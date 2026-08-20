@@ -1,2 +1,11 @@
 #!/bin/bash
+
+. "$(dirname "$0")/paths.sh"
+
+log_config "config_callback start"
+
+if apply_saved_paths; then
+  recreate_compose_stack || log_config "compose recreate skipped/failed, paths saved"
+fi
+
 exit 0

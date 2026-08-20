@@ -47,6 +47,11 @@
     </aside>
 
     <main class="content" :class="{ 'content-fixed': isTagPage }">
+      <div v-if="setupBanner" class="setup-banner">
+        <strong>首次使用请先配置数据目录</strong>
+        <span>请在「应用设置 → 运行设置」填写音乐库（/music）与下载（/downloads）目录并保存，然后刷新本页即可。</span>
+        <router-link to="/settings" class="setup-link">打开应用内设置</router-link>
+      </div>
       <router-view />
     </main>
 
@@ -55,20 +60,25 @@
 </template>
 
 <script setup>
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { connectWS, connected as wsConnected } from './ws.js'
 import { initPlayer } from './stores/player.js'
 import { checkForUpdate, hasUpdate } from './composables/useUpdateCheck.js'
+import { api } from './api.js'
 import PlayerBar from './components/PlayerBar.vue'
 
 const route = useRoute()
 const isTagPage = computed(() => route.path === '/tag' || route.path.startsWith('/tag/'))
+const setupBanner = ref(false)
 
 onMounted(() => {
   connectWS()
   initPlayer()
   checkForUpdate()
+  api.paths.list().then((res) => {
+    setupBanner.value = Boolean(res.setup?.needsPathConfig)
+  }).catch(() => {})
 })
 </script>
 
@@ -199,6 +209,30 @@ onMounted(() => {
   flex: 1;
   min-height: 0;
 }
+
+.setup-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+  padding: 12px 16px;
+  border-radius: 10px;
+  background: rgba(255, 193, 7, 0.12);
+  border: 1px solid rgba(255, 193, 7, 0.35);
+  color: var(--text);
+  font-size: 14px;
+}
+.setup-banner strong {
+  color: #ffc107;
+}
+.setup-link {
+  margin-left: auto;
+  color: var(--accent, #6c9eff);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.setup-link:hover { text-decoration: underline; }
 
 @media (max-width: 768px) {
   .sidebar {

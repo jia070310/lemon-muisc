@@ -4,7 +4,7 @@
     "items": [
       {
         "type": "tips",
-        "helpText": "<b>安装过程包含拉取 Docker 镜像</b>，会在本安装窗口中实时显示进度，请勿关闭窗口。<br><br>• 默认从 <code>ghcr.io/jia070310/lemon-muisc</code> 拉取<br>• 飞牛「Docker 镜像加速」仅对 Docker Hub 有效，<b>不能加速 ghcr.io</b><br>• 国内网络慢时，可选用「自定义镜像地址」或先 SSH 手动导入镜像"
+        "helpText": "<b>安装过程会拉取 Docker 镜像</b>，方式与手动 <code>docker compose pull</code> 相同。<br><br>• 默认镜像：<code>ghcr.1ms.run/jia070310/lemon-muisc:latest</code><br>• 安装完成后，请在<b>应用设置 → 授权目录</b>中选择音乐库与下载文件夹<br>• 若你已通过 <b>Docker 项目</b> 部署过本应用，请先停止该项目<br>• 本地已有镜像可选「跳过拉取」"
       }
     ]
   },
@@ -17,15 +17,15 @@
         "label": "拉取方式",
         "initValue": "ghcr_direct",
         "options": [
-          { "label": "官方 ghcr.io（推荐）", "value": "ghcr_direct" },
-          { "label": "自定义镜像地址（国内镜像站同步后）", "value": "custom_image" },
-          { "label": "跳过拉取（已手动 docker load / 本地已有）", "value": "skip_pull" }
+          { "label": "compose 拉取（与手动部署相同，推荐）", "value": "ghcr_direct" },
+          { "label": "自定义镜像地址", "value": "custom_image" },
+          { "label": "跳过拉取（Docker 项目已部署 / 本地已有镜像）", "value": "skip_pull" }
         ]
       },
       {
         "type": "select",
         "field": "wizard_image_tag",
-        "label": "镜像标签（官方 ghcr.io 时生效）",
+        "label": "镜像标签（国内加速源时生效）",
         "initValue": "latest",
         "options": [
           { "label": "latest（最新）", "value": "latest" },
@@ -36,8 +36,8 @@
         "type": "text",
         "field": "wizard_custom_image",
         "label": "自定义镜像地址（选「自定义」时必填）",
-        "initValue": "",
-        "placeholder": "例如 registry.cn-hangzhou.aliyuncs.com/你的命名空间/lemon-music:latest"
+        "initValue": "ghcr.1ms.run/jia070310/lemon-muisc:latest",
+        "placeholder": "ghcr.1ms.run/jia070310/lemon-muisc:latest"
       },
       {
         "type": "select",

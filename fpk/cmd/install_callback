@@ -3,6 +3,12 @@
 . "$(dirname "$0")/pull-image.sh"
 
 init_log
+
+. "$(dirname "$0")/paths.sh"
+config_path="$(default_config_path)"
+save_paths "" "" "${config_path}"
+write_compose_file "$(default_music_path)" "$(default_downloads_path)" "${config_path}"
+
 pull_image_with_progress "安装"
 mark_install_complete "安装"
 

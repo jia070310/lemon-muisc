@@ -15,10 +15,20 @@
 
       <!-- 文件路径 -->
       <div v-if="activeTab === 'paths'" class="panel-body">
+        <div v-if="needsPathSetup" class="setup-alert">
+          <strong>请先配置 NAS 数据目录</strong>
+          <p>只需在「应用设置 → <b>运行设置</b>」填写音乐库（/music）与下载（/downloads）目录并保存。保存后容器会自动挂载，本页会自动识别 <code>/music</code>、<code>/downloads</code>，一般无需再手动添加路径。</p>
+          <p class="setup-alert-sub">「访问权限」仅在使用下方「选择文件夹」时需要，请与运行设置选同一目录。选择器返回 NAS 路径（如 /vol1/...）会自动转为容器路径。</p>
+        </div>
+        <div v-else-if="mountInfo" class="setup-hint">
+          <span>容器挂载：</span>
+          <code>/music</code> ← {{ mountInfo.music?.host || '—' }}，
+          <code>/downloads</code> ← {{ mountInfo.downloads?.host || '—' }}
+        </div>
         <div class="setting-item">
           <div class="setting-item-info">
             <div class="setting-item-label">音乐文件夹</div>
-            <div class="setting-item-desc">添加包含音乐文件的文件夹，支持多个路径。{{ fnosAvailable ? '可点击浏览调用系统文件管理器。' : '' }}</div>
+            <div class="setting-item-desc">扫描音乐时使用的目录，Docker 环境下请使用 <code>/music</code> 或其子目录。{{ fnosAvailable ? '点击「选择文件夹」会调用系统文件管理器，NAS 路径会自动转换。' : '' }}</div>
           </div>
           <div class="setting-item-action">
             <button v-if="fnosAvailable" class="btn-primary btn-sm" @click="browseAddPath" :disabled="pickingFolder">
@@ -210,6 +220,8 @@ const fnosAvailable = ref(false)
 const pickingFolder = ref(false)
 const editFromPicker = ref(false)
 const activeTab = ref('paths')
+const needsPathSetup = ref(false)
+const mountInfo = ref(null)
 
 const tabs = [
   { id: 'paths', label: '文件路径' },
@@ -256,6 +268,8 @@ async function loadPaths() {
     const res = await api.paths.list()
     filePaths.value = res.data || []
     downloadPath.value = res.downloadPath || filePaths.value[0] || ''
+    needsPathSetup.value = Boolean(res.setup?.needsPathConfig)
+    mountInfo.value = res.setup?.mountInfo || null
   } catch {}
 }
 
@@ -267,7 +281,7 @@ async function addPath(fromPicker = false) {
     filePaths.value = res.data || []
     downloadPath.value = res.downloadPath || downloadPath.value
     newPath.value = ''
-    showToast('路径已添加', 'success')
+    showToast(fromPicker ? '路径已添加（NAS 路径已自动转换为容器路径）' : '路径已添加', 'success')
   } catch (e) {
     showToast(e.message, 'error')
   }
@@ -495,6 +509,30 @@ function showToast(text, type = 'info') {
 .settings-panel { flex: 1; min-width: 0; padding: 24px 28px; }
 .panel-title { font-size: 18px; font-weight: 600; margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--border-light); }
 .panel-body { display: flex; flex-direction: column; }
+
+.setup-alert {
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(255, 193, 7, 0.1);
+  border: 1px solid rgba(255, 193, 7, 0.3);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.setup-alert strong { color: #ffc107; }
+.setup-alert p { margin: 6px 0 0; color: var(--text-muted); }
+.setup-alert-sub { margin-top: 8px !important; font-size: 12px; }
+.setup-hint {
+  margin-bottom: 16px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.03);
+  border: 1px solid var(--border-light);
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+.setup-hint code { font-size: 11px; }
 
 .setting-item {
   display: flex;

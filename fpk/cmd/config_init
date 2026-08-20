@@ -1,2 +1,6 @@
 #!/bin/bash
+
+. "$(dirname "$0")/paths.sh"
+
+apply_saved_paths || true
 exit 0

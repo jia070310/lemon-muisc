@@ -1,45 +1,45 @@
 #!/bin/bash
 
-FILE_PATH="${TRIM_APPDEST}/docker/docker-compose.yaml"
-STATUS_FILE="${TRIM_PKGVAR}/install.status"
-LOG_FILE="${TRIM_PKGVAR}/log/install.log"
+. "$(dirname "$0")/paths.sh"
 
-if [ ! -f "${LOG_FILE}" ] && [ -f "${TRIM_PKGVAR}/install.log" ]; then
-  LOG_FILE="${TRIM_PKGVAR}/install.log"
-fi
+is_docker_running() {
+  local running
+  running=$(docker compose -p "${TRIM_APPNAME}" -f "${COMPOSE_FILE}" ps --format '{{.State}}' 2>/dev/null | grep -ci 'running')
+  [ "${running:-0}" -gt 0 ]
+}
 
-is_docker_running () {
-  DOCKER_NAME=""
+ensure_containers_created() {
+  cd "${COMPOSE_DIR}" || return 1
 
-  if [ -f "$FILE_PATH" ]; then
-    DOCKER_NAME=$(cat $FILE_PATH | grep "container_name" | awk -F ':' '{print $2}' | xargs)
+  local exists
+  exists=$(docker compose -p "${TRIM_APPNAME}" -f "${COMPOSE_FILE}" ps -a --format '{{.Name}}' 2>/dev/null | wc -l)
+  if [ "${exists:-0}" -gt 0 ]; then
+    return 0
   fi
 
-  if [ -n "$DOCKER_NAME" ]; then
-    docker inspect $DOCKER_NAME | grep -q "\"Status\": \"running\"," || exit 1
-    return
+  docker compose -p "${TRIM_APPNAME}" -f "${COMPOSE_FILE}" up -d 2>&1
+  if [ $? -ne 0 ]; then
+    echo "Docker compose 创建容器失败。请检查 7983 端口、容器名是否冲突。" > "${TRIM_TEMP_LOGFILE}"
+    return 1
   fi
+  return 0
 }
 
 case $1 in
 start)
-  if [ -f "${STATUS_FILE}" ]; then
-    echo "最近安装/升级状态: $(cat "${STATUS_FILE}")"
-  fi
-  if [ -f "${LOG_FILE}" ]; then
-    echo "安装日志: ${LOG_FILE}"
-  fi
   exit 0
   ;;
 stop)
   exit 0
   ;;
 status)
+  if ! ensure_containers_created; then
+    exit 1
+  fi
   if is_docker_running; then
     exit 0
-  else
-    exit 3
   fi
+  exit 3
   ;;
 *)
   exit 1

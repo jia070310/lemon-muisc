@@ -1,15 +1,35 @@
 #!/bin/bash
 # Pull Lemon Music image during install/upgrade wizard (stdout = install UI progress).
+# 优先使用 docker compose pull，与手动 docker-compose.yml 部署行为一致。
 
-DEFAULT_REGISTRY="ghcr.io/jia070310/lemon-muisc"
+DEFAULT_REGISTRY="ghcr.1ms.run/jia070310/lemon-muisc"
+FALLBACK_REGISTRIES=(
+  "ghcr.1ms.run/jia070310/lemon-muisc"
+  "ghcr.io/jia070310/lemon-muisc"
+)
 IMAGE="${DEFAULT_REGISTRY}:latest"
 COMPOSE_FILE="${TRIM_APPDEST}/docker/docker-compose.yaml"
+COMPOSE_DIR="$(dirname "${COMPOSE_FILE}")"
 IMAGE_CONF="${TRIM_PKGETC}/image.conf"
 
 init_log() {
   mkdir -p "${TRIM_PKGVAR}/log" "${TRIM_PKGETC}" 2>/dev/null || true
   LOG_FILE="${TRIM_PKGVAR}/log/install.log"
-  touch "${LOG_FILE}" 2>/dev/null || LOG_FILE="${TRIM_PKGVAR}/install.log"
+  touch "${LOG_FILE}" 2>/dev/null || true
+  if [ ! -f "${LOG_FILE}" ]; then
+    LOG_FILE="${TRIM_PKGVAR}/install.log"
+    touch "${LOG_FILE}" 2>/dev/null || true
+  fi
+  if [ -n "${TRIM_APPDEST}" ]; then
+    mkdir -p "${TRIM_APPDEST}/../var/log" 2>/dev/null || true
+  fi
+}
+
+log_hint_paths() {
+  log_line "日志路径（需 SSH 查看，文件管理器通常看不到 @appdata）:"
+  log_line "  ${LOG_FILE}"
+  [ -n "${TRIM_PKGVAR}" ] && log_line "  ${TRIM_PKGVAR}/install.log"
+  log_line "  /var/apps/lemon-music/var/log/install.log"
 }
 
 log_line() {
@@ -18,6 +38,7 @@ log_line() {
 
 fail_install() {
   log_line "错误: $*"
+  log_hint_paths
   echo "$*" > "${TRIM_TEMP_LOGFILE}"
   echo "failed at $(date -Iseconds): $*" > "${TRIM_PKGVAR}/install.status" 2>/dev/null || true
   exit 1
@@ -50,7 +71,7 @@ resolve_image_from_wizard() {
   case "${source}" in
     custom_image)
       if [ -z "${wizard_custom_image}" ]; then
-        fail_install "已选择「自定义镜像地址」，但未填写完整镜像名。请返回向导填写，例如 registry.example.com/lemon-music:latest"
+        fail_install "已选择「自定义镜像地址」，但未填写完整镜像名。例如 ghcr.1ms.run/jia070310/lemon-muisc:latest"
       fi
       IMAGE="${wizard_custom_image}"
       ;;
@@ -81,14 +102,30 @@ ensure_docker() {
   fi
 }
 
+docker_compose_cmd() {
+  if [ ! -f "${COMPOSE_FILE}" ]; then
+    return 127
+  fi
+  if docker compose version >/dev/null 2>&1; then
+    docker compose -f "${COMPOSE_FILE}" "$@"
+    return $?
+  fi
+  if command -v docker-compose >/dev/null 2>&1; then
+    docker-compose -f "${COMPOSE_FILE}" "$@"
+    return $?
+  fi
+  return 127
+}
+
 update_compose_image() {
   if [ ! -f "${COMPOSE_FILE}" ]; then
+    log_line "警告: 未找到 compose 文件 ${COMPOSE_FILE}"
     return 0
   fi
   local tmp="${COMPOSE_FILE}.tmp"
   sed -E "s|^([[:space:]]*)image:[[:space:]]*.*|\1image: ${IMAGE}|" "${COMPOSE_FILE}" > "${tmp}" \
     && mv "${tmp}" "${COMPOSE_FILE}"
-  log_line "已更新 compose 镜像为: ${IMAGE}"
+  log_line "已写入 compose 镜像: ${IMAGE}"
 }
 
 save_image_config() {
@@ -109,34 +146,127 @@ show_wizard_summary() {
   log_line "安装向导配置:"
   log_line "  拉取方式: ${source}"
   log_line "  目标镜像: ${IMAGE}"
+  log_line "  compose: ${COMPOSE_FILE}"
   log_line "  拉取超时: ${timeout_sec} 秒"
-  if [ "${wizard_apply_docker_mirror:-false}" = "true" ]; then
-    log_line "  已勾选尝试 Docker registry-mirrors（对 ghcr.io 通常无效）"
-  fi
   log_line "------------------------------------------"
+}
+
+run_with_timeout() {
+  local timeout_sec="$1"
+  shift
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "${timeout_sec}" "$@"
+    return $?
+  fi
+  "$@"
+}
+
+compose_pull_with_timeout() {
+  local timeout_sec
+  timeout_sec="$(get_pull_timeout)"
+  local pull_log="${TRIM_PKGVAR}/compose.pull.log"
+  log_line "执行 docker compose pull（与手动部署相同，超时 ${timeout_sec} 秒）..."
+  echo "compose pulling ${IMAGE} at $(date -Iseconds)" > "${TRIM_PKGVAR}/install.status" 2>/dev/null || true
+
+  if [ ! -f "${COMPOSE_FILE}" ]; then
+    log_line "compose 文件不存在: ${COMPOSE_FILE}"
+    return 127
+  fi
+
+  local rc=0
+  if docker compose version >/dev/null 2>&1; then
+    if command -v timeout >/dev/null 2>&1; then
+      timeout "${timeout_sec}" docker compose -p "${TRIM_APPNAME}" -f "${COMPOSE_FILE}" pull > "${pull_log}" 2>&1 || rc=$?
+    else
+      docker compose -p "${TRIM_APPNAME}" -f "${COMPOSE_FILE}" pull > "${pull_log}" 2>&1 || rc=$?
+    fi
+  elif command -v docker-compose >/dev/null 2>&1; then
+    if command -v timeout >/dev/null 2>&1; then
+      timeout "${timeout_sec}" docker-compose -p "${TRIM_APPNAME}" -f "${COMPOSE_FILE}" pull > "${pull_log}" 2>&1 || rc=$?
+    else
+      docker-compose -p "${TRIM_APPNAME}" -f "${COMPOSE_FILE}" pull > "${pull_log}" 2>&1 || rc=$?
+    fi
+  else
+    log_line "未找到 docker compose 命令"
+    return 127
+  fi
+
+  cat "${pull_log}" | tee -a "${LOG_FILE}" || true
+
+  if [ "${rc}" -eq 0 ]; then
+    read_image_from_compose
+    return 0
+  fi
+  if [ "${rc}" -eq 124 ]; then
+    fail_install "compose 拉取超时（${timeout_sec} 秒）。请延长超时或选「跳过拉取」。"
+  fi
+  return "${rc}"
 }
 
 docker_pull_with_timeout() {
   local timeout_sec
   timeout_sec="$(get_pull_timeout)"
-  log_line "开始拉取镜像（超时 ${timeout_sec} 秒，下方为实时进度）..."
+  log_line "执行 docker pull ${IMAGE}（超时 ${timeout_sec} 秒）..."
   echo "pulling ${IMAGE} at $(date -Iseconds)" > "${TRIM_PKGVAR}/install.status" 2>/dev/null || true
 
-  set -o pipefail
   local rc=0
+  local pull_log="${TRIM_PKGVAR}/pull.last.log"
+  if run_with_timeout "${timeout_sec}" docker pull "${IMAGE}" > "${pull_log}" 2>&1; then
+    cat "${pull_log}" | tee -a "${LOG_FILE}"
+    return 0
+  fi
+  rc=$?
+  cat "${pull_log}" | tee -a "${LOG_FILE}" || true
+  if [ "${rc}" -eq 124 ]; then
+    fail_install "镜像拉取超时（${timeout_sec} 秒）。请延长超时或选「跳过拉取」。"
+  fi
+  return "${rc}"
+}
 
-  if command -v timeout >/dev/null 2>&1; then
-    timeout "${timeout_sec}" docker pull "${IMAGE}" 2>&1 | tee -a "${LOG_FILE}" || rc=$?
-    if [ "${rc}" -eq 124 ]; then
-      fail_install "镜像拉取超时（${timeout_sec} 秒）。请返回重新安装，在向导中选择更长超时、自定义镜像地址，或先 SSH 执行 docker load 后选「跳过拉取」。"
+image_exists_locally() {
+  docker image inspect "${IMAGE}" >/dev/null 2>&1
+}
+
+pull_image_with_fallback() {
+  local tag="${wizard_image_tag:-latest}"
+  local source="${wizard_pull_source:-ghcr_direct}"
+  local registry
+  local pulled=0
+  local last_err=""
+
+  if [ "${source}" = "custom_image" ]; then
+    update_compose_image
+    if compose_pull_with_timeout || docker_pull_with_timeout; then
+      return 0
     fi
-  else
-    log_line "系统无 timeout 命令，将不设超时限制..."
-    docker pull "${IMAGE}" 2>&1 | tee -a "${LOG_FILE}" || rc=$?
+    fail_install "镜像拉取失败: ${IMAGE}。请检查自定义地址，或 SSH 测试 docker compose pull。"
   fi
 
-  set +o pipefail
-  return "${rc}"
+  for registry in "${FALLBACK_REGISTRIES[@]}"; do
+    IMAGE="${registry}:${tag}"
+    update_compose_image
+    log_line "尝试镜像源: ${IMAGE}"
+
+    if compose_pull_with_timeout; then
+      pulled=1
+      log_line "compose 拉取成功: ${IMAGE}"
+      break
+    fi
+
+    log_line "compose pull 失败，尝试 docker pull..."
+    if docker_pull_with_timeout; then
+      pulled=1
+      log_line "docker pull 成功: ${IMAGE}"
+      break
+    fi
+
+    last_err="${IMAGE}"
+    log_line "镜像源失败，尝试下一个..."
+  done
+
+  if [ "${pulled}" -ne 1 ]; then
+    fail_install "镜像拉取失败（已尝试 compose pull 与 docker pull）。若你已通过 Docker 项目安装成功，可重新安装并选「跳过拉取」。最后失败: ${last_err}"
+  fi
 }
 
 pull_image_with_progress() {
@@ -152,15 +282,14 @@ pull_image_with_progress() {
 
   if [ "${wizard_pull_source:-ghcr_direct}" = "skip_pull" ]; then
     log_line "已选择跳过拉取，检查本地镜像..."
-    if docker image inspect "${IMAGE}" >/dev/null 2>&1; then
+    read_image_from_compose
+    if image_exists_locally; then
       log_line "本地已存在镜像: ${IMAGE}"
     else
-      fail_install "本地不存在镜像 ${IMAGE}。请先 SSH 执行 docker pull 或 docker load，或改选「官方 ghcr.io」拉取。"
+      fail_install "本地不存在镜像 ${IMAGE}。你已通过 Docker 项目部署的话，请确认 compose 里 image 与此一致，或先执行 docker compose pull。"
     fi
   else
-    if ! docker_pull_with_timeout; then
-      fail_install "镜像拉取失败: ${IMAGE}。请检查网络/代理，或在向导中使用「自定义镜像地址」。日志: ${LOG_FILE}"
-    fi
+    pull_image_with_fallback
     log_line "镜像拉取完成。"
     docker images "${IMAGE}" 2>&1 | tee -a "${LOG_FILE}" || true
   fi
@@ -176,7 +305,7 @@ mark_install_complete() {
   log_line "镜像: ${IMAGE}"
   log_line "请在应用中心点击「启动」"
   log_line "访问: http://<NAS_IP>:7983"
-  log_line "日志: ${LOG_FILE}"
+  log_hint_paths
   log_line "=========================================="
   echo "completed ${IMAGE} at $(date -Iseconds)" > "${TRIM_PKGVAR}/install.status" 2>/dev/null || true
 }

@@ -6,6 +6,7 @@ import {
   updateFilePath,
   removeFilePath,
   setDownloadSavePath,
+  getSetupStatus,
 } from '../utils/filePaths.js'
 
 export const pathsRouter = Router()
@@ -15,6 +16,7 @@ pathsRouter.get('/', (_req, res) => {
     ok: true,
     data: getFilePaths(),
     downloadPath: getDownloadSavePath(),
+    setup: getSetupStatus(),
   })
 })
 

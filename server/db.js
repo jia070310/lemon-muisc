@@ -70,7 +70,7 @@ export function initDB(configPath) {
     'download.isSavePathGroupByListName': 'false',
     'source.active': '',
     'player.coverStyle': 'disc',
-    'file.paths': '["/music","/downloads"]',
+    'file.paths': '[]',
     'tag.dirs': '[]',
     'tag.matchSource': 'kg',
   }

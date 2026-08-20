@@ -74,26 +74,45 @@ docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest
 
 ---
 
-## 修改数据目录（volumes）
+## 数据目录（应用设置）
 
-FPK 默认 compose 路径（`fpk/app/docker/docker-compose.yaml`）：
+安装后 **不在安装向导中强制填写** 音乐库与下载路径。请在应用中心 → **柠檬音乐下载** → **应用设置** 中配置：
+
+| 设置项 | 变量名 | 说明 |
+|--------|--------|------|
+| 音乐库目录 | `wizard_music_path` | NAS 绝对路径，挂载到容器 `/music` |
+| 下载目录 | `wizard_downloads_path` | NAS 绝对路径，挂载到容器 `/downloads` |
+| 配置目录 | `wizard_config_path` | 留空则自动使用应用数据目录，挂载到 `/config` |
+
+**首次使用流程：**
+
+1. 安装并完成镜像拉取
+2. 打开 **应用设置**，填写音乐库与下载目录（配置目录可留空）
+3. 保存后应用会自动重启容器
+4. 打开 Web 界面，在 **设置 → 文件路径** 添加 `/music`、`/downloads`
+
+首次打开 Web 界面时，若目录未配置会显示提示条。
+
+路径持久化在 `${TRIM_PKGETC}/paths.conf`（SSH 可查看）。
+
+---
+
+## 修改数据目录（旧版说明）
+
+<details>
+<summary>手动编辑 compose（高级用户）</summary>
+
+`fpk/app/docker/docker-compose.yaml` 使用环境变量：
 
 ```yaml
 volumes:
-  - "/var/apps/lemon-music/shares/lemon-music/data:/music"
-  - "/var/apps/lemon-music/shares/lemon-music/downloads:/downloads"
-  - "/var/apps/lemon-music/shares/lemon-music/config:/config"
+  - "${wizard_music_path}:/music"
+  - "${wizard_downloads_path}:/downloads"
+  - "${wizard_config_path}:/config"
 ```
 
-若要把音乐库和下载目录放到其他盘（如 `/vol1/1000/music`、`/vol1/1000/music-downloads`）：
-
-1. 修改 `fpk/app/docker/docker-compose.yaml` 中 **冒号左边** 的路径
-2. 重新打包：`npm run fpk:build`
-3. 重新安装 FPK
-
-**只改左边**，右边 `/music`、`/downloads`、`/config` 不变。详见 [docker-compose.md](./docker-compose.md#修改-volumes-路径)。
-
-安装后在 **设置 → 文件路径** 添加的路径需与 `/music`、`/downloads` 挂载目录一致；并可在 **设置 → 下载设置 → 保存路径** 选择下载目录。
+一般无需手动编辑，请优先使用应用设置。
+</details>
 
 ---
 

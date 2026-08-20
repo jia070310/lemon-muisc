@@ -1,0 +1,23 @@
+[
+  {
+    "stepTitle": "数据目录",
+    "items": [
+      {
+        "type": "text",
+        "field": "wizard_music_path",
+        "label": "音乐库目录（/music）",
+        "initValue": "",
+        "placeholder": "选择或填写 NAS 路径，如 /vol1/1000/MP3",
+        "helpText": "挂载到容器 /music，用于扫描与管理音乐文件"
+      },
+      {
+        "type": "text",
+        "field": "wizard_downloads_path",
+        "label": "下载目录（/downloads）",
+        "initValue": "",
+        "placeholder": "选择或填写 NAS 路径，如 /vol1/1000/music-downloads",
+        "helpText": "挂载到容器 /downloads，用于保存下载文件"
+      }
+    ]
+  }
+]

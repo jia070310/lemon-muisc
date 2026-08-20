@@ -18,7 +18,11 @@ if (-not $fnpackPath) {
   exit 1
 }
 
-Write-Host ">>> fnpack build (pull ghcr.io/jia070310/lemon-muisc:latest on NAS)" -ForegroundColor Cyan
+Write-Host ">>> fnpack build (pull ghcr.1ms.run/jia070310/lemon-muisc:latest on NAS)" -ForegroundColor Cyan
+Get-ChildItem -Path (Join-Path $FpkDir "cmd") -File | ForEach-Object {
+  $text = [IO.File]::ReadAllText($_.FullName).Replace("`r`n", "`n")
+  [IO.File]::WriteAllText($_.FullName, $text)
+}
 Set-Location $FpkDir
 & $fnpackPath build
 

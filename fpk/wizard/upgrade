@@ -12,7 +12,7 @@
         "label": "拉取方式",
         "initValue": "ghcr_direct",
         "options": [
-          { "label": "官方 ghcr.io", "value": "ghcr_direct" },
+          { "label": "国内加速 ghcr.1ms.run", "value": "ghcr_direct" },
           { "label": "自定义镜像地址", "value": "custom_image" },
           { "label": "跳过拉取", "value": "skip_pull" }
         ]
