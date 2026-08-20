@@ -9,7 +9,6 @@ music_path="${wizard_music_path:-}"
 downloads_path="${wizard_downloads_path:-}"
 config_path="$(default_config_path)"
 
-# 安装时未填则先用应用数据目录占位，启用前再通过访问权限/运行设置写入真实路径
 if [ -z "${music_path}" ]; then
   music_path="$(default_music_path)"
 fi
@@ -31,48 +30,47 @@ esac
 
 log_config "install paths music=${music_path} downloads=${downloads_path} config=${config_path}"
 
-# 先自己拉；失败也不退出（飞牛 docker-project 还会继续拉）
-SOFT_PULL_FAIL=1
-if pull_image_with_progress "安装"; then
-  log_config "install pull ok image=${IMAGE}"
+# 不要在回调里「等待飞牛拉镜像」：飞牛要等本脚本结束后才会继续，会死锁卡在 80%
+# 这里只做一次拉取；失败则交给飞牛 docker-project / 启用时再拉
+echo "正在拉取 Docker 镜像，请稍候…" > "${TRIM_TEMP_LOGFILE}" 2>/dev/null || true
+
+if [ "${wizard_pull_source:-ghcr_direct}" = "skip_pull" ]; then
+  SOFT_PULL_FAIL=1
+  pull_image_with_progress "安装" || true
 else
-  log_config "script pull failed, waiting for Feiniu docker-project pull..."
+  # 硬拉一次；超时/失败不阻断，避免再次卡死安装向导
+  SOFT_PULL_FAIL=1
+  wizard_pull_timeout="${wizard_pull_timeout:-300}"
+  if pull_image_with_progress "安装"; then
+    log_config "install pull ok image=${IMAGE}"
+  else
+    log_config "install pull deferred to Feiniu/enable"
+    log_line "脚本拉取未成功，将交由飞牛 docker-project 继续（请勿取消，进度可能仍会前进）"
+  fi
 fi
 
-# 最多等 10 分钟，避免「秒完成且无镜像」
-waited=0
-while [ "${waited}" -lt 600 ]; do
-  if resolved="$(resolve_local_image_name "$(get_compose_image)" 2>/dev/null)"; then
-    IMAGE="${resolved}"
-    mkdir -p "${TRIM_PKGETC}" 2>/dev/null || true
-    cat > "${IMAGE_CONF}" <<EOF
+if resolved="$(resolve_local_image_name "$(get_compose_image)" 2>/dev/null)"; then
+  IMAGE="${resolved}"
+  mkdir -p "${TRIM_PKGETC}" 2>/dev/null || true
+  cat > "${IMAGE_CONF}" <<EOF
 SAVED_IMAGE="${IMAGE}"
 SAVED_AT="$(date -Iseconds)"
 EOF
-    write_compose_file "${music_path}" "${downloads_path}" "${config_path}"
-    log_config "image ready after ${waited}s: ${IMAGE}"
-    break
-  fi
-  sleep 5
-  waited=$((waited + 5))
-  if [ $((waited % 30)) -eq 0 ]; then
-    log_line "仍在等待镜像出现…已等待 ${waited} 秒"
-    echo "waiting image ${waited}s" > "${TRIM_PKGVAR}/install.status" 2>/dev/null || true
-  fi
-done
-
-if ! resolve_local_image_name "$(get_compose_image)" >/dev/null 2>&1; then
-  # 仍然没有：安装失败，避免用户装完却无镜像
-  fail_install "等待镜像超时。请检查网络后重试，或先 SSH 执行: docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest 再安装并选「跳过拉取」。"
+  write_compose_file "${music_path}" "${downloads_path}" "${config_path}"
+  log_config "install using image ${IMAGE}"
 fi
 
 mark_install_complete "安装"
 
-# 安装阶段可用占位路径先起容器；真正用户目录在「访问权限/运行设置」保存后，启用时 docker run 覆盖
-if recreate_compose_stack; then
-  log_config "install docker run ok (placeholder mounts ok)"
+# 有镜像才尝试起容器；没有则留给启用阶段
+if resolve_local_image_name "$(get_compose_image)" >/dev/null 2>&1; then
+  if recreate_compose_stack; then
+    log_config "install docker run ok"
+  else
+    log_config "install container deferred — will start on enable"
+  fi
 else
-  log_config "install container deferred — will start on app enable"
+  log_config "no local image yet — Feiniu project or enable will pull"
 fi
 
 exit 0
