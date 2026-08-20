@@ -6,10 +6,12 @@ services:
     ports:
       - "7983:7983"
     volumes:
-      - "${TRIM_PKGVAR}/music:/music"
-      - "${TRIM_PKGVAR}/downloads:/downloads"
-      - "${TRIM_PKGVAR}/config:/config"
+      - "${wizard_music_path}:/music"
+      - "${wizard_downloads_path}:/downloads"
+      - "${wizard_config_path}:/config"
     environment:
-      PORT: 7983
+      PORT: "7983"
       DOWNLOAD_PATH: /music
       CONFIG_PATH: /config
+      MUSIC_HOST_PATH: "${wizard_music_path}"
+      DOWNLOADS_HOST_PATH: "${wizard_downloads_path}"

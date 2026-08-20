@@ -6,7 +6,10 @@ IMAGE_CONF="${TRIM_PKGETC}/image.conf"
 ACCESSIBLE_FILE="${TRIM_PKGVAR}/accessible_paths"
 COMPOSE_FILE="${TRIM_APPDEST}/docker/docker-compose.yaml"
 COMPOSE_DIR="$(dirname "${COMPOSE_FILE}")"
+COMPOSE_ENV="${COMPOSE_DIR}/.env"
 DEFAULT_IMAGE="ghcr.1ms.run/jia070310/lemon-muisc:latest"
+CONTAINER_NAME="lemon-music"
+COMPOSE_PROJECT="${TRIM_APPNAME:-lemon-music}"
 
 default_config_path() {
   echo "${TRIM_PKGVAR}/config"
@@ -176,6 +179,19 @@ write_mounts_meta() {
 EOF
 }
 
+# 供 docker compose 与飞牛 docker-project 共同读取
+write_compose_env() {
+  local music="${1:-}"
+  local downloads="${2:-}"
+  local config="${3:-}"
+  mkdir -p "${COMPOSE_DIR}" 2>/dev/null || true
+  cat > "${COMPOSE_ENV}" <<EOF
+wizard_music_path=${music}
+wizard_downloads_path=${downloads}
+wizard_config_path=${config}
+EOF
+}
+
 write_compose_file() {
   local music="${1:-$(default_music_path)}"
   local downloads="${2:-$(default_downloads_path)}"
@@ -184,25 +200,27 @@ write_compose_file() {
   image="$(get_compose_image)"
 
   mkdir -p "${COMPOSE_DIR}" 2>/dev/null || true
+  write_compose_env "${music}" "${downloads}" "${config}"
 
+  # 使用向导变量名：飞牛运行设置保存后会注入；本地 recreate 则读同目录 .env
   cat > "${COMPOSE_FILE}" <<EOF
 services:
   lemon-music:
     image: ${image}
-    container_name: lemon-music
+    container_name: ${CONTAINER_NAME}
     restart: unless-stopped
     ports:
       - "7983:7983"
     volumes:
-      - "${music}:/music"
-      - "${downloads}:/downloads"
-      - "${config}:/config"
+      - "\${wizard_music_path}:/music"
+      - "\${wizard_downloads_path}:/downloads"
+      - "\${wizard_config_path}:/config"
     environment:
-      PORT: 7983
+      PORT: "7983"
       DOWNLOAD_PATH: /music
       CONFIG_PATH: /config
-      MUSIC_HOST_PATH: "${music}"
-      DOWNLOADS_HOST_PATH: "${downloads}"
+      MUSIC_HOST_PATH: "\${wizard_music_path}"
+      DOWNLOADS_HOST_PATH: "\${wizard_downloads_path}"
 EOF
 }
 
@@ -217,7 +235,7 @@ apply_saved_paths() {
   local config
   config="$(resolve_config_path)"
   save_paths "${RESOLVED_MUSIC}" "${RESOLVED_DOWNLOADS}" "${config}"
-  mkdir -p "${config}" 2>/dev/null || true
+  mkdir -p "${config}" "${RESOLVED_MUSIC}" "${RESOLVED_DOWNLOADS}" 2>/dev/null || true
   write_mounts_meta "${RESOLVED_MUSIC}" "${RESOLVED_DOWNLOADS}" "${config}"
   write_compose_file "${RESOLVED_MUSIC}" "${RESOLVED_DOWNLOADS}" "${config}"
   touch "${config}/.user-paths-configured" 2>/dev/null || true
@@ -225,23 +243,87 @@ apply_saved_paths() {
   return 0
 }
 
+compose_up() {
+  local project="${1:-${COMPOSE_PROJECT}}"
+  docker compose -p "${project}" -f "${COMPOSE_FILE}" --env-file "${COMPOSE_ENV}" up -d --force-recreate --remove-orphans
+}
+
+# 检查容器内挂载源是否匹配期望的宿主机路径
+mount_matches_expected() {
+  local expected_music="${1:-}"
+  local expected_downloads="${2:-}"
+  local mounts
+
+  if ! docker inspect "${CONTAINER_NAME}" >/dev/null 2>&1; then
+    return 1
+  fi
+
+  mounts="$(docker inspect -f '{{range .Mounts}}{{.Destination}}={{.Source}};{{end}}' "${CONTAINER_NAME}" 2>/dev/null || true)"
+  echo "${mounts}" | grep -q "/music=${expected_music};" || return 1
+  echo "${mounts}" | grep -q "/downloads=${expected_downloads};" || return 1
+  return 0
+}
+
 recreate_compose_stack() {
   local log_file="${TRIM_PKGVAR}/log/compose.recreate.log"
+  local music downloads config
   mkdir -p "$(dirname "${log_file}")" 2>/dev/null || true
-
   cd "${COMPOSE_DIR}" || return 1
+
+  if [ ! -f "${COMPOSE_ENV}" ]; then
+    log_config "compose .env missing"
+    return 1
+  fi
+
+  # shellcheck disable=SC1090
+  . "${COMPOSE_ENV}"
+  music="${wizard_music_path}"
+  downloads="${wizard_downloads_path}"
+  config="${wizard_config_path}"
 
   {
     echo "=== recreate $(date -Iseconds) ==="
     echo "compose=${COMPOSE_FILE}"
-    echo "project=${TRIM_APPNAME}"
-    docker compose -p "${TRIM_APPNAME}" -f "${COMPOSE_FILE}" down --remove-orphans || true
+    echo "env=${COMPOSE_ENV}"
+    echo "music=${music}"
+    echo "downloads=${downloads}"
+    echo "config=${config}"
+    echo "project=${COMPOSE_PROJECT}"
+    docker stop "${CONTAINER_NAME}" 2>/dev/null || true
+    docker rm -f "${CONTAINER_NAME}" 2>/dev/null || true
+    docker compose -p "${COMPOSE_PROJECT}" -f "${COMPOSE_FILE}" --env-file "${COMPOSE_ENV}" down --remove-orphans 2>/dev/null || true
+    docker compose -p "lemon-music" -f "${COMPOSE_FILE}" --env-file "${COMPOSE_ENV}" down --remove-orphans 2>/dev/null || true
   } > "${log_file}" 2>&1
 
-  if docker compose -p "${TRIM_APPNAME}" -f "${COMPOSE_FILE}" up -d --force-recreate >> "${log_file}" 2>&1; then
-    log_config "compose recreate ok"
+  if compose_up "${COMPOSE_PROJECT}" >> "${log_file}" 2>&1 || compose_up "lemon-music" >> "${log_file}" 2>&1; then
+    sleep 1
+    if mount_matches_expected "${music}" "${downloads}"; then
+      log_config "compose recreate ok, mounts verified"
+      return 0
+    fi
+    log_config "compose up ok but mounts mismatch: $(docker inspect -f '{{range .Mounts}}{{.Destination}}={{.Source}};{{end}}' "${CONTAINER_NAME}" 2>/dev/null)"
+    # 仍算部分成功：容器已起来
     return 0
   fi
+
   log_config "compose recreate failed: $(tr '\n' ' ' < "${log_file}" 2>/dev/null)"
   return 1
+}
+
+# 路径已配置但挂载不对时，自动纠偏（供 main status / config_callback 调用）
+ensure_mounts_applied() {
+  if ! resolve_paths; then
+    return 1
+  fi
+  local config
+  config="$(resolve_config_path)"
+  write_compose_file "${RESOLVED_MUSIC}" "${RESOLVED_DOWNLOADS}" "${config}"
+  write_mounts_meta "${RESOLVED_MUSIC}" "${RESOLVED_DOWNLOADS}" "${config}"
+
+  if mount_matches_expected "${RESOLVED_MUSIC}" "${RESOLVED_DOWNLOADS}"; then
+    return 0
+  fi
+
+  log_config "mounts outdated or missing, recreating..."
+  recreate_compose_stack
 }
