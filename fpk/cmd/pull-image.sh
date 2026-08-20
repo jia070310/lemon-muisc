@@ -224,7 +224,47 @@ docker_pull_with_timeout() {
 }
 
 image_exists_locally() {
-  docker image inspect "${IMAGE}" >/dev/null 2>&1
+  local candidate repo
+
+  for candidate in \
+      "${IMAGE}" \
+      "ghcr.io/${IMAGE#ghcr.1ms.run/}" \
+      "ghcr.1ms.run/${IMAGE#ghcr.io/}" \
+      "ghcr.1ms.run/jia070310/lemon-muisc:latest" \
+      "ghcr.io/jia070310/lemon-muisc:latest" \
+      "jia070310/lemon-muisc:latest"
+  do
+    [ -z "${candidate}" ] && continue
+    # 避免未匹配前缀时拼出错误名字
+    case "${candidate}" in
+      ghcr.io/ghcr.io/*|ghcr.1ms.run/ghcr.1ms.run/*|ghcr.io/ghcr.1ms.run/*|ghcr.1ms.run/ghcr.io/*) continue ;;
+    esac
+    if docker image inspect "${candidate}" >/dev/null 2>&1; then
+      IMAGE="${candidate}"
+      return 0
+    fi
+  done
+
+  repo="$(docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -E 'lemon-muisc' | head -n 1 || true)"
+  if [ -n "${repo}" ] && [ "${repo}" != "<none>:<none>" ]; then
+    if docker image inspect "${repo}" >/dev/null 2>&1; then
+      IMAGE="${repo}"
+      log_line "检测到本地镜像别名: ${IMAGE}"
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
+# 拉取后把 IMAGE 纠正为 docker 实际可用的引用，并写回 compose
+normalize_pulled_image() {
+  if image_exists_locally; then
+    update_compose_image
+    save_image_config
+    return 0
+  fi
+  return 1
 }
 
 pull_image_with_fallback() {
@@ -238,7 +278,10 @@ pull_image_with_fallback() {
     update_compose_image
     # 优先 docker pull（不依赖 compose 项目）；失败再 compose pull
     if docker_pull_with_timeout || compose_pull_with_timeout; then
-      return 0
+      if normalize_pulled_image; then
+        return 0
+      fi
+      log_line "警告: pull 返回成功但 inspect 未命中，继续尝试其他方式…"
     fi
     fail_install "镜像拉取失败: ${IMAGE}。请检查自定义地址，或 SSH 执行: docker pull ${IMAGE}"
   fi
@@ -250,16 +293,22 @@ pull_image_with_fallback() {
 
     # 先 docker pull，避免「安装秒完成、本地无镜像」
     if docker_pull_with_timeout; then
-      pulled=1
-      log_line "docker pull 成功: ${IMAGE}"
-      break
+      if normalize_pulled_image; then
+        pulled=1
+        log_line "docker pull 成功，本地可用: ${IMAGE}"
+        break
+      fi
+      log_line "docker pull 退出码成功，但本地未识别到镜像名，尝试 compose / 下一源…"
     fi
 
-    log_line "docker pull 失败，尝试 compose pull..."
+    log_line "尝试 compose pull..."
     if compose_pull_with_timeout; then
-      pulled=1
-      log_line "compose 拉取成功: ${IMAGE}"
-      break
+      if normalize_pulled_image; then
+        pulled=1
+        log_line "compose 拉取成功，本地可用: ${IMAGE}"
+        break
+      fi
+      log_line "compose pull 退出码成功，但本地未识别到镜像名"
     fi
 
     last_err="${IMAGE}"
@@ -267,11 +316,14 @@ pull_image_with_fallback() {
   done
 
   if [ "${pulled}" -ne 1 ]; then
-    fail_install "镜像拉取失败（已尝试 docker pull 与 compose pull）。请检查网络或选自定义加速地址。最后失败: ${last_err}"
-  fi
-
-  if ! image_exists_locally; then
-    fail_install "拉取命令已返回成功，但本地仍找不到镜像 ${IMAGE}。请 SSH 执行 docker images 核对。"
+    # 飞牛 docker-project 可能已在后台拉好，再扫一次本地
+    IMAGE="${DEFAULT_REGISTRY}:${tag}"
+    if normalize_pulled_image; then
+      log_line "未直接拉取，但本地已有可用镜像: ${IMAGE}"
+      return 0
+    fi
+    docker images 2>&1 | tee -a "${LOG_FILE}" || true
+    fail_install "镜像拉取失败（已尝试 docker pull 与 compose pull）。请 SSH 执行: docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest 后重试。最后尝试: ${last_err}"
   fi
 }
 

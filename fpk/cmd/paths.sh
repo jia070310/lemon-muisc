@@ -284,17 +284,55 @@ mount_matches_expected() {
 }
 
 # 启用/重建前确保本地有镜像（安装若秒完成、飞牛未拉取时，这里补拉）
+resolve_local_image_name() {
+  local want="${1:-}"
+  local candidate repo
+
+  for candidate in \
+      "${want}" \
+      "ghcr.io/${want#ghcr.1ms.run/}" \
+      "ghcr.1ms.run/${want#ghcr.io/}" \
+      "ghcr.1ms.run/jia070310/lemon-muisc:latest" \
+      "ghcr.io/jia070310/lemon-muisc:latest"
+  do
+    [ -z "${candidate}" ] && continue
+    case "${candidate}" in
+      ghcr.io/ghcr.io/*|ghcr.1ms.run/ghcr.1ms.run/*|ghcr.io/ghcr.1ms.run/*|ghcr.1ms.run/ghcr.io/*) continue ;;
+    esac
+    if docker image inspect "${candidate}" >/dev/null 2>&1; then
+      echo "${candidate}"
+      return 0
+    fi
+  done
+
+  repo="$(docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -E 'lemon-muisc' | head -n 1 || true)"
+  if [ -n "${repo}" ] && docker image inspect "${repo}" >/dev/null 2>&1; then
+    echo "${repo}"
+    return 0
+  fi
+  return 1
+}
+
 ensure_image_available() {
   local image="${1:-}"
-  local tag registry
+  local tag registry resolved
   local log_file="${TRIM_PKGVAR}/log/compose.recreate.log"
 
   if [ -z "${image}" ]; then
     image="$(get_compose_image)"
   fi
 
-  if docker image inspect "${image}" >/dev/null 2>&1; then
-    log_config "image present: ${image}"
+  if resolved="$(resolve_local_image_name "${image}")"; then
+    if [ "${resolved}" != "${image}" ]; then
+      mkdir -p "${TRIM_PKGETC}" 2>/dev/null || true
+      cat > "${IMAGE_CONF}" <<EOF
+SAVED_IMAGE="${resolved}"
+SAVED_AT="$(date -Iseconds)"
+EOF
+      log_config "using local image alias: ${resolved} (wanted ${image})"
+    else
+      log_config "image present: ${resolved}"
+    fi
     return 0
   fi
 
@@ -306,8 +344,15 @@ ensure_image_available() {
 
   log_config "image missing, pulling: ${image}"
   if docker pull "${image}" >> "${log_file}" 2>&1; then
-    log_config "docker pull ok: ${image}"
-    return 0
+    if resolved="$(resolve_local_image_name "${image}")"; then
+      mkdir -p "${TRIM_PKGETC}" 2>/dev/null || true
+      cat > "${IMAGE_CONF}" <<EOF
+SAVED_IMAGE="${resolved}"
+SAVED_AT="$(date -Iseconds)"
+EOF
+      log_config "docker pull ok: ${resolved}"
+      return 0
+    fi
   fi
 
   # 镜像地址失败时按仓库兜底再试
@@ -317,13 +362,15 @@ ensure_image_available() {
     image="${registry}:${tag}"
     echo "fallback pull ${image}" >> "${log_file}" 2>&1
     if docker pull "${image}" >> "${log_file}" 2>&1; then
-      mkdir -p "${TRIM_PKGETC}" 2>/dev/null || true
-      cat > "${IMAGE_CONF}" <<EOF
-SAVED_IMAGE="${image}"
+      if resolved="$(resolve_local_image_name "${image}")"; then
+        mkdir -p "${TRIM_PKGETC}" 2>/dev/null || true
+        cat > "${IMAGE_CONF}" <<EOF
+SAVED_IMAGE="${resolved}"
 SAVED_AT="$(date -Iseconds)"
 EOF
-      log_config "docker pull ok (fallback): ${image}"
-      return 0
+        log_config "docker pull ok (fallback): ${resolved}"
+        return 0
+      fi
     fi
   done
 
