@@ -50,7 +50,7 @@
         <div v-else class="empty-hint">暂无文件夹，请添加或选择路径</div>
 
         <div v-if="!fnosAvailable" class="path-manual">
-          <input v-model="newPath" placeholder="手动输入路径，如 /data 或 /vol1/music" class="path-input" @keydown.enter="addPath" />
+          <input v-model="newPath" placeholder="手动输入容器内路径，如 /data 或 /data/子目录" class="path-input" @keydown.enter="addPath" />
           <button class="btn-primary btn-sm" @click="addPath">添加</button>
         </div>
       </div>

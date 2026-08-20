@@ -5,6 +5,11 @@ const FILE_PATHS_KEY = 'file.paths'
 const DOWNLOAD_PATH_KEY = 'download.savePath'
 const TAG_DIRS_KEY = 'tag.dirs'
 
+function getDefaultMusicPath() {
+  // Docker/FPK 模式下，容器内默认音乐目录通常由 DOWNLOAD_PATH 决定
+  return process.env.DOWNLOAD_PATH || '/data'
+}
+
 function getSetting(key) {
   const row = getDB().prepare('SELECT value FROM settings WHERE key = ?').get(key)
   return row?.value
@@ -78,9 +83,13 @@ export function migrateFilePaths(defaultDataPath = '/data') {
 export function addFilePath(dirPath, { fromPicker = false } = {}) {
   const p = dirPath.trim()
   if (!p) throw new Error('请提供路径')
-  if (!fromPicker && !fs.existsSync(p)) throw new Error('目录不存在')
+  if (!fromPicker && !fs.existsSync(p)) {
+    const musicRoot = getDefaultMusicPath()
+    throw new Error(`目录不存在：${p}。Docker/FPK 环境下只能添加“容器内可见”的路径。建议添加 ${musicRoot} 或其子目录。`)
+  }
   if (fromPicker && !fs.existsSync(p) && !isAuthorizedPath(p)) {
-    throw new Error('目录不可用，请确认已在飞牛中授权该路径')
+    const musicRoot = getDefaultMusicPath()
+    throw new Error(`目录不可用：${p}。请确认飞牛已授权该路径，并且该目录在容器内可见。默认音乐目录为 ${musicRoot}（如 /data），建议添加 ${musicRoot} 或其子目录。`)
   }
   const paths = getFilePaths()
   if (paths.includes(p)) throw new Error('路径已存在')
@@ -94,9 +103,13 @@ export function updateFilePath(oldPath, newPath, { fromPicker = false } = {}) {
   const from = oldPath.trim()
   const to = newPath.trim()
   if (!from || !to) throw new Error('请提供原路径和新路径')
-  if (!fromPicker && !fs.existsSync(to)) throw new Error('新目录不存在')
+  if (!fromPicker && !fs.existsSync(to)) {
+    const musicRoot = getDefaultMusicPath()
+    throw new Error(`新目录不存在：${to}。Docker/FPK 环境下只能添加“容器内可见”的路径。建议添加 ${musicRoot} 或其子目录。`)
+  }
   if (fromPicker && !fs.existsSync(to) && !isAuthorizedPath(to)) {
-    throw new Error('目录不可用，请确认已在飞牛中授权该路径')
+    const musicRoot = getDefaultMusicPath()
+    throw new Error(`目录不可用：${to}。请确认飞牛已授权该路径，并且该目录在容器内可见。默认音乐目录为 ${musicRoot}（如 /data），建议添加 ${musicRoot} 或其子目录。`)
   }
 
   const paths = getFilePaths()
