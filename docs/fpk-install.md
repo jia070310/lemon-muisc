@@ -9,8 +9,30 @@ ghcr.io/jia070310/lemon-muisc:latest
 ## 安装
 
 1. 应用中心 → **手动安装** → 选择 `fpk/lemon-music.fpk`
-2. 首次启动会自动 `docker pull`（走飞牛 Docker 引擎）
-3. 浏览器打开 `http://飞牛IP:7983`
+2. 安装过程中会显示 **拉取镜像进度**（`docker pull` 输出）
+3. 完成后提示「安装完成」，再到应用中心 **启动** 应用
+4. 浏览器打开 `http://飞牛IP:7983`
+
+### 安装进度与日志
+
+| 内容 | 位置 |
+|------|------|
+| 安装界面进度 | 应用中心安装窗口（脚本 `echo` / `docker pull` 输出） |
+| 详细日志 | `${TRIM_PKGVAR}/log/install.log`（一般为 `/var/apps/lemon-music/var/log/install.log`） |
+| 安装状态 | `${TRIM_PKGVAR}/install.status`（`pulling` / `completed` / `failed`） |
+| 拉取失败原因 | 应用中心弹窗（写入 `TRIM_TEMP_LOGFILE`） |
+
+安装阶段脚本说明：
+
+- `install_init`：检查 Docker 是否可用
+- `install_callback`：拉取 `ghcr.io/jia070310/lemon-muisc:latest` 并输出进度
+- 升级时 `upgrade_callback` 同样会拉取最新镜像
+
+SSH 查看实时日志示例：
+
+```bash
+tail -f /var/apps/lemon-music/var/log/install.log
+```
 
 ## 国内网络与镜像加速
 

@@ -1,2 +1,9 @@
 #!/bin/bash
+
+. "$(dirname "$0")/pull-image.sh"
+
+init_log
+pull_image_with_progress "升级"
+mark_install_complete "升级"
+
 exit 0

@@ -1,6 +1,12 @@
 #!/bin/bash
 
 FILE_PATH="${TRIM_APPDEST}/docker/docker-compose.yaml"
+STATUS_FILE="${TRIM_PKGVAR}/install.status"
+LOG_FILE="${TRIM_PKGVAR}/log/install.log"
+
+if [ ! -f "${LOG_FILE}" ] && [ -f "${TRIM_PKGVAR}/install.log" ]; then
+  LOG_FILE="${TRIM_PKGVAR}/install.log"
+fi
 
 is_docker_running () {
   DOCKER_NAME=""
@@ -17,6 +23,12 @@ is_docker_running () {
 
 case $1 in
 start)
+  if [ -f "${STATUS_FILE}" ]; then
+    echo "最近安装/升级状态: $(cat "${STATUS_FILE}")"
+  fi
+  if [ -f "${LOG_FILE}" ]; then
+    echo "安装日志: ${LOG_FILE}"
+  fi
   exit 0
   ;;
 stop)

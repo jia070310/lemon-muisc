@@ -1,2 +1,9 @@
 #!/bin/bash
+
+. "$(dirname "$0")/pull-image.sh"
+
+init_log
+log_line "升级前检查..."
+ensure_docker
+log_line "升级检查通过。"
 exit 0
