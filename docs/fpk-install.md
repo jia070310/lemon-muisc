@@ -1,100 +1,60 @@
 # 飞牛 FPK 安装说明
 
-FPK **不包含 Docker 镜像**，体积约几 MB。安装/启动时由 **飞牛系统内置 Docker** 按 `docker-compose.yaml` 拉取：
+FPK **不包含 Docker 镜像**（约 40KB）。点击「安装」后，在**安装窗口内**完成镜像拉取，不是后台静默执行。
 
-```text
-ghcr.io/jia070310/lemon-muisc:latest
-```
-
-## 安装
+## 安装流程
 
 1. 应用中心 → **手动安装** → 选择 `fpk/lemon-music.fpk`
-2. 安装过程中会显示 **拉取镜像进度**（`docker pull` 输出）
-3. 完成后提示「安装完成」，再到应用中心 **启动** 应用
-4. 浏览器打开 `http://飞牛IP:7983`
+2. **安装向导**（安装界面内）：
+   - 拉取方式：官方 ghcr.io / 自定义镜像 / 跳过拉取
+   - 镜像标签：`latest` 或 `v1.0.0`
+   - 拉取超时：5～30 分钟
+   - 网络加速说明
+3. 点击「安装」→ **本窗口实时显示** `docker pull` 进度
+4. 显示「安装完成」→ 应用中心 **启动** → `http://飞牛IP:7983`
 
-### 安装进度与日志
+## 安装向导选项
+
+| 选项 | 说明 |
+|------|------|
+| 官方 ghcr.io | `ghcr.io/jia070310/lemon-muisc:<标签>` |
+| 自定义镜像地址 | 填国内同步后的完整地址，如 `registry.cn-xxx.com/xxx/lemon-music:latest` |
+| 跳过拉取 | 已 `docker load` 或本地有镜像时使用 |
+| 拉取超时 | 超时后安装失败并提示，可延长后重装 |
+
+## 进度与日志
 
 | 内容 | 位置 |
 |------|------|
-| 安装界面进度 | 应用中心安装窗口（脚本 `echo` / `docker pull` 输出） |
-| 详细日志 | `${TRIM_PKGVAR}/log/install.log`（一般为 `/var/apps/lemon-music/var/log/install.log`） |
-| 安装状态 | `${TRIM_PKGVAR}/install.status`（`pulling` / `completed` / `failed`） |
-| 拉取失败原因 | 应用中心弹窗（写入 `TRIM_TEMP_LOGFILE`） |
-
-安装阶段脚本说明：
-
-- `install_init`：检查 Docker 是否可用
-- `install_callback`：拉取 `ghcr.io/jia070310/lemon-muisc:latest` 并输出进度
-- 升级时 `upgrade_callback` 同样会拉取最新镜像
-
-SSH 查看实时日志示例：
+| 安装窗口进度 | 向导确认后的 `install_callback` 输出 |
+| 详细日志 | `/var/apps/lemon-music/var/log/install.log` |
+| 状态文件 | `/var/apps/lemon-music/var/install.status` |
+| 失败原因 | 应用中心弹窗 |
 
 ```bash
 tail -f /var/apps/lemon-music/var/log/install.log
 ```
 
-## 国内网络与镜像加速
+## 国内网络与加速器
 
-**是的**：拉取由飞牛 **Docker** 完成，不是 FPK 自己下载。
+拉取由 **飞牛内置 Docker** 执行。
 
-但要注意：
+| 方式 | 对 ghcr.io |
+|------|------------|
+| 飞牛 Docker Hub 镜像加速 | **无效** |
+| 安装向导「自定义镜像地址」 | **有效**（需先同步到国内仓库） |
+| 系统代理 / 科学上网 | 有效 |
+| SSH `docker load` + 向导选「跳过拉取」 | 有效 |
 
-| 加速类型 | 能否加速本镜像 |
-|----------|----------------|
-| 飞牛 Docker 里配的 **Docker Hub 镜像站**（docker.io） | **不能**，本镜像在 **ghcr.io**（GitHub），不是 Docker Hub |
-| 代理 / 科学上网 | 可以 |
-| 手动导入离线 tar | 可以 |
+飞牛 **Docker → 镜像加速** 仍可配置（加速 docker.io 其他镜像），但对本应用默认源无效。
 
-### 在飞牛里配置 Docker Hub 加速（仍建议配置）
+### 自定义镜像示例
 
-路径一般为：**控制面板 / 系统设置 → Docker → 镜像加速**（不同版本菜单名可能略有差异）。
+1. 在有网络的机器：`docker pull ghcr.io/jia070310/lemon-muisc:latest`
+2. 打 tag 并 push 到阿里云 ACR：`docker tag ... registry.cn-hangzhou.aliyuncs.com/你的/lemon-music:latest`
+3. 安装向导选「自定义镜像地址」并填入上述地址
 
-示例（仅对 `docker.io` 有效）：
-
-```json
-{
-  "registry-mirrors": [
-    "https://docker.1ms.run",
-    "https://docker.xuanyuan.me"
-  ]
-}
-```
-
-保存后重启 Docker 服务。这**不能**直接加速 `ghcr.io`，但以后拉其他 Hub 镜像会更快。
-
-### ghcr.io 拉不动时的办法
-
-**办法 1：SSH 预拉（有代理时）**
-
-```bash
-docker pull ghcr.io/jia070310/lemon-muisc:latest
-```
-
-拉成功后再在应用中心启动「柠檬音乐下载」。
-
-**办法 2：离线导入（无公网时）**
-
-在有网络的电脑上：
-
-```bash
-docker pull ghcr.io/jia070310/lemon-muisc:latest
-docker save -o lemon-music.tar ghcr.io/jia070310/lemon-muisc:latest
-```
-
-把 `lemon-music.tar` 上传到飞牛，SSH 执行：
-
-```bash
-docker load -i /path/to/lemon-music.tar
-```
-
-**办法 3：自建镜像加速（进阶）**
-
-把 `ghcr.io/jia070310/lemon-muisc:latest` 同步到阿里云 ACR / 腾讯云 / Docker Hub，并修改 `fpk/app/docker/docker-compose.yaml` 里的 `image` 为你的仓库地址，再重新 `npm run fpk:build`。
-
-> 飞牛目前**没有**像 Docker Hub 那样通用的「ghcr.io 一键加速」；`registry-mirrors` 主要面向 `docker.io`。若官方后续支持按 registry 配置代理，可在 Docker 高级设置里为 `ghcr.io` 单独加代理。
-
-## 本机打包 FPK
+## 本机打包
 
 ```powershell
 npm run fpk:build

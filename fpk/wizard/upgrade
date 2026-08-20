@@ -1,0 +1,50 @@
+[
+  {
+    "stepTitle": "升级说明",
+    "items": [
+      {
+        "type": "tips",
+        "helpText": "升级将重新拉取 Docker 镜像，进度显示在本窗口。配置与上次安装一致，可在下方调整拉取方式与超时。"
+      },
+      {
+        "type": "select",
+        "field": "wizard_pull_source",
+        "label": "拉取方式",
+        "initValue": "ghcr_direct",
+        "options": [
+          { "label": "官方 ghcr.io", "value": "ghcr_direct" },
+          { "label": "自定义镜像地址", "value": "custom_image" },
+          { "label": "跳过拉取", "value": "skip_pull" }
+        ]
+      },
+      {
+        "type": "select",
+        "field": "wizard_image_tag",
+        "label": "镜像标签",
+        "initValue": "latest",
+        "options": [
+          { "label": "latest", "value": "latest" },
+          { "label": "v1.0.0", "value": "v1.0.0" }
+        ]
+      },
+      {
+        "type": "text",
+        "field": "wizard_custom_image",
+        "label": "自定义镜像地址",
+        "initValue": ""
+      },
+      {
+        "type": "select",
+        "field": "wizard_pull_timeout",
+        "label": "拉取超时",
+        "initValue": "600",
+        "options": [
+          { "label": "5 分钟", "value": "300" },
+          { "label": "10 分钟", "value": "600" },
+          { "label": "15 分钟", "value": "900" },
+          { "label": "30 分钟", "value": "1800" }
+        ]
+      }
+    ]
+  }
+]

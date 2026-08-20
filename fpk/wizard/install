@@ -1,0 +1,71 @@
+[
+  {
+    "stepTitle": "安装说明",
+    "items": [
+      {
+        "type": "tips",
+        "helpText": "<b>安装过程包含拉取 Docker 镜像</b>，会在本安装窗口中实时显示进度，请勿关闭窗口。<br><br>• 默认从 <code>ghcr.io/jia070310/lemon-muisc</code> 拉取<br>• 飞牛「Docker 镜像加速」仅对 Docker Hub 有效，<b>不能加速 ghcr.io</b><br>• 国内网络慢时，可选用「自定义镜像地址」或先 SSH 手动导入镜像"
+      }
+    ]
+  },
+  {
+    "stepTitle": "镜像拉取",
+    "items": [
+      {
+        "type": "select",
+        "field": "wizard_pull_source",
+        "label": "拉取方式",
+        "initValue": "ghcr_direct",
+        "options": [
+          { "label": "官方 ghcr.io（推荐）", "value": "ghcr_direct" },
+          { "label": "自定义镜像地址（国内镜像站同步后）", "value": "custom_image" },
+          { "label": "跳过拉取（已手动 docker load / 本地已有）", "value": "skip_pull" }
+        ]
+      },
+      {
+        "type": "select",
+        "field": "wizard_image_tag",
+        "label": "镜像标签（官方 ghcr.io 时生效）",
+        "initValue": "latest",
+        "options": [
+          { "label": "latest（最新）", "value": "latest" },
+          { "label": "v1.0.0", "value": "v1.0.0" }
+        ]
+      },
+      {
+        "type": "text",
+        "field": "wizard_custom_image",
+        "label": "自定义镜像地址（选「自定义」时必填）",
+        "initValue": "",
+        "placeholder": "例如 registry.cn-hangzhou.aliyuncs.com/你的命名空间/lemon-music:latest"
+      },
+      {
+        "type": "select",
+        "field": "wizard_pull_timeout",
+        "label": "拉取超时",
+        "initValue": "600",
+        "options": [
+          { "label": "5 分钟", "value": "300" },
+          { "label": "10 分钟（推荐）", "value": "600" },
+          { "label": "15 分钟", "value": "900" },
+          { "label": "30 分钟", "value": "1800" }
+        ]
+      }
+    ]
+  },
+  {
+    "stepTitle": "网络加速提示",
+    "items": [
+      {
+        "type": "tips",
+        "helpText": "若官方源拉取失败，可尝试：<br>1. 在飞牛 <b>Docker → 设置</b> 配置系统代理（若有）<br>2. 将镜像同步到阿里云/腾讯云后，在上一步填<b>自定义镜像地址</b><br>3. 在有网络的电脑 <code>docker pull</code> 后 <code>docker save</code>，传到 NAS 执行 <code>docker load</code>，再选「跳过拉取」<br><br>点击「安装」后，将立即开始拉取并显示进度。"
+      },
+      {
+        "type": "switch",
+        "field": "wizard_apply_docker_mirror",
+        "label": "尝试使用飞牛 Docker 已配置的 registry-mirrors（对 ghcr.io 通常无效，可忽略）",
+        "initValue": "false"
+      }
+    ]
+  }
+]

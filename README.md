@@ -98,7 +98,9 @@ docker compose up -d
 ## 飞牛 NAS（FPK）
 
 应用 ID：`lemon-music`，桌面显示名：**柠檬音乐下载**。  
-安装时飞牛 Docker 拉取 `ghcr.io/jia070310/lemon-muisc:latest`（包内仅配置，约几 MB）。
+安装时飞牛 Docker 拉取 `ghcr.io/jia070310/lemon-muisc:latest`（包约 40KB）。
+
+**安装向导**（打开安装界面时）：可选拉取方式、超时、自定义镜像地址；点击安装后在**同一窗口**显示拉取进度。详见 [docs/fpk-install.md](docs/fpk-install.md)。
 
 ### 打包
 

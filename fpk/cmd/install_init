@@ -3,16 +3,8 @@
 . "$(dirname "$0")/pull-image.sh"
 
 init_log
-read_image_from_compose
-
-log_line "安装前检查..."
+resolve_image_from_wizard
 ensure_docker
 
-if docker image inspect "${IMAGE}" >/dev/null 2>&1; then
-  log_line "检测到本地已有镜像缓存，安装时将尝试更新至最新版本。"
-else
-  log_line "本地尚无镜像，安装时将首次从 ghcr.io 拉取。"
-fi
-
-log_line "环境检查通过。"
+log_line "安装向导已通过，即将开始拉取镜像（请勿关闭本窗口）..."
 exit 0
