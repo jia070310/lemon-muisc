@@ -27,7 +27,7 @@
 | 后端 | Node.js 20+、Express 5、WebSocket |
 | 数据 | better-sqlite3（配置与任务） |
 | 标签 | node-id3、music-metadata |
-| 部署 | Docker（`node:22-alpine`）、飞牛 FPK |
+| 部署 | Docker 镜像（`ghcr.io/jia070310/lemon-muisc`）、飞牛 FPK |
 
 默认 Web 端口：**7983**。
 
@@ -66,21 +66,44 @@ npm start
 2. 在 **设置 → 文件路径** 中添加音乐目录（下载保存路径从这些目录里选择）
 3. 到 **搜索** 试听或下载；到 **标签编辑** 整理本地文件
 
-## Docker
+## Docker（推荐：拉取 GitHub 镜像）
+
+镜像发布在 GitHub Container Registry：
+
+```text
+ghcr.io/jia070310/lemon-muisc:latest
+```
+
+推送到 `main` 或打 `v*` 标签后，GitHub Actions 会自动构建并推送。首次构建完成后，到仓库 **Packages** 打开该镜像，将可见性改为 **Public**，别人才能免登录拉取。
+
+### 拉取并启动
+
+```bash
+# 公开包：直接拉
+docker pull ghcr.io/jia070310/lemon-muisc:latest
+
+# 若包仍是私有：先登录
+# echo YOUR_GITHUB_TOKEN | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
+
+docker compose up -d
+```
+
+访问 http://localhost:7983 。请按实际路径修改 `docker-compose.yml` 中的卷：
+
+- `/data`：音乐下载与扫描目录（`DOWNLOAD_PATH`）
+- `/config`：配置与数据库（`CONFIG_PATH`）
+
+更新到最新镜像：
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+### 本地自行构建（可选）
 
 ```bash
 docker compose up -d --build
-```
-
-默认映射 `7983:7983`。请按实际 NAS/本机路径修改 `docker-compose.yml` 中的卷：
-
-- `/data`：音乐下载与扫描目录（环境变量 `DOWNLOAD_PATH`）
-- `/config`：配置与数据库（环境变量 `CONFIG_PATH`）
-
-单独构建镜像：
-
-```bash
-npm run docker:build
 # 或
 docker build -t lemon-music:latest .
 ```
@@ -109,12 +132,13 @@ npm run fpk:build
 | `npm run dev` | 同时启动前后端开发服务 |
 | `npm run build` | 构建前端到 `dist/public` |
 | `npm start` | 仅启动后端（提供 API 与静态页面） |
-| `npm run docker:build` | 构建 Docker 镜像 |
+| `npm run docker:build` | 本地构建 Docker 镜像 `lemon-music:latest` |
 | `npm run fpk:build` | 构建飞牛 FPK（Windows PowerShell） |
 
 ## 目录结构
 
 ```
+├── .github/workflows/   # 自动构建并推送 GHCR 镜像
 ├── src/                 # Vue 前端
 ├── server/              # Express 后端与音源运行时
 ├── public/              # 静态资源（图标等）

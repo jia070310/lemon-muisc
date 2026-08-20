@@ -1,11 +1,13 @@
 services:
-  lx-music-nas:
+  lemon-music:
+    image: ghcr.io/jia070310/lemon-muisc:latest
     build: .
-    container_name: lx-music-nas
+    container_name: lemon-music
     ports:
       - "7983:7983"
     volumes:
-      - /vol1/music:/data
+      # 请改成你的音乐目录和配置目录
+      - ./data:/data
       - ./config:/config
     environment:
       - PORT=7983
