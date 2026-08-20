@@ -33,6 +33,11 @@ esac
 log_config "install paths music=${music_path} downloads=${downloads_path} config=${config_path}"
 
 pull_image_with_progress "安装"
+
+if ! docker image inspect "$(get_compose_image)" >/dev/null 2>&1; then
+  fail_install "安装结束时本地仍无镜像 $(get_compose_image)。请勿选「跳过拉取」，或先 SSH 执行 docker pull 后再装。"
+fi
+
 mark_install_complete "安装"
 
 if recreate_compose_stack; then

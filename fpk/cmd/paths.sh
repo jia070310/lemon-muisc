@@ -283,6 +283,54 @@ mount_matches_expected() {
   return 0
 }
 
+# 启用/重建前确保本地有镜像（安装若秒完成、飞牛未拉取时，这里补拉）
+ensure_image_available() {
+  local image="${1:-}"
+  local tag registry
+  local log_file="${TRIM_PKGVAR}/log/compose.recreate.log"
+
+  if [ -z "${image}" ]; then
+    image="$(get_compose_image)"
+  fi
+
+  if docker image inspect "${image}" >/dev/null 2>&1; then
+    log_config "image present: ${image}"
+    return 0
+  fi
+
+  mkdir -p "$(dirname "${log_file}")" 2>/dev/null || true
+  {
+    echo "=== pull missing image $(date -Iseconds) ==="
+    echo "image=${image}"
+  } >> "${log_file}" 2>&1
+
+  log_config "image missing, pulling: ${image}"
+  if docker pull "${image}" >> "${log_file}" 2>&1; then
+    log_config "docker pull ok: ${image}"
+    return 0
+  fi
+
+  # 镜像地址失败时按仓库兜底再试
+  tag="${image##*:}"
+  [ "${tag}" = "${image}" ] && tag="latest"
+  for registry in "ghcr.1ms.run/jia070310/lemon-muisc" "ghcr.io/jia070310/lemon-muisc"; do
+    image="${registry}:${tag}"
+    echo "fallback pull ${image}" >> "${log_file}" 2>&1
+    if docker pull "${image}" >> "${log_file}" 2>&1; then
+      mkdir -p "${TRIM_PKGETC}" 2>/dev/null || true
+      cat > "${IMAGE_CONF}" <<EOF
+SAVED_IMAGE="${image}"
+SAVED_AT="$(date -Iseconds)"
+EOF
+      log_config "docker pull ok (fallback): ${image}"
+      return 0
+    fi
+  done
+
+  log_config "all image pulls failed"
+  return 1
+}
+
 recreate_compose_stack() {
   local log_file="${TRIM_PKGVAR}/log/compose.recreate.log"
   local music downloads config image
@@ -307,6 +355,14 @@ recreate_compose_stack() {
 
   mkdir -p "${music}" "${downloads}" "${config}" 2>/dev/null || true
   write_compose_file "${music}" "${downloads}" "${config}"
+  image="$(get_compose_image)"
+
+  if ! ensure_image_available "${image}"; then
+    log_config "recreate aborted: no image"
+    echo "本地没有 Docker 镜像，自动拉取也失败。请检查网络，或在 SSH 执行: docker pull ${image}" >> "${log_file}"
+    return 1
+  fi
+  image="$(get_compose_image)"
 
   {
     echo "=== recreate $(date -Iseconds) ==="
@@ -318,7 +374,7 @@ recreate_compose_stack() {
     docker rm -f "${CONTAINER_NAME}" 2>/dev/null || true
     docker compose -p "${COMPOSE_PROJECT}" -f "${COMPOSE_FILE}" down --remove-orphans 2>/dev/null || true
     docker compose -p "lemon-music" -f "${COMPOSE_FILE}" down --remove-orphans 2>/dev/null || true
-  } > "${log_file}" 2>&1
+  } >> "${log_file}" 2>&1
 
   if ! docker run -d \
       --name "${CONTAINER_NAME}" \

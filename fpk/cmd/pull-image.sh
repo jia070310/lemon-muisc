@@ -236,10 +236,11 @@ pull_image_with_fallback() {
 
   if [ "${source}" = "custom_image" ]; then
     update_compose_image
-    if compose_pull_with_timeout || docker_pull_with_timeout; then
+    # 优先 docker pull（不依赖 compose 项目）；失败再 compose pull
+    if docker_pull_with_timeout || compose_pull_with_timeout; then
       return 0
     fi
-    fail_install "镜像拉取失败: ${IMAGE}。请检查自定义地址，或 SSH 测试 docker compose pull。"
+    fail_install "镜像拉取失败: ${IMAGE}。请检查自定义地址，或 SSH 执行: docker pull ${IMAGE}"
   fi
 
   for registry in "${FALLBACK_REGISTRIES[@]}"; do
@@ -247,16 +248,17 @@ pull_image_with_fallback() {
     update_compose_image
     log_line "尝试镜像源: ${IMAGE}"
 
-    if compose_pull_with_timeout; then
-      pulled=1
-      log_line "compose 拉取成功: ${IMAGE}"
-      break
-    fi
-
-    log_line "compose pull 失败，尝试 docker pull..."
+    # 先 docker pull，避免「安装秒完成、本地无镜像」
     if docker_pull_with_timeout; then
       pulled=1
       log_line "docker pull 成功: ${IMAGE}"
+      break
+    fi
+
+    log_line "docker pull 失败，尝试 compose pull..."
+    if compose_pull_with_timeout; then
+      pulled=1
+      log_line "compose 拉取成功: ${IMAGE}"
       break
     fi
 
@@ -265,7 +267,11 @@ pull_image_with_fallback() {
   done
 
   if [ "${pulled}" -ne 1 ]; then
-    fail_install "镜像拉取失败（已尝试 compose pull 与 docker pull）。若你已通过 Docker 项目安装成功，可重新安装并选「跳过拉取」。最后失败: ${last_err}"
+    fail_install "镜像拉取失败（已尝试 docker pull 与 compose pull）。请检查网络或选自定义加速地址。最后失败: ${last_err}"
+  fi
+
+  if ! image_exists_locally; then
+    fail_install "拉取命令已返回成功，但本地仍找不到镜像 ${IMAGE}。请 SSH 执行 docker images 核对。"
   fi
 }
 
