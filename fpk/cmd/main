@@ -22,7 +22,11 @@ start)
   fi
 
   if ! recreate_compose_stack; then
-    echo "容器启动失败（常见原因：镜像未拉取成功）。请查看 ${TRIM_PKGVAR}/log/compose.recreate.log，或 SSH 执行: docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest" > "${TRIM_TEMP_LOGFILE}"
+    tip="容器启动失败。请 SSH 执行: docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest 后重新启用。日志: ${TRIM_PKGVAR}/log/compose.recreate.log"
+    if [ -f "${TRIM_PKGVAR}/pull.last.log" ]; then
+      tip="${tip} | $(tail -n 5 "${TRIM_PKGVAR}/pull.last.log" 2>/dev/null | tr '\n' ' ')"
+    fi
+    echo "${tip}" > "${TRIM_TEMP_LOGFILE}"
     exit 1
   fi
   exit 0

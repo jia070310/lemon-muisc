@@ -44,6 +44,16 @@ fail_install() {
   exit 1
 }
 
+# SOFT_PULL_FAIL=1 时只记录错误并返回 1，不中断安装（交给飞牛 docker-project / 启用时再拉）
+abort_pull() {
+  log_line "错误: $*"
+  echo "$*" > "${TRIM_PKGVAR}/pull.failed" 2>/dev/null || true
+  if [ "${SOFT_PULL_FAIL:-0}" = "1" ]; then
+    return 1
+  fi
+  fail_install "$*"
+}
+
 read_image_from_compose() {
   if [ -f "${COMPOSE_FILE}" ]; then
     local parsed
@@ -198,7 +208,8 @@ compose_pull_with_timeout() {
     return 0
   fi
   if [ "${rc}" -eq 124 ]; then
-    fail_install "compose 拉取超时（${timeout_sec} 秒）。请延长超时或选「跳过拉取」。"
+    log_line "compose 拉取超时（${timeout_sec} 秒）"
+    return 124
   fi
   return "${rc}"
 }
@@ -218,7 +229,8 @@ docker_pull_with_timeout() {
   rc=$?
   cat "${pull_log}" | tee -a "${LOG_FILE}" || true
   if [ "${rc}" -eq 124 ]; then
-    fail_install "镜像拉取超时（${timeout_sec} 秒）。请延长超时或选「跳过拉取」。"
+    log_line "镜像拉取超时（${timeout_sec} 秒）"
+    return 124
   fi
   return "${rc}"
 }
@@ -273,17 +285,19 @@ pull_image_with_fallback() {
   local registry
   local pulled=0
   local last_err=""
+  local last_log=""
 
   if [ "${source}" = "custom_image" ]; then
     update_compose_image
-    # 优先 docker pull（不依赖 compose 项目）；失败再 compose pull
     if docker_pull_with_timeout || compose_pull_with_timeout; then
       if normalize_pulled_image; then
         return 0
       fi
       log_line "警告: pull 返回成功但 inspect 未命中，继续尝试其他方式…"
     fi
-    fail_install "镜像拉取失败: ${IMAGE}。请检查自定义地址，或 SSH 执行: docker pull ${IMAGE}"
+    last_log="$(tail -n 8 "${TRIM_PKGVAR}/pull.last.log" 2>/dev/null | tr '\n' ' ')"
+    abort_pull "镜像拉取失败: ${IMAGE}。${last_log}请 SSH 执行: docker pull ${IMAGE}"
+    return 1
   fi
 
   for registry in "${FALLBACK_REGISTRIES[@]}"; do
@@ -291,7 +305,6 @@ pull_image_with_fallback() {
     update_compose_image
     log_line "尝试镜像源: ${IMAGE}"
 
-    # 先 docker pull，避免「安装秒完成、本地无镜像」
     if docker_pull_with_timeout; then
       if normalize_pulled_image; then
         pulled=1
@@ -316,15 +329,17 @@ pull_image_with_fallback() {
   done
 
   if [ "${pulled}" -ne 1 ]; then
-    # 飞牛 docker-project 可能已在后台拉好，再扫一次本地
     IMAGE="${DEFAULT_REGISTRY}:${tag}"
     if normalize_pulled_image; then
       log_line "未直接拉取，但本地已有可用镜像: ${IMAGE}"
       return 0
     fi
     docker images 2>&1 | tee -a "${LOG_FILE}" || true
-    fail_install "镜像拉取失败（已尝试 docker pull 与 compose pull）。请 SSH 执行: docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest 后重试。最后尝试: ${last_err}"
+    last_log="$(tail -n 8 "${TRIM_PKGVAR}/pull.last.log" 2>/dev/null | tr '\n' ' ')"
+    abort_pull "镜像拉取失败。详情: ${last_log}可先 SSH: docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest 后再启用。最后尝试: ${last_err}"
+    return 1
   fi
+  return 0
 }
 
 pull_image_with_progress() {
@@ -344,16 +359,27 @@ pull_image_with_progress() {
     if image_exists_locally; then
       log_line "本地已存在镜像: ${IMAGE}"
     else
-      fail_install "本地不存在镜像 ${IMAGE}。你已通过 Docker 项目部署的话，请确认 compose 里 image 与此一致，或先执行 docker compose pull。"
+      if [ "${SOFT_PULL_FAIL:-0}" = "1" ]; then
+        log_line "本地暂无镜像，安装将继续；请稍后 SSH 拉取或启用时自动拉取"
+        update_compose_image
+        save_image_config
+        return 1
+      fi
+      fail_install "本地不存在镜像 ${IMAGE}。请先 SSH 执行 docker pull，或不要选「跳过拉取」。"
     fi
   else
-    pull_image_with_fallback
+    if ! pull_image_with_fallback; then
+      update_compose_image
+      save_image_config
+      return 1
+    fi
     log_line "镜像拉取完成。"
     docker images "${IMAGE}" 2>&1 | tee -a "${LOG_FILE}" || true
   fi
 
   update_compose_image
   save_image_config
+  return 0
 }
 
 mark_install_complete() {

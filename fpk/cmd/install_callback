@@ -32,24 +32,26 @@ esac
 
 log_config "install paths music=${music_path} downloads=${downloads_path} config=${config_path}"
 
-pull_image_with_progress "安装"
+# 安装回调里 pull 失败不阻断安装：飞牛 docker-project 仍可继续拉；启用时还会再拉
+SOFT_PULL_FAIL=1
+if pull_image_with_progress "安装"; then
+  log_config "install pull ok image=${IMAGE}"
+else
+  log_config "install pull deferred — docker-project/enable will retry"
+  log_line "安装将继续完成。若启用失败，请 SSH 执行: docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest"
+fi
 
-# 纠正加速源可能改写的镜像名后再校验
+# 若本地已有镜像（本脚本或飞牛已拉到），纠正别名
 IMAGE="$(get_compose_image)"
-if ! docker image inspect "${IMAGE}" >/dev/null 2>&1; then
-  # shellcheck disable=SC1091
-  if resolved="$(resolve_local_image_name "${IMAGE}" 2>/dev/null)"; then
-    IMAGE="${resolved}"
-    mkdir -p "${TRIM_PKGETC}" 2>/dev/null || true
-    cat > "${IMAGE_CONF}" <<EOF
+if resolved="$(resolve_local_image_name "${IMAGE}" 2>/dev/null)"; then
+  IMAGE="${resolved}"
+  mkdir -p "${TRIM_PKGETC}" 2>/dev/null || true
+  cat > "${IMAGE_CONF}" <<EOF
 SAVED_IMAGE="${IMAGE}"
 SAVED_AT="$(date -Iseconds)"
 EOF
-    write_compose_file "${music_path}" "${downloads_path}" "${config_path}"
-    log_config "install using image alias ${IMAGE}"
-  else
-    fail_install "安装结束时本地仍无 lemon-muisc 镜像。请 SSH 执行: docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest 后重装/启用。"
-  fi
+  write_compose_file "${music_path}" "${downloads_path}" "${config_path}"
+  log_config "install using image ${IMAGE}"
 fi
 
 mark_install_complete "安装"
