@@ -4,21 +4,13 @@
 
 log_config "config_callback start music=${wizard_music_path:-} downloads=${wizard_downloads_path:-} accessible=${TRIM_DATA_ACCESSIBLE_PATHS:-}"
 
-# 运行设置选的路径优先；否则用访问权限里授权的目录（第1个=音乐库，第2个=下载）
+# 访问权限变更时飞牛会走 config 流程并带上 TRIM_DATA_ACCESSIBLE_PATHS
+save_accessible_paths
+
 if ! apply_saved_paths; then
-  if parse_accessible_paths; then
-    config="$(resolve_config_path)"
-    save_paths "${RESOLVED_MUSIC}" "${RESOLVED_DOWNLOADS}" "${config}"
-    mkdir -p "${config}" "${RESOLVED_MUSIC}" "${RESOLVED_DOWNLOADS}" 2>/dev/null || true
-    write_mounts_meta "${RESOLVED_MUSIC}" "${RESOLVED_DOWNLOADS}" "${config}"
-    write_compose_file "${RESOLVED_MUSIC}" "${RESOLVED_DOWNLOADS}" "${config}"
-    touch "${config}/.user-paths-configured" 2>/dev/null || true
-    log_config "used accessible paths music=${RESOLVED_MUSIC} downloads=${RESOLVED_DOWNLOADS}"
-  else
-    echo "请在运行设置中选择音乐库与下载目录，或在访问权限中授权两个文件夹。" > "${TRIM_TEMP_LOGFILE}"
-    log_config "config_callback paths incomplete"
-    exit 1
-  fi
+  echo "请在「访问权限」添加音乐库与下载文件夹，或在「运行设置」填写绝对路径。" > "${TRIM_TEMP_LOGFILE}"
+  log_config "config_callback paths incomplete"
+  exit 1
 fi
 
 if ! recreate_compose_stack; then

@@ -109,14 +109,27 @@ resolve_paths() {
   local downloads="${wizard_downloads_path}"
   local auth_music=""
   local auth_downloads=""
+  local default_music default_downloads
+
+  default_music="$(default_music_path)"
+  default_downloads="$(default_downloads_path)"
 
   if parse_accessible_paths; then
     auth_music="${RESOLVED_MUSIC}"
     auth_downloads="${RESOLVED_DOWNLOADS}"
   fi
 
-  [ -z "${music}" ] && music="${auth_music}"
-  [ -z "${downloads}" ] && downloads="${auth_downloads}"
+  # 安装占位路径（TRIM_PKGVAR/...）不算用户配置；优先用访问权限 / 向导新值
+  if [ -n "${auth_music}" ]; then
+    if [ -z "${music}" ] || [ "${music}" = "${default_music}" ]; then
+      music="${auth_music}"
+    fi
+  fi
+  if [ -n "${auth_downloads}" ]; then
+    if [ -z "${downloads}" ] || [ "${downloads}" = "${default_downloads}" ]; then
+      downloads="${auth_downloads}"
+    fi
+  fi
 
   if [ -n "${music}" ] && [ -z "${downloads}" ]; then
     downloads="${music}"
@@ -295,7 +308,6 @@ recreate_compose_stack() {
   mkdir -p "${music}" "${downloads}" "${config}" 2>/dev/null || true
   write_compose_file "${music}" "${downloads}" "${config}"
 
-  local rc=0
   {
     echo "=== recreate $(date -Iseconds) ==="
     echo "music=${music}"
