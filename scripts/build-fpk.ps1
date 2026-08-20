@@ -1,33 +1,28 @@
-# 飞牛 NAS FPK 打包脚本（离线内置镜像，安装时不拉取仓库）
-# 前置：Docker Desktop、fnpack（https://developer.fnnas.com/docs/cli/fnpack）
+# Feiniu FPK build (no bundled image; NAS Docker pulls ghcr.io at install)
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
-$ImageName = "lemon-music:latest"
+$FpkDir = Join-Path $Root "fpk"
 $TarPath = Join-Path $Root "fpk\app\docker\images\lemon-music.tar"
 
-Write-Host ">>> 构建前端..." -ForegroundColor Cyan
-Set-Location $Root
-npm run build
+if (Test-Path $TarPath) { Remove-Item -Force $TarPath -ErrorAction SilentlyContinue }
 
-Write-Host ">>> 构建 Docker 镜像 $ImageName ..." -ForegroundColor Cyan
-docker build -t $ImageName .
-
-Write-Host ">>> 导出离线镜像 tar（FPK 安装时 docker load，不拉取远程）..." -ForegroundColor Cyan
-New-Item -ItemType Directory -Force -Path (Split-Path $TarPath) | Out-Null
-docker save -o $TarPath $ImageName
-Write-Host "已写入 $TarPath"
-
-Write-Host ">>> 打包 FPK..." -ForegroundColor Cyan
-Set-Location (Join-Path $Root "fpk")
-$fnpack = Get-Command fnpack -ErrorAction SilentlyContinue
-if (-not $fnpack) {
-  $local = Join-Path $Root "tools\fnpack.exe"
-  if (Test-Path $local) { $fnpack = Get-Item $local }
+$fnpackPath = $null
+if (Get-Command fnpack -ErrorAction SilentlyContinue) {
+  $fnpackPath = (Get-Command fnpack).Source
+} elseif (Test-Path (Join-Path $Root "tools\fnpack.exe")) {
+  $fnpackPath = Join-Path $Root "tools\fnpack.exe"
 }
-if ($fnpack) {
-  & $fnpack.Source build
-  Get-ChildItem -Filter "*.fpk" | ForEach-Object { Write-Host "完成：$($_.FullName)" -ForegroundColor Green }
-} else {
-  Write-Host "未找到 fnpack。请从 https://developer.fnnas.com/docs/cli/fnpack 下载 Windows 版，改名为 fnpack.exe 后加入 PATH，或放到 tools\fnpack.exe" -ForegroundColor Yellow
+if (-not $fnpackPath) {
+  Write-Host "fnpack not found. Put fnpack.exe in tools\ or PATH." -ForegroundColor Red
+  exit 1
 }
+
+Write-Host ">>> fnpack build (pull ghcr.io/jia070310/lemon-muisc:latest on NAS)" -ForegroundColor Cyan
+Set-Location $FpkDir
+& $fnpackPath build
+
+$fpk = Join-Path $FpkDir "lemon-music.fpk"
+if (-not (Test-Path $fpk)) { throw "lemon-music.fpk was not created" }
+$sizeMb = [math]::Round((Get-Item $fpk).Length / 1MB, 2)
+Write-Host "Done: $fpk ($sizeMb MB)" -ForegroundColor Green

@@ -1,6 +1,2 @@
 #!/bin/bash
-IMAGE_TAR="${TRIM_APPDEST}/docker/images/lemon-music.tar"
-if [ -f "$IMAGE_TAR" ]; then
-  docker load -i "$IMAGE_TAR" || exit 1
-fi
 exit 0

@@ -11,7 +11,7 @@
   "microApp": true,
   "apiScope": ["trim.file.userAccess"],
   "docker": {
-    "image": "lemon-music:latest",
+    "image": "ghcr.io/jia070310/lemon-muisc:latest",
     "ports": [
       { "container": 7983, "host": 7983, "protocol": "tcp", "description": "Web UI" }
     ],

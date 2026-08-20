@@ -93,28 +93,26 @@ docker compose up -d
 
 打开 `http://127.0.0.1:7983`。飞牛把 volumes 左边改成例如 `/vol1/1000/music` 和 `/vol1/1000/lemon-music-config`。
 
-> FPK 安装包是另一条路线，包内自带离线镜像，不拉取 ghcr.io。
+> FPK 安装包体积小，**不内置镜像**；安装时由飞牛 Docker 拉取 `ghcr.io`。国内网络说明见 [docs/fpk-install.md](docs/fpk-install.md)。
 
-## 飞牛 NAS（FPK，离线镜像）
+## 飞牛 NAS（FPK）
 
 应用 ID：`lemon-music`，桌面显示名：**柠檬音乐下载**。  
-FPK 会把 `lemon-music:latest` 打成 tar 打进安装包，飞牛安装时 `docker load`，**不访问 ghcr.io**。
+安装时飞牛 Docker 拉取 `ghcr.io/jia070310/lemon-muisc:latest`（包内仅配置，约几 MB）。
 
-### 下载现成安装包
-
-GitHub Actions 会构建 `lemon-music-1.0.0.fpk`，可在仓库 [Releases](https://github.com/jia070310/lemon-muisc/releases) 或 Actions 的 **Build FPK** 产物中下载。在飞牛 **应用中心 → 手动安装** 选择该文件。
-
-### 本机自行打包
-
-需要：Node.js 20+、Docker、[fnpack](https://developer.fnnas.com/docs/cli/fnpack)（Windows 下载后改名为 `fnpack.exe` 加入 PATH）。
+### 打包
 
 ```powershell
 npm run fpk:build
 ```
 
-脚本会：构建前端 → `docker build` → `docker save` 到 `fpk/app/docker/images/` → `fnpack build`。
+生成 `fpk/lemon-music.fpk`，拷到飞牛 **应用中心 → 手动安装**。
 
-将生成的 `.fpk` 拷到飞牛，应用中心手动安装。
+### 国内拉取镜像
+
+- 走 **飞牛内置 Docker** 的 `docker pull`
+- Docker Hub **镜像加速** 对 `ghcr.io` **无效**；可配代理，或 SSH 预拉 / 离线 `docker load`  
+- 详见 [docs/fpk-install.md](docs/fpk-install.md)
 
 ## 常用脚本
 
@@ -124,7 +122,7 @@ npm run fpk:build
 | `npm run build` | 构建前端到 `dist/public` |
 | `npm start` | 仅启动后端（提供 API 与静态页面） |
 | `npm run docker:build` | 本地构建 Docker 镜像 `lemon-music:latest` |
-| `npm run fpk:build` | 构建离线 FPK（内置镜像 tar，不拉取仓库） |
+| `npm run fpk:build` | 打包 FPK（不内置镜像，安装时拉 ghcr.io） |
 
 ## 目录结构
 

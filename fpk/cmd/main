@@ -1,13 +1,6 @@
 #!/bin/bash
 
 FILE_PATH="${TRIM_APPDEST}/docker/docker-compose.yaml"
-IMAGE_TAR="${TRIM_APPDEST}/docker/images/lemon-music.tar"
-
-load_bundled_image () {
-  if [ -f "$IMAGE_TAR" ]; then
-    docker load -i "$IMAGE_TAR" || exit 1
-  fi
-}
 
 is_docker_running () {
   DOCKER_NAME=""
@@ -24,7 +17,6 @@ is_docker_running () {
 
 case $1 in
 start)
-  load_bundled_image
   exit 0
   ;;
 stop)
