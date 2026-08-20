@@ -83,15 +83,15 @@ services:
       DOWNLOAD_PATH: /data
       CONFIG_PATH: /config
     volumes:
-      - "~/Music/data:/data"
-      - "~/Music/config:/config"
+      - "/Music/data:/data"
+      - "/Music/config:/config"
 ```
 
 ```bash
 docker compose up -d
 ```
 
-打开 `http://127.0.0.1:7983`。飞牛把 volumes 左边改成例如 `/vol1/1000/music` 和 `/vol1/1000/lemon-music-config`。  
+飞牛把 volumes 左边改成例如 `/vol1/1000/music` 和 `/vol1/1000/lemon-music-config`。  考虑国内网络可以把ghcr.io/jia070310/lemon-muisc:latest修改为 加速器 ghcr.1ms.run/jia070310/lemon-muisc:latest
 **如何改 volumes、ghcr 加速** → [docs/docker-compose.md](docs/docker-compose.md)
 
 > FPK 安装包体积小，**不内置镜像**；安装时由飞牛 Docker 拉取 `ghcr.io`。国内网络说明见 [docs/fpk-install.md](docs/fpk-install.md)。
