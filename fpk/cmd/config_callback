@@ -2,16 +2,18 @@
 
 . "$(dirname "$0")/paths.sh"
 
-log_config "config_callback start env_music=${wizard_music_path:-} env_downloads=${wizard_downloads_path:-} accessible=${TRIM_DATA_ACCESSIBLE_PATHS:-}"
+log_config "config_callback start music=${wizard_music_path:-} downloads=${wizard_downloads_path:-} accessible=${TRIM_DATA_ACCESSIBLE_PATHS:-}"
 
-if apply_saved_paths; then
-  if recreate_compose_stack; then
-    log_config "config_callback recreate ok"
-  else
-    log_config "config_callback recreate failed — will retry on app status/start"
-  fi
-else
+if ! apply_saved_paths; then
+  echo "请填写音乐库与下载目录（NAS 绝对路径，如 /vol1/1000/MP3）" > "${TRIM_TEMP_LOGFILE}"
   log_config "config_callback paths incomplete"
+  exit 1
+fi
+
+if ! recreate_compose_stack; then
+  echo "路径已保存，但容器重建失败。请停用再启用应用，或到 Docker→lemon-music→存储位置手动改挂载后重建。" > "${TRIM_TEMP_LOGFILE}"
+  log_config "config_callback recreate failed"
+  # 不 exit 1：避免飞牛提示配置回调失败导致设置无法保存；挂载会在 main start 再试
 fi
 
 exit 0

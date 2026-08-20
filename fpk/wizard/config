@@ -3,20 +3,30 @@
     "stepTitle": "数据目录",
     "items": [
       {
+        "type": "tips",
+        "helpText": "<b>重要：</b>保存后应用会把路径写入 Docker 挂载并重建容器。<br>若 Docker「存储位置」仍显示 <code>@appdata</code>，请停用再启用应用；或在 Docker 项目里手动把 <code>/music</code>、<code>/downloads</code> 改成下方填写的 NAS 路径。"
+      },
+      {
         "type": "text",
         "field": "wizard_music_path",
-        "label": "音乐库目录（/music）",
+        "label": "音乐库目录（挂载到 /music）",
         "initValue": "",
-        "placeholder": "选择或填写 NAS 路径，如 /vol1/1000/MP3",
-        "helpText": "挂载到容器 /music，用于扫描与管理音乐文件"
+        "placeholder": "/vol1/1000/MP3",
+        "helpText": "填 NAS 原始路径，例如 /vol1/1000/MP3",
+        "rules": [
+          { "required": true, "message": "请填写音乐库目录" }
+        ]
       },
       {
         "type": "text",
         "field": "wizard_downloads_path",
-        "label": "下载目录（/downloads）",
+        "label": "下载目录（挂载到 /downloads）",
         "initValue": "",
-        "placeholder": "选择或填写 NAS 路径，如 /vol1/1000/music-downloads",
-        "helpText": "挂载到容器 /downloads，用于保存下载文件"
+        "placeholder": "/vol1/1000/mp3-0",
+        "helpText": "填 NAS 原始路径，例如 /vol1/1000/mp3-0",
+        "rules": [
+          { "required": true, "message": "请填写下载目录" }
+        ]
       }
     ]
   }

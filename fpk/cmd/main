@@ -6,42 +6,33 @@ is_docker_running() {
   docker inspect -f '{{.State.Running}}' "${CONTAINER_NAME}" 2>/dev/null | grep -qi true
 }
 
-ensure_containers_created() {
-  cd "${COMPOSE_DIR}" || return 1
-
-  # 若用户已在运行设置里配过路径，确保挂载真正生效
-  if paths_ready || resolve_paths; then
-    ensure_mounts_applied || true
-  fi
-
-  if is_docker_running; then
-    return 0
-  fi
-
-  if [ -f "${COMPOSE_ENV}" ]; then
-    if compose_up "${COMPOSE_PROJECT}" 2>&1 || compose_up "lemon-music" 2>&1; then
-      return 0
-    fi
-  fi
-
-  echo "Docker 容器启动失败。请检查 7983 端口、容器名冲突，或到运行设置重新保存数据目录。" > "${TRIM_TEMP_LOGFILE}"
-  return 1
-}
-
 case $1 in
 start)
-  if paths_ready || resolve_paths; then
-    ensure_mounts_applied || true
+  # 应用启动时：按已保存路径重写 compose 并拉起容器（覆盖飞牛安装时冻住的 @appdata 挂载）
+  if resolve_paths; then
+    config="$(resolve_config_path)"
+    write_compose_file "${RESOLVED_MUSIC}" "${RESOLVED_DOWNLOADS}" "${config}"
+    write_mounts_meta "${RESOLVED_MUSIC}" "${RESOLVED_DOWNLOADS}" "${config}"
+  elif [ -f "${COMPOSE_ENV}" ]; then
+    # shellcheck disable=SC1090
+    . "${COMPOSE_ENV}"
+    write_compose_file "${wizard_music_path}" "${wizard_downloads_path}" "${wizard_config_path}"
+  else
+    write_compose_file "$(default_music_path)" "$(default_downloads_path)" "$(default_config_path)"
+  fi
+
+  if ! recreate_compose_stack; then
+    echo "Docker 容器启动失败。请到 Docker → lemon-music → 存储位置，把 /music、/downloads 改成你的 NAS 路径后重建。" > "${TRIM_TEMP_LOGFILE}"
+    exit 1
   fi
   exit 0
   ;;
 stop)
+  docker stop "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+  docker compose -p "${COMPOSE_PROJECT}" -f "${COMPOSE_FILE}" down >/dev/null 2>&1 || true
   exit 0
   ;;
 status)
-  if ! ensure_containers_created; then
-    exit 1
-  fi
   if is_docker_running; then
     exit 0
   fi

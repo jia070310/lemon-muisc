@@ -202,7 +202,7 @@ write_compose_file() {
   mkdir -p "${COMPOSE_DIR}" 2>/dev/null || true
   write_compose_env "${music}" "${downloads}" "${config}"
 
-  # 使用向导变量名：飞牛运行设置保存后会注入；本地 recreate 则读同目录 .env
+  # 必须写入绝对路径：飞牛 docker-project 不会把运行设置里的 wizard_* 注入到挂载
   cat > "${COMPOSE_FILE}" <<EOF
 services:
   lemon-music:
@@ -212,16 +212,18 @@ services:
     ports:
       - "7983:7983"
     volumes:
-      - "\${wizard_music_path}:/music"
-      - "\${wizard_downloads_path}:/downloads"
-      - "\${wizard_config_path}:/config"
+      - "${music}:/music"
+      - "${downloads}:/downloads"
+      - "${config}:/config"
     environment:
       PORT: "7983"
       DOWNLOAD_PATH: /music
       CONFIG_PATH: /config
-      MUSIC_HOST_PATH: "\${wizard_music_path}"
-      DOWNLOADS_HOST_PATH: "\${wizard_downloads_path}"
+      MUSIC_HOST_PATH: "${music}"
+      DOWNLOADS_HOST_PATH: "${downloads}"
 EOF
+
+  log_config "wrote compose volumes music=${music} downloads=${downloads} config=${config}"
 }
 
 apply_saved_paths() {
@@ -245,7 +247,11 @@ apply_saved_paths() {
 
 compose_up() {
   local project="${1:-${COMPOSE_PROJECT}}"
-  docker compose -p "${project}" -f "${COMPOSE_FILE}" --env-file "${COMPOSE_ENV}" up -d --force-recreate --remove-orphans
+  if [ -f "${COMPOSE_ENV}" ]; then
+    docker compose -p "${project}" -f "${COMPOSE_FILE}" --env-file "${COMPOSE_ENV}" up -d --force-recreate --remove-orphans
+  else
+    docker compose -p "${project}" -f "${COMPOSE_FILE}" up -d --force-recreate --remove-orphans
+  fi
 }
 
 # 检查容器内挂载源是否匹配期望的宿主机路径
