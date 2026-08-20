@@ -1,7 +1,7 @@
 appname        = lemon-music
 version        = 1.0.0
 display_name   = 柠檬音乐下载
-desc           = <b>音乐搜索、试听、下载与标签管理工具</b><br><br><b>重要：目录怎么生效</b><br>1. 安装后打开 <b>应用设置 → 访问权限</b>，添加音乐库、下载文件夹<br>2. 或在 <b>运行设置</b> 填写绝对路径并保存<br>3. <b>停用再启用</b>，容器才会按你的路径挂载<br><br>Docker 里若仍显示 @appdata，说明还没用你的目录重建容器；按上面 1→3 操作。<br>无镜像时 SSH：<code>docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest</code>
+desc           = <b>音乐搜索、试听、下载与标签管理工具</b><br><br><b>安装</b>：会拉取镜像，需等待完成（不会秒装完）。已有镜像可选跳过拉取。<br><br><b>目录</b>：装完后 → 应用设置 → 访问权限（两个文件夹）→ 保存 → 停用再启用。<br>Docker 界面若仍显示 @appdata，属飞牛项目占位；启用后脚本会按你的目录重建挂载。<br><br>手动拉镜像：<code>docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest</code>
 platform       = x86
 os_min_version = 1.1.8
 source         = thirdparty
