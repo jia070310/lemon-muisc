@@ -4,7 +4,7 @@
     "items": [
       {
         "type": "tips",
-        "helpText": "<b>安装过程会拉取 Docker 镜像</b>。<br><br>• 默认镜像：<code>ghcr.1ms.run/jia070310/lemon-muisc:latest</code><br>• <b>下一步请填写你自己的音乐库与下载目录</b>（每人 NAS 路径不同）<br>• 若已通过 Docker 项目部署过本应用，请先停止该项目<br>• 本地已有镜像可选「跳过拉取」"
+        "helpText": "<b>安装会拉取 Docker 镜像</b>，并按你选择的目录挂载到容器。<br><br>• 下一步请用<b>文件夹选择</b>指定音乐库与下载目录（每人 NAS 路径不同）<br>• 选择后系统会授权应用访问这些文件夹<br>• 若已通过 Docker 项目部署过本应用，请先停止/删除旧容器 <code>lemon-music</code>"
       }
     ]
   },
@@ -13,30 +13,28 @@
     "items": [
       {
         "type": "tips",
-        "helpText": "请填写本机 NAS 的<b>原始路径</b>（文件管理 → 右键文件夹 → 详细信息 → 复制原始路径）。<br>安装完成后会直接挂载到容器 <code>/music</code>、<code>/downloads</code>。<br>示例仅作格式参考，请改成你自己的目录。"
+        "helpText": "点击输入框旁的文件夹图标选择目录。选好的路径会在安装时直接挂载到容器 <code>/music</code>、<code>/downloads</code>，并自动授权访问。"
       },
       {
-        "type": "text",
+        "type": "path",
         "field": "wizard_music_path",
         "label": "音乐库目录（挂载到 /music）",
         "initValue": "",
-        "placeholder": "例如 /vol1/1000/Music",
-        "helpText": "存放已有音乐、用于扫描与标签编辑的文件夹",
+        "placeholder": "点击选择文件夹",
+        "helpText": "存放音乐、用于扫描与标签编辑",
         "rules": [
-          { "required": true, "message": "请填写音乐库目录" },
-          { "pattern": "^/", "message": "请填写以 / 开头的 NAS 绝对路径" }
+          { "required": true, "message": "请选择音乐库目录" }
         ]
       },
       {
-        "type": "text",
+        "type": "path",
         "field": "wizard_downloads_path",
         "label": "下载目录（挂载到 /downloads）",
         "initValue": "",
-        "placeholder": "例如 /vol1/1000/MusicDownloads",
-        "helpText": "下载保存目录，可与音乐库相同或另选文件夹",
+        "placeholder": "点击选择文件夹",
+        "helpText": "下载保存位置，可与音乐库相同",
         "rules": [
-          { "required": true, "message": "请填写下载目录" },
-          { "pattern": "^/", "message": "请填写以 / 开头的 NAS 绝对路径" }
+          { "required": true, "message": "请选择下载目录" }
         ]
       }
     ]
@@ -50,9 +48,9 @@
         "label": "拉取方式",
         "initValue": "ghcr_direct",
         "options": [
-          { "label": "compose 拉取（与手动部署相同，推荐）", "value": "ghcr_direct" },
+          { "label": "compose 拉取（推荐）", "value": "ghcr_direct" },
           { "label": "自定义镜像地址", "value": "custom_image" },
-          { "label": "跳过拉取（Docker 项目已部署 / 本地已有镜像）", "value": "skip_pull" }
+          { "label": "跳过拉取（本地已有镜像）", "value": "skip_pull" }
         ]
       },
       {
@@ -91,12 +89,12 @@
     "items": [
       {
         "type": "tips",
-        "helpText": "若官方源拉取失败，可尝试：<br>1. 在飞牛 <b>Docker → 设置</b> 配置系统代理（若有）<br>2. 将镜像同步到阿里云/腾讯云后，在上一步填<b>自定义镜像地址</b><br>3. 在有网络的电脑 <code>docker pull</code> 后 <code>docker save</code>，传到 NAS 执行 <code>docker load</code>，再选「跳过拉取」<br><br>点击「安装」后，将立即开始拉取并显示进度。"
+        "helpText": "若拉取失败，可在上一步填自定义加速地址，例如 <code>ghcr.1ms.run/jia070310/lemon-muisc:latest</code>。"
       },
       {
         "type": "switch",
         "field": "wizard_apply_docker_mirror",
-        "label": "尝试使用飞牛 Docker 已配置的 registry-mirrors（对 ghcr.io 通常无效，可忽略）",
+        "label": "尝试使用飞牛 Docker registry-mirrors（对 ghcr.io 通常无效）",
         "initValue": "false"
       }
     ]

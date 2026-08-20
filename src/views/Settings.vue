@@ -16,17 +16,24 @@
       <!-- 文件路径 -->
       <div v-if="activeTab === 'paths'" class="panel-body">
         <div v-if="needsPathSetup" class="setup-alert">
-          <strong>请先配置 NAS 数据目录</strong>
-          <p>安装时应在向导「数据目录」填写你自己的 NAS 路径。也可在「应用设置 → <b>运行设置</b>」修改音乐库与下载目录并保存，然后停用再启用应用。</p>
-          <p class="setup-alert-sub">「访问权限」仅在使用下方「选择文件夹」时需要，请与运行设置选同一目录。选择器返回 NAS 路径（如 /vol1/...）会自动转为容器路径。</p>
+          <strong>尚未配置数据目录</strong>
+          <p>请卸载后重新安装，在安装向导用文件夹选择器选择音乐库与下载目录；或在飞牛「应用设置 → 运行设置 / 访问权限」选择目录后启用应用。</p>
         </div>
-        <div v-else-if="mountInfo" class="setup-hint">
-          <span>容器挂载：</span>
-          <code>/music</code> ← {{ mountInfo.music?.host || '—' }}，
-          <code>/downloads</code> ← {{ mountInfo.downloads?.host || '—' }}
-          <template v-if="mountProbeText">
-            <br />{{ mountProbeText }}
-          </template>
+        <div v-else class="config-summary card-inner">
+          <div class="block-label">已配置的数据目录</div>
+          <div class="summary-row">
+            <span class="summary-key">音乐库 → /music</span>
+            <code class="summary-val">{{ mountInfo?.music?.host || '未设置' }}</code>
+          </div>
+          <div class="summary-row">
+            <span class="summary-key">下载 → /downloads</span>
+            <code class="summary-val">{{ mountInfo?.downloads?.host || '未设置' }}</code>
+          </div>
+          <div class="summary-row" v-if="mountProbeText">
+            <span class="summary-key">探测</span>
+            <span class="summary-val">{{ mountProbeText }}</span>
+          </div>
+          <p class="summary-tip">修改路径：飞牛应用设置 → 运行设置（或访问权限授权两个文件夹）→ 保存后停用再启用。</p>
         </div>
         <div class="setting-item">
           <div class="setting-item-info">
@@ -536,6 +543,36 @@ function showToast(text, type = 'info') {
 .setup-alert strong { color: #ffc107; }
 .setup-alert p { margin: 6px 0 0; color: var(--text-muted); }
 .setup-alert-sub { margin-top: 8px !important; font-size: 12px; }
+.config-summary {
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(108, 158, 255, 0.08);
+  border: 1px solid rgba(108, 158, 255, 0.25);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.summary-row {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+.summary-key {
+  color: var(--text-muted);
+  min-width: 120px;
+  font-size: 12px;
+}
+.summary-val {
+  font-size: 12px;
+  word-break: break-all;
+}
+.summary-tip {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
 .setup-hint {
   margin-bottom: 16px;
   padding: 10px 14px;

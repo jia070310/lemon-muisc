@@ -4,30 +4,27 @@
     "items": [
       {
         "type": "tips",
-        "helpText": "修改后会重写 Docker 挂载并重建容器。请填写你自己的 NAS 原始路径。<br>若 Docker「存储位置」未更新，请停用再启用应用。"
+        "helpText": "修改后会按所选目录重建容器挂载。也可用「访问权限」添加文件夹（系统文件夹选择器会同时授权）。"
       },
       {
-        "type": "text",
+        "type": "path",
         "field": "wizard_music_path",
         "label": "音乐库目录（挂载到 /music）",
         "initValue": "",
-        "placeholder": "例如 /vol1/1000/Music",
-        "helpText": "NAS 绝对路径，以 / 开头",
+        "placeholder": "点击选择文件夹",
+        "helpText": "当前生效路径会显示在 Web 设置页",
         "rules": [
-          { "required": true, "message": "请填写音乐库目录" },
-          { "pattern": "^/", "message": "请填写以 / 开头的 NAS 绝对路径" }
+          { "required": true, "message": "请选择音乐库目录" }
         ]
       },
       {
-        "type": "text",
+        "type": "path",
         "field": "wizard_downloads_path",
         "label": "下载目录（挂载到 /downloads）",
         "initValue": "",
-        "placeholder": "例如 /vol1/1000/MusicDownloads",
-        "helpText": "NAS 绝对路径，以 / 开头",
+        "placeholder": "点击选择文件夹",
         "rules": [
-          { "required": true, "message": "请填写下载目录" },
-          { "pattern": "^/", "message": "请填写以 / 开头的 NAS 绝对路径" }
+          { "required": true, "message": "请选择下载目录" }
         ]
       }
     ]

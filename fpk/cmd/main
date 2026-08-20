@@ -8,7 +8,6 @@ is_docker_running() {
 
 case $1 in
 start)
-  # 应用启动时：按已保存路径重写 compose 并拉起容器（覆盖飞牛安装时冻住的 @appdata 挂载）
   if resolve_paths; then
     config="$(resolve_config_path)"
     write_compose_file "${RESOLVED_MUSIC}" "${RESOLVED_DOWNLOADS}" "${config}"
@@ -18,22 +17,24 @@ start)
     . "${COMPOSE_ENV}"
     write_compose_file "${wizard_music_path}" "${wizard_downloads_path}" "${wizard_config_path}"
   else
-    write_compose_file "$(default_music_path)" "$(default_downloads_path)" "$(default_config_path)"
+    echo "请先完成安装向导中的数据目录选择，或在应用设置中配置路径。" > "${TRIM_TEMP_LOGFILE}"
+    exit 1
   fi
 
   if ! recreate_compose_stack; then
-    echo "Docker 容器启动失败。请到 Docker → lemon-music → 存储位置，把 /music、/downloads 改成你的 NAS 路径后重建。" > "${TRIM_TEMP_LOGFILE}"
+    echo "容器启动失败，请查看 ${TRIM_PKGVAR}/log/compose.recreate.log" > "${TRIM_TEMP_LOGFILE}"
     exit 1
   fi
   exit 0
   ;;
 stop)
   docker stop "${CONTAINER_NAME}" >/dev/null 2>&1 || true
-  docker compose -p "${COMPOSE_PROJECT}" -f "${COMPOSE_FILE}" down >/dev/null 2>&1 || true
+  docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
   exit 0
   ;;
 status)
   if is_docker_running; then
+    # 挂载被飞牛旧项目改回 @appdata 时，下次 start 会纠偏；status 仍报运行中
     exit 0
   fi
   exit 3

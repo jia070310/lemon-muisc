@@ -272,9 +272,8 @@ mount_matches_expected() {
 
 recreate_compose_stack() {
   local log_file="${TRIM_PKGVAR}/log/compose.recreate.log"
-  local music downloads config
+  local music downloads config image
   mkdir -p "$(dirname "${log_file}")" 2>/dev/null || true
-  cd "${COMPOSE_DIR}" || return 1
 
   if [ ! -f "${COMPOSE_ENV}" ]; then
     log_config "compose .env missing"
@@ -285,34 +284,54 @@ recreate_compose_stack() {
   . "${COMPOSE_ENV}"
   music="${wizard_music_path}"
   downloads="${wizard_downloads_path}"
-  config="${wizard_config_path}"
+  config="${wizard_config_path:-$(default_config_path)}"
+  image="$(get_compose_image)"
 
+  if [ -z "${music}" ] || [ -z "${downloads}" ]; then
+    log_config "recreate aborted: empty music/downloads"
+    return 1
+  fi
+
+  mkdir -p "${music}" "${downloads}" "${config}" 2>/dev/null || true
+  write_compose_file "${music}" "${downloads}" "${config}"
+
+  local rc=0
   {
     echo "=== recreate $(date -Iseconds) ==="
-    echo "compose=${COMPOSE_FILE}"
-    echo "env=${COMPOSE_ENV}"
     echo "music=${music}"
     echo "downloads=${downloads}"
     echo "config=${config}"
-    echo "project=${COMPOSE_PROJECT}"
+    echo "image=${image}"
     docker stop "${CONTAINER_NAME}" 2>/dev/null || true
     docker rm -f "${CONTAINER_NAME}" 2>/dev/null || true
-    docker compose -p "${COMPOSE_PROJECT}" -f "${COMPOSE_FILE}" --env-file "${COMPOSE_ENV}" down --remove-orphans 2>/dev/null || true
-    docker compose -p "lemon-music" -f "${COMPOSE_FILE}" --env-file "${COMPOSE_ENV}" down --remove-orphans 2>/dev/null || true
+    docker compose -p "${COMPOSE_PROJECT}" -f "${COMPOSE_FILE}" down --remove-orphans 2>/dev/null || true
+    docker compose -p "lemon-music" -f "${COMPOSE_FILE}" down --remove-orphans 2>/dev/null || true
   } > "${log_file}" 2>&1
 
-  if compose_up "${COMPOSE_PROJECT}" >> "${log_file}" 2>&1 || compose_up "lemon-music" >> "${log_file}" 2>&1; then
-    sleep 1
-    if mount_matches_expected "${music}" "${downloads}"; then
-      log_config "compose recreate ok, mounts verified"
-      return 0
-    fi
-    log_config "compose up ok but mounts mismatch: $(docker inspect -f '{{range .Mounts}}{{.Destination}}={{.Source}};{{end}}' "${CONTAINER_NAME}" 2>/dev/null)"
-    # 仍算部分成功：容器已起来
+  if ! docker run -d \
+      --name "${CONTAINER_NAME}" \
+      --restart unless-stopped \
+      -p 7983:7983 \
+      -v "${music}:/music" \
+      -v "${downloads}:/downloads" \
+      -v "${config}:/config" \
+      -e PORT=7983 \
+      -e DOWNLOAD_PATH=/music \
+      -e CONFIG_PATH=/config \
+      -e "MUSIC_HOST_PATH=${music}" \
+      -e "DOWNLOADS_HOST_PATH=${downloads}" \
+      "${image}" >> "${log_file}" 2>&1; then
+    log_config "docker run failed: $(tr '\n' ' ' < "${log_file}" 2>/dev/null)"
+    return 1
+  fi
+
+  sleep 1
+  if mount_matches_expected "${music}" "${downloads}"; then
+    log_config "docker run ok, mounts verified music=${music} downloads=${downloads}"
     return 0
   fi
 
-  log_config "compose recreate failed: $(tr '\n' ' ' < "${log_file}" 2>/dev/null)"
+  log_config "docker run up but mounts mismatch: $(docker inspect -f '{{range .Mounts}}{{.Destination}}={{.Source}};{{end}}' "${CONTAINER_NAME}" 2>/dev/null)"
   return 1
 }
 

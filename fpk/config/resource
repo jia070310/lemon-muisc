@@ -1,12 +1,4 @@
 {
-  "docker-project": {
-    "projects": [
-      {
-        "name": "lemon-music",
-        "path": "docker"
-      }
-    ]
-  },
   "api-scope": [
     "trim.file.userAccess"
   ]

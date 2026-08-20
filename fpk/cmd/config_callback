@@ -4,16 +4,26 @@
 
 log_config "config_callback start music=${wizard_music_path:-} downloads=${wizard_downloads_path:-} accessible=${TRIM_DATA_ACCESSIBLE_PATHS:-}"
 
+# 运行设置选的路径优先；否则用访问权限里授权的目录（第1个=音乐库，第2个=下载）
 if ! apply_saved_paths; then
-  echo "请填写音乐库与下载目录（NAS 绝对路径，如 /vol1/1000/MP3）" > "${TRIM_TEMP_LOGFILE}"
-  log_config "config_callback paths incomplete"
-  exit 1
+  if parse_accessible_paths; then
+    config="$(resolve_config_path)"
+    save_paths "${RESOLVED_MUSIC}" "${RESOLVED_DOWNLOADS}" "${config}"
+    mkdir -p "${config}" "${RESOLVED_MUSIC}" "${RESOLVED_DOWNLOADS}" 2>/dev/null || true
+    write_mounts_meta "${RESOLVED_MUSIC}" "${RESOLVED_DOWNLOADS}" "${config}"
+    write_compose_file "${RESOLVED_MUSIC}" "${RESOLVED_DOWNLOADS}" "${config}"
+    touch "${config}/.user-paths-configured" 2>/dev/null || true
+    log_config "used accessible paths music=${RESOLVED_MUSIC} downloads=${RESOLVED_DOWNLOADS}"
+  else
+    echo "请在运行设置中选择音乐库与下载目录，或在访问权限中授权两个文件夹。" > "${TRIM_TEMP_LOGFILE}"
+    log_config "config_callback paths incomplete"
+    exit 1
+  fi
 fi
 
 if ! recreate_compose_stack; then
-  echo "路径已保存，但容器重建失败。请停用再启用应用，或到 Docker→lemon-music→存储位置手动改挂载后重建。" > "${TRIM_TEMP_LOGFILE}"
+  echo "路径已保存，但容器重建失败。请停用再启用应用。日志：${TRIM_PKGVAR}/log/compose.recreate.log" > "${TRIM_TEMP_LOGFILE}"
   log_config "config_callback recreate failed"
-  # 不 exit 1：避免飞牛提示配置回调失败导致设置无法保存；挂载会在 main start 再试
 fi
 
 exit 0
