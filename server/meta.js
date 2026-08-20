@@ -191,10 +191,11 @@ function extractLyricText(metadata, filePath) {
 function extractPicture(metadata) {
   const pic = metadata.common.picture?.[0]
   if (!pic?.data?.length) return { pictureBase64: '', pictureMime: '' }
-  const pictureMime = pic.format || detectImageMime(pic.data)
+  const picBuffer = Buffer.isBuffer(pic.data) ? pic.data : Buffer.from(pic.data)
+  const pictureMime = pic.format || detectImageMime(picBuffer)
   return {
     pictureMime,
-    pictureBase64: `data:${pictureMime};base64,${pic.data.toString('base64')}`,
+    pictureBase64: `data:${pictureMime};base64,${picBuffer.toString('base64')}`,
   }
 }
 
