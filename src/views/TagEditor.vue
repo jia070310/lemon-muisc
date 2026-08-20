@@ -1,0 +1,900 @@
+<template>
+  <div class="tag-page">
+    <div class="page-header">
+      <div>
+        <div class="page-title">标签编辑</div>
+        <div class="page-subtitle">批量编辑本地音乐文件的元数据、封面与歌词</div>
+      </div>
+      <div class="header-actions">
+        <button class="btn-primary btn-sm" @click="saveAll" :disabled="!hasChanges || saving">
+          {{ saving ? '保存中...' : '保存全部修改' }}
+        </button>
+      </div>
+    </div>
+
+    <div class="tag-layout">
+      <!-- 左侧：文件目录（来自设置） -->
+      <aside class="dir-panel card">
+        <div class="panel-title">文件目录</div>
+        <p class="dir-hint">路径在「设置 → 文件路径」中管理</p>
+        <div class="dir-list">
+          <div
+            v-for="dir in dirs" :key="dir"
+            :class="['dir-item', { active: activeDir === dir }]"
+            @click="scanDir(dir)"
+          >
+            <span class="dir-path" :title="dir">{{ dir }}</span>
+          </div>
+          <div v-if="!dirs.length" class="dir-empty">请先在设置中添加文件路径</div>
+        </div>
+      </aside>
+
+      <!-- 中间：文件列表 -->
+      <section class="file-panel card">
+        <div class="file-toolbar">
+          <input v-model="filterText" placeholder="按文件名过滤..." class="filter-input" />
+          <span class="file-count">{{ filteredFiles.length }} / {{ files.length }}</span>
+          <label class="check-all">
+            <input type="checkbox" v-model="selectAll" @change="toggleAll" /> 全选
+          </label>
+          <button class="btn-ghost btn-sm" :disabled="!selectedFiles.length || matching" @click="autoMatchSelected">
+            {{ matching ? '匹配中...' : `自动匹配 (${selectedFiles.length})` }}
+          </button>
+          <select v-model="fetchSource" class="source-select-sm" title="自动匹配音源">
+            <option value="tx">QQ音乐</option>
+            <option value="wy">网易云</option>
+          </select>
+        </div>
+
+        <div class="table-wrap" v-if="filteredFiles.length">
+          <table>
+            <thead>
+              <tr>
+                <th class="col-check"></th>
+                <th>文件名</th>
+                <th>标题</th>
+                <th>歌手</th>
+                <th>专辑</th>
+                <th>封面</th>
+                <th>歌词</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="f in filteredFiles" :key="f.filePath"
+                :class="{ modified: f._modified, active: editingFile?.filePath === f.filePath, selected: f._selected }"
+                @click="openEdit(f)"
+              >
+                <td @click.stop><input type="checkbox" v-model="f._selected" /></td>
+                <td class="cell-file" :title="f.filePath">{{ f.fileName }}</td>
+                <td class="cell-text">{{ f.title || '-' }}</td>
+                <td class="cell-text">{{ f.artist || '-' }}</td>
+                <td class="cell-text">{{ f.album || '-' }}</td>
+                <td>{{ f.hasPicture ? '✓' : '-' }}</td>
+                <td>{{ f.hasLyrics ? '✓' : '-' }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div v-else class="empty">添加目录并扫描，或选择左侧目录加载文件</div>
+      </section>
+
+      <!-- 右侧：编辑面板 -->
+      <aside class="edit-panel card" v-if="editForm">
+        <div class="panel-title">
+          {{ isBatchMode ? `批量编辑 (${selectedFiles.length})` : '单文件编辑' }}
+        </div>
+
+        <div class="edit-form">
+          <label>标题<input v-model="editForm.title" @input="markModified" /></label>
+          <label>歌手<input v-model="editForm.artist" @input="markModified" /></label>
+          <label>专辑<input v-model="editForm.album" @input="markModified" /></label>
+          <label>年份<input v-model="editForm.year" @input="markModified" /></label>
+          <label>风格<input v-model="editForm.genre" @input="markModified" /></label>
+          <label>描述<input v-model="editForm.comment" @input="markModified" /></label>
+
+          <label class="field-block">封面
+            <div class="field-toolbar">
+              <div class="split-btn">
+                <button class="btn-primary btn-sm" @click="openFetchModal('cover')" :disabled="fetchLoading">
+                  {{ fetchLoading ? '获取中...' : '网络获取信息' }}
+                </button>
+                <select v-model="fetchSource" class="source-select" title="选择音源">
+                  <option value="tx">QQ音乐</option>
+                  <option value="wy">网易云</option>
+                </select>
+              </div>
+            </div>
+            <div class="cover-box">
+              <img v-if="editForm.pictureBase64" :src="editForm.pictureBase64" alt="cover" />
+              <div v-else class="cover-placeholder">无封面</div>
+            </div>
+            <input type="file" accept="image/*" @change="onCoverUpload" />
+            <input v-model="editForm.picUrl" placeholder="或输入封面 URL" @input="markModified" />
+          </label>
+
+          <label class="field-block">歌词
+            <div class="field-toolbar">
+              <div class="split-btn">
+                <button class="btn-primary btn-sm" @click="openFetchModal('lyric')" :disabled="fetchLoading">
+                  {{ fetchLoading ? '获取中...' : '网络获取信息' }}
+                </button>
+                <select v-model="fetchSource" class="source-select" title="选择音源">
+                  <option value="tx">QQ音乐</option>
+                  <option value="wy">网易云</option>
+                </select>
+              </div>
+            </div>
+            <textarea v-model="editForm.lyric" rows="8" @input="markModified" placeholder="LRC 歌词内容"></textarea>
+          </label>
+        </div>
+
+        <div class="edit-actions">
+          <button class="btn-primary" @click="applyToFiles" :disabled="!editForm">应用到{{ isBatchMode ? '选中' : '当前' }}</button>
+          <button class="btn-ghost" @click="saveCurrent" :disabled="saving">
+            {{ saving ? '保存中...' : '保存到文件' }}
+          </button>
+        </div>
+      </aside>
+    </div>
+
+    <div v-if="toast" class="toast" :class="toast.type">{{ toast.text }}</div>
+
+    <!-- 网络获取信息弹窗 -->
+    <div class="modal-overlay" v-if="showFetchModal" @click.self="closeFetchModal">
+      <div class="fetch-modal">
+        <div class="fetch-header">
+          <h3>{{ fetchIntentLabel }} · {{ fetchSourceLabel }}</h3>
+          <button class="btn-icon" @click="closeFetchModal">×</button>
+        </div>
+
+        <div class="fetch-search">
+          <label class="search-field">
+            <span>歌手</span>
+            <input v-model="fetchArtist" placeholder="歌手名" @keydown.enter="doFetchSearch" />
+          </label>
+          <label class="search-field">
+            <span>歌名</span>
+            <input v-model="fetchTitle" placeholder="歌曲名" @keydown.enter="doFetchSearch" />
+          </label>
+          <button class="btn-primary btn-sm search-btn" @click="doFetchSearch" :disabled="fetchLoading">
+            {{ fetchLoading ? '搜索中...' : '搜索' }}
+          </button>
+        </div>
+
+        <div class="fetch-body">
+          <div class="fetch-list">
+            <div v-if="!fetchResults.length && !fetchLoading" class="fetch-empty">暂无结果，请调整歌手或歌名后重试</div>
+            <div
+              v-for="(item, i) in fetchResults" :key="i"
+              :class="['fetch-item', { active: fetchPreview?.id === item.id && fetchPreview?.source === item.source }]"
+              @click="previewFetchItem(item)"
+            >
+              <img v-if="fetchIntent === 'cover' && item.picUrl" :src="item.picUrl" class="fetch-thumb" alt="" />
+              <div v-else-if="fetchIntent === 'cover'" class="fetch-thumb placeholder">♪</div>
+              <div class="fetch-item-info">
+                <div class="fetch-item-name">{{ item.name }}</div>
+                <div class="fetch-item-meta">{{ item.singer }} · {{ item.album || item.albumName || '-' }}</div>
+                <div class="fetch-item-score">匹配度 {{ item._score }}</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="fetch-preview" v-if="fetchPreviewMeta">
+            <div class="preview-info">
+              <p><strong>标题</strong> {{ fetchPreviewMeta.title || fetchPreview?.name || '-' }}</p>
+              <p><strong>歌手</strong> {{ fetchPreviewMeta.artist || fetchPreview?.singer || '-' }}</p>
+              <p><strong>专辑</strong> {{ fetchPreviewMeta.album || '-' }}</p>
+            </div>
+
+            <template v-if="fetchIntent === 'cover'">
+              <div class="preview-cover large">
+                <img v-if="fetchPreviewMeta.pic || fetchPreview?.picUrl" :src="fetchPreviewMeta.pic || fetchPreview?.picUrl" alt="cover" />
+                <div v-else class="cover-placeholder">无封面</div>
+              </div>
+            </template>
+
+            <template v-else>
+              <div class="preview-lyric">
+                <div class="preview-lyric-title">歌词预览</div>
+                <pre>{{ fetchPreviewMeta.lyric ? fetchPreviewMeta.lyric.slice(0, 800) : '暂无歌词' }}{{ fetchPreviewMeta.lyric?.length > 800 ? '...' : '' }}</pre>
+              </div>
+            </template>
+          </div>
+          <div class="fetch-preview empty" v-else>
+            <p>请从左侧选择一条结果查看{{ fetchIntent === 'cover' ? '封面' : '歌词' }}</p>
+          </div>
+        </div>
+
+        <div class="fetch-footer">
+          <button class="btn-ghost" @click="closeFetchModal">取消</button>
+          <button
+            class="btn-primary"
+            @click="confirmFetchApply"
+            :disabled="!fetchPreviewMeta || !canConfirmFetch"
+          >
+            确定
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup>
+import { ref, computed, reactive, onMounted } from 'vue'
+import { api } from '../api.js'
+
+const dirs = ref([])
+const activeDir = ref('')
+const files = ref([])
+const filterText = ref('')
+const selectAll = ref(false)
+const saving = ref(false)
+const matching = ref(false)
+const fetchSource = ref('tx')
+const fetchLoading = ref(false)
+const fetchResults = ref([])
+const fetchPreview = ref(null)
+const fetchPreviewMeta = ref(null)
+const showFetchModal = ref(false)
+const fetchArtist = ref('')
+const fetchTitle = ref('')
+const fetchIntent = ref('cover')
+const editingFile = ref(null)
+const editForm = ref(null)
+const toast = ref(null)
+
+const filteredFiles = computed(() => {
+  const q = filterText.value.trim().toLowerCase()
+  if (!q) return files.value
+  return files.value.filter(f => f.fileName.toLowerCase().includes(q))
+})
+
+const selectedFiles = computed(() => files.value.filter(f => f._selected))
+const isBatchMode = computed(() => selectedFiles.value.length > 1)
+const hasChanges = computed(() => files.value.some(f => f._modified))
+const fetchSourceLabel = computed(() => fetchSource.value === 'tx' ? 'QQ音乐' : '网易云')
+const fetchIntentLabel = computed(() => fetchIntent.value === 'cover' ? '网络获取封面' : '网络获取歌词')
+const canConfirmFetch = computed(() => {
+  if (!fetchPreviewMeta.value) return false
+  if (fetchIntent.value === 'cover') {
+    return Boolean(fetchPreviewMeta.value.pic || fetchPreviewMeta.value.picUrl || fetchPreview.value?.picUrl)
+  }
+  return Boolean(fetchPreviewMeta.value.lyric)
+})
+
+onMounted(loadDirs)
+
+async function loadDirs() {
+  try {
+    const res = await api.paths.list()
+    dirs.value = res.data || []
+  } catch {}
+}
+
+async function scanDir(dir) {
+  activeDir.value = dir
+  try {
+    const res = await api.tag.scan(dir)
+    files.value = (res.data || []).map(f => ({
+      ...f,
+      _selected: false,
+      _modified: false,
+    }))
+    editingFile.value = null
+    editForm.value = null
+    selectAll.value = false
+    showToast(`已加载 ${files.value.length} 个文件`, 'success')
+  } catch (e) {
+    showToast(e.message, 'error')
+  }
+}
+
+function toggleAll() {
+  files.value.forEach(f => { f._selected = selectAll.value })
+}
+
+function openEdit(f) {
+  editingFile.value = f
+  editForm.value = reactive({
+    title: f.title || '',
+    artist: f.artist || '',
+    album: f.album || '',
+    year: f.year ? String(f.year) : '',
+    genre: f.genre || '',
+    comment: f.comment || '',
+    lyric: f.lyric || '',
+    pictureBase64: f.pictureBase64 || '',
+    picUrl: '',
+  })
+  fetchResults.value = []
+  fetchPreview.value = null
+  fetchPreviewMeta.value = null
+}
+
+function markModified() {
+  if (editingFile.value) editingFile.value._modified = true
+}
+
+function buildMetaFromForm() {
+  const m = {
+    title: editForm.value.title,
+    artist: editForm.value.artist,
+    album: editForm.value.album,
+    year: editForm.value.year,
+    genre: editForm.value.genre,
+    comment: editForm.value.comment,
+    lyric: editForm.value.lyric,
+  }
+  if (editForm.value.pictureBase64) m.pic = editForm.value.pictureBase64
+  else if (editForm.value.picUrl) m.picUrl = editForm.value.picUrl
+  return m
+}
+
+function applyMetaToFile(f, meta) {
+  f.title = meta.title ?? f.title
+  f.artist = meta.artist ?? f.artist
+  f.album = meta.album ?? f.album
+  f.year = meta.year ?? f.year
+  f.genre = meta.genre ?? f.genre
+  f.comment = meta.comment ?? f.comment
+  f.lyric = meta.lyric ?? f.lyric
+  if (meta.pic) f.pictureBase64 = meta.pic
+  f.hasPicture = Boolean(f.pictureBase64 || meta.picUrl)
+  f.hasLyrics = Boolean(f.lyric)
+  f._modified = true
+}
+
+function applyToFiles() {
+  const meta = buildMetaFromForm()
+  const targets = isBatchMode.value ? selectedFiles.value : (editingFile.value ? [editingFile.value] : [])
+  if (!targets.length) return
+  targets.forEach(f => applyMetaToFile(f, meta))
+  showToast(`已应用到 ${targets.length} 个文件（未写入磁盘）`, 'info')
+}
+
+async function saveCurrent() {
+  const targets = isBatchMode.value
+    ? selectedFiles.value.filter(f => f._modified)
+    : (editingFile.value?._modified ? [editingFile.value] : [])
+
+  if (!targets.length && editingFile.value) {
+    applyToFiles()
+    targets.push(editingFile.value)
+  }
+
+  if (!targets.length) {
+    showToast('没有需要保存的文件', 'info')
+    return
+  }
+
+  saving.value = true
+  try {
+    const payload = targets.map(f => ({
+      filePath: f.filePath,
+      meta: {
+        title: f.title,
+        artist: f.artist,
+        album: f.album,
+        year: f.year,
+        genre: f.genre,
+        comment: f.comment,
+        lyric: f.lyric,
+        pic: f.pictureBase64 || undefined,
+        picUrl: f.picUrl || undefined,
+      },
+    }))
+    const res = await api.tag.writeBatch(payload)
+    const ok = (res.data || []).filter(r => r.ok).length
+    targets.forEach(f => { f._modified = false })
+    showToast(`已保存 ${ok}/${targets.length} 个文件`, 'success')
+  } catch (e) {
+    showToast(e.message, 'error')
+  } finally {
+    saving.value = false
+  }
+}
+
+async function saveAll() {
+  const modified = files.value.filter(f => f._modified)
+  if (!modified.length) return
+  saving.value = true
+  try {
+    const payload = modified.map(f => ({
+      filePath: f.filePath,
+      meta: {
+        title: f.title,
+        artist: f.artist,
+        album: f.album,
+        year: f.year,
+        genre: f.genre,
+        comment: f.comment,
+        lyric: f.lyric,
+        pic: f.pictureBase64 || undefined,
+      },
+    }))
+    const res = await api.tag.writeBatch(payload)
+    const ok = (res.data || []).filter(r => r.ok).length
+    modified.forEach(f => { f._modified = false })
+    showToast(`已保存 ${ok}/${modified.length} 个文件`, 'success')
+  } catch (e) {
+    showToast(e.message, 'error')
+  } finally {
+    saving.value = false
+  }
+}
+
+async function openFetchModal(intent) {
+  if (!editingFile.value) return
+  fetchIntent.value = intent
+  showFetchModal.value = true
+  fetchResults.value = []
+  fetchPreview.value = null
+  fetchPreviewMeta.value = null
+
+  const f = editingFile.value
+  fetchArtist.value = editForm.value?.artist || f.parsedArtist || ''
+  fetchTitle.value = editForm.value?.title || f.parsedTitle || ''
+
+  if (!fetchArtist.value && !fetchTitle.value) {
+    const parsed = parseLocalFilename(f.fileName)
+    fetchArtist.value = parsed.artist
+    fetchTitle.value = parsed.title
+  }
+
+  if (fetchArtist.value || fetchTitle.value) await doFetchSearch()
+}
+
+function parseLocalFilename(fileName) {
+  const base = fileName.replace(/\.[^.]+$/, '').trim()
+  const m = base.match(/^(.+?)\s*[-–—_]\s*(.+)$/)
+  if (m) return { title: m[1].trim(), artist: m[2].trim() }
+  return { title: base, artist: '' }
+}
+
+function closeFetchModal() {
+  showFetchModal.value = false
+  fetchPreview.value = null
+  fetchPreviewMeta.value = null
+}
+
+async function doFetchSearch() {
+  const artist = fetchArtist.value.trim()
+  const title = fetchTitle.value.trim()
+  if (!artist && !title) {
+    showToast('请至少填写歌手或歌名', 'info')
+    return
+  }
+  fetchLoading.value = true
+  fetchPreview.value = null
+  fetchPreviewMeta.value = null
+  try {
+    const res = await api.tag.match({ artist, title }, fetchSource.value)
+    fetchResults.value = res.data || []
+    if (!fetchResults.value.length) showToast('未找到匹配结果', 'info')
+    else if (fetchResults.value.length === 1) await previewFetchItem(fetchResults.value[0])
+  } catch (e) {
+    showToast(e.message, 'error')
+  } finally {
+    fetchLoading.value = false
+  }
+}
+
+async function previewFetchItem(item) {
+  fetchPreview.value = item
+  fetchPreviewMeta.value = null
+  try {
+    const fields = fetchIntent.value === 'cover' ? ['cover'] : ['lyric']
+    const res = await api.tag.matchApply(item, fetchSource.value, fields)
+    fetchPreviewMeta.value = res.data
+  } catch (e) {
+    showToast(e.message, 'error')
+  }
+}
+
+function confirmFetchApply() {
+  const meta = fetchPreviewMeta.value
+  if (!meta || !editForm.value || !canConfirmFetch.value) return
+
+  if (fetchIntent.value === 'cover') {
+    if (meta.pic) editForm.value.pictureBase64 = meta.pic
+    else if (meta.picUrl) editForm.value.picUrl = meta.picUrl
+    else if (fetchPreview.value?.picUrl) editForm.value.picUrl = fetchPreview.value.picUrl
+  } else {
+    if (meta.lyric) editForm.value.lyric = meta.lyric
+  }
+
+  markModified()
+  closeFetchModal()
+  showToast(fetchIntent.value === 'cover' ? '已应用封面' : '已应用歌词', 'success')
+}
+
+async function autoMatchSelected() {
+  if (!selectedFiles.value.length) return
+  matching.value = true
+  try {
+    const res = await api.tag.matchBatch(
+      selectedFiles.value.map(f => ({ filePath: f.filePath, fileName: f.fileName })),
+      fetchSource.value,
+    )
+    let ok = 0
+    for (const item of res.data || []) {
+      const f = files.value.find(x => x.filePath === item.filePath)
+      if (f && item.ok) {
+        applyMetaToFile(f, item.meta)
+        if (item.meta.pic) f.pictureBase64 = item.meta.pic
+        ok++
+      }
+    }
+    showToast(`自动匹配完成 ${ok}/${selectedFiles.value.length}`, 'success')
+  } catch (e) {
+    showToast(e.message, 'error')
+  } finally {
+    matching.value = false
+  }
+}
+
+function onCoverUpload(e) {
+  const file = e.target.files?.[0]
+  if (!file) return
+  const reader = new FileReader()
+  reader.onload = () => {
+    editForm.value.pictureBase64 = reader.result
+    markModified()
+  }
+  reader.readAsDataURL(file)
+  e.target.value = ''
+}
+
+function showToast(text, type = 'info') {
+  toast.value = { text, type }
+  setTimeout(() => { toast.value = null }, 3000)
+}
+</script>
+
+<style scoped>
+.tag-page { max-width: 1400px; }
+
+.page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 20px;
+  gap: 16px;
+}
+.page-header .page-subtitle { margin-bottom: 0; }
+
+.tag-layout {
+  display: grid;
+  grid-template-columns: 220px 1fr 320px;
+  gap: 16px;
+  min-height: calc(100vh - 160px);
+}
+
+.dir-panel, .edit-panel {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.file-panel {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.panel-title { font-size: 14px; font-weight: 600; color: var(--text); }
+.dir-hint { font-size: 11px; color: var(--text-muted); margin-bottom: 8px; line-height: 1.4; }
+
+.dir-add { display: flex; gap: 6px; }
+.dir-add input { flex: 1; min-width: 0; font-size: 12px; }
+
+.dir-list { display: flex; flex-direction: column; gap: 4px; overflow-y: auto; max-height: 400px; }
+.dir-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  background: transparent;
+  font-size: 12px;
+  border: 1px solid transparent;
+  position: relative;
+  transition: all 0.15s;
+}
+.dir-item:hover { background: var(--bg-hover); }
+.dir-item.active {
+  background: var(--accent-muted);
+  border-color: transparent;
+  color: var(--accent);
+}
+.dir-item.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 16px;
+  background: var(--accent);
+  border-radius: 0 2px 2px 0;
+}
+.dir-path { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dir-empty { font-size: 12px; color: var(--text-muted); padding: 8px; }
+.btn-icon { background: none; border: none; color: var(--text-muted); font-size: 16px; padding: 0 4px; }
+
+.file-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+.filter-input {
+  flex: 1;
+  min-width: 120px;
+  font-size: 13px;
+  border-radius: var(--radius-pill);
+  padding: 6px 14px;
+}
+.file-count { font-size: 12px; color: var(--text-muted); }
+.check-all { font-size: 13px; display: flex; align-items: center; gap: 4px; }
+
+.table-wrap { overflow: auto; flex: 1; }
+
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+thead th {
+  text-align: left;
+  padding: 10px 8px;
+  color: var(--text-muted);
+  font-weight: 500;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border-light);
+  white-space: nowrap;
+  background: var(--bg-elevated);
+}
+tbody td { padding: 8px 8px; border-bottom: 1px solid var(--border-light); }
+tbody tr { cursor: pointer; transition: background 0.15s; }
+tbody tr:hover { background: var(--bg-hover); }
+tbody tr.modified { background: rgba(60, 110, 247, 0.08); }
+tbody tr.active { background: var(--accent-muted); }
+tbody tr.selected td:first-child { background: rgba(60, 110, 247, 0.05); }
+
+.col-check { width: 32px; }
+.cell-file { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); font-size: 12px; }
+.cell-text { max-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.edit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  flex: 1;
+}
+.edit-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.edit-form input, .edit-form textarea, .edit-form select {
+  font-size: 13px;
+}
+
+.cover-box {
+  width: 100px;
+  height: 100px;
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--bg-input);
+  margin-bottom: 4px;
+}
+.cover-box img { width: 100%; height: 100%; object-fit: cover; }
+.cover-placeholder {
+  width: 100%; height: 100%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; color: var(--text-muted);
+}
+
+.field-block { gap: 6px !important; }
+.field-toolbar { display: flex; align-items: center; margin-bottom: 4px; }
+.split-btn { display: flex; align-items: stretch; gap: 0; }
+.split-btn .btn-primary { border-radius: var(--radius) 0 0 var(--radius); }
+.source-select {
+  font-size: 12px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-left: none;
+  border-radius: 0 var(--radius) var(--radius) 0;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+.source-select-sm {
+  font-size: 12px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-input);
+  color: var(--text-primary);
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+  padding: 20px;
+}
+.fetch-modal {
+  width: min(920px, 100%);
+  max-height: 85vh;
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: var(--shadow);
+}
+.fetch-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-light);
+  background: var(--bg-elevated);
+}
+.fetch-header h3 { font-size: 15px; font-weight: 600; margin: 0; }
+.fetch-search {
+  display: flex;
+  gap: 10px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-light);
+  align-items: flex-end;
+  flex-wrap: wrap;
+  background: var(--bg-card);
+}
+.search-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 140px;
+}
+.search-field span { font-size: 12px; color: var(--text-muted); }
+.search-field input {
+  font-size: 13px;
+  border-radius: var(--radius);
+}
+.search-btn { flex-shrink: 0; margin-bottom: 1px; border-radius: var(--radius); }
+.fetch-body {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  min-height: 360px;
+  max-height: calc(85vh - 120px);
+  overflow: hidden;
+}
+.fetch-list {
+  overflow-y: auto;
+  border-right: 1px solid var(--border-light);
+  padding: 8px;
+  background: var(--bg-card);
+}
+.fetch-empty {
+  padding: 24px 12px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+.fetch-item {
+  display: flex;
+  gap: 10px;
+  padding: 8px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  margin-bottom: 4px;
+}
+.fetch-item:hover { background: var(--bg-hover); }
+.fetch-item.active { background: var(--accent-muted); border: 1px solid var(--accent); }
+.fetch-thumb {
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius);
+  object-fit: cover;
+  flex-shrink: 0;
+  background: var(--bg-input);
+}
+.fetch-thumb.placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  color: var(--text-muted);
+}
+.fetch-item-info { min-width: 0; flex: 1; }
+.fetch-item-name { font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fetch-item-meta { font-size: 11px; color: var(--text-muted); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fetch-item-score { font-size: 11px; color: var(--accent); margin-top: 2px; }
+
+.fetch-preview {
+  padding: 16px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.fetch-preview.empty {
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+.preview-cover {
+  width: 140px;
+  height: 140px;
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--bg-input);
+  align-self: center;
+}
+.preview-cover img { width: 100%; height: 100%; object-fit: cover; }
+.preview-info p { font-size: 13px; margin: 4px 0; }
+.preview-lyric-title { font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }
+.preview-cover.large {
+  width: 200px;
+  height: 200px;
+}
+.preview-lyric pre {
+  font-size: 11px;
+  line-height: 1.5;
+  max-height: 280px;
+  overflow-y: auto;
+  background: var(--bg-input);
+  padding: 8px;
+  border-radius: var(--radius);
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+}
+.fetch-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 20px;
+  border-top: 1px solid var(--border-light);
+  background: var(--bg-elevated);
+}
+
+.edit-actions { display: flex; gap: 8px; margin-top: 8px; }
+
+.empty { text-align: center; padding: 40px 0; color: var(--text-muted); font-size: 13px; }
+
+.toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  padding: 10px 20px;
+  border-radius: var(--radius);
+  font-size: 14px;
+  z-index: 1000;
+}
+.toast.success { background: var(--success); color: #fff; }
+.toast.error { background: var(--error); color: #fff; }
+.toast.info { background: var(--bg-card); border: 1px solid var(--border); }
+
+@media (max-width: 1100px) {
+  .tag-layout { grid-template-columns: 1fr; }
+  .edit-panel { order: 3; }
+  .fetch-body { grid-template-columns: 1fr; }
+  .fetch-list { border-right: none; border-bottom: 1px solid var(--border); max-height: 220px; }
+}
+</style>

@@ -1,0 +1,11 @@
+appname        = lemon-music
+version        = 1.0.0
+display_name   = 柠檬音乐下载
+desc           = 音乐搜索、试听、下载与标签管理工具
+arch           = x86_64
+source         = thirdparty
+maintainer     = lemon
+distributor    = lemon
+desktop_uidir  = ui
+desktop_applaunchname = lemon-music.Application
+micro_app      = true

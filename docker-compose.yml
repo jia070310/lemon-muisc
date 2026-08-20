@@ -1,0 +1,14 @@
+services:
+  lx-music-nas:
+    build: .
+    container_name: lx-music-nas
+    ports:
+      - "7983:7983"
+    volumes:
+      - /vol1/music:/data
+      - ./config:/config
+    environment:
+      - PORT=7983
+      - DOWNLOAD_PATH=/data
+      - CONFIG_PATH=/config
+    restart: unless-stopped

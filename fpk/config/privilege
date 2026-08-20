@@ -1,0 +1,7 @@
+{
+  "defaults": {
+    "run-as": "package"
+  },
+  "username": "docker-lemon-music",
+  "groupname": "docker-lemon-music"
+}

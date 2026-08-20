@@ -1,0 +1,33 @@
+{
+  "name": "lemon-music",
+  "title": "柠檬音乐下载",
+  "displayName": "柠檬音乐下载",
+  "appTitle": "Lemon Music",
+  "description": "音乐搜索、试听、下载与标签管理工具",
+  "version": "1.0.0",
+  "author": "lemon",
+  "icon": "icon.png",
+  "type": "docker",
+  "microApp": true,
+  "apiScope": ["trim.file.userAccess"],
+  "docker": {
+    "image": "lemon-music:latest",
+    "ports": [
+      { "container": 7983, "host": 7983, "protocol": "tcp", "description": "Web UI" }
+    ],
+    "volumes": [
+      { "container": "/data", "host": "/vol1/music", "description": "音乐下载目录" },
+      { "container": "/config", "host": "/vol1/.apps/lemon-music/config", "description": "配置目录" }
+    ],
+    "environment": [
+      { "key": "PORT", "value": "7983" },
+      { "key": "DOWNLOAD_PATH", "value": "/data" },
+      { "key": "CONFIG_PATH", "value": "/config" }
+    ],
+    "webUI": {
+      "port": 7983,
+      "path": "/"
+    },
+    "restart": "unless-stopped"
+  }
+}

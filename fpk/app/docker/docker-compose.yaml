@@ -1,0 +1,14 @@
+services:
+  lemon-music:
+    image: lemon-music:latest
+    container_name: lemon-music
+    restart: unless-stopped
+    ports:
+      - "7983:7983"
+    volumes:
+      - "/var/apps/lemon-music/shares/lemon-music/data:/data"
+      - "/var/apps/lemon-music/shares/lemon-music/config:/config"
+    environment:
+      - PORT=7983
+      - DOWNLOAD_PATH=/data
+      - CONFIG_PATH=/config
