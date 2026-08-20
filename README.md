@@ -5,6 +5,8 @@
 当前版本：**v1.0.0**  
 仓库：[https://github.com/jia070310/lemon-muisc](https://github.com/jia070310/lemon-muisc)
 
+![搜索页：检索、试听队列与底栏播放器](docs/screenshots/search.png)
+
 > 请仅用于个人已合法授权的音乐资源管理。请遵守当地法律法规及各平台服务条款，不要将本项目用于侵权或商业用途。
 
 ## 功能
