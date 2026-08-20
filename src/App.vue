@@ -46,7 +46,7 @@
       </div>
     </aside>
 
-    <main class="content">
+    <main class="content" :class="{ 'content-fixed': isTagPage }">
       <router-view />
     </main>
 
@@ -55,11 +55,15 @@
 </template>
 
 <script setup>
-import { onMounted } from 'vue'
+import { computed, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { connectWS, connected as wsConnected } from './ws.js'
 import { initPlayer } from './stores/player.js'
 import { checkForUpdate, hasUpdate } from './composables/useUpdateCheck.js'
 import PlayerBar from './components/PlayerBar.vue'
+
+const route = useRoute()
+const isTagPage = computed(() => route.path === '/tag' || route.path.startsWith('/tag/'))
 
 onMounted(() => {
   connectWS()
@@ -185,6 +189,16 @@ onMounted(() => {
   min-width: 0;
   min-height: 100vh;
 }
+.content-fixed {
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.content-fixed > * {
+  flex: 1;
+  min-height: 0;
+}
 
 @media (max-width: 768px) {
   .sidebar {
@@ -202,5 +216,14 @@ onMounted(() => {
   .nav-item span { display: none; }
   .sidebar-footer { display: none; }
   .content { margin-left: 0; padding: 16px 16px 80px; }
+  .content-fixed {
+    height: auto;
+    overflow: visible;
+    display: block;
+  }
+  .content-fixed > * {
+    flex: none;
+    min-height: auto;
+  }
 }
 </style>
