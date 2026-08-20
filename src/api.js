@@ -83,8 +83,13 @@ export const api = {
       add: (dirPath) => request('/tag/dirs', { method: 'POST', body: { dirPath } }),
       remove: (dirPath) => request('/tag/dirs', { method: 'DELETE', body: { dirPath } }),
     },
-    scan: (dirPath) => request('/tag/scan', { method: 'POST', body: { dirPath } }),
-    read: (filePath) => request('/tag/read', { method: 'POST', body: { filePath } }),
+    scan: (dirPath) => request('/tag/scan', { method: 'POST', body: { dirPath }, timeout: 120000 }),
+    read: (filePath) => request('/tag/read', { method: 'POST', body: { filePath }, timeout: 60000 }),
+    readBatch: (filePaths, lite = true) => request('/tag/read-batch', {
+      method: 'POST',
+      body: { filePaths, lite },
+      timeout: 180000,
+    }),
     write: (filePath, meta) => request('/tag/write', { method: 'POST', body: { filePath, meta } }),
     writeBatch: (files) => request('/tag/write-batch', { method: 'POST', body: { files } }),
     match: (params, source) => {

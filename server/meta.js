@@ -153,6 +153,31 @@ function rebuildFlacBlocks(parsed, comments, pic) {
   return Buffer.concat(parts)
 }
 
+/** 列表视图用的轻量读取：跳过封面/歌词内容，显著加快大目录扫描 */
+export async function readMetaLite(filePath) {
+  const { parseFile } = await import('music-metadata')
+  const metadata = await parseFile(filePath, { skipCovers: true, duration: true })
+
+  return {
+    title: metadata.common.title || '',
+    artist: metadata.common.artist || '',
+    album: metadata.common.album || '',
+    year: metadata.common.year || '',
+    genre: metadata.common.genre?.[0] || '',
+    comment: metadata.common.comment?.[0] || '',
+    track: metadata.common.track?.no || '',
+    duration: metadata.format.duration || 0,
+    bitrate: metadata.format.bitrate || 0,
+    sampleRate: metadata.format.sampleRate || 0,
+    format: metadata.format.container || '',
+    hasPicture: Boolean(metadata.common.picture?.length),
+    hasLyrics: Boolean(metadata.common.lyrics?.length),
+    lyric: '',
+    pictureBase64: '',
+    pictureMime: '',
+  }
+}
+
 export async function readMeta(filePath) {
   const { parseFile } = await import('music-metadata')
   const metadata = await parseFile(filePath)

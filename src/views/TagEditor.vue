@@ -20,10 +20,11 @@
         <div class="dir-list">
           <div
             v-for="dir in dirs" :key="dir"
-            :class="['dir-item', { active: activeDir === dir }]"
+            :class="['dir-item', { active: activeDir === dir, scanning: scanning && activeDir === dir }]"
             @click="scanDir(dir)"
           >
             <span class="dir-path" :title="dir">{{ dir }}</span>
+            <span v-if="scanning && activeDir === dir" class="dir-status">扫描中...</span>
           </div>
           <div v-if="!dirs.length" class="dir-empty">请先在设置中添加文件路径</div>
         </div>
@@ -34,6 +35,7 @@
         <div class="file-toolbar">
           <input v-model="filterText" placeholder="按文件名过滤..." class="filter-input" />
           <span class="file-count">{{ filteredFiles.length }} / {{ files.length }}</span>
+          <span v-if="loadingMeta" class="meta-progress">读取标签 {{ metaProgress.done }}/{{ metaProgress.total }}</span>
           <label class="check-all">
             <input type="checkbox" v-model="selectAll" @change="toggleAll" /> 全选
           </label>
@@ -76,6 +78,7 @@
             </tbody>
           </table>
         </div>
+        <div v-else-if="scanning" class="empty">正在扫描目录...</div>
         <div v-else class="empty">添加目录并扫描，或选择左侧目录加载文件</div>
       </section>
 
@@ -244,6 +247,10 @@ const fetchIntent = ref('cover')
 const editingFile = ref(null)
 const editForm = ref(null)
 const toast = ref(null)
+const scanning = ref(false)
+const loadingMeta = ref(false)
+const metaProgress = ref({ done: 0, total: 0 })
+const metaLoadToken = ref(0)
 
 const filteredFiles = computed(() => {
   const q = filterText.value.trim().toLowerCase()
@@ -274,20 +281,74 @@ async function loadDirs() {
 }
 
 async function scanDir(dir) {
+  if (scanning.value) return
   activeDir.value = dir
+  scanning.value = true
+  loadingMeta.value = false
+  metaLoadToken.value += 1
+  const token = metaLoadToken.value
+  files.value = []
+  editingFile.value = null
+  editForm.value = null
+  selectAll.value = false
+
   try {
     const res = await api.tag.scan(dir)
+    if (token !== metaLoadToken.value) return
+
     files.value = (res.data || []).map(f => ({
       ...f,
       _selected: false,
       _modified: false,
+      _metaLoaded: false,
     }))
-    editingFile.value = null
-    editForm.value = null
-    selectAll.value = false
-    showToast(`已加载 ${files.value.length} 个文件`, 'success')
+    showToast(`已发现 ${files.value.length} 个文件，正在读取标签...`, 'info')
+    loadMetaInBatches(token)
   } catch (e) {
     showToast(e.message, 'error')
+  } finally {
+    if (token === metaLoadToken.value) scanning.value = false
+  }
+}
+
+async function loadMetaInBatches(token) {
+  if (!files.value.length) return
+
+  loadingMeta.value = true
+  metaProgress.value = { done: 0, total: files.value.length }
+  const batchSize = 40
+
+  for (let i = 0; i < files.value.length; i += batchSize) {
+    if (token !== metaLoadToken.value) return
+
+    const batch = files.value.slice(i, i + batchSize).map(f => f.filePath)
+    try {
+      const res = await api.tag.readBatch(batch, true)
+      for (const item of res.data || []) {
+        const file = files.value.find(f => f.filePath === item.filePath)
+        if (!file || !item.ok) continue
+        Object.assign(file, {
+          title: item.title || file.parsedTitle || file.title,
+          artist: item.artist || file.parsedArtist || file.artist,
+          album: item.album || '',
+          year: item.year || '',
+          genre: item.genre || '',
+          comment: item.comment || '',
+          hasPicture: item.hasPicture,
+          hasLyrics: item.hasLyrics,
+        })
+        file._metaLoaded = true
+      }
+    } catch (e) {
+      showToast(`部分标签读取失败：${e.message}`, 'error')
+    }
+
+    metaProgress.value.done = Math.min(i + batchSize, files.value.length)
+  }
+
+  if (token === metaLoadToken.value) {
+    loadingMeta.value = false
+    showToast(`标签读取完成 ${metaProgress.value.done}/${metaProgress.value.total}`, 'success')
   }
 }
 
@@ -295,8 +356,17 @@ function toggleAll() {
   files.value.forEach(f => { f._selected = selectAll.value })
 }
 
-function openEdit(f) {
+async function openEdit(f) {
   editingFile.value = f
+  if (!f._metaLoaded || !f.lyric) {
+    try {
+      const res = await api.tag.read(f.filePath)
+      Object.assign(f, res.data)
+      f._metaLoaded = true
+    } catch (e) {
+      showToast(`读取文件详情失败：${e.message}`, 'error')
+    }
+  }
   editForm.value = reactive({
     title: f.title || '',
     artist: f.artist || '',
@@ -624,6 +694,8 @@ function showToast(text, type = 'info') {
   border-radius: 0 2px 2px 0;
 }
 .dir-path { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dir-status { font-size: 11px; color: var(--accent); flex-shrink: 0; }
+.dir-item.scanning { opacity: 0.85; }
 .dir-empty { font-size: 12px; color: var(--text-muted); padding: 8px; }
 .btn-icon { background: none; border: none; color: var(--text-muted); font-size: 16px; padding: 0 4px; }
 
@@ -642,6 +714,7 @@ function showToast(text, type = 'info') {
   padding: 6px 14px;
 }
 .file-count { font-size: 12px; color: var(--text-muted); }
+.meta-progress { font-size: 12px; color: var(--accent); }
 .check-all { font-size: 13px; display: flex; align-items: center; gap: 4px; }
 
 .table-wrap { overflow: auto; flex: 1; }

@@ -1,16 +1,14 @@
 import { Router } from 'express'
 import fs from 'fs'
 import path from 'path'
-import { getDB } from '../db.js'
-import { readMeta, batchWriteMeta, writeMeta } from '../meta.js'
+import { readMeta, readMetaLite, batchWriteMeta, writeMeta } from '../meta.js'
 import { matchByFilename, matchByArtistTitle, fetchMatchMeta, normalizeTagSource } from '../utils/tagMatch.js'
 import { parseFilename } from '../utils/filenameParse.js'
 import { fetchPicBuffer } from '../utils/fetchPic.js'
 import { getFilePaths, addFilePath, removeFilePath } from '../utils/filePaths.js'
+import { listAudioFiles } from '../utils/audioScan.js'
 
 export const tagRouter = Router()
-
-const AUDIO_EXTS = ['.mp3', '.flac', '.wav', '.ape', '.ogg', '.m4a', '.aac', '.wma']
 
 /** @deprecated 使用 /api/paths */
 tagRouter.get('/dirs', (_req, res) => {
@@ -41,6 +39,37 @@ tagRouter.post('/read', async (req, res) => {
     if (!filePath || !fs.existsSync(filePath)) return res.status(400).json({ error: '文件不存在' })
     const meta = await readMeta(filePath)
     res.json({ ok: true, data: meta })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+/** 批量读取标签（列表页分批加载，避免单次请求超时） */
+tagRouter.post('/read-batch', async (req, res) => {
+  try {
+    const { filePaths, lite = true } = req.body
+    if (!Array.isArray(filePaths) || !filePaths.length) {
+      return res.status(400).json({ error: '请提供文件路径数组' })
+    }
+    if (filePaths.length > 100) {
+      return res.status(400).json({ error: '单次最多读取 100 个文件' })
+    }
+
+    const reader = lite ? readMetaLite : readMeta
+    const results = []
+    for (const filePath of filePaths) {
+      if (!filePath || !fs.existsSync(filePath)) {
+        results.push({ filePath, ok: false, error: '文件不存在' })
+        continue
+      }
+      try {
+        const meta = await reader(filePath)
+        results.push({ filePath, ok: true, ...meta })
+      } catch (e) {
+        results.push({ filePath, ok: false, error: e.message })
+      }
+    }
+    res.json({ ok: true, data: results })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
@@ -88,30 +117,38 @@ tagRouter.post('/write-batch', async (req, res) => {
   }
 })
 
+/** 快速扫描：只列出文件，不读标签（大目录秒开） */
 tagRouter.post('/scan', async (req, res) => {
   try {
     const { dirPath } = req.body
     if (!dirPath || !fs.existsSync(dirPath)) return res.status(400).json({ error: '目录不存在' })
-    if (!getFilePaths().includes(dirPath)) return res.status(400).json({ error: '该目录未在文件路径中配置，请先在设置中添加' })
-
-    const files = scanDir(dirPath, AUDIO_EXTS)
-    const results = []
-    for (const fp of files) {
-      try {
-        const meta = await readMeta(fp)
-        const parsed = parseFilename(path.basename(fp))
-        results.push({
-          filePath: fp,
-          fileName: path.basename(fp),
-          parsedTitle: parsed.title,
-          parsedArtist: parsed.artist,
-          ...meta,
-        })
-      } catch (e) {
-        results.push({ filePath: fp, fileName: path.basename(fp), error: e.message })
-      }
+    if (!getFilePaths().includes(dirPath)) {
+      return res.status(400).json({ error: '该目录未在文件路径中配置，请先在设置中添加' })
     }
-    res.json({ ok: true, data: results })
+
+    const filePaths = listAudioFiles(dirPath)
+    const results = filePaths.map((fp) => {
+      const fileName = path.basename(fp)
+      const parsed = parseFilename(fileName)
+      return {
+        filePath: fp,
+        fileName,
+        parsedTitle: parsed.title,
+        parsedArtist: parsed.artist,
+        title: parsed.title,
+        artist: parsed.artist,
+        album: '',
+        year: '',
+        genre: '',
+        comment: '',
+        hasPicture: false,
+        hasLyrics: false,
+        lyric: '',
+        pictureBase64: '',
+      }
+    })
+
+    res.json({ ok: true, data: results, total: results.length })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
@@ -173,19 +210,3 @@ tagRouter.post('/match-batch', async (req, res) => {
     res.status(500).json({ error: e.message })
   }
 })
-
-function scanDir(dir, exts, maxDepth = 20, depth = 0) {
-  if (depth > maxDepth) return []
-  const files = []
-  try {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      const fullPath = path.join(dir, entry.name)
-      if (entry.isDirectory()) {
-        files.push(...scanDir(fullPath, exts, maxDepth, depth + 1))
-      } else if (exts.includes(path.extname(entry.name).toLowerCase())) {
-        files.push(fullPath)
-      }
-    }
-  } catch {}
-  return files
-}
