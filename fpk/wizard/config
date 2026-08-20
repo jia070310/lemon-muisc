@@ -4,28 +4,21 @@
     "items": [
       {
         "type": "tips",
-        "helpText": "修改后会按所选目录重建容器挂载。也可用「访问权限」添加文件夹（系统文件夹选择器会同时授权）。"
+        "helpText": "<b>推荐：</b>到「访问权限」用系统文件夹选择器添加音乐库、下载目录（会自动授权）。<br>也可在下方填写绝对路径后保存；保存后会重建容器挂载。<br>Web 设置页会显示当前已配置路径。"
       },
       {
-        "type": "path",
+        "type": "text",
         "field": "wizard_music_path",
         "label": "音乐库目录（挂载到 /music）",
         "initValue": "",
-        "placeholder": "点击选择文件夹",
-        "helpText": "当前生效路径会显示在 Web 设置页",
-        "rules": [
-          { "required": true, "message": "请选择音乐库目录" }
-        ]
+        "placeholder": "例如 /vol1/1000/Music，可留空改用访问权限"
       },
       {
-        "type": "path",
+        "type": "text",
         "field": "wizard_downloads_path",
         "label": "下载目录（挂载到 /downloads）",
         "initValue": "",
-        "placeholder": "点击选择文件夹",
-        "rules": [
-          { "required": true, "message": "请选择下载目录" }
-        ]
+        "placeholder": "例如 /vol1/1000/Downloads，可留空改用访问权限"
       }
     ]
   }

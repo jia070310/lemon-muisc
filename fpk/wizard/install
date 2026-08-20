@@ -4,38 +4,32 @@
     "items": [
       {
         "type": "tips",
-        "helpText": "<b>安装会拉取 Docker 镜像</b>，并按你选择的目录挂载到容器。<br><br>• 下一步请用<b>文件夹选择</b>指定音乐库与下载目录（每人 NAS 路径不同）<br>• 选择后系统会授权应用访问这些文件夹<br>• 若已通过 Docker 项目部署过本应用，请先停止/删除旧容器 <code>lemon-music</code>"
+        "helpText": "<b>安装会拉取 Docker 镜像</b>。<br><br><b>目录怎么选（推荐）：</b><br>安装完成后打开 <b>应用设置 → 访问权限</b>，用系统文件夹选择器添加：<br>① 音乐库文件夹　② 下载文件夹<br>保存后会自动授权，并挂载到容器 <code>/music</code>、<code>/downloads</code>。<br><br>也可在下一步手动填写 NAS 原始路径（文件管理 → 右键 → 复制原始路径）。"
       }
     ]
   },
   {
-    "stepTitle": "数据目录",
+    "stepTitle": "数据目录（可选）",
     "items": [
       {
         "type": "tips",
-        "helpText": "点击输入框旁的文件夹图标选择目录。选好的路径会在安装时直接挂载到容器 <code>/music</code>、<code>/downloads</code>，并自动授权访问。"
+        "helpText": "若已知道绝对路径可在此填写；留空则安装后用「访问权限」选择（带文件夹窗口，并自动授权）。示例格式 <code>/vol1/1000/Music</code>，请改成你自己的目录。"
       },
       {
-        "type": "path",
+        "type": "text",
         "field": "wizard_music_path",
         "label": "音乐库目录（挂载到 /music）",
         "initValue": "",
-        "placeholder": "点击选择文件夹",
-        "helpText": "存放音乐、用于扫描与标签编辑",
-        "rules": [
-          { "required": true, "message": "请选择音乐库目录" }
-        ]
+        "placeholder": "可留空，安装后用访问权限选择",
+        "helpText": "选填。填写则以 / 开头的 NAS 绝对路径"
       },
       {
-        "type": "path",
+        "type": "text",
         "field": "wizard_downloads_path",
         "label": "下载目录（挂载到 /downloads）",
         "initValue": "",
-        "placeholder": "点击选择文件夹",
-        "helpText": "下载保存位置，可与音乐库相同",
-        "rules": [
-          { "required": true, "message": "请选择下载目录" }
-        ]
+        "placeholder": "可留空，安装后用访问权限选择",
+        "helpText": "选填。可与音乐库相同"
       }
     ]
   },

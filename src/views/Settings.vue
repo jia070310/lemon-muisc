@@ -17,7 +17,7 @@
       <div v-if="activeTab === 'paths'" class="panel-body">
         <div v-if="needsPathSetup" class="setup-alert">
           <strong>尚未配置数据目录</strong>
-          <p>请卸载后重新安装，在安装向导用文件夹选择器选择音乐库与下载目录；或在飞牛「应用设置 → 运行设置 / 访问权限」选择目录后启用应用。</p>
+          <p>请到飞牛「应用设置 → <b>访问权限</b>」用文件夹选择器添加音乐库与下载目录（会自动授权），保存后停用再启用应用。也可在「运行设置」填写绝对路径。</p>
         </div>
         <div v-else class="config-summary card-inner">
           <div class="block-label">已配置的数据目录</div>

@@ -1,7 +1,7 @@
 appname        = lemon-music
 version        = 1.0.0
 display_name   = 柠檬音乐下载
-desc           = <b>音乐搜索、试听、下载与标签管理工具</b><br><br><b>一、安装时选择目录</b><br>安装向导「数据目录」用文件夹选择器选择：<br>• 音乐库 → 容器 /music<br>• 下载目录 → 容器 /downloads<br>选择时会授权应用访问，装完后挂载即为所选路径。<br><br><b>二、修改路径</b><br>应用设置 → 运行设置 / 访问权限，保存后停用再启用。<br>Web 设置页会显示当前已配置的 NAS 路径。<br><br><b>三、常见问题</b><br>• 若 Docker 仍显示 @appdata：请卸载旧版后安装新包，或删除旧容器 lemon-music 后重新启用<br>• 日志：/var/apps/lemon-music/var/log/config.log
+desc           = <b>音乐搜索、试听、下载与标签管理工具</b><br><br><b>一、选择目录（推荐）</b><br>安装后打开 <b>应用设置 → 访问权限</b>，用系统文件夹选择器添加音乐库、下载目录（自动授权）。<br>保存后启用应用，目录会挂载到 <code>/music</code>、<code>/downloads</code>。<br><br><b>二、Web 设置</b><br>「文件路径」页会显示已配置的 NAS 路径与探测结果。<br><br><b>三、常见问题</b><br>• 若仍显示 @appdata：删除旧容器 lemon-music 后重新启用<br>• 日志：/var/apps/lemon-music/var/log/config.log / compose.recreate.log
 platform       = x86
 os_min_version = 1.1.8
 source         = thirdparty
