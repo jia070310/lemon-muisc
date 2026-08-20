@@ -24,6 +24,9 @@
           <span>容器挂载：</span>
           <code>/music</code> ← {{ mountInfo.music?.host || '—' }}，
           <code>/downloads</code> ← {{ mountInfo.downloads?.host || '—' }}
+          <template v-if="mountProbeText">
+            <br />{{ mountProbeText }}
+          </template>
         </div>
         <div class="setting-item">
           <div class="setting-item-info">
@@ -222,6 +225,7 @@ const editFromPicker = ref(false)
 const activeTab = ref('paths')
 const needsPathSetup = ref(false)
 const mountInfo = ref(null)
+const mountProbeText = ref('')
 
 const tabs = [
   { id: 'paths', label: '文件路径' },
@@ -270,6 +274,16 @@ async function loadPaths() {
     downloadPath.value = res.downloadPath || filePaths.value[0] || ''
     needsPathSetup.value = Boolean(res.setup?.needsPathConfig)
     mountInfo.value = res.setup?.mountInfo || null
+    const mp = res.setup?.musicProbe
+    if (res.setup?.mountLooksEmpty) {
+      mountProbeText.value = '警告：容器内 /music 是空的，挂载可能未生效。请到「运行设置」重新保存并重启应用。'
+    } else if (mp?.readable) {
+      mountProbeText.value = `探测 /music：共 ${mp.entryCount} 项，音频 ${mp.audioCount} 个`
+    } else if (mp?.error) {
+      mountProbeText.value = `探测 /music 失败：${mp.error}`
+    } else {
+      mountProbeText.value = ''
+    }
   } catch {}
 }
 

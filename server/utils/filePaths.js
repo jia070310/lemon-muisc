@@ -1,6 +1,7 @@
 import fs from 'fs'
 import path from 'path'
 import { getDB } from '../db.js'
+import { probeDir } from './audioScan.js'
 
 const FILE_PATHS_KEY = 'file.paths'
 const DOWNLOAD_PATH_KEY = 'download.savePath'
@@ -299,14 +300,21 @@ export function getSetupStatus() {
   const userConfigured = fs.existsSync(path.join(configRoot, '.user-paths-configured'))
   const paths = getFilePaths()
   const readablePaths = paths.filter((p) => fs.existsSync(p))
+  const musicProbe = fs.existsSync('/music') ? probeDir('/music') : null
+  const downloadsProbe = fs.existsSync('/downloads') ? probeDir('/downloads') : null
   return {
     needsPathConfig: !userConfigured,
     userPathsConfigured: userConfigured,
-    musicMounted: fs.existsSync('/music'),
-    downloadsMounted: fs.existsSync('/downloads'),
+    musicMounted: Boolean(musicProbe?.exists),
+    downloadsMounted: Boolean(downloadsProbe?.exists),
     filePathsConfigured: readablePaths.length > 0,
     readablePaths,
     mountInfo: getMountInfo(),
     isContainer: Boolean(process.env.CONFIG_PATH),
+    musicProbe,
+    downloadsProbe,
+    mountLooksEmpty: Boolean(
+      musicProbe?.readable && musicProbe.entryCount === 0 && getMountInfo()?.music?.host
+    ),
   }
 }

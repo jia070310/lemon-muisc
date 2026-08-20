@@ -230,10 +230,18 @@ recreate_compose_stack() {
   mkdir -p "$(dirname "${log_file}")" 2>/dev/null || true
 
   cd "${COMPOSE_DIR}" || return 1
-  if docker compose -p "${TRIM_APPNAME}" -f "${COMPOSE_FILE}" up -d --force-recreate > "${log_file}" 2>&1; then
+
+  {
+    echo "=== recreate $(date -Iseconds) ==="
+    echo "compose=${COMPOSE_FILE}"
+    echo "project=${TRIM_APPNAME}"
+    docker compose -p "${TRIM_APPNAME}" -f "${COMPOSE_FILE}" down --remove-orphans || true
+  } > "${log_file}" 2>&1
+
+  if docker compose -p "${TRIM_APPNAME}" -f "${COMPOSE_FILE}" up -d --force-recreate >> "${log_file}" 2>&1; then
     log_config "compose recreate ok"
     return 0
   fi
-  log_config "compose recreate failed: $(cat "${log_file}" 2>/dev/null | tr '\n' ' ')"
+  log_config "compose recreate failed: $(tr '\n' ' ' < "${log_file}" 2>/dev/null)"
   return 1
 }

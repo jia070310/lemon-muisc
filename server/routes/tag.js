@@ -6,7 +6,7 @@ import { matchByFilename, matchByArtistTitle, fetchMatchMeta, normalizeTagSource
 import { parseFilename } from '../utils/filenameParse.js'
 import { fetchPicBuffer } from '../utils/fetchPic.js'
 import { getFilePaths, addFilePath, removeFilePath } from '../utils/filePaths.js'
-import { listAudioFiles } from '../utils/audioScan.js'
+import { listAudioFiles, probeDir } from '../utils/audioScan.js'
 
 export const tagRouter = Router()
 
@@ -121,9 +121,19 @@ tagRouter.post('/write-batch', async (req, res) => {
 tagRouter.post('/scan', async (req, res) => {
   try {
     const { dirPath } = req.body
-    if (!dirPath || !fs.existsSync(dirPath)) return res.status(400).json({ error: '目录不存在' })
+    if (!dirPath || !fs.existsSync(dirPath)) {
+      return res.status(400).json({ error: `目录不存在：${dirPath || ''}` })
+    }
     if (!getFilePaths().includes(dirPath)) {
       return res.status(400).json({ error: '该目录未在文件路径中配置，请先在设置中添加' })
+    }
+
+    const probe = probeDir(dirPath)
+    if (!probe.readable) {
+      return res.status(400).json({
+        error: `目录不可读：${dirPath}（${probe.error || '权限不足'}）。请检查飞牛访问权限与 Docker 挂载。`,
+        probe,
+      })
     }
 
     const filePaths = listAudioFiles(dirPath)
@@ -148,7 +158,23 @@ tagRouter.post('/scan', async (req, res) => {
       }
     })
 
-    res.json({ ok: true, data: results, total: results.length })
+    let tip = ''
+    if (!results.length) {
+      if (probe.entryCount === 0) {
+        tip = `容器内 ${dirPath} 是空目录。应用设置里显示的挂载可能未真正生效，请到「运行设置」重新保存并重启应用，或 SSH 执行：docker exec lemon-music ls -la ${dirPath}`
+      } else {
+        tip = `目录可读（共 ${probe.entryCount} 项），但未发现支持的音频（mp3/flac/wav/m4a 等）。样例：${probe.sampleNames.join(', ') || '无'}`
+      }
+    }
+
+    res.json({
+      ok: true,
+      data: results,
+      total: results.length,
+      tip,
+      probe,
+      scanErrors: listAudioFiles.lastErrors?.slice(0, 5) || [],
+    })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }

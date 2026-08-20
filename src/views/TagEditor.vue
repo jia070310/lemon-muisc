@@ -305,6 +305,10 @@ async function scanDir(dir) {
       _modified: false,
       _metaLoaded: false,
     }))
+    if (!files.value.length) {
+      showToast(res.tip || '未发现音频文件', 'error')
+      return
+    }
     showToast(`已发现 ${files.value.length} 个文件，正在读取标签...`, 'info')
     loadMetaInBatches(token)
   } catch (e) {
