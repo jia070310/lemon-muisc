@@ -153,6 +153,51 @@ function rebuildFlacBlocks(parsed, comments, pic) {
   return Buffer.concat(parts)
 }
 
+function extractCommentText(comments) {
+  if (!comments?.length) return ''
+  const c = comments[0]
+  if (typeof c === 'string') return c
+  return c?.text || ''
+}
+
+function extractLyricText(metadata, filePath) {
+  const parts = []
+  for (const item of metadata.common.lyrics || []) {
+    if (typeof item === 'string') parts.push(item)
+    else if (item?.text) parts.push(item.text)
+  }
+  let lyric = parts.join('\n').trim()
+
+  if (!lyric && filePath.toLowerCase().endsWith('.mp3')) {
+    try {
+      const tags = NodeID3.read(filePath)
+      const unsync = tags?.unsynchronisedLyrics
+      if (typeof unsync === 'string') lyric = unsync
+      else if (unsync?.text) lyric = unsync.text
+    } catch {}
+  }
+
+  // 尝试读取同目录下的 .lrc 文件
+  if (!lyric) {
+    const lrcPath = filePath.replace(/\.[^.]+$/, '.lrc')
+    if (lrcPath !== filePath && fs.existsSync(lrcPath)) {
+      try { lyric = fs.readFileSync(lrcPath, 'utf-8').trim() } catch {}
+    }
+  }
+
+  return lyric
+}
+
+function extractPicture(metadata) {
+  const pic = metadata.common.picture?.[0]
+  if (!pic?.data?.length) return { pictureBase64: '', pictureMime: '' }
+  const pictureMime = pic.format || detectImageMime(pic.data)
+  return {
+    pictureMime,
+    pictureBase64: `data:${pictureMime};base64,${pic.data.toString('base64')}`,
+  }
+}
+
 /** 列表视图用的轻量读取：跳过封面/歌词内容，显著加快大目录扫描 */
 export async function readMetaLite(filePath) {
   const { parseFile } = await import('music-metadata')
@@ -164,7 +209,7 @@ export async function readMetaLite(filePath) {
     album: metadata.common.album || '',
     year: metadata.common.year || '',
     genre: metadata.common.genre?.[0] || '',
-    comment: metadata.common.comment?.[0] || '',
+    comment: extractCommentText(metadata.common.comment),
     track: metadata.common.track?.no || '',
     duration: metadata.format.duration || 0,
     bitrate: metadata.format.bitrate || 0,
@@ -182,25 +227,9 @@ export async function readMeta(filePath) {
   const { parseFile } = await import('music-metadata')
   const metadata = await parseFile(filePath)
 
-  let lyric = ''
-  if (metadata.common.lyrics?.length) {
-    lyric = metadata.common.lyrics.join('\n')
-  }
-
-  let pictureBase64 = ''
-  let pictureMime = ''
+  const lyric = extractLyricText(metadata, filePath)
+  const { pictureBase64, pictureMime } = extractPicture(metadata)
   const pic = metadata.common.picture?.[0]
-  if (pic?.data?.length) {
-    pictureMime = pic.format || detectImageMime(pic.data)
-    pictureBase64 = `data:${pictureMime};base64,${pic.data.toString('base64')}`
-  }
-
-  if (!lyric && filePath.toLowerCase().endsWith('.mp3')) {
-    try {
-      const tags = NodeID3.read(filePath)
-      lyric = tags?.unsynchronisedLyrics?.text || ''
-    } catch {}
-  }
 
   return {
     title: metadata.common.title || '',
@@ -208,7 +237,7 @@ export async function readMeta(filePath) {
     album: metadata.common.album || '',
     year: metadata.common.year || '',
     genre: metadata.common.genre?.[0] || '',
-    comment: metadata.common.comment?.[0] || '',
+    comment: extractCommentText(metadata.common.comment),
     track: metadata.common.track?.no || '',
     duration: metadata.format.duration || 0,
     bitrate: metadata.format.bitrate || 0,

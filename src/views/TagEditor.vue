@@ -83,12 +83,14 @@
       </section>
 
       <!-- 右侧：编辑面板 -->
-      <aside class="edit-panel card" v-if="editForm">
+      <aside class="edit-panel card" v-if="editForm || loadingDetail">
         <div class="panel-title">
           {{ isBatchMode ? `批量编辑 (${selectedFiles.length})` : '单文件编辑' }}
         </div>
 
-        <div class="edit-form">
+        <div v-if="loadingDetail" class="detail-loading">正在读取文件内置信息...</div>
+
+        <div v-else class="edit-form">
           <label>标题<input v-model="editForm.title" @input="markModified" /></label>
           <label>歌手<input v-model="editForm.artist" @input="markModified" /></label>
           <label>专辑<input v-model="editForm.album" @input="markModified" /></label>
@@ -132,7 +134,7 @@
           </label>
         </div>
 
-        <div class="edit-actions">
+        <div v-if="!loadingDetail" class="edit-actions">
           <button class="btn-primary" @click="applyToFiles" :disabled="!editForm">应用到{{ isBatchMode ? '选中' : '当前' }}</button>
           <button class="btn-ghost" @click="saveCurrent" :disabled="saving">
             {{ saving ? '保存中...' : '保存到文件' }}
@@ -249,6 +251,7 @@ const editForm = ref(null)
 const toast = ref(null)
 const scanning = ref(false)
 const loadingMeta = ref(false)
+const loadingDetail = ref(false)
 const metaProgress = ref({ done: 0, total: 0 })
 const metaLoadToken = ref(0)
 
@@ -358,29 +361,43 @@ function toggleAll() {
 
 async function openEdit(f) {
   editingFile.value = f
-  if (!f._metaLoaded || !f.lyric) {
-    try {
-      const res = await api.tag.read(f.filePath)
-      Object.assign(f, res.data)
-      f._metaLoaded = true
-    } catch (e) {
-      showToast(`读取文件详情失败：${e.message}`, 'error')
-    }
-  }
+  loadingDetail.value = true
   editForm.value = reactive({
-    title: f.title || '',
-    artist: f.artist || '',
+    title: f.title || f.parsedTitle || '',
+    artist: f.artist || f.parsedArtist || '',
     album: f.album || '',
     year: f.year ? String(f.year) : '',
     genre: f.genre || '',
     comment: f.comment || '',
-    lyric: f.lyric || '',
-    pictureBase64: f.pictureBase64 || '',
+    lyric: '',
+    pictureBase64: '',
     picUrl: '',
   })
   fetchResults.value = []
   fetchPreview.value = null
   fetchPreviewMeta.value = null
+
+  try {
+    const res = await api.tag.read(f.filePath)
+    const meta = res.data || {}
+    Object.assign(f, meta)
+    f._detailLoaded = true
+    editForm.value = reactive({
+      title: meta.title || f.parsedTitle || '',
+      artist: meta.artist || f.parsedArtist || '',
+      album: meta.album || '',
+      year: meta.year ? String(meta.year) : '',
+      genre: meta.genre || '',
+      comment: meta.comment || '',
+      lyric: typeof meta.lyric === 'string' ? meta.lyric : '',
+      pictureBase64: meta.pictureBase64 || '',
+      picUrl: '',
+    })
+  } catch (e) {
+    showToast(`读取文件详情失败：${e.message}`, 'error')
+  } finally {
+    loadingDetail.value = false
+  }
 }
 
 function markModified() {
@@ -975,6 +992,16 @@ tbody tr.selected td:first-child { background: rgba(60, 110, 247, 0.05); }
 }
 
 .edit-actions { display: flex; gap: 8px; margin-top: 8px; flex-shrink: 0; }
+
+.detail-loading {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 13px;
+  padding: 24px 0;
+}
 
 .empty {
   text-align: center;
