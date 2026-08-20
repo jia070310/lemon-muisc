@@ -66,48 +66,34 @@ npm start
 2. 在 **设置 → 文件路径** 中添加音乐目录（下载保存路径从这些目录里选择）
 3. 到 **搜索** 试听或下载；到 **标签编辑** 整理本地文件
 
-## Docker 部署教程
+## Docker Compose 部署
 
-适合本机、服务器或飞牛「Docker」里用 **docker-compose.yml** 跑容器。完整图文步骤见 [docs/docker-compose.md](docs/docker-compose.md)。
+复制下面内容保存为 `docker-compose.yml`，把 `volumes` 改成你的目录后启动。完整说明见 [docs/docker-compose.md](docs/docker-compose.md)。
 
-### 最短步骤
-
-1. 安装 Docker（需支持 `docker compose`）。
-2. 把仓库里的 `docker-compose.yml` 放到一台已装 Docker 的机器上（或 `git clone` 本仓库）。
-3. 按需改文件里的 `volumes`（音乐目录、配置目录）。
-4. 在该文件所在目录执行：
+```yaml
+version: "3"
+services:
+  lemon-music:
+    image: ghcr.io/jia070310/lemon-muisc:latest
+    ports:
+      - "7983:7983"
+    restart: unless-stopped
+    environment:
+      PORT: 7983
+      DOWNLOAD_PATH: /data
+      CONFIG_PATH: /config
+    volumes:
+      - "~/Music/data:/data"
+      - "~/Music/config:/config"
+```
 
 ```bash
-docker compose pull
 docker compose up -d
 ```
 
-5. 浏览器打开 `http://127.0.0.1:7983`（NAS 用 `http://设备IP:7983`）。
+打开 `http://127.0.0.1:7983`。飞牛把 volumes 左边改成例如 `/vol1/1000/music` 和 `/vol1/1000/lemon-music-config`。
 
-镜像：`ghcr.io/jia070310/lemon-muisc:latest`  
-包页面：https://github.com/jia070310/lemon-muisc/pkgs/container/lemon-muisc
-
-### 飞牛 Docker 项目
-
-在飞牛 **Docker → 项目** 中新建 Compose，粘贴 `docker-compose.yml`，把路径改成例如：
-
-```yaml
-volumes:
-  - /vol1/1000/music:/data
-  - /vol1/1000/lemon-music-config:/config
-```
-
-然后部署。`/data` 是音乐，`/config` 是配置；只改冒号左边的宿主机路径。
-
-### 更新 / 日志 / 停止
-
-```bash
-docker compose pull && docker compose up -d
-docker compose logs -f
-docker compose down
-```
-
-> 这条路线会从 GitHub 拉镜像。飞牛 **FPK 安装包** 是另一条路线，包内自带离线镜像，不拉取 ghcr.io。详见下文。
+> FPK 安装包是另一条路线，包内自带离线镜像，不拉取 ghcr.io。
 
 ## 飞牛 NAS（FPK，离线镜像）
 

@@ -1,27 +1,14 @@
-# 柠檬音乐下载 · docker compose
-#
-# 使用：在本文件所在目录执行
-#   docker compose pull
-#   docker compose up -d
-# 然后打开 http://127.0.0.1:7983
-# 详细步骤见 docs/docker-compose.md
-
+version: "3"
 services:
   lemon-music:
     image: ghcr.io/jia070310/lemon-muisc:latest
-    container_name: lemon-music
     ports:
-      # 宿主机端口:容器端口。改左边即可，例如 "8080:7983"
       - "7983:7983"
-    volumes:
-      # 左边 = 你电脑/NAS 上的目录；右边不要改
-      # 飞牛示例：
-      #   - /vol1/1000/music:/data
-      #   - /vol1/1000/lemon-music-config:/config
-      - ./data:/data
-      - ./config:/config
-    environment:
-      - PORT=7983
-      - DOWNLOAD_PATH=/data
-      - CONFIG_PATH=/config
     restart: unless-stopped
+    environment:
+      PORT: 7983
+      DOWNLOAD_PATH: /data
+      CONFIG_PATH: /config
+    volumes:
+      - "~/Music/data:/data"
+      - "~/Music/config:/config"
