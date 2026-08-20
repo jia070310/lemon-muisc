@@ -54,7 +54,7 @@ export function initDB(configPath) {
   `)
 
   const defaultSettings = {
-    'download.savePath': '/music',
+    'download.savePath': '/downloads',
     'download.fileName': '{name} - {singer}',
     'download.maxDownloadNum': '3',
     'download.skipExistFile': 'true',
@@ -70,7 +70,7 @@ export function initDB(configPath) {
     'download.isSavePathGroupByListName': 'false',
     'source.active': '',
     'player.coverStyle': 'disc',
-    'file.paths': '["/music"]',
+    'file.paths': '["/music","/downloads"]',
     'tag.dirs': '[]',
     'tag.matchSource': 'kg',
   }

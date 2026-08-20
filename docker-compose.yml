@@ -11,4 +11,5 @@ services:
       CONFIG_PATH: /config
     volumes:
       - "~/Music/data:/music"
+      - "~/Music/downloads:/downloads"
       - "~/Music/config:/config"

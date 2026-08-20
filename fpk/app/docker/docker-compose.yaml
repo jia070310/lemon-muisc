@@ -7,6 +7,7 @@ services:
       - "7983:7983"
     volumes:
       - "/var/apps/lemon-music/shares/lemon-music/data:/music"
+      - "/var/apps/lemon-music/shares/lemon-music/downloads:/downloads"
       - "/var/apps/lemon-music/shares/lemon-music/config:/config"
     environment:
       - PORT=7983

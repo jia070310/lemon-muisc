@@ -1,6 +1,6 @@
 # Docker Compose 部署
 
-复制下面内容，保存为 `docker-compose.yml`。把 `volumes` 里的路径改成你的音乐目录和配置目录，然后启动。
+复制下面内容，保存为 `docker-compose.yml`。把 `volumes` 里的路径改成你的音乐库目录、下载目录和配置目录，然后启动。
 
 ```yaml
 version: "3"
@@ -16,6 +16,7 @@ services:
       CONFIG_PATH: /config
     volumes:
       - "~/Music/data:/music"
+      - "~/Music/downloads:/downloads"
       - "~/Music/config:/config"
 ```
 
@@ -25,11 +26,12 @@ services:
 
 ```yaml
 volumes:
-  - 左边改这里:/music      # 音乐下载、扫描
+  - 左边改这里:/music      # 音乐库扫描/管理
+  - 左边改这里:/downloads  # 下载保存目录
   - 左边改这里:/config    # 配置、数据库
 ```
 
-**只改冒号左边**，右边 `/music`、`/config` 不要改（与 `DOWNLOAD_PATH`、`CONFIG_PATH` 对应）。
+**只改冒号左边**，右边 `/music`、`/downloads`、`/config` 不要改（与容器内目录及环境变量对应）。
 
 ### 飞牛 NAS
 
@@ -38,6 +40,7 @@ volumes:
 ```yaml
 volumes:
   - "/vol1/1000/music:/music"
+  - "/vol1/1000/music-downloads:/downloads"
   - "/vol1/1000/lemon-music-config:/config"
 ```
 
@@ -46,16 +49,18 @@ volumes:
 ```yaml
 volumes:
   - "D:/Music:/music"
+  - "D:/MusicDownloads:/downloads"
   - "D:/LemonMusic/config:/config"
 ```
 
 ### 使用 compose 同目录下的文件夹
 
-在 `docker-compose.yml` 旁边建 `music`、`config` 两个文件夹：
+在 `docker-compose.yml` 旁边建 `music`、`downloads`、`config` 三个文件夹：
 
 ```yaml
 volumes:
   - "./music:/music"
+  - "./downloads:/downloads"
   - "./config:/config"
 ```
 
@@ -100,7 +105,8 @@ docker compose up -d
 |------|------|
 | `image` | GitHub 镜像，无需本地编译 |
 | `ports` | 左边是访问端口，右边固定 `7983` |
-| `DOWNLOAD_PATH` / `/music` | 下载与扫描的音乐目录 |
+| `DOWNLOAD_PATH` / `/music` | 音乐扫描/管理根目录 |
+| `/downloads` | 建议单独挂载的下载保存目录（可在设置中选择） |
 | `CONFIG_PATH` / `/config` | 配置与数据库 |
 | `volumes` 冒号左边 | **改这里**：你电脑或 NAS 上的真实路径 |
 | `volumes` 冒号右边 | 不要改 |

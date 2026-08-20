@@ -16,7 +16,8 @@
       { "container": 7983, "host": 7983, "protocol": "tcp", "description": "Web UI" }
     ],
     "volumes": [
-      { "container": "/music", "host": "/vol1/music", "description": "音乐下载目录" },
+      { "container": "/music", "host": "/vol1/music", "description": "音乐库目录（扫描/管理）" },
+      { "container": "/downloads", "host": "/vol1/music-downloads", "description": "下载保存目录" },
       { "container": "/config", "host": "/vol1/.apps/lemon-music/config", "description": "配置目录" }
     ],
     "environment": [
