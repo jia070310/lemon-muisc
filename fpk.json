@@ -3,7 +3,7 @@
   "title": "柠檬音乐下载",
   "displayName": "柠檬音乐下载",
   "appTitle": "Lemon Music",
-  "description": "音乐搜索、试听、下载与标签管理工具。首次使用请在应用设置中配置音乐库与下载目录。",
+  "description": "音乐搜索、试听、下载与标签管理。安装向导中填写各自的音乐库与下载目录。",
   "version": "1.0.0",
   "author": "jia070310",
   "icon": "icon.png",

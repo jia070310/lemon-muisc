@@ -49,7 +49,7 @@
     <main class="content" :class="{ 'content-fixed': isTagPage }">
       <div v-if="setupBanner" class="setup-banner">
         <strong>首次使用请先配置数据目录</strong>
-        <span>请在「应用设置 → 运行设置」填写音乐库（/music）与下载（/downloads）目录并保存，然后刷新本页即可。</span>
+        <span>请卸载后重新安装，并在安装向导「数据目录」填写你自己的音乐库与下载路径；或在「应用设置 → 运行设置」修改后启用应用。</span>
         <router-link to="/settings" class="setup-link">打开应用内设置</router-link>
       </div>
       <router-view />

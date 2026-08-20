@@ -17,7 +17,7 @@
       <div v-if="activeTab === 'paths'" class="panel-body">
         <div v-if="needsPathSetup" class="setup-alert">
           <strong>请先配置 NAS 数据目录</strong>
-          <p>只需在「应用设置 → <b>运行设置</b>」填写音乐库（/music）与下载（/downloads）目录并保存。保存后容器会自动挂载，本页会自动识别 <code>/music</code>、<code>/downloads</code>，一般无需再手动添加路径。</p>
+          <p>安装时应在向导「数据目录」填写你自己的 NAS 路径。也可在「应用设置 → <b>运行设置</b>」修改音乐库与下载目录并保存，然后停用再启用应用。</p>
           <p class="setup-alert-sub">「访问权限」仅在使用下方「选择文件夹」时需要，请与运行设置选同一目录。选择器返回 NAS 路径（如 /vol1/...）会自动转为容器路径。</p>
         </div>
         <div v-else-if="mountInfo" class="setup-hint">

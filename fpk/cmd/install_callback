@@ -1,18 +1,43 @@
 #!/bin/bash
 
 . "$(dirname "$0")/pull-image.sh"
+. "$(dirname "$0")/paths.sh"
 
 init_log
 
-. "$(dirname "$0")/paths.sh"
+# 安装向导传入的路径（每位用户自己的 NAS 目录）
+music_path="${wizard_music_path:-}"
+downloads_path="${wizard_downloads_path:-}"
 config_path="$(default_config_path)"
-music_path="$(default_music_path)"
-downloads_path="$(default_downloads_path)"
+
+if [ -z "${music_path}" ] || [ -z "${downloads_path}" ]; then
+  fail_install "请在安装向导「数据目录」中填写音乐库与下载目录（NAS 绝对路径，以 / 开头）"
+fi
+
+case "${music_path}" in
+  /*) ;;
+  *) fail_install "音乐库路径必须是以 / 开头的绝对路径，当前：${music_path}" ;;
+esac
+case "${downloads_path}" in
+  /*) ;;
+  *) fail_install "下载目录路径必须是以 / 开头的绝对路径，当前：${downloads_path}" ;;
+esac
+
 mkdir -p "${config_path}" "${music_path}" "${downloads_path}" 2>/dev/null || true
 save_paths "${music_path}" "${downloads_path}" "${config_path}"
+write_mounts_meta "${music_path}" "${downloads_path}" "${config_path}"
 write_compose_file "${music_path}" "${downloads_path}" "${config_path}"
+touch "${config_path}/.user-paths-configured" 2>/dev/null || true
+log_config "install paths music=${music_path} downloads=${downloads_path} config=${config_path}"
 
 pull_image_with_progress "安装"
 mark_install_complete "安装"
+
+# 按用户填写的路径拉起容器（此时 compose 已是绝对路径）
+if recreate_compose_stack; then
+  log_config "install compose up ok"
+else
+  log_config "install compose up deferred — will start on app enable"
+fi
 
 exit 0

@@ -4,17 +4,18 @@
     "items": [
       {
         "type": "tips",
-        "helpText": "<b>重要：</b>保存后应用会把路径写入 Docker 挂载并重建容器。<br>若 Docker「存储位置」仍显示 <code>@appdata</code>，请停用再启用应用；或在 Docker 项目里手动把 <code>/music</code>、<code>/downloads</code> 改成下方填写的 NAS 路径。"
+        "helpText": "修改后会重写 Docker 挂载并重建容器。请填写你自己的 NAS 原始路径。<br>若 Docker「存储位置」未更新，请停用再启用应用。"
       },
       {
         "type": "text",
         "field": "wizard_music_path",
         "label": "音乐库目录（挂载到 /music）",
         "initValue": "",
-        "placeholder": "/vol1/1000/MP3",
-        "helpText": "填 NAS 原始路径，例如 /vol1/1000/MP3",
+        "placeholder": "例如 /vol1/1000/Music",
+        "helpText": "NAS 绝对路径，以 / 开头",
         "rules": [
-          { "required": true, "message": "请填写音乐库目录" }
+          { "required": true, "message": "请填写音乐库目录" },
+          { "pattern": "^/", "message": "请填写以 / 开头的 NAS 绝对路径" }
         ]
       },
       {
@@ -22,10 +23,11 @@
         "field": "wizard_downloads_path",
         "label": "下载目录（挂载到 /downloads）",
         "initValue": "",
-        "placeholder": "/vol1/1000/mp3-0",
-        "helpText": "填 NAS 原始路径，例如 /vol1/1000/mp3-0",
+        "placeholder": "例如 /vol1/1000/MusicDownloads",
+        "helpText": "NAS 绝对路径，以 / 开头",
         "rules": [
-          { "required": true, "message": "请填写下载目录" }
+          { "required": true, "message": "请填写下载目录" },
+          { "pattern": "^/", "message": "请填写以 / 开头的 NAS 绝对路径" }
         ]
       }
     ]
