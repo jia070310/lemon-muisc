@@ -174,7 +174,7 @@ tagRouter.post('/match-batch', async (req, res) => {
   }
 })
 
-function scanDir(dir, exts, maxDepth = 5, depth = 0) {
+function scanDir(dir, exts, maxDepth = 20, depth = 0) {
   if (depth > maxDepth) return []
   const files = []
   try {

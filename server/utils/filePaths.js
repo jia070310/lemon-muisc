@@ -4,6 +4,7 @@ import { getDB } from '../db.js'
 const FILE_PATHS_KEY = 'file.paths'
 const DOWNLOAD_PATH_KEY = 'download.savePath'
 const TAG_DIRS_KEY = 'tag.dirs'
+const DEFAULT_DOWNLOAD_DIR = '/downloads'
 
 function getDefaultMusicPath() {
   // Docker/FPK 模式下，容器内默认音乐目录通常由 DOWNLOAD_PATH 决定
@@ -46,6 +47,10 @@ export function getDownloadSavePath() {
   const paths = getFilePaths()
   const saved = getSetting(DOWNLOAD_PATH_KEY)
   if (saved && paths.includes(saved)) return saved
+  if (paths.includes(DEFAULT_DOWNLOAD_DIR)) {
+    setSetting(DOWNLOAD_PATH_KEY, DEFAULT_DOWNLOAD_DIR)
+    return DEFAULT_DOWNLOAD_DIR
+  }
   if (paths.length) {
     setSetting(DOWNLOAD_PATH_KEY, paths[0])
     return paths[0]
@@ -98,9 +103,21 @@ export function migrateFilePaths(defaultMusicPath = '/music') {
     setFilePaths(paths)
   }
 
+  const defaultCandidates = [defaultMusicPath, DEFAULT_DOWNLOAD_DIR]
+  const appendDefaults = defaultCandidates.filter((p) => {
+    if (!p || paths.includes(p)) return false
+    // 仅在容器内确实存在该目录时自动补齐，避免本机开发出现无效路径
+    return fs.existsSync(p)
+  })
+  if (appendDefaults.length) {
+    paths = [...paths, ...appendDefaults]
+    setFilePaths(paths)
+  }
+
   const saved = getSetting(DOWNLOAD_PATH_KEY)
   if (!saved || !paths.includes(saved)) {
-    setSetting(DOWNLOAD_PATH_KEY, paths[0])
+    const preferred = paths.includes(DEFAULT_DOWNLOAD_DIR) ? DEFAULT_DOWNLOAD_DIR : paths[0]
+    setSetting(DOWNLOAD_PATH_KEY, preferred)
   }
   syncTagDirs(paths)
 }
