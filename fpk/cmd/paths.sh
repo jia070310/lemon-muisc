@@ -78,6 +78,11 @@ parse_accessible_paths() {
   local auth_music=""
   local auth_downloads=""
 
+  # 环境变量为空时，读上次保存的访问权限列表
+  if [ -z "${raw}" ] && [ -f "${ACCESSIBLE_FILE}" ]; then
+    raw="$(tr -d '\r' < "${ACCESSIBLE_FILE}" 2>/dev/null)"
+  fi
+
   if [ -z "${raw}" ]; then
     return 1
   fi
@@ -435,6 +440,7 @@ recreate_compose_stack() {
       -e CONFIG_PATH=/config \
       -e "MUSIC_HOST_PATH=${music}" \
       -e "DOWNLOADS_HOST_PATH=${downloads}" \
+      --label "com.lemon-music.managed=1" \
       "${image}" >> "${log_file}" 2>&1; then
     log_config "docker run failed: $(tr '\n' ' ' < "${log_file}" 2>/dev/null)"
     return 1
@@ -443,6 +449,34 @@ recreate_compose_stack() {
   sleep 1
   if mount_matches_expected "${music}" "${downloads}"; then
     log_config "docker run ok, mounts verified music=${music} downloads=${downloads}"
+    return 0
+  fi
+
+  # 飞牛 docker-project 可能抢着重启成 @appdata：再强制重建一次
+  {
+    echo "=== remount retry $(date -Iseconds) ==="
+    docker stop "${CONTAINER_NAME}" 2>/dev/null || true
+    docker rm -f "${CONTAINER_NAME}" 2>/dev/null || true
+    docker compose -p "${COMPOSE_PROJECT}" -f "${COMPOSE_FILE}" down --remove-orphans 2>/dev/null || true
+  } >> "${log_file}" 2>&1
+
+  if docker run -d \
+      --name "${CONTAINER_NAME}" \
+      --restart unless-stopped \
+      -p 7983:7983 \
+      -v "${music}:/music" \
+      -v "${downloads}:/downloads" \
+      -v "${config}:/config" \
+      -e PORT=7983 \
+      -e DOWNLOAD_PATH=/music \
+      -e CONFIG_PATH=/config \
+      -e "MUSIC_HOST_PATH=${music}" \
+      -e "DOWNLOADS_HOST_PATH=${downloads}" \
+      --label "com.lemon-music.managed=1" \
+      "${image}" >> "${log_file}" 2>&1 \
+     && sleep 1 \
+     && mount_matches_expected "${music}" "${downloads}"; then
+    log_config "docker run retry ok music=${music} downloads=${downloads}"
     return 0
   fi
 

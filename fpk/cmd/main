@@ -8,7 +8,12 @@ is_docker_running() {
 
 case $1 in
 start)
-  if resolve_paths; then
+  save_accessible_paths
+
+  # 优先：运行设置 / 访问权限；不要沿用飞牛 docker-project 冻住的 @appdata
+  if apply_saved_paths; then
+    :
+  elif resolve_paths; then
     config="$(resolve_config_path)"
     write_compose_file "${RESOLVED_MUSIC}" "${RESOLVED_DOWNLOADS}" "${config}"
     write_mounts_meta "${RESOLVED_MUSIC}" "${RESOLVED_DOWNLOADS}" "${config}"
@@ -17,12 +22,12 @@ start)
     . "${COMPOSE_ENV}"
     write_compose_file "${wizard_music_path}" "${wizard_downloads_path}" "${wizard_config_path}"
   else
-    echo "请先完成安装向导中的数据目录选择，或在应用设置中配置路径。" > "${TRIM_TEMP_LOGFILE}"
+    echo "请先在应用设置 → 访问权限添加两个文件夹，或在运行设置填写路径。" > "${TRIM_TEMP_LOGFILE}"
     exit 1
   fi
 
   if ! recreate_compose_stack; then
-    tip="容器启动失败。请 SSH 执行: docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest 后重新启用。日志: ${TRIM_PKGVAR}/log/compose.recreate.log"
+    tip="容器启动失败。请确认已配置路径，并 SSH 执行: docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest 。日志: ${TRIM_PKGVAR}/log/compose.recreate.log"
     if [ -f "${TRIM_PKGVAR}/pull.last.log" ]; then
       tip="${tip} | $(tail -n 5 "${TRIM_PKGVAR}/pull.last.log" 2>/dev/null | tr '\n' ' ')"
     fi
@@ -37,8 +42,22 @@ stop)
   exit 0
   ;;
 status)
+  if ! is_docker_running; then
+    exit 3
+  fi
+  # 运行中但挂载被改回 @appdata 时，尝试纠偏（不拖垮 status）
+  if resolve_paths; then
+    case "${RESOLVED_MUSIC}" in
+      "${TRIM_PKGVAR}"/*) ;;
+      *)
+        if ! mount_matches_expected "${RESOLVED_MUSIC}" "${RESOLVED_DOWNLOADS}"; then
+          log_config "status: mounts stale, fixing..."
+          ensure_mounts_applied || true
+        fi
+        ;;
+    esac
+  fi
   if is_docker_running; then
-    # 挂载被飞牛旧项目改回 @appdata 时，下次 start 会纠偏；status 仍报运行中
     exit 0
   fi
   exit 3
