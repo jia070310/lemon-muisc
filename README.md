@@ -91,7 +91,8 @@ services:
 docker compose up -d
 ```
 
-打开 `http://127.0.0.1:7983`。飞牛把 volumes 左边改成例如 `/vol1/1000/music` 和 `/vol1/1000/lemon-music-config`。
+打开 `http://127.0.0.1:7983`。飞牛把 volumes 左边改成例如 `/vol1/1000/music` 和 `/vol1/1000/lemon-music-config`。  
+**如何改 volumes、ghcr 加速** → [docs/docker-compose.md](docs/docker-compose.md)
 
 > FPK 安装包体积小，**不内置镜像**；安装时由飞牛 Docker 拉取 `ghcr.io`。国内网络说明见 [docs/fpk-install.md](docs/fpk-install.md)。
 
@@ -113,8 +114,7 @@ npm run fpk:build
 ### 国内拉取镜像
 
 - 走 **飞牛内置 Docker** 的 `docker pull`
-- Docker Hub **镜像加速** 对 `ghcr.io` **无效**；可配代理，或 SSH 预拉 / 离线 `docker load`  
-- 详见 [docs/fpk-install.md](docs/fpk-install.md)
+- Docker Hub **镜像加速** 对 `ghcr.io` **无效**；可用 `ghcr.1ms.run/...` 等前缀或向导自定义镜像 → [docs/fpk-install.md](docs/fpk-install.md)
 
 ## 常用脚本
 
@@ -129,7 +129,7 @@ npm run fpk:build
 ## 目录结构
 
 ```
-├── docs/                # 截图与 docker-compose 部署说明
+├── docs/                # 部署教程（compose / fpk / volumes / ghcr 加速）
 ├── .github/workflows/   # GHCR 镜像 + 离线 FPK 构建
 ├── src/                 # Vue 前端
 ├── server/              # Express 后端与音源运行时

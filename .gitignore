@@ -5,6 +5,7 @@ data/
 fpk/app/docker/images/*.tar
 tools/fnpack
 tools/fnpack.exe
+tools/regctl.exe
 .env
 .env.*
 *.log

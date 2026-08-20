@@ -19,24 +19,80 @@ services:
       - "~/Music/config:/config"
 ```
 
-飞牛 NAS 可把路径改成盘符下的实际目录，例如：
+## 修改 volumes 路径
+
+格式：`宿主机路径:容器路径`
 
 ```yaml
-version: "3"
-services:
-  lemon-music:
-    image: ghcr.io/jia070310/lemon-muisc:latest
-    ports:
-      - "7983:7983"
-    restart: unless-stopped
-    environment:
-      PORT: 7983
-      DOWNLOAD_PATH: /data
-      CONFIG_PATH: /config
-    volumes:
-      - "/vol1/1000/music:/data"
-      - "/vol1/1000/lemon-music-config:/config"
+volumes:
+  - 左边改这里:/data      # 音乐下载、扫描
+  - 左边改这里:/config    # 配置、数据库
 ```
+
+**只改冒号左边**，右边 `/data`、`/config` 不要改（与 `DOWNLOAD_PATH`、`CONFIG_PATH` 对应）。
+
+### 飞牛 NAS
+
+在文件管理里复制真实路径，例如：
+
+```yaml
+volumes:
+  - "/vol1/1000/music:/data"
+  - "/vol1/1000/lemon-music-config:/config"
+```
+
+### Windows 本机
+
+```yaml
+volumes:
+  - "D:/Music:/data"
+  - "D:/LemonMusic/config:/config"
+```
+
+### 使用 compose 同目录下的文件夹
+
+在 `docker-compose.yml` 旁边建 `data`、`config` 两个文件夹：
+
+```yaml
+volumes:
+  - "./data:/data"
+  - "./config:/config"
+```
+
+### 飞牛 Docker 项目界面（不改文件）
+
+1. **Docker → 项目 → 添加/编辑**
+2. 粘贴 compose 内容，直接改 `volumes` 左边路径
+3. 保存并部署
+
+### 修改后生效
+
+```bash
+docker compose down
+docker compose up -d
+```
+
+### 与设置页的关系
+
+挂载到 `/data` 的目录，需在应用 **设置 → 文件路径** 里添加（容器内路径一般为 `/data` 或其子目录）。
+
+---
+
+## ghcr.io 镜像加速（国内）
+
+飞牛 **Docker → 镜像加速** 里的 `registry-mirrors` **只对 docker.io 有效**，不会自动加速 `ghcr.io`。
+
+可选方式：
+
+| 方式 | 示例 |
+|------|------|
+| 换加速前缀拉取 | `ghcr.1ms.run/jia070310/lemon-muisc:latest` |
+| 轩辕等专属 GHCR 域名 | `xxx-ghcr.xuanyuan.run/jia070310/lemon-muisc:latest` |
+| 同步到阿里云 ACR 等 | `registry.cn-hangzhou.aliyuncs.com/命名空间/lemon-music:latest` |
+
+把 `docker-compose.yml` 里的 `image:` 改成上述地址即可。FPK 安装可在向导选「自定义镜像地址」。
+
+---
 
 ## 字段说明
 
@@ -52,6 +108,7 @@ services:
 ## 启动
 
 ```bash
+docker compose pull
 docker compose up -d
 ```
 

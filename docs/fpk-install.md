@@ -18,7 +18,7 @@ FPK **不包含 Docker 镜像**（约 40KB）。点击「安装」后，在**安
 | 选项 | 说明 |
 |------|------|
 | 官方 ghcr.io | `ghcr.io/jia070310/lemon-muisc:<标签>` |
-| 自定义镜像地址 | 填国内同步后的完整地址，如 `registry.cn-xxx.com/xxx/lemon-music:latest` |
+| 自定义镜像地址 | 填国内同步或加速后的完整地址 |
 | 跳过拉取 | 已 `docker load` 或本地有镜像时使用 |
 | 拉取超时 | 超时后安装失败并提示，可延长后重装 |
 
@@ -35,24 +35,66 @@ FPK **不包含 Docker 镜像**（约 40KB）。点击「安装」后，在**安
 tail -f /var/apps/lemon-music/var/log/install.log
 ```
 
-## 国内网络与加速器
+## ghcr.io 镜像加速
 
-拉取由 **飞牛内置 Docker** 执行。
+拉取由 **飞牛内置 Docker** 执行。Docker Hub 镜像加速 **对 ghcr.io 无效**。
 
-| 方式 | 对 ghcr.io |
-|------|------------|
-| 飞牛 Docker Hub 镜像加速 | **无效** |
-| 安装向导「自定义镜像地址」 | **有效**（需先同步到国内仓库） |
-| 系统代理 / 科学上网 | 有效 |
-| SSH `docker load` + 向导选「跳过拉取」 | 有效 |
+### 有 ghcr 加速吗？
 
-飞牛 **Docker → 镜像加速** 仍可配置（加速 docker.io 其他镜像），但对本应用默认源无效。
+有，但用法和 Docker Hub 不同，需 **换域名** 或 **自定义镜像地址**，不能指望 `registry-mirrors` 自动代理 ghcr.io。
 
-### 自定义镜像示例
+| 方式 | 说明 |
+|------|------|
+| 公开 GHCR 前缀 | 如 `ghcr.1ms.run`、`ghcr.m.daocloud.io`（可用性会变，需自测） |
+| 商业专属域名 | 如轩辕 `xxx-ghcr.xuanyuan.run` |
+| 同步到国内仓库 | 阿里云 ACR / 腾讯云 TCR（最稳） |
+| 离线 `docker load` | 向导选「跳过拉取」 |
 
-1. 在有网络的机器：`docker pull ghcr.io/jia070310/lemon-muisc:latest`
-2. 打 tag 并 push 到阿里云 ACR：`docker tag ... registry.cn-hangzhou.aliyuncs.com/你的/lemon-music:latest`
-3. 安装向导选「自定义镜像地址」并填入上述地址
+### 安装向导里使用加速
+
+选 **「自定义镜像地址」**，填写例如：
+
+```text
+ghcr.1ms.run/jia070310/lemon-muisc:latest
+```
+
+或同步到国内后的：
+
+```text
+registry.cn-hangzhou.aliyuncs.com/你的命名空间/lemon-music:latest
+```
+
+### SSH 测试加速是否可用
+
+```bash
+docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest
+```
+
+成功后再在安装向导填同一地址。
+
+---
+
+## 修改数据目录（volumes）
+
+FPK 默认 compose 路径（`fpk/app/docker/docker-compose.yaml`）：
+
+```yaml
+volumes:
+  - "/var/apps/lemon-music/shares/lemon-music/data:/data"
+  - "/var/apps/lemon-music/shares/lemon-music/config:/config"
+```
+
+若要把音乐放到其他盘（如 `/vol1/1000/music`）：
+
+1. 修改 `fpk/app/docker/docker-compose.yaml` 中 **冒号左边** 的路径
+2. 重新打包：`npm run fpk:build`
+3. 重新安装 FPK
+
+**只改左边**，右边 `/data`、`/config` 不变。详见 [docker-compose.md](./docker-compose.md#修改-volumes-路径)。
+
+安装后在 **设置 → 文件路径** 添加的路径需与 `/data` 挂载目录一致。
+
+---
 
 ## 本机打包
 
