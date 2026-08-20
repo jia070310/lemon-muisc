@@ -1,12 +1,14 @@
 services:
   lemon-music:
     image: ghcr.io/jia070310/lemon-muisc:latest
-    build: .
     container_name: lemon-music
     ports:
       - "7983:7983"
     volumes:
-      # 请改成你的音乐目录和配置目录
+      # 本机示例：当前目录下的 data / config
+      # 飞牛 NAS 示例：
+      #   - /vol1/1000/music:/data
+      #   - /vol1/1000/lemon-music-config:/config
       - ./data:/data
       - ./config:/config
     environment:

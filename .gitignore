@@ -2,6 +2,9 @@ node_modules/
 dist/
 data/
 *.fpk
+fpk/app/docker/images/*.tar
+tools/fnpack
+tools/fnpack.exe
 .env
 .env.*
 *.log

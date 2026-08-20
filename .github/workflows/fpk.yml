@@ -1,0 +1,63 @@
+name: Build FPK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fpk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build application image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: lemon-music:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Export offline image tar
+        run: |
+          mkdir -p fpk/app/docker/images
+          docker save -o fpk/app/docker/images/lemon-music.tar lemon-music:latest
+          ls -lh fpk/app/docker/images/lemon-music.tar
+
+      - name: Install fnpack
+        run: |
+          curl -fsSL "https://static2.fnnas.com/fnpack/fnpack-1.2.3-linux-amd64" -o fnpack
+          echo "54b97fa7b70968c4d05c79840f5daeff508957d0bb2062fdb0376d00d9615c93  fnpack" | sha256sum -c -
+          chmod +x fnpack
+          sudo mv fnpack /usr/local/bin/fnpack
+
+      - name: Build FPK
+        run: |
+          chmod +x fpk/cmd/*
+          fnpack build --directory fpk
+          FPK="$(find fpk -maxdepth 1 -type f -name '*.fpk' | head -n 1)"
+          test -n "$FPK"
+          mv "$FPK" lemon-music-1.0.0.fpk
+          ls -lh lemon-music-1.0.0.fpk
+
+      - name: Upload FPK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lemon-music-fpk
+          path: lemon-music-1.0.0.fpk
+          if-no-files-found: error
+
+      - name: Attach FPK to GitHub Release v1.0.0
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload v1.0.0 lemon-music-1.0.0.fpk --clobber --repo "${{ github.repository }}"

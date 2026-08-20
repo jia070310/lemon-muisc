@@ -1,6 +1,7 @@
 services:
   lemon-music:
     image: lemon-music:latest
+    pull_policy: never
     container_name: lemon-music
     restart: unless-stopped
     ports:

@@ -66,64 +66,112 @@ npm start
 2. 在 **设置 → 文件路径** 中添加音乐目录（下载保存路径从这些目录里选择）
 3. 到 **搜索** 试听或下载；到 **标签编辑** 整理本地文件
 
-## Docker（推荐：拉取 GitHub 镜像）
+## Docker 部署教程
 
-镜像发布在 GitHub Container Registry：
+适合本机、服务器或飞牛「Docker」里直接跑容器。镜像在 GitHub Container Registry，**不需要在 NAS 上编译源码**。
+
+镜像地址：
 
 ```text
 ghcr.io/jia070310/lemon-muisc:latest
 ```
 
-推送到 `main` 或打 `v*` 标签后，GitHub Actions 会自动构建并推送。首次构建完成后，到仓库 **Packages** 打开该镜像，将可见性改为 **Public**，别人才能免登录拉取。
+包页面：https://github.com/jia070310/lemon-muisc/pkgs/container/lemon-muisc  
+推送到 `main` 或打 `v*` 标签后，GitHub Actions 会自动构建并上传。
 
-### 拉取并启动
+### 1. 准备 Docker
+
+安装 [Docker Desktop](https://www.docker.com/products/docker-desktop/) 或 Linux 上的 Docker Engine，并确保 `docker compose` 可用。
+
+### 2. 拿到 compose 文件
 
 ```bash
-# 公开包：直接拉
-docker pull ghcr.io/jia070310/lemon-muisc:latest
-
-# 若包仍是私有：先登录
-# echo YOUR_GITHUB_TOKEN | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
-
-docker compose up -d
+git clone https://github.com/jia070310/lemon-muisc.git
+cd lemon-muisc
 ```
 
-访问 http://localhost:7983 。请按实际路径修改 `docker-compose.yml` 中的卷：
+也可以只下载仓库里的 `docker-compose.yml`。
 
-- `/data`：音乐下载与扫描目录（`DOWNLOAD_PATH`）
-- `/config`：配置与数据库（`CONFIG_PATH`）
+### 3. 修改数据目录
 
-更新到最新镜像：
+编辑 `docker-compose.yml` 的 `volumes`：
+
+| 容器路径 | 作用 |
+|----------|------|
+| `/data` | 音乐下载与标签扫描目录（`DOWNLOAD_PATH`） |
+| `/config` | 配置与数据库（`CONFIG_PATH`） |
+
+示例：
+
+```yaml
+volumes:
+  - /vol1/1000/music:/data
+  - /vol1/1000/lemon-music-config:/config
+```
+
+### 4. 拉取镜像并启动
 
 ```bash
 docker compose pull
 docker compose up -d
 ```
 
-### 本地自行构建（可选）
+浏览器打开：http://localhost:7983 （NAS 上换成设备 IP，端口 `7983`）。
+
+若包是私有的，先登录再拉：
 
 ```bash
-docker compose up -d --build
-# 或
-docker build -t lemon-music:latest .
+echo YOUR_GITHUB_TOKEN | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
+docker compose pull
+docker compose up -d
 ```
 
-## 飞牛 NAS（FPK）
+### 5. 更新
 
-应用 ID：`lemon-music`，桌面显示名：**柠檬音乐下载**。
+```bash
+docker compose pull
+docker compose up -d
+```
 
-1. 安装 [fnpack](https://developer.fnnas.com/) 并加入 `PATH`
-2. 本机执行：
+### 6. 查看日志 / 停止
+
+```bash
+docker compose logs -f
+docker compose down
+```
+
+### 可选：本机自己构建镜像
+
+不拉 GitHub，在有 Dockerfile 的目录执行：
+
+```bash
+docker build -t lemon-music:latest .
+docker tag lemon-music:latest ghcr.io/jia070310/lemon-muisc:latest
+docker compose up -d
+```
+
+> Docker 部署与飞牛 FPK 是两条独立路线。FPK **不拉取** GitHub 镜像，安装包内自带离线镜像。
+
+## 飞牛 NAS（FPK，离线镜像）
+
+应用 ID：`lemon-music`，桌面显示名：**柠檬音乐下载**。  
+FPK 会把 `lemon-music:latest` 打成 tar 打进安装包，飞牛安装时 `docker load`，**不访问 ghcr.io**。
+
+### 下载现成安装包
+
+GitHub Actions 会构建 `lemon-music-1.0.0.fpk`，可在仓库 [Releases](https://github.com/jia070310/lemon-muisc/releases) 或 Actions 的 **Build FPK** 产物中下载。在飞牛 **应用中心 → 手动安装** 选择该文件。
+
+### 本机自行打包
+
+需要：Node.js 20+、Docker、[fnpack](https://developer.fnnas.com/docs/cli/fnpack)（Windows 下载后改名为 `fnpack.exe` 加入 PATH）。
 
 ```powershell
 npm run fpk:build
 ```
 
-脚本会构建前端、打 Docker 镜像 `lemon-music:latest`，再在 `fpk/` 目录执行 `fnpack build`。
+脚本会：构建前端 → `docker build` → `docker save` 到 `fpk/app/docker/images/` → `fnpack build`。
 
-3. 将生成的 `.fpk` 安装到飞牛 NAS
-
-未安装 fnpack 时，可在 `fpk` 目录手动执行 `fnpack build`。
+将生成的 `.fpk` 拷到飞牛，应用中心手动安装。
 
 ## 常用脚本
 
@@ -133,12 +181,12 @@ npm run fpk:build
 | `npm run build` | 构建前端到 `dist/public` |
 | `npm start` | 仅启动后端（提供 API 与静态页面） |
 | `npm run docker:build` | 本地构建 Docker 镜像 `lemon-music:latest` |
-| `npm run fpk:build` | 构建飞牛 FPK（Windows PowerShell） |
+| `npm run fpk:build` | 构建离线 FPK（内置镜像 tar，不拉取仓库） |
 
 ## 目录结构
 
 ```
-├── .github/workflows/   # 自动构建并推送 GHCR 镜像
+├── .github/workflows/   # GHCR 镜像 + 离线 FPK 构建
 ├── src/                 # Vue 前端
 ├── server/              # Express 后端与音源运行时
 ├── public/              # 静态资源（图标等）
