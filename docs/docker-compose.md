@@ -12,10 +12,10 @@ services:
     restart: unless-stopped
     environment:
       PORT: 7983
-      DOWNLOAD_PATH: /data
+      DOWNLOAD_PATH: /music
       CONFIG_PATH: /config
     volumes:
-      - "~/Music/data:/data"
+      - "~/Music/data:/music"
       - "~/Music/config:/config"
 ```
 
@@ -25,11 +25,11 @@ services:
 
 ```yaml
 volumes:
-  - 左边改这里:/data      # 音乐下载、扫描
+  - 左边改这里:/music      # 音乐下载、扫描
   - 左边改这里:/config    # 配置、数据库
 ```
 
-**只改冒号左边**，右边 `/data`、`/config` 不要改（与 `DOWNLOAD_PATH`、`CONFIG_PATH` 对应）。
+**只改冒号左边**，右边 `/music`、`/config` 不要改（与 `DOWNLOAD_PATH`、`CONFIG_PATH` 对应）。
 
 ### 飞牛 NAS
 
@@ -37,7 +37,7 @@ volumes:
 
 ```yaml
 volumes:
-  - "/vol1/1000/music:/data"
+  - "/vol1/1000/music:/music"
   - "/vol1/1000/lemon-music-config:/config"
 ```
 
@@ -45,17 +45,17 @@ volumes:
 
 ```yaml
 volumes:
-  - "D:/Music:/data"
+  - "D:/Music:/music"
   - "D:/LemonMusic/config:/config"
 ```
 
 ### 使用 compose 同目录下的文件夹
 
-在 `docker-compose.yml` 旁边建 `data`、`config` 两个文件夹：
+在 `docker-compose.yml` 旁边建 `music`、`config` 两个文件夹：
 
 ```yaml
 volumes:
-  - "./data:/data"
+  - "./music:/music"
   - "./config:/config"
 ```
 
@@ -74,7 +74,7 @@ docker compose up -d
 
 ### 与设置页的关系
 
-挂载到 `/data` 的目录，需在应用 **设置 → 文件路径** 里添加（容器内路径一般为 `/data` 或其子目录）。
+挂载到 `/music` 的目录，需在应用 **设置 → 文件路径** 里添加（容器内路径一般为 `/music` 或其子目录）。
 
 ---
 
@@ -100,7 +100,7 @@ docker compose up -d
 |------|------|
 | `image` | GitHub 镜像，无需本地编译 |
 | `ports` | 左边是访问端口，右边固定 `7983` |
-| `DOWNLOAD_PATH` / `/data` | 下载与扫描的音乐目录 |
+| `DOWNLOAD_PATH` / `/music` | 下载与扫描的音乐目录 |
 | `CONFIG_PATH` / `/config` | 配置与数据库 |
 | `volumes` 冒号左边 | **改这里**：你电脑或 NAS 上的真实路径 |
 | `volumes` 冒号右边 | 不要改 |

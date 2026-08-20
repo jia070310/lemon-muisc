@@ -80,10 +80,10 @@ services:
     restart: unless-stopped
     environment:
       PORT: 7983
-      DOWNLOAD_PATH: /data
+      DOWNLOAD_PATH: /music
       CONFIG_PATH: /config
     volumes:
-      - "/Music/data:/data"
+      - "/Music/data:/music"
       - "/Music/config:/config"
 ```
 

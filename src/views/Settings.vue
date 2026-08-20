@@ -50,7 +50,7 @@
         <div v-else class="empty-hint">暂无文件夹，请添加或选择路径</div>
 
         <div v-if="!fnosAvailable" class="path-manual">
-          <input v-model="newPath" placeholder="手动输入容器内路径，如 /data 或 /data/子目录" class="path-input" @keydown.enter="addPath" />
+          <input v-model="newPath" placeholder="手动输入容器内路径，如 /music 或 /music/子目录" class="path-input" @keydown.enter="addPath" />
           <button class="btn-primary btn-sm" @click="addPath">添加</button>
         </div>
       </div>
@@ -203,7 +203,7 @@ const importUrl = ref('')
 const importingUrl = ref(false)
 const filePaths = ref([])
 const downloadPath = ref('')
-const newPath = ref('/data')
+const newPath = ref('/music')
 const editingPath = ref('')
 const editPathValue = ref('')
 const fnosAvailable = ref(false)

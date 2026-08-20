@@ -7,7 +7,7 @@ const TAG_DIRS_KEY = 'tag.dirs'
 
 function getDefaultMusicPath() {
   // Docker/FPK 模式下，容器内默认音乐目录通常由 DOWNLOAD_PATH 决定
-  return process.env.DOWNLOAD_PATH || '/data'
+  return process.env.DOWNLOAD_PATH || '/music'
 }
 
 function getSetting(key) {
@@ -50,7 +50,7 @@ export function getDownloadSavePath() {
     setSetting(DOWNLOAD_PATH_KEY, paths[0])
     return paths[0]
   }
-  return process.env.DOWNLOAD_PATH || '/data'
+  return process.env.DOWNLOAD_PATH || '/music'
 }
 
 export function setDownloadSavePath(dirPath) {
@@ -61,15 +61,40 @@ export function setDownloadSavePath(dirPath) {
   return p
 }
 
-export function migrateFilePaths(defaultDataPath = '/data') {
+function migrateLegacyContainerPath(defaultMusicPath) {
+  const legacy = '/data'
+  if (legacy === defaultMusicPath) return
+
+  const mapPath = (p) => {
+    if (p === legacy) return defaultMusicPath
+    if (p.startsWith(`${legacy}/`)) return defaultMusicPath + p.slice(legacy.length)
+    return p
+  }
+
+  let paths = getFilePaths()
+  const migrated = [...new Set(paths.map(mapPath).filter(Boolean))]
+  if (JSON.stringify(migrated) !== JSON.stringify(paths)) {
+    setFilePaths(migrated)
+    paths = migrated
+  }
+
+  const saved = getSetting(DOWNLOAD_PATH_KEY)
+  if (saved) {
+    const mapped = mapPath(saved)
+    if (mapped !== saved) setSetting(DOWNLOAD_PATH_KEY, mapped)
+  }
+}
+
+export function migrateFilePaths(defaultMusicPath = '/music') {
+  migrateLegacyContainerPath(defaultMusicPath)
   let paths = getFilePaths()
   if (!paths.length) {
-    const savePath = getSetting(DOWNLOAD_PATH_KEY) || defaultDataPath
+    const savePath = getSetting(DOWNLOAD_PATH_KEY) || defaultMusicPath
     let tagDirs = []
     try {
       tagDirs = JSON.parse(getSetting(TAG_DIRS_KEY) || '[]')
     } catch {}
-    paths = [...new Set([savePath, ...tagDirs, defaultDataPath].filter(Boolean))]
+    paths = [...new Set([savePath, ...tagDirs, defaultMusicPath].filter(Boolean))]
     setFilePaths(paths)
   }
 
@@ -89,7 +114,7 @@ export function addFilePath(dirPath, { fromPicker = false } = {}) {
   }
   if (fromPicker && !fs.existsSync(p) && !isAuthorizedPath(p)) {
     const musicRoot = getDefaultMusicPath()
-    throw new Error(`目录不可用：${p}。请确认飞牛已授权该路径，并且该目录在容器内可见。默认音乐目录为 ${musicRoot}（如 /data），建议添加 ${musicRoot} 或其子目录。`)
+    throw new Error(`目录不可用：${p}。请确认飞牛已授权该路径，并且该目录在容器内可见。默认音乐目录为 ${musicRoot}（如 /music），建议添加 ${musicRoot} 或其子目录。`)
   }
   const paths = getFilePaths()
   if (paths.includes(p)) throw new Error('路径已存在')
@@ -109,7 +134,7 @@ export function updateFilePath(oldPath, newPath, { fromPicker = false } = {}) {
   }
   if (fromPicker && !fs.existsSync(to) && !isAuthorizedPath(to)) {
     const musicRoot = getDefaultMusicPath()
-    throw new Error(`目录不可用：${to}。请确认飞牛已授权该路径，并且该目录在容器内可见。默认音乐目录为 ${musicRoot}（如 /data），建议添加 ${musicRoot} 或其子目录。`)
+    throw new Error(`目录不可用：${to}。请确认飞牛已授权该路径，并且该目录在容器内可见。默认音乐目录为 ${musicRoot}（如 /music），建议添加 ${musicRoot} 或其子目录。`)
   }
 
   const paths = getFilePaths()

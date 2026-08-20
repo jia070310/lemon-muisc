@@ -80,7 +80,7 @@ FPK 默认 compose 路径（`fpk/app/docker/docker-compose.yaml`）：
 
 ```yaml
 volumes:
-  - "/var/apps/lemon-music/shares/lemon-music/data:/data"
+  - "/var/apps/lemon-music/shares/lemon-music/data:/music"
   - "/var/apps/lemon-music/shares/lemon-music/config:/config"
 ```
 
@@ -90,9 +90,9 @@ volumes:
 2. 重新打包：`npm run fpk:build`
 3. 重新安装 FPK
 
-**只改左边**，右边 `/data`、`/config` 不变。详见 [docker-compose.md](./docker-compose.md#修改-volumes-路径)。
+**只改左边**，右边 `/music`、`/config` 不变。详见 [docker-compose.md](./docker-compose.md#修改-volumes-路径)。
 
-安装后在 **设置 → 文件路径** 添加的路径需与 `/data` 挂载目录一致。
+安装后在 **设置 → 文件路径** 添加的路径需与 `/music` 挂载目录一致。
 
 ---
 

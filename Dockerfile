@@ -17,9 +17,9 @@ COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/server ./server
 
 ENV PORT=7983
-ENV DOWNLOAD_PATH=/data
+ENV DOWNLOAD_PATH=/music
 ENV CONFIG_PATH=/config
 EXPOSE 7983
-VOLUME ["/data", "/config"]
+VOLUME ["/music", "/config"]
 
 CMD ["node", "server/index.js"]
