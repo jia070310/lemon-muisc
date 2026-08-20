@@ -10,6 +10,10 @@ Thumbs.db
 *.sqlite
 *.sqlite3
 *.db
+*.db-shm
+*.db-wal
 config/*.db
+config/*.db-shm
+config/*.db-wal
 config/*.sqlite
 config/*.sqlite3
