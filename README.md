@@ -68,40 +68,28 @@ npm start
 
 ## Docker 部署教程
 
-适合本机、服务器或飞牛「Docker」里直接跑容器。镜像在 GitHub Container Registry，**不需要在 NAS 上编译源码**。
+适合本机、服务器或飞牛「Docker」里用 **docker-compose.yml** 跑容器。完整图文步骤见 [docs/docker-compose.md](docs/docker-compose.md)。
 
-镜像地址：
+### 最短步骤
 
-```text
-ghcr.io/jia070310/lemon-muisc:latest
-```
-
-包页面：https://github.com/jia070310/lemon-muisc/pkgs/container/lemon-muisc  
-推送到 `main` 或打 `v*` 标签后，GitHub Actions 会自动构建并上传。
-
-### 1. 准备 Docker
-
-安装 [Docker Desktop](https://www.docker.com/products/docker-desktop/) 或 Linux 上的 Docker Engine，并确保 `docker compose` 可用。
-
-### 2. 拿到 compose 文件
+1. 安装 Docker（需支持 `docker compose`）。
+2. 把仓库里的 `docker-compose.yml` 放到一台已装 Docker 的机器上（或 `git clone` 本仓库）。
+3. 按需改文件里的 `volumes`（音乐目录、配置目录）。
+4. 在该文件所在目录执行：
 
 ```bash
-git clone https://github.com/jia070310/lemon-muisc.git
-cd lemon-muisc
+docker compose pull
+docker compose up -d
 ```
 
-也可以只下载仓库里的 `docker-compose.yml`。
+5. 浏览器打开 `http://127.0.0.1:7983`（NAS 用 `http://设备IP:7983`）。
 
-### 3. 修改数据目录
+镜像：`ghcr.io/jia070310/lemon-muisc:latest`  
+包页面：https://github.com/jia070310/lemon-muisc/pkgs/container/lemon-muisc
 
-编辑 `docker-compose.yml` 的 `volumes`：
+### 飞牛 Docker 项目
 
-| 容器路径 | 作用 |
-|----------|------|
-| `/data` | 音乐下载与标签扫描目录（`DOWNLOAD_PATH`） |
-| `/config` | 配置与数据库（`CONFIG_PATH`） |
-
-示例：
+在飞牛 **Docker → 项目** 中新建 Compose，粘贴 `docker-compose.yml`，把路径改成例如：
 
 ```yaml
 volumes:
@@ -109,48 +97,17 @@ volumes:
   - /vol1/1000/lemon-music-config:/config
 ```
 
-### 4. 拉取镜像并启动
+然后部署。`/data` 是音乐，`/config` 是配置；只改冒号左边的宿主机路径。
+
+### 更新 / 日志 / 停止
 
 ```bash
-docker compose pull
-docker compose up -d
-```
-
-浏览器打开：http://localhost:7983 （NAS 上换成设备 IP，端口 `7983`）。
-
-若包是私有的，先登录再拉：
-
-```bash
-echo YOUR_GITHUB_TOKEN | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
-docker compose pull
-docker compose up -d
-```
-
-### 5. 更新
-
-```bash
-docker compose pull
-docker compose up -d
-```
-
-### 6. 查看日志 / 停止
-
-```bash
+docker compose pull && docker compose up -d
 docker compose logs -f
 docker compose down
 ```
 
-### 可选：本机自己构建镜像
-
-不拉 GitHub，在有 Dockerfile 的目录执行：
-
-```bash
-docker build -t lemon-music:latest .
-docker tag lemon-music:latest ghcr.io/jia070310/lemon-muisc:latest
-docker compose up -d
-```
-
-> Docker 部署与飞牛 FPK 是两条独立路线。FPK **不拉取** GitHub 镜像，安装包内自带离线镜像。
+> 这条路线会从 GitHub 拉镜像。飞牛 **FPK 安装包** 是另一条路线，包内自带离线镜像，不拉取 ghcr.io。详见下文。
 
 ## 飞牛 NAS（FPK，离线镜像）
 
@@ -186,6 +143,7 @@ npm run fpk:build
 ## 目录结构
 
 ```
+├── docs/                # 截图与 docker-compose 部署说明
 ├── .github/workflows/   # GHCR 镜像 + 离线 FPK 构建
 ├── src/                 # Vue 前端
 ├── server/              # Express 后端与音源运行时
