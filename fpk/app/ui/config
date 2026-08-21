@@ -3,7 +3,7 @@
     "lemon-music.Application": {
       "title": "柠檬音乐下载",
       "icon": "images/icon_{0}.png",
-      "type": "iframe",
+      "type": "url",
       "protocol": "http",
       "port": "7983",
       "url": "/",
