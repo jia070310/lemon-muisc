@@ -440,12 +440,24 @@ function showToast(text, type = 'info') {
 @media (max-width: 768px) {
   .search-header { padding: 12px; }
   .search-bar {
-    flex-wrap: wrap;
-    padding: 8px 10px;
+    flex-wrap: nowrap;
+    align-items: center;
+    padding: 4px 4px 4px 12px;
     gap: 8px;
   }
-  .search-input { width: 100%; flex: 1 1 100%; }
-  .search-btn { width: 100%; border-radius: var(--radius); }
+  .search-input {
+    width: auto;
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 16px; /* avoid iOS zoom on focus */
+    padding: 10px 0;
+  }
+  .search-btn {
+    width: auto;
+    flex-shrink: 0;
+    padding: 8px 14px;
+    border-radius: var(--radius-pill);
+  }
 
   .result-header { display: none; }
 
