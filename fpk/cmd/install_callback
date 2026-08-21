@@ -30,23 +30,23 @@ esac
 
 log_config "install paths music=${music_path} downloads=${downloads_path} config=${config_path}"
 
-# 不要在回调里「等待飞牛拉镜像」：飞牛要等本脚本结束后才会继续，会死锁卡在 80%
-# 这里只做一次拉取；失败则交给飞牛 docker-project / 启用时再拉
+# 再次清理：防止 install_init 之后仍有残留，或本脚本早前跑过 docker run
+docker stop "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+docker compose -p "${COMPOSE_PROJECT}" -f "${COMPOSE_FILE}" down --remove-orphans >/dev/null 2>&1 || true
+docker compose -p "lemon-music" down --remove-orphans >/dev/null 2>&1 || true
+
 echo "正在拉取 Docker 镜像，请稍候…" > "${TRIM_TEMP_LOGFILE}" 2>/dev/null || true
 
+SOFT_PULL_FAIL=1
+wizard_pull_timeout="${wizard_pull_timeout:-300}"
 if [ "${wizard_pull_source:-ghcr_direct}" = "skip_pull" ]; then
-  SOFT_PULL_FAIL=1
   pull_image_with_progress "安装" || true
+elif pull_image_with_progress "安装"; then
+  log_config "install pull ok image=${IMAGE}"
 else
-  # 硬拉一次；超时/失败不阻断，避免再次卡死安装向导
-  SOFT_PULL_FAIL=1
-  wizard_pull_timeout="${wizard_pull_timeout:-300}"
-  if pull_image_with_progress "安装"; then
-    log_config "install pull ok image=${IMAGE}"
-  else
-    log_config "install pull deferred to Feiniu/enable"
-    log_line "脚本拉取未成功，将交由飞牛 docker-project 继续（请勿取消，进度可能仍会前进）"
-  fi
+  log_config "install pull deferred to Feiniu/enable"
+  log_line "脚本拉取未成功，将交由飞牛 docker-project 继续"
 fi
 
 if resolved="$(resolve_local_image_name "$(get_compose_image)" 2>/dev/null)"; then
@@ -60,17 +60,11 @@ EOF
   log_config "install using image ${IMAGE}"
 fi
 
+# 安装阶段不要自己 docker run：飞牛 docker-project 会创建同名容器，否则 Conflict
+# 真正挂载纠偏放在启用(main start)时
+docker stop "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+
 mark_install_complete "安装"
-
-# 有镜像才尝试起容器；没有则留给启用阶段
-if resolve_local_image_name "$(get_compose_image)" >/dev/null 2>&1; then
-  if recreate_compose_stack; then
-    log_config "install docker run ok"
-  else
-    log_config "install container deferred — will start on enable"
-  fi
-else
-  log_config "no local image yet — Feiniu project or enable will pull"
-fi
-
+log_config "install done — container will be created by Feiniu/enable"
 exit 0

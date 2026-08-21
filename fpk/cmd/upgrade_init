@@ -1,9 +1,16 @@
 #!/bin/bash
 
 . "$(dirname "$0")/pull-image.sh"
+. "$(dirname "$0")/paths.sh"
 
 init_log
 log_line "升级前检查..."
 ensure_docker
+
+docker stop "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+docker compose -p "${COMPOSE_PROJECT}" -f "${COMPOSE_FILE}" down --remove-orphans >/dev/null 2>&1 || true
+docker compose -p "lemon-music" down --remove-orphans >/dev/null 2>&1 || true
+
 log_line "升级检查通过。"
 exit 0
