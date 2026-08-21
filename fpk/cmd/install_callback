@@ -45,8 +45,8 @@ if [ "${wizard_pull_source:-ghcr_direct}" = "skip_pull" ]; then
 elif pull_image_with_progress "安装"; then
   log_config "install pull ok image=${IMAGE}"
 else
-  log_config "install pull deferred to Feiniu/enable"
-  log_line "脚本拉取未成功，将交由飞牛 docker-project 继续"
+  log_config "install pull deferred to enable"
+  log_line "脚本拉取未成功，启用时会再尝试拉取"
 fi
 
 if resolved="$(resolve_local_image_name "$(get_compose_image)" 2>/dev/null)"; then
@@ -60,11 +60,16 @@ EOF
   log_config "install using image ${IMAGE}"
 fi
 
-# 安装阶段不要自己 docker run：飞牛 docker-project 会创建同名容器，否则 Conflict
-# 真正挂载纠偏放在启用(main start)时
-docker stop "${CONTAINER_NAME}" >/dev/null 2>&1 || true
-docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+# 无 docker-project 时由本脚本负责起容器（启用时 main start 也会重建挂载）
+if resolve_local_image_name "$(get_compose_image)" >/dev/null 2>&1; then
+  if recreate_compose_stack; then
+    log_config "install docker run ok"
+  else
+    log_config "install container deferred — will start on enable"
+  fi
+else
+  log_config "no local image yet — enable will pull/start"
+fi
 
 mark_install_complete "安装"
-log_config "install done — container will be created by Feiniu/enable"
 exit 0
