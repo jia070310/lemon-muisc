@@ -12,6 +12,6 @@ distributor_url = https://github.com/jia070310/lemon-muisc
 desktop_uidir  = ui
 desktop_applaunchname = lemon-music.Application
 service_port   = 7983
-checkport      = true
+checkport      = false
 ctl_stop       = true
 disable_authorization_path = false
