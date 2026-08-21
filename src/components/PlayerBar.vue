@@ -432,10 +432,38 @@ async function onPlayAt(index) {
 }
 
 @media (max-width: 768px) {
-  .player-bar { left: 0; padding: 0 12px; gap: 10px; }
-  .bar-left { width: 120px; }
-  .player-progress, .player-volume { display: none; }
-  .ctrl-mode { display: none; }
-  .queue-panel { right: 12px; width: calc(100vw - 24px); }
+  .player-bar {
+    left: 0;
+    bottom: calc(var(--mobile-nav-height) + env(safe-area-inset-bottom, 0px));
+    height: var(--player-height);
+    padding: 0 10px;
+    gap: 8px;
+  }
+  .bar-left {
+    width: auto;
+    flex: 1;
+    min-width: 0;
+  }
+  .bar-cover {
+    width: 40px;
+    height: 40px;
+  }
+  .player-lyric { display: none; }
+  .bar-center { gap: 4px; }
+  .ctrl-mode, .ctrl-sub[title="停止"], .player-volume { display: none; }
+  .player-progress {
+    display: none;
+  }
+  .bar-right {
+    flex: 0;
+    gap: 6px;
+  }
+  .queue-panel {
+    left: 12px;
+    right: 12px;
+    bottom: calc(var(--player-height) + 12px);
+    width: auto;
+    max-height: min(50vh, 360px);
+  }
 }
 </style>

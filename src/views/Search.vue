@@ -438,10 +438,55 @@ function showToast(text, type = 'info') {
 @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 
 @media (max-width: 768px) {
-  .result-header, .result-row {
-    grid-template-columns: 1fr 80px 38px 38px 38px;
+  .search-header { padding: 12px; }
+  .search-bar {
+    flex-wrap: wrap;
+    padding: 8px 10px;
+    gap: 8px;
+  }
+  .search-input { width: 100%; flex: 1 1 100%; }
+  .search-btn { width: 100%; border-radius: var(--radius); }
+
+  .result-header { display: none; }
+
+  .result-row {
+    grid-template-columns: 1fr 36px 36px 36px;
+    grid-template-areas:
+      "name play queue action"
+      "meta play queue action";
+    gap: 2px 8px;
+    padding: 12px 14px;
+    align-items: center;
   }
   .col-index, .col-album, .col-duration { display: none; }
+  .col-name {
+    grid-area: name;
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    line-height: 1.35;
+  }
+  .col-singer {
+    grid-area: meta;
+    font-size: 12px;
+  }
+  .col-play { grid-area: play; }
+  .col-queue { grid-area: queue; }
+  .col-action { grid-area: action; }
+
   .results-toolbar { flex-wrap: wrap; gap: 8px; }
+  .results-actions {
+    width: 100%;
+    display: flex;
+    gap: 8px;
+  }
+  .results-actions .btn-sm { flex: 1; }
+
+  .toast {
+    left: 12px;
+    right: 12px;
+    bottom: calc(var(--player-height) + var(--mobile-nav-height) + 16px);
+  }
 }
 </style>

@@ -698,10 +698,48 @@ function showToast(text, type = 'info') {
 @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 
 @media (max-width: 768px) {
-  .settings-page { flex-direction: column; }
-  .settings-nav { width: 100%; display: flex; flex-wrap: wrap; gap: 4px; }
-  .nav-title, .nav-sub { width: 100%; }
-  .nav-tab { width: auto; display: inline-block; }
+  .settings-page { flex-direction: column; gap: 12px; }
+  .settings-nav {
+    width: 100%;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 12px 14px;
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    background: var(--bg);
+  }
+  .nav-title { width: 100%; font-size: 18px; margin-bottom: 0; }
+  .nav-sub { width: 100%; margin-bottom: 4px; }
+  .nav-tab {
+    width: auto;
+    display: inline-block;
+    padding: 7px 12px;
+    font-size: 13px;
+    margin-bottom: 0;
+  }
   .nav-tab.active::before { display: none; }
+  .settings-panel { padding: 16px; }
+  .panel-title { font-size: 16px; margin-bottom: 14px; padding-bottom: 12px; }
+  .setting-item {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+  .setting-item-action { width: 100%; }
+  .setting-select { width: 100%; min-width: 0; }
+  .path-row { flex-wrap: wrap; }
+  .path-actions { width: 100%; }
+  .path-manual { flex-direction: column; }
+  .source-item { flex-direction: column; align-items: flex-start; gap: 10px; }
+  .source-actions { width: 100%; }
+  .import-area { flex-direction: column; align-items: stretch; }
+  .url-input { min-width: 0; width: 100%; }
+  .toast {
+    left: 12px;
+    right: 12px;
+    bottom: calc(var(--player-height) + var(--mobile-nav-height) + 16px);
+  }
 }
 </style>

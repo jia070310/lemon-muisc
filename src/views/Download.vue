@@ -152,4 +152,17 @@ async function clearCompleted() { try { await api.download.clearCompleted(); tas
 .task-actions { display: flex; gap: 4px; }
 
 .empty { text-align: center; padding: 60px 0; color: var(--text-muted); font-size: 14px; }
+
+@media (max-width: 768px) {
+  .task-item {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 10px;
+  }
+  .task-info { width: 100%; }
+  .task-name { white-space: normal; }
+  .task-progress { width: 100%; order: 3; }
+  .task-status { width: auto; }
+  .task-actions { margin-left: auto; }
+}
 </style>

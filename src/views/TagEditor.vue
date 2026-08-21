@@ -1037,15 +1037,65 @@ tbody tr.selected td:first-child { background: rgba(60, 110, 247, 0.05); }
     grid-template-columns: 1fr;
     overflow: visible;
     min-height: auto;
+    gap: 12px;
   }
   .dir-panel, .edit-panel, .file-panel {
     overflow: visible;
     min-height: auto;
   }
   .dir-list { max-height: 200px; }
-  .table-wrap { max-height: 60vh; }
+  .table-wrap { max-height: 50vh; }
   .edit-panel { order: 3; }
   .fetch-body { grid-template-columns: 1fr; }
   .fetch-list { border-right: none; border-bottom: 1px solid var(--border); max-height: 220px; }
+}
+
+@media (max-width: 768px) {
+  .page-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+  .header-actions {
+    display: flex;
+    width: 100%;
+  }
+  .header-actions .btn-primary {
+    width: 100%;
+  }
+  .file-toolbar {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .filter-input {
+    width: 100%;
+    flex: 1 1 100%;
+  }
+  .table-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  table {
+    min-width: 560px;
+  }
+  .edit-form {
+    display: flex;
+    flex-direction: column;
+  }
+  .edit-form label {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .edit-actions {
+    flex-wrap: wrap;
+  }
+  .edit-actions button {
+    flex: 1;
+  }
+  .toast {
+    left: 12px;
+    right: 12px;
+    bottom: calc(var(--player-height) + var(--mobile-nav-height) + 16px);
+  }
 }
 </style>

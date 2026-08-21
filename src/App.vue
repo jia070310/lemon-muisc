@@ -49,13 +49,37 @@
     <main class="content" :class="{ 'content-fixed': isTagPage }">
       <div v-if="setupBanner" class="setup-banner">
         <strong>首次使用请先配置数据目录</strong>
-        <span>请卸载后重新安装，并在安装向导「数据目录」填写你自己的音乐库与下载路径；或在「应用设置 → 运行设置」修改后启用应用。</span>
-        <router-link to="/settings" class="setup-link">打开应用内设置</router-link>
+        <span>请到「应用设置 → 访问权限」添加音乐库与下载目录，保存后停用再启用。</span>
+        <router-link to="/settings" class="setup-link">打开设置</router-link>
       </div>
       <router-view />
     </main>
 
     <PlayerBar />
+
+    <nav class="mobile-tabbar" aria-label="主导航">
+      <router-link to="/search" class="tab-item" active-class="active">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <span>搜索</span>
+      </router-link>
+      <router-link to="/download" class="tab-item" active-class="active">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        <span>下载</span>
+      </router-link>
+      <router-link to="/tag" class="tab-item" active-class="active">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
+        <span>标签</span>
+      </router-link>
+      <router-link to="/settings" class="tab-item" active-class="active">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        <span>设置</span>
+      </router-link>
+      <router-link to="/about" class="tab-item" active-class="active">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+        <span>关于</span>
+        <span v-if="hasUpdate" class="tab-dot"></span>
+      </router-link>
+    </nav>
   </div>
 </template>
 
@@ -86,7 +110,10 @@ onMounted(() => {
 .app {
   display: flex;
   min-height: 100vh;
+  min-height: 100dvh;
   background: var(--bg);
+  width: 100%;
+  overflow-x: hidden;
 }
 
 .sidebar {
@@ -100,6 +127,7 @@ onMounted(() => {
   top: 0;
   left: 0;
   height: 100vh;
+  height: 100dvh;
   z-index: 100;
 }
 
@@ -196,11 +224,15 @@ onMounted(() => {
   margin-left: var(--sidebar-width);
   padding: 28px 32px 88px;
   overflow-y: auto;
+  overflow-x: hidden;
   min-width: 0;
   min-height: 100vh;
+  min-height: 100dvh;
+  width: 100%;
 }
 .content-fixed {
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -223,9 +255,7 @@ onMounted(() => {
   color: var(--text);
   font-size: 14px;
 }
-.setup-banner strong {
-  color: #ffc107;
-}
+.setup-banner strong { color: #ffc107; }
 .setup-link {
   margin-left: auto;
   color: var(--accent, #6c9eff);
@@ -234,30 +264,87 @@ onMounted(() => {
 }
 .setup-link:hover { text-decoration: underline; }
 
+.mobile-tabbar { display: none; }
+
 @media (max-width: 768px) {
-  .sidebar {
-    width: 100%;
-    height: auto;
-    position: static;
-    flex-direction: row;
-    flex-wrap: wrap;
-    align-items: center;
+  .app {
+    flex-direction: column;
   }
-  .logo { padding: 12px 16px; }
-  .nav-section { display: flex; align-items: center; padding: 0 8px; }
-  .nav-label { display: none; }
-  nav { display: flex; }
-  .nav-item span { display: none; }
-  .sidebar-footer { display: none; }
-  .content { margin-left: 0; padding: 16px 16px 80px; }
+
+  .sidebar { display: none; }
+
+  .content {
+    margin-left: 0;
+    padding: 16px 14px calc(var(--player-height) + var(--mobile-nav-height) + 20px + env(safe-area-inset-bottom, 0px));
+    min-height: auto;
+    width: 100%;
+  }
+
   .content-fixed {
     height: auto;
+    min-height: calc(100dvh - var(--player-height) - var(--mobile-nav-height));
     overflow: visible;
     display: block;
   }
   .content-fixed > * {
     flex: none;
     min-height: auto;
+  }
+
+  .setup-banner {
+    font-size: 13px;
+    padding: 10px 12px;
+  }
+  .setup-link {
+    margin-left: 0;
+    width: 100%;
+  }
+
+  .mobile-tabbar {
+    display: flex;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 120;
+    height: calc(var(--mobile-nav-height) + env(safe-area-inset-bottom, 0px));
+    padding: 0 4px env(safe-area-inset-bottom, 0px);
+    background: rgba(24, 24, 24, 0.96);
+    backdrop-filter: blur(12px);
+    border-top: 1px solid var(--border-light);
+    justify-content: space-around;
+    align-items: stretch;
+  }
+
+  .tab-item {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    color: var(--text-muted);
+    font-size: 10px;
+    text-decoration: none;
+    position: relative;
+    min-width: 0;
+    padding: 6px 2px;
+  }
+  .tab-item svg {
+    width: 22px;
+    height: 22px;
+  }
+  .tab-item.active {
+    color: var(--accent);
+  }
+  .tab-dot {
+    position: absolute;
+    top: 6px;
+    right: calc(50% - 14px);
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--warning);
   }
 }
 </style>

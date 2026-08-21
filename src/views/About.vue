@@ -214,4 +214,24 @@ function formatDate(iso) {
   gap: 10px;
   flex-wrap: wrap;
 }
+
+@media (max-width: 768px) {
+  .about-header { gap: 12px; }
+  .about-icon { width: 48px; height: 48px; }
+  .update-banner {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .info-row {
+    flex-direction: column;
+    gap: 6px;
+    padding: 12px 14px;
+  }
+  .info-label { width: auto; }
+  .about-actions .btn-primary,
+  .about-actions .btn-ghost {
+    flex: 1;
+    text-align: center;
+  }
+}
 </style>

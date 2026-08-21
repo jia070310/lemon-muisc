@@ -10,6 +10,6 @@ distributor    = jia070310
 desktop_uidir  = ui
 desktop_applaunchname = lemon-music.Application
 service_port   = 7983
-checkport      = true
+checkport      = false
 disable_authorization_path = false
 micro_app      = true
