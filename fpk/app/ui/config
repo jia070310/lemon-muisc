@@ -4,11 +4,11 @@
       "title": "柠檬音乐下载",
       "desc": "柠檬音乐下载",
       "icon": "images/icon_{0}.png",
-      "type": "url",
+      "type": "iframe",
       "protocol": "http",
       "port": "7983",
       "url": "/",
-      "allUsers": true,
+      "allUsers": false,
       "noDisplay": false
     }
   }

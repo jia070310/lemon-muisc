@@ -20,7 +20,7 @@ fix_desktop_db() {
   }
 
   run_sql "UPDATE app SET is_docker = false, micro_app = true WHERE app_name = '${appname}';" || true
-  run_sql "UPDATE app_service SET no_display = false WHERE app_id IN (SELECT id FROM app WHERE app_name = '${appname}');" || true
+  run_sql "UPDATE app_service SET no_display = false, is_admin = true, type = 'iframe' WHERE app_id IN (SELECT id FROM app WHERE app_name = '${appname}');" || true
 }
 
 ensure_desktop_entry() {
