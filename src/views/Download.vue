@@ -1,11 +1,12 @@
 <template>
   <div class="download-page">
     <div class="page-title">下载管理</div>
-    <div class="page-subtitle">查看和管理下载任务</div>
+    <div class="page-subtitle">查看和管理下载任务，可直接试听</div>
 
     <div class="toolbar">
       <button class="btn-ghost btn-sm" @click="loadList">刷新</button>
       <button class="btn-ghost btn-sm" @click="clearCompleted">清除已完成</button>
+      <button class="btn-primary btn-sm" @click="playAllPlayable" :disabled="!playableTasks.length">试听全部</button>
     </div>
 
     <div class="stats card" v-if="tasks.length">
@@ -21,7 +22,12 @@
     </div>
 
     <div class="task-list card" v-if="tasks.length">
-      <div v-for="task in tasks" :key="task.id" class="task-item">
+      <div
+        v-for="task in tasks"
+        :key="task.id"
+        class="task-item"
+        :class="{ playing: isPlayingTask(task) }"
+      >
         <div class="task-info">
           <div class="task-name">{{ task.name }}</div>
           <div class="task-meta">{{ task.singer }} · {{ task.quality }} · {{ statusText(task.status) }}</div>
@@ -37,24 +43,50 @@
           <span :class="'status-' + task.status">{{ statusIcon(task.status) }}</span>
         </div>
         <div class="task-actions">
-          <button v-if="task.status === 'paused'" class="btn-sm btn-ghost" @click="resume(task.id)" title="继续">▶</button>
-          <button v-if="task.status === 'downloading' || task.status === 'waiting'" class="btn-sm btn-ghost" @click="pause(task.id)" title="暂停">⏸</button>
-          <button v-if="task.status === 'error'" class="btn-sm btn-ghost" @click="resume(task.id)" title="重试">↻</button>
-          <button class="btn-sm btn-ghost" @click="remove(task.id)" title="删除">✕</button>
+          <button
+            class="play-btn"
+            :disabled="!canPreview(task)"
+            @click="togglePlay(task)"
+            :title="previewTitle(task)"
+          >
+            <svg v-if="isPlayingTask(task) && !isPaused" viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+            <svg v-else-if="loadingPlay === trackId(task)" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" class="spin"><circle cx="12" cy="12" r="10" stroke-dasharray="50" stroke-dashoffset="20"/></svg>
+            <svg v-else viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
+          </button>
+          <button
+            class="queue-add-btn"
+            :class="{ added: isTaskInQueue(task) }"
+            :disabled="!canPreview(task)"
+            @click="addOneToQueue(task)"
+            :title="isTaskInQueue(task) ? '已在试听列表' : '加入试听列表'"
+          >
+            <svg v-if="isTaskInQueue(task)" viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><polyline points="20 6 9 17 4 12" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+            <svg v-else viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          </button>
+          <button v-if="task.status === 'paused'" class="btn-sm btn-ghost" @click="resume(task.id)" title="继续">继续</button>
+          <button v-if="task.status === 'downloading' || task.status === 'waiting'" class="btn-sm btn-ghost" @click="pause(task.id)" title="暂停">暂停</button>
+          <button v-if="task.status === 'error'" class="btn-sm btn-ghost" @click="resume(task.id)" title="重试">重试</button>
+          <button class="btn-sm btn-ghost" @click="remove(task.id)" title="删除">删除</button>
         </div>
       </div>
     </div>
 
     <div v-else class="empty">暂无下载任务</div>
+
+    <div v-if="toast" class="toast" :class="toast.type">{{ toast.text }}</div>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { api } from '../api.js'
 import { onWS } from '../ws.js'
+import {
+  loadingPlay, isPaused, isPlayingItem, playItem, addToQueue, isInQueue,
+} from '../stores/player.js'
 
 const tasks = ref([])
+const toast = ref(null)
 
 onMounted(() => loadList())
 
@@ -75,6 +107,97 @@ unsubs.push(onWS('download:cleared', () => {
 }))
 onUnmounted(() => unsubs.forEach(fn => fn()))
 
+const playableTasks = computed(() => tasks.value.filter(canPreview))
+
+function taskToTrack(task) {
+  const meta = task.meta || {}
+  return {
+    id: meta.songId || meta.songmid || meta.hash || meta.copyrightId || task.id,
+    name: task.name,
+    singer: task.singer,
+    source: task.source || meta.source,
+    album: task.album,
+    interval: task.interval,
+    songId: meta.songId,
+    songmid: meta.songmid,
+    hash: meta.hash,
+    copyrightId: meta.copyrightId,
+    picUrl: meta.picUrl,
+    qualitys: meta.qualitys || [],
+  }
+}
+
+function trackId(task) {
+  return taskToTrack(task).id
+}
+
+function canPreview(task) {
+  const meta = task.meta || {}
+  return !!(
+    (task.source || meta.source)
+    && (meta.songmid || meta.hash || meta.songId || meta.copyrightId)
+  )
+}
+
+function isPlayingTask(task) {
+  return isPlayingItem(taskToTrack(task))
+}
+
+function isTaskInQueue(task) {
+  const track = taskToTrack(task)
+  return isInQueue(track, track.source)
+}
+
+function previewTitle(task) {
+  if (!canPreview(task)) return '缺少歌曲信息，无法试听'
+  return isPlayingTask(task) && !isPaused.value ? '暂停' : '试听'
+}
+
+async function togglePlay(task) {
+  if (!canPreview(task)) {
+    showToast('该任务缺少歌曲信息，无法试听', 'error')
+    return
+  }
+  const track = taskToTrack(task)
+  try {
+    await playItem(track, track.source)
+  } catch (e) {
+    showToast(e.message || '试听失败', 'error')
+  }
+}
+
+function addOneToQueue(task) {
+  if (!canPreview(task)) {
+    showToast('该任务缺少歌曲信息，无法加入列表', 'error')
+    return
+  }
+  const track = taskToTrack(task)
+  if (isInQueue(track, track.source)) {
+    showToast('已在试听列表', 'info')
+    return
+  }
+  addToQueue(track, track.source)
+  showToast(`已加入列表: ${track.name}`, 'success')
+}
+
+async function playAllPlayable() {
+  const list = playableTasks.value
+  if (!list.length) {
+    showToast('没有可试听的任务', 'info')
+    return
+  }
+  for (const task of list) {
+    const track = taskToTrack(task)
+    addToQueue(track, track.source)
+  }
+  try {
+    await playItem(taskToTrack(list[0]), taskToTrack(list[0]).source)
+    showToast(`开始试听，共 ${list.length} 首`, 'success')
+  } catch (e) {
+    showToast(e.message || '试听失败', 'error')
+  }
+}
+
 async function loadList() {
   try { tasks.value = await api.download.list() } catch {}
 }
@@ -94,6 +217,11 @@ async function pause(id) { try { await api.download.pause(id) } catch {} }
 async function resume(id) { try { await api.download.resume(id) } catch {} }
 async function remove(id) { try { await api.download.remove(id); tasks.value = tasks.value.filter(t => t.id !== id) } catch {} }
 async function clearCompleted() { try { await api.download.clearCompleted(); tasks.value = tasks.value.filter(t => t.status !== 'completed') } catch {} }
+
+function showToast(text, type = 'info') {
+  toast.value = { text, type }
+  setTimeout(() => { toast.value = null }, 3000)
+}
 </script>
 
 <style scoped>
@@ -103,6 +231,7 @@ async function clearCompleted() { try { await api.download.clearCompleted(); tas
   display: flex;
   gap: 8px;
   margin-bottom: 16px;
+  flex-wrap: wrap;
 }
 
 .stats {
@@ -132,6 +261,7 @@ async function clearCompleted() { try { await api.download.clearCompleted(); tas
 }
 .task-item:last-child { border-bottom: none; }
 .task-item:hover { background: var(--bg-hover); }
+.task-item.playing { background: var(--accent-muted); }
 
 .task-info { flex: 1; min-width: 0; }
 .task-name { font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -149,9 +279,52 @@ async function clearCompleted() { try { await api.download.clearCompleted(); tas
 .status-error { color: var(--error); }
 .status-waiting { color: var(--text-muted); }
 
-.task-actions { display: flex; gap: 4px; }
+.task-actions { display: flex; gap: 4px; align-items: center; flex-shrink: 0; }
+
+.play-btn,
+.queue-add-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--border);
+  transition: all 0.2s;
+}
+.queue-add-btn { border-radius: var(--radius); }
+.play-btn:hover:not(:disabled),
+.queue-add-btn:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-muted);
+}
+.play-btn:disabled,
+.queue-add-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.task-item.playing .play-btn { color: var(--accent); border-color: var(--accent); background: var(--accent-muted); }
+.queue-add-btn.added { color: var(--success); border-color: var(--success); background: rgba(52, 199, 89, 0.1); }
+
+.spin { animation: spin 1s linear infinite; }
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 
 .empty { text-align: center; padding: 60px 0; color: var(--text-muted); font-size: 14px; }
+
+.toast {
+  position: fixed;
+  bottom: 80px;
+  right: 24px;
+  padding: 10px 20px;
+  border-radius: var(--radius);
+  font-size: 14px;
+  z-index: 1000;
+  box-shadow: var(--shadow);
+}
+.toast.success { background: var(--success); color: #fff; }
+.toast.error { background: var(--error); color: #fff; }
+.toast.info { background: var(--bg-card); border: 1px solid var(--border); }
 
 @media (max-width: 768px) {
   .task-item {
@@ -163,6 +336,16 @@ async function clearCompleted() { try { await api.download.clearCompleted(); tas
   .task-name { white-space: normal; }
   .task-progress { width: 100%; order: 3; }
   .task-status { width: auto; }
-  .task-actions { margin-left: auto; }
+  .task-actions {
+    width: 100%;
+    margin-left: 0;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+  }
+  .toast {
+    left: 12px;
+    right: 12px;
+    bottom: calc(var(--player-height) + var(--mobile-nav-height) + 16px);
+  }
 }
 </style>
