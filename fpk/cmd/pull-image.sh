@@ -7,6 +7,8 @@ FALLBACK_REGISTRIES=(
   "ghcr.1ms.run/jia070310/lemon-muisc"
   "ghcr.io/jia070310/lemon-muisc"
 )
+# shellcheck disable=SC1091
+. "$(dirname "$0")/image-alias.sh"
 IMAGE="${DEFAULT_REGISTRY}:latest"
 COMPOSE_FILE="${TRIM_APPDEST}/docker/docker-compose.yaml"
 COMPOSE_DIR="$(dirname "${COMPOSE_FILE}")"
@@ -239,6 +241,7 @@ image_exists_locally() {
   local candidate repo
 
   for candidate in \
+      "${LOCAL_IMAGE_ALIAS}" \
       "${IMAGE}" \
       "ghcr.io/${IMAGE#ghcr.1ms.run/}" \
       "ghcr.1ms.run/${IMAGE#ghcr.io/}" \
@@ -257,7 +260,7 @@ image_exists_locally() {
     fi
   done
 
-  repo="$(docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -E 'lemon-muisc' | head -n 1 || true)"
+  repo="$(docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -E 'lemon-muisc|lemon-music' | head -n 1 || true)"
   if [ -n "${repo}" ] && [ "${repo}" != "<none>:<none>" ]; then
     if docker image inspect "${repo}" >/dev/null 2>&1; then
       IMAGE="${repo}"
@@ -269,9 +272,15 @@ image_exists_locally() {
   return 1
 }
 
-# 拉取后把 IMAGE 纠正为 docker 实际可用的引用，并写回 compose
+# 拉取后把 IMAGE 纠正为 docker 实际可用的引用，并打短名别名写回 compose
 normalize_pulled_image() {
   if image_exists_locally; then
+    if promoted="$(promote_to_local_image_alias "${IMAGE}")"; then
+      IMAGE="${promoted}"
+      log_line "已打本地短名: ${IMAGE}"
+    elif promoted="$(prefer_local_image_alias)"; then
+      IMAGE="${promoted}"
+    fi
     update_compose_image
     save_image_config
     return 0

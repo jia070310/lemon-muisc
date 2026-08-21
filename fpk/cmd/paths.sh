@@ -7,7 +7,9 @@ ACCESSIBLE_FILE="${TRIM_PKGVAR}/accessible_paths"
 COMPOSE_FILE="${TRIM_APPDEST}/docker/docker-compose.yaml"
 COMPOSE_DIR="$(dirname "${COMPOSE_FILE}")"
 COMPOSE_ENV="${COMPOSE_DIR}/.env"
-DEFAULT_IMAGE="ghcr.1ms.run/jia070310/lemon-muisc:latest"
+# shellcheck disable=SC1091
+. "$(dirname "$0")/image-alias.sh"
+DEFAULT_IMAGE="${LOCAL_IMAGE_ALIAS}"
 CONTAINER_NAME="lemon-music"
 COMPOSE_PROJECT="${TRIM_APPNAME:-lemon-music}"
 
@@ -293,11 +295,16 @@ resolve_local_image_name() {
   local want="${1:-}"
   local candidate repo
 
+  if alias_name="$(prefer_local_image_alias)"; then
+    echo "${alias_name}"
+    return 0
+  fi
+
   for candidate in \
       "${want}" \
       "ghcr.io/${want#ghcr.1ms.run/}" \
       "ghcr.1ms.run/${want#ghcr.io/}" \
-      "ghcr.1ms.run/jia070310/lemon-muisc:latest" \
+      "${REMOTE_IMAGE_DEFAULT}" \
       "ghcr.io/jia070310/lemon-muisc:latest"
   do
     [ -z "${candidate}" ] && continue
@@ -305,13 +312,21 @@ resolve_local_image_name() {
       ghcr.io/ghcr.io/*|ghcr.1ms.run/ghcr.1ms.run/*|ghcr.io/ghcr.1ms.run/*|ghcr.1ms.run/ghcr.io/*) continue ;;
     esac
     if docker image inspect "${candidate}" >/dev/null 2>&1; then
+      if promote_to_local_image_alias "${candidate}" >/dev/null 2>&1; then
+        echo "${LOCAL_IMAGE_ALIAS}"
+        return 0
+      fi
       echo "${candidate}"
       return 0
     fi
   done
 
-  repo="$(docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -E 'lemon-muisc' | head -n 1 || true)"
+  repo="$(docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -E 'lemon-muisc|lemon-music' | head -n 1 || true)"
   if [ -n "${repo}" ] && docker image inspect "${repo}" >/dev/null 2>&1; then
+    if promote_to_local_image_alias "${repo}" >/dev/null 2>&1; then
+      echo "${LOCAL_IMAGE_ALIAS}"
+      return 0
+    fi
     echo "${repo}"
     return 0
   fi
@@ -320,64 +335,41 @@ resolve_local_image_name() {
 
 ensure_image_available() {
   local image="${1:-}"
-  local tag registry resolved
+  local remote resolved
   local log_file="${TRIM_PKGVAR}/log/compose.recreate.log"
 
   if [ -z "${image}" ]; then
     image="$(get_compose_image)"
   fi
 
-  if resolved="$(resolve_local_image_name "${image}")"; then
-    if [ "${resolved}" != "${image}" ]; then
-      mkdir -p "${TRIM_PKGETC}" 2>/dev/null || true
-      cat > "${IMAGE_CONF}" <<EOF
-SAVED_IMAGE="${resolved}"
-SAVED_AT="$(date -Iseconds)"
-EOF
-      log_config "using local image alias: ${resolved} (wanted ${image})"
-    else
-      log_config "image present: ${resolved}"
-    fi
+  # 短名已存在：直接用（更新请先 docker pull 远程再 tag / 重装升级）
+  if prefer_local_image_alias >/dev/null 2>&1; then
+    promote_to_local_image_alias "${LOCAL_IMAGE_ALIAS}" >/dev/null 2>&1 || true
+    log_config "image present: ${LOCAL_IMAGE_ALIAS}"
     return 0
   fi
 
   mkdir -p "$(dirname "${log_file}")" 2>/dev/null || true
   {
     echo "=== pull missing image $(date -Iseconds) ==="
-    echo "image=${image}"
+    echo "wanted=${image}"
   } >> "${log_file}" 2>&1
 
-  log_config "image missing, pulling: ${image}"
-  if docker pull "${image}" >> "${log_file}" 2>&1; then
-    if resolved="$(resolve_local_image_name "${image}")"; then
-      mkdir -p "${TRIM_PKGETC}" 2>/dev/null || true
-      cat > "${IMAGE_CONF}" <<EOF
-SAVED_IMAGE="${resolved}"
-SAVED_AT="$(date -Iseconds)"
-EOF
-      log_config "docker pull ok: ${resolved}"
-      return 0
-    fi
-  fi
-
-  # 镜像地址失败时按仓库兜底再试
-  tag="${image##*:}"
-  [ "${tag}" = "${image}" ] && tag="latest"
-  for registry in "ghcr.1ms.run/jia070310/lemon-muisc" "ghcr.io/jia070310/lemon-muisc"; do
-    image="${registry}:${tag}"
-    echo "fallback pull ${image}" >> "${log_file}" 2>&1
-    if docker pull "${image}" >> "${log_file}" 2>&1; then
-      if resolved="$(resolve_local_image_name "${image}")"; then
-        mkdir -p "${TRIM_PKGETC}" 2>/dev/null || true
-        cat > "${IMAGE_CONF}" <<EOF
-SAVED_IMAGE="${resolved}"
-SAVED_AT="$(date -Iseconds)"
-EOF
-        log_config "docker pull ok (fallback): ${resolved}"
+  for remote in "${REMOTE_IMAGE_FALLBACKS[@]}"; do
+    log_config "image missing, pulling: ${remote}"
+    echo "pull ${remote}" >> "${log_file}" 2>&1
+    if docker pull "${remote}" >> "${log_file}" 2>&1; then
+      if resolved="$(promote_to_local_image_alias "${remote}")"; then
+        log_config "docker pull ok, aliased as: ${resolved}"
         return 0
       fi
     fi
   done
+
+  if resolved="$(resolve_local_image_name "${image}")"; then
+    log_config "using existing image: ${resolved}"
+    return 0
+  fi
 
   log_config "all image pulls failed"
   return 1
@@ -411,7 +403,7 @@ recreate_compose_stack() {
 
   if ! ensure_image_available "${image}"; then
     log_config "recreate aborted: no image"
-    echo "本地没有 Docker 镜像，自动拉取也失败。请检查网络，或在 SSH 执行: docker pull ${image}" >> "${log_file}"
+    echo "本地没有 Docker 镜像，自动拉取也失败。请检查网络，或在 SSH 执行: docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest && docker tag ghcr.1ms.run/jia070310/lemon-muisc:latest lemon-music:latest" >> "${log_file}"
     return 1
   fi
   image="$(get_compose_image)"

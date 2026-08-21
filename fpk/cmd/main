@@ -27,7 +27,7 @@ start)
   fi
 
   if ! recreate_compose_stack; then
-    tip="容器启动失败。请确认已配置路径，并 SSH 执行: docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest 。日志: ${TRIM_PKGVAR}/log/compose.recreate.log"
+    tip="容器启动失败。请确认已配置路径，并 SSH 执行: docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest && docker tag ghcr.1ms.run/jia070310/lemon-muisc:latest lemon-music:latest 。日志: ${TRIM_PKGVAR}/log/compose.recreate.log"
     if [ -f "${TRIM_PKGVAR}/pull.last.log" ]; then
       tip="${tip} | $(tail -n 5 "${TRIM_PKGVAR}/pull.last.log" 2>/dev/null | tr '\n' ' ')"
     fi
