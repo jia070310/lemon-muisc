@@ -540,7 +540,8 @@ async function openFetchModal(intent) {
 function parseLocalFilename(fileName) {
   const base = fileName.replace(/\.[^.]+$/, '').trim()
   const m = base.match(/^(.+?)\s*[-–—_]\s*(.+)$/)
-  if (m) return { title: m[1].trim(), artist: m[2].trim() }
+  // 与后端一致：歌手 - 歌名
+  if (m) return { artist: m[1].trim(), title: m[2].trim() }
   return { title: base, artist: '' }
 }
 
@@ -610,15 +611,34 @@ async function autoMatchSelected() {
       fetchSource.value,
     )
     let ok = 0
+    let fail = 0
     for (const item of res.data || []) {
       const f = files.value.find(x => x.filePath === item.filePath)
-      if (f && item.ok) {
+      if (f && item.ok && item.meta) {
         applyMetaToFile(f, item.meta)
         if (item.meta.pic) f.pictureBase64 = item.meta.pic
+        if (item.meta.picUrl) f.picUrl = item.meta.picUrl
         ok++
+        if (editingFile.value?.filePath === f.filePath) {
+          editForm.value = {
+            title: f.title || '',
+            artist: f.artist || '',
+            album: f.album || '',
+            year: f.year || '',
+            genre: f.genre || '',
+            comment: f.comment || '',
+            lyric: f.lyric || '',
+            picUrl: f.picUrl || '',
+            pictureBase64: f.pictureBase64 || '',
+          }
+        }
+      } else {
+        fail++
       }
     }
-    showToast(`自动匹配完成 ${ok}/${selectedFiles.value.length}`, 'success')
+    if (ok && !fail) showToast(`自动匹配完成 ${ok}/${selectedFiles.value.length}`, 'success')
+    else if (ok) showToast(`自动匹配成功 ${ok}，失败 ${fail}`, 'info')
+    else showToast('自动匹配未找到可用结果，可改用「网络获取信息」手动选择', 'error')
   } catch (e) {
     showToast(e.message, 'error')
   } finally {

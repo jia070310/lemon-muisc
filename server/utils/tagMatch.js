@@ -44,11 +44,15 @@ export async function matchByArtistTitle(artist = '', title = '', source = 'wy',
   if (!keywords.length && parsed.keyword) keywords.push(parsed.keyword)
 
   const uniqueKeywords = [...new Set(keywords.filter(Boolean))]
+  if (parsed.altKeyword) uniqueKeywords.push(parsed.altKeyword)
 
   let best = []
-  for (const keyword of uniqueKeywords) {
+  let fallback = []
+  for (const keyword of [...new Set(uniqueKeywords.filter(Boolean))]) {
     const result = await searchMusic(keyword, sdkSource, 1, 20)
-    const scored = (result.list || []).map(item => ({
+    const list = result.list || []
+    fallback = fallback.concat(list.map(item => ({ ...item, _score: 0, _source: sdkSource })))
+    const scored = list.map(item => ({
       ...item,
       _score: scoreMatch(item, parsed),
       _source: sdkSource,
@@ -57,8 +61,10 @@ export async function matchByArtistTitle(artist = '', title = '', source = 'wy',
     if (best.some(i => i._score >= 7)) break
   }
 
+  // 评分全被滤掉时，仍返回搜索第一页结果，避免自动匹配“完全没反应”
+  const pool = best.length ? best : fallback
   const seen = new Set()
-  return best
+  return pool
     .sort((a, b) => b._score - a._score)
     .filter(item => {
       const key = `${item.source}-${item.id || item.songId}`

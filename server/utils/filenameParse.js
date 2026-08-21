@@ -1,23 +1,25 @@
 export function parseFilename(fileName) {
-  const base = fileName.replace(/\.[^.]+$/, '').trim()
+  const base = String(fileName || '').replace(/\.[^.]+$/, '').trim()
   if (!base) return { title: '', artist: '', keyword: '' }
 
   const sepMatch = base.match(/^(.+?)\s*[-–—_]\s*(.+)$/)
   if (sepMatch) {
-    const a = sepMatch[1].trim()
-    const b = sepMatch[2].trim()
+    const left = sepMatch[1].trim()
+    const right = sepMatch[2].trim()
+    // 中文曲库常见：歌手 - 歌名；同时保留互换形态用于评分兜底
     return {
-      title: a,
-      artist: b,
-      keyword: `${a} ${b}`,
-      altKeyword: `${b} ${a}`,
+      title: right,
+      artist: left,
+      keyword: `${left} ${right}`,
+      altKeyword: `${right} ${left}`,
+      swapped: { title: left, artist: right, keyword: `${right} ${left}` },
     }
   }
 
   return { title: base, artist: '', keyword: base }
 }
 
-export function scoreMatch(item, parsed) {
+function scoreOne(item, parsed) {
   const name = (item.name || '').toLowerCase()
   const singer = (item.singer || '').toLowerCase()
   const title = (parsed.title || '').toLowerCase()
@@ -33,5 +35,13 @@ export function scoreMatch(item, parsed) {
   const keyword = (parsed.keyword || '').toLowerCase()
   if (keyword && `${name} ${singer}`.includes(keyword.replace(/\s+/g, ' '))) score += 2
 
+  return score
+}
+
+export function scoreMatch(item, parsed) {
+  let score = scoreOne(item, parsed)
+  if (parsed?.swapped) {
+    score = Math.max(score, scoreOne(item, parsed.swapped))
+  }
   return score
 }
