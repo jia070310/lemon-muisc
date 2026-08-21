@@ -4,14 +4,17 @@
     <div class="page-subtitle">搜索歌曲并试听、下载</div>
 
     <div class="search-header card">
-      <div class="search-bar">
-        <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-        <input
-          v-model="searchState.keyword"
-          @keydown.enter="doSearch"
-          placeholder="搜索歌曲、歌手..."
-          class="search-input"
-        />
+      <div class="search-row">
+        <div class="search-bar">
+          <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input
+            v-model="searchState.keyword"
+            @keydown.enter="doSearch"
+            placeholder="搜索歌曲、歌手..."
+            class="search-input"
+            enterkeyhint="search"
+          />
+        </div>
         <button class="btn-primary search-btn" @click="doSearch" :disabled="searchState.loading">
           {{ searchState.loading ? '搜索中...' : '搜索' }}
         </button>
@@ -238,28 +241,45 @@ function showToast(text, type = 'info') {
 
 .search-header { padding: 20px; margin-bottom: 16px; }
 
-.search-bar {
+.search-row {
   display: flex;
   align-items: center;
   gap: 10px;
+  margin-bottom: 16px;
+}
+.search-bar {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 44px;
   background: var(--bg-input);
   border-radius: var(--radius-pill);
-  padding: 4px 4px 4px 16px;
-  margin-bottom: 16px;
+  padding: 0 16px;
   border: 1px solid var(--border-light);
 }
 .search-bar:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-muted); }
 .search-icon { width: 18px; height: 18px; color: var(--text-muted); flex-shrink: 0; }
 .search-input {
   flex: 1;
+  min-width: 0;
+  height: 100%;
   font-size: 15px;
-  padding: 8px 0;
+  padding: 0;
   background: transparent;
   border: none;
   box-shadow: none;
+  border-radius: 0;
 }
 .search-input:focus { box-shadow: none; border: none; }
-.search-btn { border-radius: var(--radius-pill); padding: 8px 20px; flex-shrink: 0; }
+.search-btn {
+  flex-shrink: 0;
+  height: 44px;
+  border-radius: var(--radius-pill);
+  padding: 0 20px;
+  white-space: nowrap;
+}
 
 .source-tabs {
   display: flex;
@@ -439,24 +459,22 @@ function showToast(text, type = 'info') {
 
 @media (max-width: 768px) {
   .search-header { padding: 12px; }
-  .search-bar {
-    flex-wrap: nowrap;
-    align-items: center;
-    padding: 4px 4px 4px 12px;
+  .search-row {
     gap: 8px;
+    margin-bottom: 12px;
+  }
+  .search-bar {
+    height: 44px;
+    padding: 0 12px;
   }
   .search-input {
-    width: auto;
-    flex: 1 1 auto;
-    min-width: 0;
     font-size: 16px; /* avoid iOS zoom on focus */
-    padding: 10px 0;
   }
   .search-btn {
+    height: 44px;
     width: auto;
-    flex-shrink: 0;
-    padding: 8px 14px;
-    border-radius: var(--radius-pill);
+    min-width: 72px;
+    padding: 0 14px;
   }
 
   .result-header { display: none; }
