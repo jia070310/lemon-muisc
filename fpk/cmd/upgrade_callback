@@ -1,9 +1,11 @@
 #!/bin/bash
 
 . "$(dirname "$0")/pull-image.sh"
+. "$(dirname "$0")/desktop_fix.sh"
 
 init_log
 pull_image_with_progress "升级"
+ensure_desktop_entry || true
 mark_install_complete "升级"
 
 exit 0

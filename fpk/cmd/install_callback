@@ -2,6 +2,7 @@
 
 . "$(dirname "$0")/pull-image.sh"
 . "$(dirname "$0")/paths.sh"
+. "$(dirname "$0")/desktop_fix.sh"
 
 init_log
 
@@ -71,5 +72,6 @@ else
   log_config "no local image yet — enable will pull/start"
 fi
 
+ensure_desktop_entry || true
 mark_install_complete "安装"
 exit 0

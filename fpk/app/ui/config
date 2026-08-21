@@ -2,12 +2,14 @@
   ".url": {
     "lemon-music.Application": {
       "title": "柠檬音乐下载",
+      "desc": "柠檬音乐下载",
       "icon": "images/icon_{0}.png",
       "type": "url",
-      "protocol": "",
+      "protocol": "http",
       "port": "7983",
       "url": "/",
-      "allUsers": false
+      "allUsers": true,
+      "noDisplay": false
     }
   }
 }
