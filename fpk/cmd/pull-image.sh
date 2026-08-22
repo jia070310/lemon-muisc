@@ -142,12 +142,17 @@ update_compose_image() {
 
 save_image_config() {
   mkdir -p "${TRIM_PKGETC}" 2>/dev/null || true
+  local saved="${IMAGE}"
+  case "${saved}" in
+    ghcr.*|ghcr.io/*|*/lemon-muisc:*|*/lemon-music:*) saved="${LOCAL_IMAGE_ALIAS}" ;;
+  esac
   cat > "${IMAGE_CONF}" << EOF
-SAVED_IMAGE="${IMAGE}"
+SAVED_IMAGE="${saved}"
 SAVED_PULL_SOURCE="${wizard_pull_source:-ghcr_direct}"
 SAVED_PULL_TIMEOUT="${wizard_pull_timeout:-600}"
 SAVED_AT="$(date -Iseconds)"
 EOF
+  IMAGE="${saved}"
 }
 
 show_wizard_summary() {
@@ -239,18 +244,19 @@ docker_pull_with_timeout() {
 
 image_exists_locally() {
   local candidate repo
+  local pulled_ref="${IMAGE:-}"
 
+  # 刚拉取的远程引用优先，避免误用旧的 lemon-music:latest
   for candidate in \
-      "${LOCAL_IMAGE_ALIAS}" \
-      "${IMAGE}" \
-      "ghcr.io/${IMAGE#ghcr.1ms.run/}" \
-      "ghcr.1ms.run/${IMAGE#ghcr.io/}" \
+      "${pulled_ref}" \
+      "ghcr.io/${pulled_ref#ghcr.1ms.run/}" \
+      "ghcr.1ms.run/${pulled_ref#ghcr.io/}" \
       "ghcr.1ms.run/jia070310/lemon-muisc:latest" \
       "ghcr.io/jia070310/lemon-muisc:latest" \
-      "jia070310/lemon-muisc:latest"
+      "jia070310/lemon-muisc:latest" \
+      "${LOCAL_IMAGE_ALIAS}"
   do
     [ -z "${candidate}" ] && continue
-    # 避免未匹配前缀时拼出错误名字
     case "${candidate}" in
       ghcr.io/ghcr.io/*|ghcr.1ms.run/ghcr.1ms.run/*|ghcr.io/ghcr.1ms.run/*|ghcr.1ms.run/ghcr.io/*) continue ;;
     esac
@@ -260,32 +266,44 @@ image_exists_locally() {
     fi
   done
 
-  repo="$(docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -E 'lemon-muisc|lemon-music' | head -n 1 || true)"
-  if [ -n "${repo}" ] && [ "${repo}" != "<none>:<none>" ]; then
-    if docker image inspect "${repo}" >/dev/null 2>&1; then
-      IMAGE="${repo}"
-      log_line "检测到本地镜像别名: ${IMAGE}"
-      return 0
-    fi
+  repo="$(find_newest_remote_image "${wizard_image_tag:-latest}" 2>/dev/null || true)"
+  if [ -n "${repo}" ] && docker image inspect "${repo}" >/dev/null 2>&1; then
+    IMAGE="${repo}"
+    log_line "检测到最新远程镜像: ${IMAGE}"
+    return 0
   fi
 
   return 1
 }
 
-# 拉取后把 IMAGE 纠正为 docker 实际可用的引用，并打短名别名写回 compose
+# 拉取后把远程镜像 retag 为 lemon-music:latest，并写回 compose
 normalize_pulled_image() {
-  if image_exists_locally; then
-    if promoted="$(promote_to_local_image_alias "${IMAGE}")"; then
-      IMAGE="${promoted}"
-      log_line "已打本地短名: ${IMAGE}"
-    elif promoted="$(prefer_local_image_alias)"; then
-      IMAGE="${promoted}"
-    fi
-    update_compose_image
-    save_image_config
-    return 0
+  local remote="${IMAGE:-}"
+  local promoted=""
+
+  if ! docker image inspect "${remote}" >/dev/null 2>&1; then
+    remote="$(find_newest_remote_image "${wizard_image_tag:-latest}" 2>/dev/null || true)"
   fi
-  return 1
+
+  if [ -z "${remote}" ] && ! image_exists_locally; then
+    return 1
+  fi
+
+  [ -n "${remote}" ] || remote="${IMAGE}"
+
+  if promoted="$(promote_to_local_image_alias "${remote}")"; then
+    IMAGE="${promoted}"
+    log_line "已打本地短名: ${IMAGE} ← ${remote}"
+  elif promoted="$(sync_local_image_alias "${wizard_image_tag:-latest}")"; then
+    IMAGE="${promoted}"
+    log_line "已同步本地短名: ${IMAGE}"
+  else
+    return 1
+  fi
+
+  update_compose_image
+  save_image_config
+  return 0
 }
 
 pull_image_with_fallback() {
@@ -363,9 +381,13 @@ pull_image_with_progress() {
   log_line "=========================================="
 
   if [ "${wizard_pull_source:-ghcr_direct}" = "skip_pull" ]; then
-    log_line "已选择跳过拉取，检查本地镜像..."
+    log_line "已选择跳过拉取，同步本地镜像..."
     read_image_from_compose
-    if image_exists_locally; then
+    if sync_local_image_alias "${wizard_image_tag:-latest}" >/dev/null; then
+      IMAGE="${LOCAL_IMAGE_ALIAS}"
+      log_line "本地已同步镜像: ${IMAGE}"
+    elif image_exists_locally; then
+      normalize_pulled_image || true
       log_line "本地已存在镜像: ${IMAGE}"
     else
       if [ "${SOFT_PULL_FAIL:-0}" = "1" ]; then

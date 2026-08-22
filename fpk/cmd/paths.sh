@@ -167,19 +167,34 @@ get_compose_image() {
     # shellcheck disable=SC1090
     . "${IMAGE_CONF}"
     if [ -n "${SAVED_IMAGE}" ]; then
-      echo "${SAVED_IMAGE}"
-      return 0
+      case "${SAVED_IMAGE}" in
+        ghcr.*|ghcr.io/*|*/lemon-muisc:*)
+          echo "${LOCAL_IMAGE_ALIAS}"
+          return 0
+          ;;
+        *)
+          echo "${SAVED_IMAGE}"
+          return 0
+          ;;
+      esac
     fi
   fi
   if [ -f "${COMPOSE_FILE}" ]; then
     local parsed
     parsed="$(grep -E '^[[:space:]]*image:[[:space:]]*' "${COMPOSE_FILE}" | head -n 1 | sed -E 's/^[[:space:]]*image:[[:space:]]*//' | tr -d '\r' | xargs)"
     if [ -n "${parsed}" ]; then
-      echo "${parsed}"
+      case "${parsed}" in
+        ghcr.*|ghcr.io/*|*/lemon-muisc:*)
+          echo "${LOCAL_IMAGE_ALIAS}"
+          ;;
+        *)
+          echo "${parsed}"
+          ;;
+      esac
       return 0
     fi
   fi
-  echo "${DEFAULT_IMAGE}"
+  echo "${LOCAL_IMAGE_ALIAS}"
 }
 
 json_escape() {
@@ -295,6 +310,11 @@ resolve_local_image_name() {
   local want="${1:-}"
   local candidate repo
 
+  if synced="$(sync_local_image_alias latest 2>/dev/null)"; then
+    echo "${synced}"
+    return 0
+  fi
+
   if alias_name="$(prefer_local_image_alias)"; then
     echo "${alias_name}"
     return 0
@@ -342,9 +362,13 @@ ensure_image_available() {
     image="$(get_compose_image)"
   fi
 
-  # 短名已存在：直接用（更新请先 docker pull 远程再 tag / 重装升级）
+  # 若已有较新的远程镜像，先 retag 到 lemon-music:latest
+  if resolved="$(sync_local_image_alias latest 2>/dev/null)"; then
+    log_config "using synced alias: ${resolved}"
+    return 0
+  fi
+
   if prefer_local_image_alias >/dev/null 2>&1; then
-    promote_to_local_image_alias "${LOCAL_IMAGE_ALIAS}" >/dev/null 2>&1 || true
     log_config "image present: ${LOCAL_IMAGE_ALIAS}"
     return 0
   fi
