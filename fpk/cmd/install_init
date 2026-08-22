@@ -7,18 +7,18 @@ init_log
 resolve_image_from_wizard
 ensure_docker
 
-# 卸载残留 / 上次 docker run 留下的同名容器，避免飞牛 compose 报 Conflict
 cleanup_stale_containers() {
   log_line "清理可能冲突的旧容器/网络…"
   docker stop "${CONTAINER_NAME}" >/dev/null 2>&1 || true
   docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
   docker compose -p "${COMPOSE_PROJECT}" -f "${COMPOSE_FILE}" down --remove-orphans >/dev/null 2>&1 || true
   docker compose -p "lemon-music" down --remove-orphans >/dev/null 2>&1 || true
-  # 仅删本应用默认网络，避免误伤其它项目
   docker network rm "lemon-music_default" >/dev/null 2>&1 || true
 }
 
 cleanup_stale_containers
 
-log_line "安装向导已通过，即将开始拉取镜像（请勿关闭本窗口）..."
+update_compose_image
+update_install_ui "正在从 ${IMAGE} 拉取镜像（国内 ghcr.1ms.run 加速）…"
+log_line "compose 已指向加速地址: ${IMAGE}"
 exit 0

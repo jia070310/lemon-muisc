@@ -186,6 +186,17 @@ compose_pull_with_timeout() {
   local timeout_sec
   timeout_sec="$(get_pull_timeout)"
   local pull_log="${TRIM_PKGVAR}/compose.pull.log"
+
+  read_image_from_compose
+  case "${IMAGE}" in
+    lemon-music:*|lemon-music)
+      if ! docker image inspect "${IMAGE}" >/dev/null 2>&1; then
+        log_line "compose 为本地短名 ${IMAGE} 且不存在，跳过 compose pull（避免误拉 Docker Hub）"
+        return 127
+      fi
+      ;;
+  esac
+
   log_line "执行 docker compose pull（与手动部署相同，超时 ${timeout_sec} 秒）..."
   echo "compose pulling ${IMAGE} at $(date -Iseconds)" > "${TRIM_PKGVAR}/install.status" 2>/dev/null || true
 

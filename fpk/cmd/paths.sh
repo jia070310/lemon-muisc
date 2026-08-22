@@ -167,29 +167,30 @@ paths_ready() {
 }
 
 get_compose_image() {
+  if prefer_local_image_alias >/dev/null 2>&1; then
+    echo "${LOCAL_IMAGE_ALIAS}"
+    return 0
+  fi
+
   if [ -f "${IMAGE_CONF}" ]; then
     # shellcheck disable=SC1090
     . "${IMAGE_CONF}"
-    if [ -n "${SAVED_IMAGE}" ]; then
-      case "${SAVED_IMAGE}" in
-        ghcr.*|ghcr.io/*|*/lemon-muisc:*)
-          echo "${LOCAL_IMAGE_ALIAS}"
-          return 0
-          ;;
-        *)
-          echo "${SAVED_IMAGE}"
-          return 0
-          ;;
-      esac
+    if [ -n "${SAVED_IMAGE}" ] && docker image inspect "${SAVED_IMAGE}" >/dev/null 2>&1; then
+      echo "${SAVED_IMAGE}"
+      return 0
     fi
   fi
+
   if [ -f "${COMPOSE_FILE}" ]; then
     local parsed
     parsed="$(grep -E '^[[:space:]]*image:[[:space:]]*' "${COMPOSE_FILE}" | head -n 1 | sed -E 's/^[[:space:]]*image:[[:space:]]*//' | tr -d '\r' | xargs)"
     if [ -n "${parsed}" ]; then
       case "${parsed}" in
+        lemon-music:*|lemon-music)
+          echo "${REMOTE_IMAGE_DEFAULT}"
+          ;;
         ghcr.*|ghcr.io/*|*/lemon-muisc:*)
-          echo "${LOCAL_IMAGE_ALIAS}"
+          echo "${parsed}"
           ;;
         *)
           echo "${parsed}"
@@ -198,7 +199,8 @@ get_compose_image() {
       return 0
     fi
   fi
-  echo "${LOCAL_IMAGE_ALIAS}"
+
+  echo "${REMOTE_IMAGE_DEFAULT}"
 }
 
 json_escape() {

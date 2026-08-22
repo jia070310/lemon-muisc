@@ -20,7 +20,12 @@ fi
 mkdir -p "${config_path}" "${music_path}" "${downloads_path}" 2>/dev/null || true
 save_paths "${music_path}" "${downloads_path}" "${config_path}"
 write_mounts_meta "${music_path}" "${downloads_path}" "${config_path}"
+
+resolve_image_from_wizard
+update_compose_image
+log_line "安装拉取地址: ${IMAGE}"
 write_compose_file "${music_path}" "${downloads_path}" "${config_path}"
+update_compose_image
 
 case "${music_path}" in
   "${TRIM_PKGVAR}"/*) ;;
