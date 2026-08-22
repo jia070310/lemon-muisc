@@ -1,26 +1,27 @@
-# 柠檬音乐下载 v1.0.5
+# 柠檬音乐下载 v1.0.6
 
 ## 更新内容
 
-### 酷我 / 酷狗歌词修复
-- 酷我：改用 `www.kuwo.cn` openapi / newh5 接口，修复大量歌曲歌词为空
-- 酷我：拉取失败时按歌名搜索备用 musicId 重试
-- 酷狗：歌词请求携带 `album_audio_id`（MixSongID），提升命中率
-- 酷狗：多 client 回退 + 按歌名重试
-- 试听、下载、标签匹配统一传递完整歌曲元数据
-- 试听歌词接口增加自定义音源 `lyric` 回退
+### 飞牛 FPK 安装体验
+- 安装向导默认「跳过拉取」，避免进度停在 55% 长时间无响应
+- 本地已有镜像时自动跳过在线拉取
+- 拉取镜像时显示 layer 进度
+- 安装阶段不再启动容器，启用时再启动
+
+### v1.0.5 — 酷我 / 酷狗歌词修复
+- 酷我改用 www.kuwo.cn 接口，修复大量歌曲歌词为空
+- 酷狗携带 album_audio_id，提升歌词命中率
 
 ## 安装 / 更新
 
 ```bash
 docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest
 docker tag ghcr.1ms.run/jia070310/lemon-muisc:latest lemon-music:latest
-docker rm -f lemon-music
 ```
 
-应用中心：**手动安装** FPK → 停用 → 启用
+应用中心：**手动安装** `lemon-music-1.0.6.fpk` → 选「跳过拉取」→ 停用 → 启用
 
 ## Docker 镜像
 
 - `ghcr.io/jia070310/lemon-muisc:latest`
-- `ghcr.io/jia070310/lemon-muisc:1.0.5`
+- `ghcr.io/jia070310/lemon-muisc:1.0.6`

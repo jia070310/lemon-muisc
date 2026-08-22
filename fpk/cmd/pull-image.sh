@@ -46,6 +46,10 @@ fail_install() {
   exit 1
 }
 
+update_install_ui() {
+  echo "$*" > "${TRIM_TEMP_LOGFILE}" 2>/dev/null || true
+}
+
 # SOFT_PULL_FAIL=1 时只记录错误并返回 1，不中断安装（交给飞牛 docker-project / 启用时再拉）
 abort_pull() {
   log_line "错误: $*"
@@ -225,18 +229,43 @@ docker_pull_with_timeout() {
   local timeout_sec
   timeout_sec="$(get_pull_timeout)"
   log_line "执行 docker pull ${IMAGE}（超时 ${timeout_sec} 秒）..."
+  update_install_ui "正在拉取镜像 ${IMAGE}（约 500MB），网络慢时请耐心等待或取消后改用「跳过拉取」…"
   echo "pulling ${IMAGE} at $(date -Iseconds)" > "${TRIM_PKGVAR}/install.status" 2>/dev/null || true
 
   local rc=0
   local pull_log="${TRIM_PKGVAR}/pull.last.log"
-  if run_with_timeout "${timeout_sec}" docker pull "${IMAGE}" > "${pull_log}" 2>&1; then
+  local done_flag="${pull_log}.done"
+  rm -f "${done_flag}" 2>/dev/null || true
+  : > "${pull_log}" 2>/dev/null || true
+
+  (
+    while [ ! -f "${done_flag}" ]; do
+      if [ -s "${pull_log}" ]; then
+        local last
+        last="$(tail -n 1 "${pull_log}" 2>/dev/null | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+        if [ -n "${last}" ]; then
+          update_install_ui "拉取镜像中… ${last}"
+        fi
+      fi
+      sleep 2
+    done
+  ) &
+  local reporter_pid=$!
+
+  if run_with_timeout "${timeout_sec}" docker pull "${IMAGE}" >> "${pull_log}" 2>&1; then
+    touch "${done_flag}" 2>/dev/null || true
+    wait "${reporter_pid}" 2>/dev/null || true
     cat "${pull_log}" | tee -a "${LOG_FILE}"
+    update_install_ui "镜像拉取完成，正在写入配置…"
     return 0
   fi
   rc=$?
+  touch "${done_flag}" 2>/dev/null || true
+  wait "${reporter_pid}" 2>/dev/null || true
   cat "${pull_log}" | tee -a "${LOG_FILE}" || true
   if [ "${rc}" -eq 124 ]; then
     log_line "镜像拉取超时（${timeout_sec} 秒）"
+    update_install_ui "镜像拉取超时，可取消后 SSH 手动 pull，再选手动安装并选「跳过拉取」"
     return 124
   fi
   return "${rc}"
@@ -313,6 +342,17 @@ pull_image_with_fallback() {
   local pulled=0
   local last_err=""
   local last_log=""
+
+  # 本地已有可用镜像时直接同步，避免安装界面长时间停在 50%~60%
+  if [ "${source}" != "custom_image" ]; then
+    if sync_local_image_alias "${tag}" >/dev/null 2>&1; then
+      IMAGE="${LOCAL_IMAGE_ALIAS}"
+      update_install_ui "检测到本地已有镜像 ${IMAGE}，跳过在线拉取"
+      log_line "本地已有镜像，跳过在线拉取: ${IMAGE}"
+      normalize_pulled_image
+      return 0
+    fi
+  fi
 
   if [ "${source}" = "custom_image" ]; then
     update_compose_image

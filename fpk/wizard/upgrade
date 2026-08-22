@@ -10,11 +10,11 @@
         "type": "select",
         "field": "wizard_pull_source",
         "label": "拉取方式",
-        "initValue": "ghcr_direct",
+        "initValue": "skip_pull",
         "options": [
-          { "label": "国内加速 ghcr.1ms.run（推荐）", "value": "ghcr_direct" },
-          { "label": "自定义镜像地址", "value": "custom_image" },
-          { "label": "跳过拉取（本地已有最新镜像）", "value": "skip_pull" }
+          { "label": "跳过拉取（推荐，需先 SSH 拉镜像）", "value": "skip_pull" },
+          { "label": "国内加速 ghcr.1ms.run", "value": "ghcr_direct" },
+          { "label": "自定义镜像地址", "value": "custom_image" }
         ]
       },
       {
@@ -24,8 +24,8 @@
         "initValue": "latest",
         "options": [
           { "label": "latest（最新）", "value": "latest" },
-          { "label": "1.0.3", "value": "1.0.3" },
-          { "label": "1.0.2", "value": "1.0.2" }
+          { "label": "1.0.6", "value": "1.0.6" },
+          { "label": "1.0.5", "value": "1.0.5" }
         ]
       },
       {

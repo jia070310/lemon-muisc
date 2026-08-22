@@ -40,7 +40,6 @@ docker compose -p "lemon-music" down --remove-orphans >/dev/null 2>&1 || true
 echo "正在拉取 Docker 镜像，请稍候…" > "${TRIM_TEMP_LOGFILE}" 2>/dev/null || true
 
 SOFT_PULL_FAIL=1
-wizard_pull_timeout="${wizard_pull_timeout:-300}"
 if [ "${wizard_pull_source:-ghcr_direct}" = "skip_pull" ]; then
   pull_image_with_progress "安装" || true
 elif pull_image_with_progress "安装"; then
@@ -61,16 +60,9 @@ EOF
   log_config "install using image ${IMAGE}"
 fi
 
-# 无 docker-project 时由本脚本负责起容器（启用时 main start 也会重建挂载）
-if resolve_local_image_name "$(get_compose_image)" >/dev/null 2>&1; then
-  if recreate_compose_stack; then
-    log_config "install docker run ok"
-  else
-    log_config "install container deferred — will start on enable"
-  fi
-else
-  log_config "no local image yet — enable will pull/start"
-fi
+# 安装阶段不启动容器，避免飞牛 UI 在 55% 附近长时间无响应；配置访问权限后「启用」即可
+log_line "安装脚本完成，跳过容器启动（请在应用中心启用）"
+update_install_ui "安装完成，请在应用中心启用应用"
 
 ensure_desktop_entry || true
 mark_install_complete "安装"
