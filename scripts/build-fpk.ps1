@@ -28,5 +28,14 @@ Set-Location $FpkDir
 
 $fpk = Join-Path $FpkDir "lemon-music.fpk"
 if (-not (Test-Path $fpk)) { throw "lemon-music.fpk was not created" }
+$manifest = Join-Path $FpkDir "manifest"
+$version = "1.0.0"
+if (Test-Path $manifest) {
+  $m = Select-String -Path $manifest -Pattern '^\s*version\s*=\s*(.+)\s*$' | Select-Object -First 1
+  if ($m) { $version = $m.Matches[0].Groups[1].Value.Trim() }
+}
+$versioned = Join-Path $FpkDir "lemon-music-$version.fpk"
+Copy-Item -Force $fpk $versioned
 $sizeMb = [math]::Round((Get-Item $fpk).Length / 1MB, 2)
 Write-Host "Done: $fpk ($sizeMb MB)" -ForegroundColor Green
+Write-Host "Also: $versioned" -ForegroundColor Green
