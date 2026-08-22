@@ -65,10 +65,10 @@ export const api = {
     clearCompleted: () => request('/download/clear-completed', { method: 'POST' }),
   },
   play: {
-    getUrl: (songId, source, name, singer, quality) =>
-      request('/play/url', { method: 'POST', body: { songId, source, name, singer, quality } }),
-    getLyric: (songId, source) =>
-      request('/play/lyric', { method: 'POST', body: { songId, source } }),
+    getUrl: (songId, source, name, singer, quality, localPath) =>
+      request('/play/url', { method: 'POST', body: { songId, source, name, singer, quality, localPath } }),
+    getLyric: (songId, source, lyric) =>
+      request('/play/lyric', { method: 'POST', body: { songId, source, lyric } }),
   },
   paths: {
     list: () => request('/paths'),

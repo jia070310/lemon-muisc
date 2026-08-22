@@ -30,8 +30,10 @@ let audio = null
 let inited = false
 /** @type {number[]} */
 let playHistory = []
+let lastSessionSave = 0
 
 const QUEUE_STORAGE_KEY = 'lx-music-nas:play-queue'
+const SESSION_STORAGE_KEY = 'lx-music-nas:play-session'
 
 function pickItemFields(item) {
   if (!item) return null
@@ -49,6 +51,8 @@ function pickItemFields(item) {
     interval: cleaned.interval,
     album: cleaned.album,
     albumName: cleaned.albumName,
+    localPath: cleaned.localPath || '',
+    lyric: cleaned.lyric || '',
   }
 }
 
@@ -63,7 +67,48 @@ function saveQueueState() {
       currentIndex: currentQueueIndex.value,
       playMode: playMode.value,
     }))
+    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({
+      currentPlaying: currentPlaying.value ? pickItemFields(currentPlaying.value) : null,
+      isPaused: isPaused.value,
+      currentTime: currentTime.value,
+    }))
   } catch {}
+}
+
+function syncCurrentPlayingFromQueue(forcePaused = false) {
+  if (currentQueueIndex.value < 0 || !playQueue.value[currentQueueIndex.value]) return
+  const { item, source } = playQueue.value[currentQueueIndex.value]
+  const cleaned = cleanTrackItem({ ...item, source: item.source || source })
+  currentPlaying.value = cleaned
+  coverUrl.value = cleaned.picUrl || ''
+  lyricLines.value = cleaned.lyric ? parseLrc(cleaned.lyric) : []
+  activeLyricIdx.value = -1
+  applyDurationFallback(cleaned)
+  if (forcePaused) isPaused.value = true
+}
+
+function restoreSessionState() {
+  try {
+    const raw = localStorage.getItem(SESSION_STORAGE_KEY)
+    if (raw) {
+      const data = JSON.parse(raw)
+      if (data.currentPlaying?.name) {
+        currentPlaying.value = cleanTrackItem(data.currentPlaying)
+        coverUrl.value = data.currentPlaying.picUrl || ''
+        lyricLines.value = data.currentPlaying.lyric ? parseLrc(data.currentPlaying.lyric) : []
+        activeLyricIdx.value = -1
+        currentTime.value = Number(data.currentTime) || 0
+        applyDurationFallback(currentPlaying.value)
+        // 刷新后默认暂停，用户可点播放继续
+        isPaused.value = true
+        return
+      }
+    }
+  } catch {}
+
+  if (currentQueueIndex.value >= 0) {
+    syncCurrentPlayingFromQueue(true)
+  }
 }
 
 function loadQueueState() {
@@ -148,6 +193,7 @@ function resolveNextIndex(fromAuto = false) {
 }
 
 export function getTrackKey(item, source) {
+  if (item?.localPath) return `local:${item.localPath}`
   const id = item?.songmid || item?.hash || item?.songId || item?.copyrightId || item?.id
   const src = item?.source || source || ''
   return `${src}:${id}`
@@ -163,6 +209,11 @@ export function initPlayer() {
     currentTime.value = audio.currentTime
     updateActiveLyric(audio.currentTime)
     syncDurationFromAudio()
+    const now = Date.now()
+    if (now - lastSessionSave > 2000) {
+      lastSessionSave = now
+      saveQueueState()
+    }
   })
   audio.addEventListener('loadedmetadata', syncDurationFromAudio)
   audio.addEventListener('durationchange', syncDurationFromAudio)
@@ -173,7 +224,13 @@ export function initPlayer() {
     loadingPlay.value = null
   })
 
+  restoreSessionState()
   loadCoverStyle()
+
+  window.addEventListener('beforeunload', saveQueueState)
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') saveQueueState()
+  })
 }
 
 async function onTrackEnded() {
@@ -213,9 +270,17 @@ export async function loadCoverStyle() {
 }
 
 export function isPlayingItem(item) {
+  if (!item || !currentPlaying.value) return false
+  const key = getTrackKey(item, item.source)
+  const curKey = getTrackKey(currentPlaying.value, currentPlaying.value.source)
+  return key === curKey
+}
+
+export function isActiveTrack(item, source) {
   if (!item || currentQueueIndex.value < 0) return false
   const entry = playQueue.value[currentQueueIndex.value]
-  return entry ? entry.key === getTrackKey(item, entry.source) : currentPlaying.value?.id === item?.id
+  if (!entry) return false
+  return entry.key === getTrackKey(item, source || item.source)
 }
 
 export function isInQueue(item, source) {
@@ -273,14 +338,36 @@ export function togglePlayMode() {
 }
 
 export async function playItem(item, activeSource) {
+  const key = getTrackKey(item, activeSource)
+  const idx = playQueue.value.findIndex(q => q.key === key)
+
   if (isPlayingItem(item)) {
-    togglePause()
+    await resumeOrTogglePause()
     return
   }
+
+  // 刷新后 currentPlaying 已恢复但 audio 未加载，继续播放同一首
+  if (idx >= 0 && currentPlaying.value && getTrackKey(currentPlaying.value, currentPlaying.value.source) === key) {
+    currentQueueIndex.value = idx
+    await playTrackAt(idx, { resumeTime: currentTime.value })
+    return
+  }
+
   await addToQueue(item, activeSource, { play: true, replace: true })
 }
 
-export async function playTrackAt(index, { fromHistory = false } = {}) {
+export async function resumeOrTogglePause() {
+  if (!currentPlaying.value) return
+  if (!audio?.src) {
+    if (currentQueueIndex.value >= 0) {
+      await playTrackAt(currentQueueIndex.value, { resumeTime: currentTime.value })
+    }
+    return
+  }
+  togglePause()
+}
+
+export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 } = {}) {
   if (index < 0 || index >= playQueue.value.length) return
 
   const prevIndex = currentQueueIndex.value
@@ -295,17 +382,31 @@ export async function playTrackAt(index, { fromHistory = false } = {}) {
   loadingPlay.value = item.id
   playerError.value = ''
   try {
-    const songId = item.songmid || item.hash || item.songId || item.copyrightId || item.id
-    const res = await api.play.getUrl(songId, source, item.name, item.singer, '128k')
-    if (!res.url) throw new Error('获取播放链接失败')
+    const isLocal = Boolean(item.localPath) || source === 'local'
+    let url = ''
+    if (isLocal) {
+      const res = await api.play.getUrl(item.id, 'local', item.name, item.singer, '128k', item.localPath)
+      url = res.url
+    } else {
+      const songId = item.songmid || item.hash || item.songId || item.copyrightId || item.id
+      const res = await api.play.getUrl(songId, source, item.name, item.singer, '128k')
+      url = res.url
+    }
+    if (!url) throw new Error('获取播放链接失败')
 
     if (!audio) initPlayer()
-    currentTime.value = 0
+    if (!resumeTime) currentTime.value = 0
     duration.value = 0
     applyDurationFallback(item)
 
-    audio.src = res.url
+    audio.src = url
     await waitForAudioReady()
+    if (resumeTime > 0) {
+      try {
+        audio.currentTime = resumeTime
+        currentTime.value = resumeTime
+      } catch {}
+    }
     await audio.play()
 
     syncDurationFromAudio()
@@ -317,7 +418,12 @@ export async function playTrackAt(index, { fromHistory = false } = {}) {
     lyricLines.value = []
     activeLyricIdx.value = -1
 
-    fetchLyric(item, source)
+    if (isLocal && item.lyric) {
+      lyricLines.value = parseLrc(item.lyric)
+    } else if (!isLocal) {
+      fetchLyric(item, source)
+    }
+    saveQueueState()
   } catch (e) {
     playerError.value = e.message || '试听失败，请确认音源已激活'
     throw e
@@ -374,7 +480,13 @@ export async function playPrev() {
 }
 
 export function togglePause() {
-  if (!audio) return
+  if (!currentPlaying.value) return
+  if (!audio?.src) {
+    if (currentQueueIndex.value >= 0) {
+      playTrackAt(currentQueueIndex.value, { resumeTime: currentTime.value }).catch(() => {})
+    }
+    return
+  }
   if (audio.paused) {
     audio.play()
     isPaused.value = false
@@ -382,21 +494,26 @@ export function togglePause() {
     audio.pause()
     isPaused.value = true
   }
+  saveQueueState()
 }
 
 export function stopPlay() {
   if (audio) { audio.pause(); audio.src = '' }
   currentPlaying.value = null
+  currentQueueIndex.value = -1
   isPaused.value = true
   currentTime.value = 0
   duration.value = 0
   coverUrl.value = ''
   lyricLines.value = []
   activeLyricIdx.value = -1
+  saveQueueState()
 }
 
 export function seekTo(time) {
   if (audio) audio.currentTime = time
+  currentTime.value = time
+  saveQueueState()
 }
 
 export function setVolume(val) {

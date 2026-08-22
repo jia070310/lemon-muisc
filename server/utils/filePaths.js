@@ -136,6 +136,36 @@ export function getDownloadSavePath() {
   return process.env.DOWNLOAD_PATH || '/music'
 }
 
+/** 判断路径是否位于已配置的音乐库/下载目录内（防任意文件读取） */
+export function isAllowedMediaPath(filePath) {
+  if (!filePath || typeof filePath !== 'string') return false
+  let resolved
+  try {
+    resolved = path.resolve(filePath)
+  } catch {
+    return false
+  }
+  if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) return false
+
+  const roots = new Set([
+    ...getFilePaths(),
+    getDownloadSavePath(),
+    '/music',
+    '/downloads',
+    process.env.DOWNLOAD_PATH,
+    process.env.MUSIC_PATH,
+  ].filter(Boolean).map(p => {
+    try { return path.resolve(p) } catch { return null }
+  }).filter(Boolean))
+
+  for (const root of roots) {
+    if (resolved === root) return true
+    const prefix = root.endsWith(path.sep) ? root : root + path.sep
+    if (resolved.startsWith(prefix)) return true
+  }
+  return false
+}
+
 export function setDownloadSavePath(dirPath) {
   const p = mapToContainerPath(dirPath.trim())
   const paths = getFilePaths()

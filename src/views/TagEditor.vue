@@ -3,7 +3,7 @@
     <div class="page-header">
       <div>
         <div class="page-title">标签编辑</div>
-        <div class="page-subtitle">批量编辑本地音乐文件的元数据、封面与歌词</div>
+        <div class="page-subtitle">批量编辑本地音乐文件的元数据、封面与歌词，支持试听</div>
       </div>
       <div class="header-actions">
         <button class="btn-primary btn-sm" @click="saveAll" :disabled="!hasChanges || saving">
@@ -39,6 +39,9 @@
           <label class="check-all">
             <input type="checkbox" v-model="selectAll" @change="toggleAll" /> 全选
           </label>
+          <button class="btn-ghost btn-sm" :disabled="!filteredFiles.length" @click="playAllVisible">
+            试听全部
+          </button>
           <button class="btn-ghost btn-sm" :disabled="!selectedFiles.length || matching" @click="autoMatchSelected">
             {{ matching ? '匹配中...' : `自动匹配 (${selectedFiles.length})` }}
           </button>
@@ -53,6 +56,7 @@
             <thead>
               <tr>
                 <th class="col-check"></th>
+                <th class="col-play"></th>
                 <th>文件名</th>
                 <th>标题</th>
                 <th>歌手</th>
@@ -64,10 +68,30 @@
             <tbody>
               <tr
                 v-for="f in filteredFiles" :key="f.filePath"
-                :class="{ modified: f._modified, active: editingFile?.filePath === f.filePath, selected: f._selected }"
+                :class="{ modified: f._modified, active: editingFile?.filePath === f.filePath, selected: f._selected, playing: isPlayingFile(f) }"
                 @click="openEdit(f)"
               >
                 <td @click.stop><input type="checkbox" v-model="f._selected" /></td>
+                <td class="col-play" @click.stop>
+                  <button
+                    class="play-btn"
+                    :title="isPlayingFile(f) && !isPaused ? '暂停' : '试听'"
+                    @click="togglePlayFile(f)"
+                  >
+                    <svg v-if="isPlayingFile(f) && !isPaused" viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+                    <svg v-else-if="loadingPlay === fileTrackId(f)" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" class="spin"><circle cx="12" cy="12" r="10" stroke-dasharray="50" stroke-dashoffset="20"/></svg>
+                    <svg v-else viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
+                  </button>
+                  <button
+                    class="queue-add-btn"
+                    :class="{ added: isFileInQueue(f) }"
+                    :title="isFileInQueue(f) ? '已在试听列表' : '加入试听列表'"
+                    @click="addFileToQueue(f)"
+                  >
+                    <svg v-if="isFileInQueue(f)" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+                    <svg v-else viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                  </button>
+                </td>
                 <td class="cell-file" :title="f.filePath">{{ f.fileName }}</td>
                 <td class="cell-text">{{ f.title || '-' }}</td>
                 <td class="cell-text">{{ f.artist || '-' }}</td>
@@ -86,6 +110,14 @@
       <aside class="edit-panel card" v-if="editForm || loadingDetail">
         <div class="panel-title">
           {{ isBatchMode ? `批量编辑 (${selectedFiles.length})` : '单文件编辑' }}
+          <button
+            v-if="!isBatchMode && editingFile"
+            class="btn-ghost btn-sm play-inline"
+            @click="togglePlayFile(editingFile)"
+            :title="isPlayingFile(editingFile) && !isPaused ? '暂停' : '试听当前文件'"
+          >
+            {{ isPlayingFile(editingFile) && !isPaused ? '暂停' : '试听' }}
+          </button>
         </div>
 
         <div v-if="loadingDetail" class="detail-loading">正在读取文件内置信息...</div>
@@ -230,6 +262,9 @@
 <script setup>
 import { ref, computed, reactive, onMounted } from 'vue'
 import { api } from '../api.js'
+import {
+  loadingPlay, isPaused, isPlayingItem, playItem, addToQueue, isInQueue,
+} from '../stores/player.js'
 
 const dirs = ref([])
 const activeDir = ref('')
@@ -684,6 +719,81 @@ async function autoMatchSelected() {
   }
 }
 
+function fileToTrack(f) {
+  const name = f.title || f.parsedTitle || f.fileName?.replace(/\.[^.]+$/, '') || '未知歌曲'
+  const singer = f.artist || f.parsedArtist || '未知歌手'
+  return {
+    id: `local_${f.filePath}`,
+    name,
+    singer,
+    source: 'local',
+    album: f.album || '',
+    picUrl: f.pictureBase64 || f.picUrl || '',
+    localPath: f.filePath,
+    lyric: f.lyric || '',
+  }
+}
+
+function fileTrackId(f) {
+  return fileToTrack(f).id
+}
+
+function isPlayingFile(f) {
+  return isPlayingItem(fileToTrack(f))
+}
+
+function isFileInQueue(f) {
+  const track = fileToTrack(f)
+  return isInQueue(track, 'local')
+}
+
+async function togglePlayFile(f) {
+  if (!f?.filePath) return
+  try {
+    // 若正在编辑该文件且已读出封面/歌词，优先用编辑表单数据
+    let track = fileToTrack(f)
+    if (editingFile.value?.filePath === f.filePath && editForm.value) {
+      track = {
+        ...track,
+        name: editForm.value.title || track.name,
+        singer: editForm.value.artist || track.singer,
+        album: editForm.value.album || track.album,
+        picUrl: editForm.value.pictureBase64 || editForm.value.picUrl || track.picUrl,
+        lyric: editForm.value.lyric || track.lyric,
+      }
+    }
+    await playItem(track, 'local')
+  } catch (e) {
+    showToast(e.message || '试听失败', 'error')
+  }
+}
+
+function addFileToQueue(f) {
+  if (!f?.filePath) return
+  const track = fileToTrack(f)
+  if (isInQueue(track, 'local')) {
+    showToast('已在试听列表', 'info')
+    return
+  }
+  addToQueue(track, 'local')
+  showToast(`已加入列表: ${track.name}`, 'success')
+}
+
+async function playAllVisible() {
+  const list = filteredFiles.value
+  if (!list.length) {
+    showToast('没有可试听的文件', 'info')
+    return
+  }
+  for (const f of list) addToQueue(fileToTrack(f), 'local')
+  try {
+    await playItem(fileToTrack(list[0]), 'local')
+    showToast(`开始试听，共 ${list.length} 首`, 'success')
+  } catch (e) {
+    showToast(e.message || '试听失败', 'error')
+  }
+}
+
 function onCoverUpload(e) {
   const file = e.target.files?.[0]
   if (!file) return
@@ -748,7 +858,17 @@ function showToast(text, type = 'info') {
   overflow: hidden;
 }
 
-.panel-title { font-size: 14px; font-weight: 600; color: var(--text); flex-shrink: 0; }
+.panel-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.play-inline { flex-shrink: 0; }
 .dir-hint { font-size: 11px; color: var(--text-muted); margin-bottom: 8px; line-height: 1.4; flex-shrink: 0; }
 
 .dir-add { display: flex; gap: 6px; }
@@ -842,7 +962,47 @@ tbody tr.modified { background: rgba(60, 110, 247, 0.08); }
 tbody tr.active { background: var(--accent-muted); }
 tbody tr.selected td:first-child { background: rgba(60, 110, 247, 0.05); }
 
+tbody tr.playing { background: var(--accent-muted); }
+
 .col-check { width: 32px; }
+.col-play {
+  width: 72px;
+  white-space: nowrap;
+}
+.col-play .play-btn,
+.col-play .queue-add-btn {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-secondary);
+  vertical-align: middle;
+  margin-right: 4px;
+}
+.col-play .play-btn:hover,
+.col-play .queue-add-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-muted);
+}
+.col-play .queue-add-btn.added {
+  color: var(--success);
+  border-color: var(--success);
+  background: rgba(52, 199, 89, 0.1);
+}
+tr.playing .play-btn {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-muted);
+}
+.spin { animation: tag-spin 0.8s linear infinite; }
+@keyframes tag-spin { to { transform: rotate(360deg); } }
+
 .cell-file { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); font-size: 12px; }
 .cell-text { max-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 

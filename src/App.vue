@@ -269,7 +269,11 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
 }
-.content-fixed > * {
+.content-fixed > .setup-banner {
+  flex: 0 0 auto;
+  margin-bottom: 12px;
+}
+.content-fixed > *:not(.setup-banner) {
   flex: 1;
   min-height: 0;
 }
@@ -277,15 +281,16 @@ onMounted(() => {
 .setup-banner {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   flex-wrap: wrap;
   margin-bottom: 16px;
-  padding: 12px 16px;
-  border-radius: 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
   background: rgba(255, 193, 7, 0.12);
   border: 1px solid rgba(255, 193, 7, 0.35);
   color: var(--text);
-  font-size: 14px;
+  font-size: 13px;
+  line-height: 1.4;
 }
 .setup-banner strong { color: #ffc107; }
 .setup-link {
@@ -324,8 +329,8 @@ onMounted(() => {
   }
 
   .setup-banner {
-    font-size: 13px;
-    padding: 10px 12px;
+    font-size: 12px;
+    padding: 8px 10px;
   }
   .setup-link {
     margin-left: 0;

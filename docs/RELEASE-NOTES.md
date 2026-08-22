@@ -1,29 +1,25 @@
-# 柠檬音乐下载 v1.0.1
+# 柠檬音乐下载 v1.0.2
 
 面向飞牛 NAS 的音乐搜索、试听、下载与标签管理工具。兼容落雪音乐（LX Music）自定义音源。
 
 ## 更新内容
 
-### 下载内嵌与歌词文件
-- 按设置写入**内嵌封面 / 内嵌歌词**；关闭则不写入
-- 开启「下载歌词文件」时，在下载目录生成同名 `.lrc`
-- 修复酷我等音源封面缺失、歌词获取失败导致内嵌为空的问题
-- 封面拉取兼容酷我多镜像与尺寸回退
+### 标签编辑试听
+- 标签页支持本地文件试听，与底栏播放器共用试听队列
+- 支持「试听全部」、加入队列、上一首/下一首
+- 新增 `/api/play/local` 本地文件流式播放（支持 Range）
 
-### 自定义音源兼容性
-- 补齐 LX 官方 `lx.utils`（crypto / buffer / zlib）
-- 修复沙箱 `globalThis` 被错误覆盖的问题
-- 提供受限 `require`（`crypto`、`zlib`、`buffer`、`querystring`、`url`）
-- 缓解社区反馈的「`require is not defined`」「`Bind must be called on a function`」激活失败
+### 播放状态持久化
+- 刷新或重新进入页面后保留当前曲目、进度与队列
+- 修复刷新后列表显示暂停图标但底栏无信息、无法继续播放的问题
 
-### 其它
-- 搜索结果补充封面地址（酷我 / 酷狗 / 咪咕）
-- 下载任务保留 `albummid`，便于 QQ 封面兜底
-- 设置页歌词文件相关文案更清晰
+### 界面
+- 浅色 / 深色主题切换（设置页或侧栏）
+- 修复首次配置提示条被页面布局撑高的问题
 
 ## 安装 / 更新（飞牛 FPK）
 
-1. 应用中心 → 手动安装 → 选择本页附件 `lemon-music-1.0.1.fpk`
+1. 应用中心 → 手动安装 → 选择本页附件 `lemon-music-1.0.2.fpk`（若已发布）
 2. 若镜像较旧，在 NAS 执行：
 
 ```bash
@@ -37,7 +33,7 @@ docker rm -f lemon-music
 ## Docker 镜像
 
 - `ghcr.io/jia070310/lemon-muisc:latest`
-- `ghcr.io/jia070310/lemon-muisc:1.0.1`
+- `ghcr.io/jia070310/lemon-muisc:1.0.2`
 - 国内镜像示例：`ghcr.1ms.run/jia070310/lemon-muisc:latest`
 
 ## 说明
