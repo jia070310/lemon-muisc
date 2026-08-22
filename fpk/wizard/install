@@ -4,7 +4,7 @@
     "items": [
       {
         "type": "tips",
-        "helpText": "<b>默认在线拉取最新镜像</b>（升级 / 重装都会从 ghcr.1ms.run 下载，不会沿用旧镜像）。<br><br>进度约 40% 为解压 FPK；<b>55% 起</b>在 install_callback 中用 docker pull 下载（与 SSH 相同），请看网络流量。<br><br>仅当已手动 pull 完时，才改选「跳过拉取」。"
+        "helpText": "<b>推荐流程</b>：若应用中心安装时无网速，请先在 SSH 手动 <code>docker pull</code>，再选手动安装 +「跳过拉取」。<br><br>在线安装时进度约 40% 为解压；55% 为飞牛系统进度，请看下方「实际拉取进度」。"
       }
     ]
   },
@@ -39,13 +39,18 @@
       {
         "type": "select",
         "field": "wizard_pull_source",
-        "label": "拉取方式",
-        "initValue": "ghcr_direct",
+        "label": "拉取方式 / 镜像加速",
+        "initValue": "mirror_1ms",
         "options": [
-          { "label": "在线拉取 ghcr.1ms.run（推荐，始终拉最新镜像）", "value": "ghcr_direct" },
-          { "label": "跳过拉取（已 SSH 手动 pull 完成）", "value": "skip_pull" },
-          { "label": "自定义镜像地址", "value": "custom_image" }
-        ]
+          { "label": "1ms.run 加速 ghcr.1ms.run（默认）", "value": "mirror_1ms" },
+          { "label": "南大加速 ghcr.nju.edu.cn", "value": "mirror_nju" },
+          { "label": "dockerproxy 加速 ghcr.dockerproxy.com", "value": "mirror_dockerproxy" },
+          { "label": "DaoCloud 加速 docker.m.daocloud.io", "value": "mirror_daocloud" },
+          { "label": "官方 ghcr.io（海外/较慢）", "value": "ghcr_io" },
+          { "label": "跳过拉取（已 SSH 手动 pull + tag）", "value": "skip_pull" },
+          { "label": "自定义完整镜像地址", "value": "custom_image" }
+        ],
+        "helpText": "失败时会自动尝试其它加速源。应用中心无网速时请先 SSH pull，再选「跳过拉取」。"
       },
       {
         "type": "select",
@@ -63,7 +68,7 @@
         "field": "wizard_custom_image",
         "label": "自定义镜像地址（选「自定义」时必填）",
         "initValue": "ghcr.1ms.run/jia070310/lemon-muisc:latest",
-        "placeholder": "ghcr.1ms.run/jia070310/lemon-muisc:latest"
+        "placeholder": "ghcr.nju.edu.cn/jia070310/lemon-muisc:latest"
       },
       {
         "type": "select",
@@ -80,17 +85,11 @@
     ]
   },
   {
-    "stepTitle": "网络加速提示",
+    "stepTitle": "SSH 手动拉取示例",
     "items": [
       {
         "type": "tips",
-        "helpText": "若拉取失败，可在上一步填自定义加速地址，例如 <code>ghcr.1ms.run/jia070310/lemon-muisc:latest</code>。"
-      },
-      {
-        "type": "switch",
-        "field": "wizard_apply_docker_mirror",
-        "label": "尝试使用飞牛 Docker registry-mirrors（对 ghcr.io 通常无效）",
-        "initValue": "false"
+        "helpText": "任选其一在 SSH 执行（拉完再选手动安装 +「跳过拉取」）：<br><code>docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest</code><br><code>docker pull ghcr.nju.edu.cn/jia070310/lemon-muisc:latest</code><br><code>docker pull ghcr.dockerproxy.com/jia070310/lemon-muisc:latest</code><br><code>docker pull docker.m.daocloud.io/ghcr.io/jia070310/lemon-muisc:latest</code><br>然后：<code>docker tag &lt;上面拉到的名&gt; lemon-music:latest</code>"
       }
     ]
   }

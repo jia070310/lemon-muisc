@@ -18,18 +18,60 @@ init_docker_access() {
     DOCKER_USE_SUDO=0
     return 0
   fi
-  if command -v sudo >/dev/null 2>&1 && sudo docker info >/dev/null 2>&1; then
+  # 仅免密 sudo，避免安装向导里卡在交互式密码（表现为无网速、无日志）
+  if command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then
     DOCKER_USE_SUDO=1
-    log_line_maybe "Docker: 当前用户无 socket 权限，改用 sudo docker"
+    log_line_maybe "Docker: 使用免密 sudo docker"
     return 0
   fi
   return 1
 }
 
 LOCAL_IMAGE_ALIAS="${LOCAL_IMAGE_ALIAS:-lemon-music:latest}"
+LEMON_IMAGE_REPO="${LEMON_IMAGE_REPO:-jia070310/lemon-muisc}"
 REMOTE_IMAGE_DEFAULT="${REMOTE_IMAGE_DEFAULT:-ghcr.1ms.run/jia070310/lemon-muisc:latest}"
+
+# 安装向导镜像源 → registry 主机（含路径型加速）
+wizard_registry_host() {
+  case "${1:-ghcr_direct}" in
+    mirror_nju) echo "ghcr.nju.edu.cn" ;;
+    mirror_dockerproxy) echo "ghcr.dockerproxy.com" ;;
+    mirror_daocloud) echo "docker.m.daocloud.io/ghcr.io" ;;
+    ghcr_io) echo "ghcr.io" ;;
+    mirror_1ms|ghcr_direct|*) echo "ghcr.1ms.run" ;;
+  esac
+}
+
+image_ref_for_registry() {
+  local host="${1:-ghcr.1ms.run}"
+  local tag="${2:-latest}"
+  printf '%s/%s:%s' "${host}" "${LEMON_IMAGE_REPO}" "${tag}"
+}
+
+# 按向导首选源排序，供 pull 依次尝试
+pull_registry_hosts() {
+  local source="${1:-ghcr_direct}"
+  local primary seen="" host
+  primary="$(wizard_registry_host "${source}")"
+  for host in \
+    "${primary}" \
+    "ghcr.1ms.run" \
+    "ghcr.nju.edu.cn" \
+    "ghcr.dockerproxy.com" \
+    "docker.m.daocloud.io/ghcr.io" \
+    "ghcr.io"
+  do
+    case " ${seen} " in *" ${host} "*) continue ;; esac
+    seen="${seen} ${host}"
+    printf '%s\n' "${host}"
+  done
+}
+
 REMOTE_IMAGE_FALLBACKS=(
   "ghcr.1ms.run/jia070310/lemon-muisc:latest"
+  "ghcr.nju.edu.cn/jia070310/lemon-muisc:latest"
+  "ghcr.dockerproxy.com/jia070310/lemon-muisc:latest"
+  "docker.m.daocloud.io/ghcr.io/jia070310/lemon-muisc:latest"
   "ghcr.io/jia070310/lemon-muisc:latest"
 )
 
@@ -45,6 +87,9 @@ find_newest_remote_image() {
   local newest="" created="" img c
   for img in \
     "ghcr.1ms.run/jia070310/lemon-muisc:${tag}" \
+    "ghcr.nju.edu.cn/jia070310/lemon-muisc:${tag}" \
+    "ghcr.dockerproxy.com/jia070310/lemon-muisc:${tag}" \
+    "docker.m.daocloud.io/ghcr.io/jia070310/lemon-muisc:${tag}" \
     "ghcr.io/jia070310/lemon-muisc:${tag}" \
     "ghcr.1ms.run/jia070310/lemon-muisc:latest" \
     "ghcr.io/jia070310/lemon-muisc:latest"

@@ -235,6 +235,7 @@ load_saved_image_config() {
 resolve_image_from_wizard() {
   local source="${wizard_pull_source:-ghcr_direct}"
   local tag="${wizard_image_tag:-latest}"
+  local host
 
   case "${source}" in
     custom_image)
@@ -247,8 +248,9 @@ resolve_image_from_wizard() {
       load_saved_image_config
       read_image_from_compose
       ;;
-    ghcr_direct|*)
-      IMAGE="${DEFAULT_REGISTRY}:${tag}"
+    mirror_1ms|mirror_nju|mirror_dockerproxy|mirror_daocloud|ghcr_io|ghcr_direct|*)
+      host="$(wizard_registry_host "${source}")"
+      IMAGE="$(image_ref_for_registry "${host}" "${tag}")"
       ;;
   esac
 }
@@ -268,8 +270,9 @@ ensure_docker() {
   if ! command -v docker >/dev/null 2>&1; then
     fail_install "未检测到 Docker。请先在飞牛系统中安装并启用 Docker，再重新安装本应用。"
   fi
+  log_line "Docker 检测: 用户=$(id -un 2>/dev/null || echo '?') uid=$(id -u 2>/dev/null || echo '?')"
   if ! init_docker_access; then
-    fail_install "无法连接 Docker（permission denied）。请确认应用权限为 root 运行，或 SSH 用管理员执行: docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest"
+    fail_install "安装脚本无法访问 Docker（与 SSH 不同用户/无 socket 权限）。请先 SSH 执行: docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest && docker tag ghcr.1ms.run/jia070310/lemon-muisc:latest lemon-music:latest ，再选手动安装并选「跳过拉取」。"
   fi
 }
 
@@ -524,11 +527,18 @@ normalize_pulled_image() {
 pull_image_with_fallback() {
   local tag="${wizard_image_tag:-latest}"
   local source="${wizard_pull_source:-ghcr_direct}"
-  local registry
+  local registry host
   local pulled=0
   local last_err=""
   local last_log=""
   local pull_rc=0
+  local -a registry_hosts=()
+
+  while IFS= read -r host; do
+    [ -n "${host}" ] && registry_hosts+=("${host}")
+  done <<EOF
+$(pull_registry_hosts "${source}")
+EOF
 
   if [ "${source}" = "custom_image" ]; then
     update_compose_image
@@ -546,8 +556,8 @@ pull_image_with_fallback() {
     return 1
   fi
 
-  for registry in "${FALLBACK_REGISTRIES[@]}"; do
-    IMAGE="${registry}:${tag}"
+  for host in "${registry_hosts[@]}"; do
+    IMAGE="$(image_ref_for_registry "${host}" "${tag}")"
     update_compose_image
     log_line "尝试镜像源: ${IMAGE}"
 
@@ -577,7 +587,7 @@ pull_image_with_fallback() {
   done
 
   if [ "${pulled}" -ne 1 ]; then
-    IMAGE="${DEFAULT_REGISTRY}:${tag}"
+    IMAGE="$(image_ref_for_registry "$(wizard_registry_host "${source}")" "${tag}")"
     if normalize_pulled_image; then
       log_line "未直接拉取，但本地已有可用镜像: ${IMAGE}"
       return 0
