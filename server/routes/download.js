@@ -5,7 +5,7 @@ import { getDB } from '../db.js'
 import { broadcast } from '../ws.js'
 import { requestSource } from '../sourceManager.js'
 import { writeMeta } from '../meta.js'
-import { buildMusicInfoFromTask } from '../utils/musicInfo.js'
+import { buildMusicInfoFromTask, lyricLookupExtra } from '../utils/musicInfo.js'
 import { buildEmbedLyrics, fixKgLyric } from '../utils/lyric.js'
 import { getDownloadSavePath } from '../utils/filePaths.js'
 import { getLyric, searchMusic } from '../musicSdk.js'
@@ -41,6 +41,11 @@ downloadRouter.post('/add', async (req, res) => {
           hash: t.hash || '',
           songmid: t.songmid || '',
           copyrightId: t.copyrightId || '',
+          albumAudioId: t.albumAudioId || '',
+          duration: t.duration || '',
+          musicId: t.musicId || '',
+          rid: t.rid || '',
+          dcTargetId: t.dcTargetId || '',
           albummid: t.albummid || '',
           picUrl: t.picUrl || '',
           source: t.source,
@@ -304,7 +309,7 @@ async function fetchLyric(source, musicInfo, meta, task) {
   // 1) 内置 SDK（比自定义音源脚本更稳）
   if (songId) {
     try {
-      const lrc = await getLyric(songId, source)
+      const lrc = await getLyric(songId, source, lyricLookupExtra({ ...musicInfo, ...meta, ...task }))
       if (lrc?.lyric) return lrc
     } catch (e) {
       console.warn('SDK 获取歌词失败:', e?.message || e)
@@ -327,7 +332,7 @@ async function fetchLyric(source, musicInfo, meta, task) {
     for (const hit of result.list || []) {
       const id = hit.songmid || hit.hash || hit.songId || hit.copyrightId || hit.id
       if (!id) continue
-      const lrc = await getLyric(id, hit.source || source)
+      const lrc = await getLyric(id, hit.source || source, lyricLookupExtra(hit))
       if (lrc?.lyric) return lrc
     }
   } catch (e) {

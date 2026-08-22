@@ -67,8 +67,13 @@ export const api = {
   play: {
     getUrl: (songId, source, name, singer, quality, localPath) =>
       request('/play/url', { method: 'POST', body: { songId, source, name, singer, quality, localPath } }),
-    getLyric: (songId, source, lyric) =>
-      request('/play/lyric', { method: 'POST', body: { songId, source, lyric } }),
+    getLyric: (songIdOrPayload, source, lyric) =>
+      request('/play/lyric', {
+        method: 'POST',
+        body: typeof songIdOrPayload === 'object'
+          ? songIdOrPayload
+          : { songId: songIdOrPayload, source, lyric },
+      }),
   },
   paths: {
     list: () => request('/paths'),

@@ -31,6 +31,9 @@ async function kwSearch(keyword, page = 1, limit = 30) {
         interval: formatTime(parseInt(item.DURATION) || 0),
         source: 'kw',
         songId: item.MUSICRID?.replace('MUSIC_', '') || item.DC_TARGETID || '',
+        musicId: item.MUSICRID?.replace('MUSIC_', '') || item.DC_TARGETID || '',
+        rid: item.MUSICRID?.replace('MUSIC_', '') || '',
+        dcTargetId: item.DC_TARGETID || '',
         picUrl: kwPicUrl(item),
       }, types)
     }),
@@ -59,6 +62,8 @@ async function kgSearch(keyword, page = 1, limit = 30) {
         songId: item.FileHash || '',
         hash: item.FileHash || '',
         albumId: item.AlbumID || '',
+        albumAudioId: String(item.ID || item.AlbumAudioID || item.MixSongID || ''),
+        duration: item.Duration || 0,
         picUrl: kgPicUrl(item),
       }, types)
     }),
@@ -330,6 +335,46 @@ export async function searchMusic(keyword, source, page = 1, limit = 30) {
 }
 
 // --- 歌词获取 ---
+const LYRIC_HEADERS = {
+  kw: {
+    Referer: 'https://www.kuwo.cn/',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  },
+  kg: {
+    Referer: 'https://www.kugou.com/',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  },
+}
+
+function parseKwLrcPayload(data) {
+  const list = data?.data?.lrclist || data?.data?.lrcList || data?.lrclist
+  if (!Array.isArray(list) || !list.length) return null
+  const lines = list
+    .filter(l => l?.lineLyric != null && l?.time != null)
+    .map(l => `[${fmtLrcTime(parseFloat(l.time))}]${l.lineLyric}`)
+    .join('\n')
+  return lines.trim() ? { lyric: lines, tlyric: '' } : null
+}
+
+async function fetchKwLyricById(musicId) {
+  if (!musicId) return null
+  const urls = [
+    `https://www.kuwo.cn/openapi/v1/www/lyric/getlyric?musicId=${musicId}`,
+    `https://www.kuwo.cn/newh5/singles/songinfoandlrc?musicId=${musicId}`,
+    `https://m.kuwo.cn/newh5/singles/songinfoandlrc?musicId=${musicId}&httpsStatus=1`,
+  ]
+  for (const url of urls) {
+    try {
+      const buf = await req('get', url, null, LYRIC_HEADERS.kw)
+      const text = Buffer.isBuffer(buf) ? buf.toString() : String(buf || '')
+      const data = parseJSON(text.trim()) || parseJSON(text.replace(/^[^{\[]+/, ''))
+      const parsed = parseKwLrcPayload(data)
+      if (parsed?.lyric) return parsed
+    } catch {}
+  }
+  return null
+}
+
 async function wyLyric(songId) {
   const buf = await req('get', `https://music.163.com/api/song/lyric?id=${songId}&lv=1&tv=1`, null, { Referer: 'https://music.163.com' })
   const data = parseJSON(buf)
@@ -354,28 +399,105 @@ async function txLyric(songmid) {
   return { lyric, tlyric }
 }
 
-async function kwLyric(songId) {
-  const buf = await req('get', `https://m.kuwo.cn/newh5/singles/songinfoandlrc?musicId=${songId}&httpsStatus=1`, null, {
-    Referer: 'https://m.kuwo.cn/',
-    'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15',
-  })
-  const text = Buffer.isBuffer(buf) ? buf.toString() : String(buf || '')
-  const data = parseJSON(text.trim()) || parseJSON(text.replace(/^[^{\[]+/, ''))
-  if (!data?.data?.lrclist) return { lyric: '', tlyric: '' }
-  const lines = data.data.lrclist.map(l => `[${fmtLrcTime(parseFloat(l.time))}]${l.lineLyric}`).join('\n')
-  return { lyric: lines, tlyric: '' }
+async function kwLyric(songId, extra = {}) {
+  const ids = [...new Set([
+    songId,
+    extra.musicId,
+    extra.rid,
+    extra.dcTargetId,
+  ].filter(Boolean).map(String))]
+
+  for (const id of ids) {
+    const parsed = await fetchKwLyricById(id)
+    if (parsed?.lyric) return parsed
+  }
+
+  // 按歌名再搜一次，尝试其它 musicId（部分条目 m.kuwo 会失败但同曲其它 id 可用）
+  const keyword = [extra.name, extra.singer].filter(Boolean).join(' ')
+  if (keyword) {
+    try {
+      const result = await kwSearch(keyword, 1, 8)
+      for (const hit of result.list || []) {
+        const hitIds = [hit.songId, hit.id, hit.musicId, hit.rid].filter(Boolean).map(String)
+        for (const id of hitIds) {
+          if (ids.includes(id)) continue
+          const parsed = await fetchKwLyricById(id)
+          if (parsed?.lyric) return parsed
+        }
+      }
+    } catch {}
+  }
+
+  return { lyric: '', tlyric: '' }
 }
 
-async function kgLyric(hash) {
-  const buf = await req('get', `https://krcs.kugou.com/search?ver=1&man=yes&client=mobi&keyword=&duration=&hash=${hash}&album_audio_id=`, null)
-  const data = parseJSON(buf)
-  if (!data?.candidates?.[0]) return { lyric: '', tlyric: '' }
-  const c = data.candidates[0]
-  const lrcBuf = await req('get', `https://lyrics.kugou.com/download?ver=1&client=pc&id=${c.id}&accesskey=${c.accesskey}&fmt=lrc&charset=utf8`, null)
-  const lrcData = parseJSON(lrcBuf)
-  if (!lrcData?.content) return { lyric: '', tlyric: '' }
-  const lyric = Buffer.from(lrcData.content, 'base64').toString('utf-8')
-  return { lyric, tlyric: '' }
+async function kgDownloadLyric(candidate) {
+  const clients = ['pc', 'mobi']
+  for (const client of clients) {
+    try {
+      const lrcBuf = await req('get',
+        `https://lyrics.kugou.com/download?ver=1&client=${client}&id=${candidate.id}&accesskey=${candidate.accesskey}&fmt=lrc&charset=utf8`,
+        null, LYRIC_HEADERS.kg)
+      const lrcData = parseJSON(lrcBuf)
+      if (!lrcData?.content) continue
+      const lyric = Buffer.from(lrcData.content, 'base64').toString('utf-8').trim()
+      if (lyric) return { lyric, tlyric: '' }
+    } catch {}
+  }
+  return null
+}
+
+async function kgSearchLyricCandidates(hash, extra = {}) {
+  const albumAudioId = extra.albumAudioId || extra.album_audio_id || ''
+  const duration = extra.duration ?? extra.interval ?? ''
+  const queries = [
+    `https://krcs.kugou.com/search?ver=1&man=yes&client=mobi&keyword=&duration=${duration}&hash=${hash}&album_audio_id=${albumAudioId}`,
+    `https://krcs.kugou.com/search?ver=1&man=yes&client=pc&keyword=&duration=${duration}&hash=${hash}&album_audio_id=${albumAudioId}`,
+    `https://krcs.kugou.com/search?ver=1&man=yes&client=pc&keyword=&duration=&hash=${hash}&album_audio_id=`,
+  ]
+  const candidates = []
+  for (const url of queries) {
+    try {
+      const buf = await req('get', url, null, LYRIC_HEADERS.kg)
+      const data = parseJSON(buf)
+      for (const c of data?.candidates || []) {
+        if (c?.id && c?.accesskey) candidates.push(c)
+      }
+    } catch {}
+  }
+  return candidates
+}
+
+async function kgLyric(hash, extra = {}) {
+  if (!hash) return { lyric: '', tlyric: '' }
+
+  const candidates = await kgSearchLyricCandidates(hash, extra)
+  for (const c of candidates) {
+    const parsed = await kgDownloadLyric(c)
+    if (parsed?.lyric) return parsed
+  }
+
+  const keyword = [extra.name, extra.singer].filter(Boolean).join(' ')
+  if (keyword) {
+    try {
+      const result = await kgSearch(keyword, 1, 8)
+      for (const hit of result.list || []) {
+        const hitHash = hit.hash || hit.songId || hit.id
+        if (!hitHash || hitHash === hash) continue
+        const more = await kgSearchLyricCandidates(hitHash, {
+          ...extra,
+          albumAudioId: hit.albumAudioId || extra.albumAudioId,
+          duration: hit.duration || extra.duration,
+        })
+        for (const c of more) {
+          const parsed = await kgDownloadLyric(c)
+          if (parsed?.lyric) return parsed
+        }
+      }
+    } catch {}
+  }
+
+  return { lyric: '', tlyric: '' }
 }
 
 async function mgLyric(copyrightId) {
@@ -392,8 +514,12 @@ function fmtLrcTime(sec) {
 
 const lyricMap = { wy: wyLyric, tx: txLyric, kw: kwLyric, kg: kgLyric, mg: mgLyric }
 
-export async function getLyric(songId, source) {
+export async function getLyric(songId, source, extra = {}) {
   const fn = lyricMap[source]
-  if (!fn) return { lyric: '', tlyric: '' }
-  try { return await fn(songId) } catch { return { lyric: '', tlyric: '' } }
+  if (!fn || !songId) return { lyric: '', tlyric: '' }
+  try {
+    return await fn(songId, extra)
+  } catch {
+    return { lyric: '', tlyric: '' }
+  }
 }

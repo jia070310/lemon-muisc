@@ -2,6 +2,7 @@ import { searchMusic } from '../musicSdk.js'
 import { parseFilename, scoreMatch } from './filenameParse.js'
 import { getLyric } from '../musicSdk.js'
 import { fetchPicBuffer, detectImageMime } from './fetchPic.js'
+import { lyricLookupExtra } from './musicInfo.js'
 
 const SOURCE_MAP = {
   wy: 'wy',
@@ -84,7 +85,7 @@ export async function fetchMatchMeta(match, source, fields = null) {
   let lyric = ''
   if (wantLyric && songId) {
     try {
-      const lrc = await getLyric(songId, sdkSource)
+      const lrc = await getLyric(songId, sdkSource, lyricLookupExtra(match))
       lyric = lrc.lyric || ''
     } catch {}
   }

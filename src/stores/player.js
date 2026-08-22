@@ -536,7 +536,22 @@ async function fetchLyric(item, activeSource) {
   const songId = item.songmid || item.hash || item.songId || item.copyrightId || item.id
   const source = item.source || activeSource
   try {
-    const res = await api.play.getLyric(songId, source)
+    const res = await api.play.getLyric({
+      songId,
+      source,
+      name: item.name,
+      singer: item.singer,
+      album: item.album || item.albumName,
+      hash: item.hash,
+      songmid: item.songmid,
+      copyrightId: item.copyrightId,
+      albumAudioId: item.albumAudioId,
+      duration: item.duration || item.interval,
+      musicId: item.musicId,
+      rid: item.rid,
+      dcTargetId: item.dcTargetId,
+      lyric: item.lyric,
+    })
     if (res.lyric) lyricLines.value = parseLrc(res.lyric)
   } catch {}
 }

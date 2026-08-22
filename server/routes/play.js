@@ -3,7 +3,7 @@ import fs from 'fs'
 import path from 'path'
 import { requestSource, getActiveSource } from '../sourceManager.js'
 import { getLyric } from '../musicSdk.js'
-import { buildMusicInfo } from '../utils/musicInfo.js'
+import { buildMusicInfo, lyricLookupExtra } from '../utils/musicInfo.js'
 import { isAllowedMediaPath } from '../utils/filePaths.js'
 
 export const playRouter = Router()
@@ -100,7 +100,6 @@ playRouter.get('/local', (req, res) => {
 playRouter.post('/lyric', async (req, res) => {
   try {
     const { songId, source, lyric } = req.body
-    // 本地文件可直接带上已读出的歌词
     if (typeof lyric === 'string' && lyric) {
       return res.json({ ok: true, lyric, tlyric: '' })
     }
@@ -108,8 +107,25 @@ playRouter.post('/lyric', async (req, res) => {
       return res.json({ ok: true, lyric: '', tlyric: '' })
     }
 
-    const result = await getLyric(songId, source)
-    res.json({ ok: true, ...result })
+    const musicInfo = buildMusicInfo(req.body)
+    const extra = lyricLookupExtra(musicInfo)
+
+    let result = await getLyric(songId, source, extra)
+    if (result?.lyric) {
+      return res.json({ ok: true, ...result })
+    }
+
+    const active = getActiveSource()
+    if (active?.handler) {
+      try {
+        const fromSource = await requestSource(source, 'lyric', { musicInfo })
+        if (fromSource?.lyric) {
+          return res.json({ ok: true, lyric: fromSource.lyric, tlyric: fromSource.tlyric || '' })
+        }
+      } catch {}
+    }
+
+    res.json({ ok: true, lyric: '', tlyric: '' })
   } catch {
     res.json({ ok: true, lyric: '', tlyric: '' })
   }
