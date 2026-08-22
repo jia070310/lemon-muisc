@@ -17,8 +17,27 @@ cleanup_stale_containers() {
 }
 
 cleanup_stale_containers
+update_compose_image 2>/dev/null || true
 
-update_compose_image
-update_install_ui "正在从 ${IMAGE} 拉取镜像（国内 ghcr.1ms.run 加速）…"
-log_line "compose 已指向加速地址: ${IMAGE}"
+if [ "${wizard_pull_source:-ghcr_direct}" = "skip_pull" ]; then
+  update_install_ui "已选择跳过拉取，安装时将校验本地镜像…"
+elif image_already_pulled; then
+  update_install_ui "【实际拉取进度 100% · 检测到本地已有镜像】
+镜像：${IMAGE}
+等待安装脚本写入配置…"
+  log_line "install_init: 本地已有镜像 ${IMAGE}"
+else
+  update_install_pull_ui "${IMAGE}" "${TRIM_PKGVAR}/pull.last.log"
+  log_line "install_init: 开始预拉取 ${IMAGE}"
+  SOFT_PULL_FAIL=1
+  if docker_pull_with_timeout; then
+    normalize_pulled_image || true
+    log_line "install_init: 预拉取完成"
+  else
+    log_line "install_init: 预拉取未完成，install_callback 将继续拉取并显示进度"
+  fi
+  unset SOFT_PULL_FAIL
+fi
+
+log_line "install_init 完成，目标镜像: ${IMAGE}"
 exit 0

@@ -50,6 +50,95 @@ update_install_ui() {
   echo "$*" > "${TRIM_TEMP_LOGFILE}" 2>/dev/null || true
 }
 
+# 从 docker pull --progress=plain 日志解析可读进度（供安装窗口文案展示）
+format_pull_progress_from_log() {
+  local log="$1"
+  local complete total pct dl_line
+
+  if [ ! -s "${log}" ]; then
+    echo "0% · 正在连接镜像仓库…"
+    return 0
+  fi
+
+  if grep -qiE 'Downloaded newer image|Status: Downloaded newer image|Image is up to date' "${log}" 2>/dev/null; then
+    echo "100% · 镜像拉取完成"
+    return 0
+  fi
+
+  complete="$(grep -ciE '^#[0-9]+ pull complete|Pull complete' "${log}" 2>/dev/null | tr -d ' \n\r' || true)"
+  complete="${complete:-0}"
+  total="$(grep -oE '^#[0-9]+' "${log}" 2>/dev/null | sed 's/^#//' | sort -n | tail -1 || true)"
+  total="${total:-0}"
+
+  if [ "${total}" -lt 1 ]; then
+    total="$(grep -ciE 'Pulling fs layer|pulling fs layer' "${log}" 2>/dev/null | tr -d ' \n\r' || true)"
+  fi
+  if [ "${total}" -lt 1 ]; then
+    total=12
+  fi
+  if [ "${complete}" -gt "${total}" ]; then
+    total="${complete}"
+  fi
+
+  pct=$(( complete * 100 / total ))
+  if [ "${pct}" -lt 1 ]; then
+    pct=1
+  fi
+  if [ "${complete}" -lt "${total}" ] && [ "${pct}" -ge 100 ]; then
+    pct=99
+  fi
+
+  dl_line="$(grep -iE 'downloading|extracting|Waiting|Verifying|Pulling fs layer|pulling manifest|Pulling from' "${log}" 2>/dev/null | tail -1 | sed 's/^[[:space:]]*//;s/\r$//' | cut -c1-120)"
+  if [ -n "${dl_line}" ]; then
+    echo "${pct}% · 已完成 ${complete}/${total} 层 · ${dl_line}"
+  else
+    echo "${pct}% · 已完成 ${complete}/${total} 层"
+  fi
+}
+
+update_install_pull_ui() {
+  local image="$1"
+  local log_file="$2"
+  local status
+  status="$(format_pull_progress_from_log "${log_file}")"
+  update_install_ui "【实际拉取进度 ${status}】
+镜像：${image}
+提示：上方 55% 为飞牛系统进度，请以下方百分比为准"
+  echo "${status}" > "${TRIM_PKGVAR}/pull.progress" 2>/dev/null || true
+}
+
+start_pull_progress_reporter() {
+  local log_file="$1"
+  local image="$2"
+  local done_flag="$3"
+  (
+    while [ ! -f "${done_flag}" ]; do
+      update_install_pull_ui "${image}" "${log_file}"
+      sleep 1
+    done
+    update_install_pull_ui "${image}" "${log_file}"
+  ) &
+  echo $!
+}
+
+image_already_pulled() {
+  local tag="${wizard_image_tag:-latest}"
+  local candidate
+  resolve_image_from_wizard
+  for candidate in \
+    "${IMAGE}" \
+    "${DEFAULT_REGISTRY}:${tag}" \
+    "ghcr.io/jia070310/lemon-muisc:${tag}" \
+    "${LOCAL_IMAGE_ALIAS}"
+  do
+    if docker image inspect "${candidate}" >/dev/null 2>&1; then
+      IMAGE="${candidate}"
+      return 0
+    fi
+  done
+  return 1
+}
+
 # SOFT_PULL_FAIL=1 时只记录错误并返回 1，不中断安装（交给飞牛 docker-project / 启用时再拉）
 abort_pull() {
   log_line "错误: $*"
@@ -186,6 +275,8 @@ compose_pull_with_timeout() {
   local timeout_sec
   timeout_sec="$(get_pull_timeout)"
   local pull_log="${TRIM_PKGVAR}/compose.pull.log"
+  local done_flag="${pull_log}.done"
+  local reporter_pid=0
 
   read_image_from_compose
   case "${IMAGE}" in
@@ -197,20 +288,25 @@ compose_pull_with_timeout() {
       ;;
   esac
 
-  log_line "执行 docker compose pull（与手动部署相同，超时 ${timeout_sec} 秒）..."
+  log_line "执行 docker compose pull（超时 ${timeout_sec} 秒）..."
   echo "compose pulling ${IMAGE} at $(date -Iseconds)" > "${TRIM_PKGVAR}/install.status" 2>/dev/null || true
+  update_install_pull_ui "${IMAGE}" "${pull_log}"
 
   if [ ! -f "${COMPOSE_FILE}" ]; then
     log_line "compose 文件不存在: ${COMPOSE_FILE}"
     return 127
   fi
 
+  rm -f "${done_flag}" 2>/dev/null || true
+  : > "${pull_log}" 2>/dev/null || true
+  reporter_pid="$(start_pull_progress_reporter "${pull_log}" "${IMAGE}" "${done_flag}")"
+
   local rc=0
   if docker compose version >/dev/null 2>&1; then
     if command -v timeout >/dev/null 2>&1; then
-      timeout "${timeout_sec}" docker compose -p "${TRIM_APPNAME}" -f "${COMPOSE_FILE}" pull > "${pull_log}" 2>&1 || rc=$?
+      timeout "${timeout_sec}" docker compose -p "${TRIM_APPNAME}" -f "${COMPOSE_FILE}" pull --progress plain > "${pull_log}" 2>&1 || rc=$?
     else
-      docker compose -p "${TRIM_APPNAME}" -f "${COMPOSE_FILE}" pull > "${pull_log}" 2>&1 || rc=$?
+      docker compose -p "${TRIM_APPNAME}" -f "${COMPOSE_FILE}" pull --progress plain > "${pull_log}" 2>&1 || rc=$?
     fi
   elif command -v docker-compose >/dev/null 2>&1; then
     if command -v timeout >/dev/null 2>&1; then
@@ -219,18 +315,24 @@ compose_pull_with_timeout() {
       docker-compose -p "${TRIM_APPNAME}" -f "${COMPOSE_FILE}" pull > "${pull_log}" 2>&1 || rc=$?
     fi
   else
+    touch "${done_flag}" 2>/dev/null || true
+    wait "${reporter_pid}" 2>/dev/null || true
     log_line "未找到 docker compose 命令"
     return 127
   fi
 
+  touch "${done_flag}" 2>/dev/null || true
+  wait "${reporter_pid}" 2>/dev/null || true
   cat "${pull_log}" | tee -a "${LOG_FILE}" || true
 
   if [ "${rc}" -eq 0 ]; then
+    update_install_pull_ui "${IMAGE}" "${pull_log}"
     read_image_from_compose
     return 0
   fi
   if [ "${rc}" -eq 124 ]; then
     log_line "compose 拉取超时（${timeout_sec} 秒）"
+    update_install_ui "镜像拉取超时（${timeout_sec}s），可 SSH 手动 pull 后选「跳过拉取」"
     return 124
   fi
   return "${rc}"
@@ -240,7 +342,6 @@ docker_pull_with_timeout() {
   local timeout_sec
   timeout_sec="$(get_pull_timeout)"
   log_line "执行 docker pull ${IMAGE}（超时 ${timeout_sec} 秒）..."
-  update_install_ui "正在拉取镜像 ${IMAGE}（约 500MB），网络慢时请耐心等待或取消后改用「跳过拉取」…"
   echo "pulling ${IMAGE} at $(date -Iseconds)" > "${TRIM_PKGVAR}/install.status" 2>/dev/null || true
 
   local rc=0
@@ -249,25 +350,16 @@ docker_pull_with_timeout() {
   rm -f "${done_flag}" 2>/dev/null || true
   : > "${pull_log}" 2>/dev/null || true
 
-  (
-    while [ ! -f "${done_flag}" ]; do
-      if [ -s "${pull_log}" ]; then
-        local last
-        last="$(tail -n 1 "${pull_log}" 2>/dev/null | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-        if [ -n "${last}" ]; then
-          update_install_ui "拉取镜像中… ${last}"
-        fi
-      fi
-      sleep 2
-    done
-  ) &
-  local reporter_pid=$!
+  update_install_pull_ui "${IMAGE}" "${pull_log}"
+  local reporter_pid
+  reporter_pid="$(start_pull_progress_reporter "${pull_log}" "${IMAGE}" "${done_flag}")"
 
-  if run_with_timeout "${timeout_sec}" docker pull "${IMAGE}" >> "${pull_log}" 2>&1; then
+  if run_with_timeout "${timeout_sec}" docker pull --progress plain "${IMAGE}" >> "${pull_log}" 2>&1; then
     touch "${done_flag}" 2>/dev/null || true
     wait "${reporter_pid}" 2>/dev/null || true
     cat "${pull_log}" | tee -a "${LOG_FILE}"
-    update_install_ui "镜像拉取完成，正在写入配置…"
+    update_install_pull_ui "${IMAGE}" "${pull_log}"
+    echo "pull done ${IMAGE} at $(date -Iseconds)" > "${TRIM_PKGVAR}/pull.progress" 2>/dev/null || true
     return 0
   fi
   rc=$?
@@ -276,7 +368,7 @@ docker_pull_with_timeout() {
   cat "${pull_log}" | tee -a "${LOG_FILE}" || true
   if [ "${rc}" -eq 124 ]; then
     log_line "镜像拉取超时（${timeout_sec} 秒）"
-    update_install_ui "镜像拉取超时，可取消后 SSH 手动 pull，再选手动安装并选「跳过拉取」"
+    update_install_ui "镜像拉取超时（${timeout_sec}s），可 SSH 手动 pull 后选「跳过拉取」"
     return 124
   fi
   return "${rc}"
@@ -439,12 +531,28 @@ pull_image_with_progress() {
       fail_install "本地不存在镜像 ${IMAGE}。请先 SSH 执行 docker pull，或不要选「跳过拉取」。"
     fi
   else
-    if ! pull_image_with_fallback; then
+    if image_already_pulled; then
+      log_line "检测到镜像已存在，跳过在线拉取: ${IMAGE}"
+      update_install_ui "【实际拉取进度 100% · 镜像已存在】
+镜像：${IMAGE}
+正在校验并写入配置…"
+      if ! normalize_pulled_image; then
+        log_line "本地镜像校验失败，重新在线拉取…"
+        if ! pull_image_with_fallback; then
+          update_compose_image
+          save_image_config
+          return 1
+        fi
+      fi
+    elif ! pull_image_with_fallback; then
       update_compose_image
       save_image_config
       return 1
     fi
     log_line "镜像拉取完成。"
+    update_install_ui "【实际拉取进度 100% · 镜像拉取完成】
+镜像：${IMAGE}
+正在写入配置…"
     docker images "${IMAGE}" 2>&1 | tee -a "${LOG_FILE}" || true
   fi
 
