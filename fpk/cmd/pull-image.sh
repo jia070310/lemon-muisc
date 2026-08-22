@@ -112,13 +112,48 @@ start_pull_progress_reporter() {
   local image="$2"
   local done_flag="$3"
   (
+    local last_size=0 stall=0
     while [ ! -f "${done_flag}" ]; do
-      update_install_pull_ui "${image}" "${log_file}"
+      local cur_size=0
+      if [ -f "${log_file}" ]; then
+        cur_size="$(wc -c < "${log_file}" 2>/dev/null | tr -d ' \n\r')"
+        cur_size="${cur_size:-0}"
+      fi
+      if [ "${cur_size}" -le "${last_size}" ]; then
+        stall=$((stall + 1))
+      else
+        stall=0
+        last_size="${cur_size}"
+      fi
+      if [ "${stall}" -ge 20 ] && [ "${cur_size}" -lt 200 ]; then
+        update_install_ui "【镜像仓库连接较慢 / 无流量】
+镜像：${image}
+已等待约 ${stall} 秒仍无下载数据。请检查 NAS 网络，或取消后 SSH 执行：
+docker pull ${image}
+再选手动安装 +「跳过拉取」"
+      else
+        update_install_pull_ui "${image}" "${log_file}"
+      fi
       sleep 1
     done
     update_install_pull_ui "${image}" "${log_file}"
   ) &
   echo $!
+}
+
+preflight_registry() {
+  local image="$1"
+  log_line "预检镜像仓库: ${image}"
+  update_install_ui "正在连接镜像仓库…
+${image}"
+  if command -v timeout >/dev/null 2>&1; then
+    if timeout 20 docker manifest inspect "${image}" >/dev/null 2>&1; then
+      log_line "仓库预检 OK: ${image}"
+    else
+      log_line "仓库预检未响应（仍将尝试 pull，可能是镜像加速域名限制 manifest）"
+    fi
+  fi
+  return 0
 }
 
 image_already_pulled() {
@@ -350,6 +385,7 @@ docker_pull_with_timeout() {
   rm -f "${done_flag}" 2>/dev/null || true
   : > "${pull_log}" 2>/dev/null || true
 
+  preflight_registry "${IMAGE}"
   update_install_pull_ui "${IMAGE}" "${pull_log}"
   local reporter_pid
   reporter_pid="$(start_pull_progress_reporter "${pull_log}" "${IMAGE}" "${done_flag}")"

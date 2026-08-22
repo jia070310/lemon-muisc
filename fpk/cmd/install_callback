@@ -7,7 +7,10 @@
 init_log
 
 resolve_image_from_wizard
-update_install_ui "【准备安装】正在检查 Docker 镜像…"
+update_compose_image 2>/dev/null || true
+update_install_ui "【开始拉取镜像】解压已完成，正在下载（约 500MB）…
+目标：${IMAGE}
+请观察下方「实际拉取进度」与网络流量"
 
 if [ "${wizard_pull_source:-ghcr_direct}" = "skip_pull" ]; then
   SOFT_PULL_FAIL=1
