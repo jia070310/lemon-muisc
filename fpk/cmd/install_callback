@@ -6,6 +6,9 @@
 
 init_log
 
+echo "callback started $(date -Iseconds)" > "${TRIM_PKGVAR}/install.status" 2>/dev/null || true
+update_install_ui "安装脚本已启动，准备在线拉取最新镜像…"
+
 resolve_image_from_wizard
 update_compose_image 2>/dev/null || true
 update_install_ui "【开始拉取镜像】解压已完成，正在下载（约 500MB）…

@@ -557,12 +557,8 @@ pull_image_with_progress() {
       fail_install "本地不存在镜像 ${IMAGE}。请先 SSH 执行 docker pull，或不要选「跳过拉取」。"
     fi
   else
-    if image_already_pulled && normalize_pulled_image 2>/dev/null; then
-      log_line "镜像已在 install_init / SSH 拉取完成，跳过重复下载: ${IMAGE}"
-      update_install_ui "【实际拉取进度 100% · 镜像已存在】
-${IMAGE}
-正在写入配置…"
-    elif ! pull_image_with_fallback; then
+    log_line "在线拉取镜像（始终从仓库更新，不沿用旧本地层）…"
+    if ! pull_image_with_fallback; then
       update_compose_image
       save_image_config
       return 1

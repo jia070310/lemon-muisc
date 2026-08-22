@@ -3,8 +3,9 @@
 ## 更新内容
 
 ### 飞牛 FPK 安装 / 启用
-- 推荐：SSH `docker pull ghcr.1ms.run/...` 后选手动安装 +「跳过拉取」（避免飞牛 55% compose 卡住）
-- 在线拉取时 install_init 用与终端相同的 `docker pull` 预下载，不用 compose pull
+- 默认 **在线拉取 ghcr.1ms.run**，安装 / 升级都会从仓库拉镜像，不会跳过更新
+- install_init 秒退；**install_callback** 中用 docker pull（与 SSH 相同）
+- 40% 为解压，55% 起为镜像下载
 - **安装 / 升级时完成拉取**，到 100% 才算装完；启用时仅用本地镜像
 - 拉取失败则安装 / 升级直接报错
 - 网络极差时可选手动 SSH pull +「跳过拉取」
