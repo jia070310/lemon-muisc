@@ -343,17 +343,6 @@ pull_image_with_fallback() {
   local last_err=""
   local last_log=""
 
-  # 本地已有可用镜像时直接同步，避免安装界面长时间停在 50%~60%
-  if [ "${source}" != "custom_image" ]; then
-    if sync_local_image_alias "${tag}" >/dev/null 2>&1; then
-      IMAGE="${LOCAL_IMAGE_ALIAS}"
-      update_install_ui "检测到本地已有镜像 ${IMAGE}，跳过在线拉取"
-      log_line "本地已有镜像，跳过在线拉取: ${IMAGE}"
-      normalize_pulled_image
-      return 0
-    fi
-  fi
-
   if [ "${source}" = "custom_image" ]; then
     update_compose_image
     if docker_pull_with_timeout || compose_pull_with_timeout; then

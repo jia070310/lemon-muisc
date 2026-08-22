@@ -10,10 +10,10 @@
         "type": "select",
         "field": "wizard_pull_source",
         "label": "拉取方式",
-        "initValue": "skip_pull",
+        "initValue": "ghcr_direct",
         "options": [
-          { "label": "跳过拉取（推荐，需先 SSH 拉镜像）", "value": "skip_pull" },
-          { "label": "国内加速 ghcr.1ms.run", "value": "ghcr_direct" },
+          { "label": "在线拉取 ghcr.1ms.run（推荐）", "value": "ghcr_direct" },
+          { "label": "跳过拉取（已手动拉好镜像）", "value": "skip_pull" },
           { "label": "自定义镜像地址", "value": "custom_image" }
         ]
       },

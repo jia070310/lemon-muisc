@@ -10,7 +10,6 @@ log_line "=========================================="
 log_line "柠檬音乐下载 · 升级回调"
 log_line "=========================================="
 
-# 保留上次安装的路径与 compose
 if apply_saved_paths; then
   log_line "已恢复路径: music=${RESOLVED_MUSIC} downloads=${RESOLVED_DOWNLOADS}"
 elif resolve_paths; then
@@ -31,21 +30,19 @@ fi
 docker stop "${CONTAINER_NAME}" >/dev/null 2>&1 || true
 docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
 
-echo "正在拉取 Docker 镜像，请稍候…" > "${TRIM_TEMP_LOGFILE}" 2>/dev/null || true
-
-# 拉取失败不中断升级包安装，启用时 main start 会再尝试
-SOFT_PULL_FAIL=1
-wizard_pull_timeout="${wizard_pull_timeout:-600}"
+update_install_ui "正在拉取 Docker 镜像，请耐心等待…"
 
 if [ "${wizard_pull_source:-ghcr_direct}" = "skip_pull" ]; then
+  SOFT_PULL_FAIL=1
   pull_image_with_progress "升级" || true
-elif pull_image_with_progress "升级"; then
-  log_line "升级镜像拉取成功"
 else
-  log_line "升级镜像拉取未成功，将沿用本地镜像；可 SSH 手动 pull 后停用/启用"
+  unset SOFT_PULL_FAIL
+  if ! pull_image_with_progress "升级"; then
+    fail_install "升级时镜像拉取失败。请检查网络或 SSH 手动 pull 后选「跳过拉取」。"
+  fi
 fi
 
-  if resolved="$(resolve_local_image_name "$(get_compose_image)" 2>/dev/null)"; then
+if resolved="$(resolve_local_image_name "$(get_compose_image)" 2>/dev/null)"; then
   IMAGE="${resolved}"
   mkdir -p "${TRIM_PKGETC}" 2>/dev/null || true
   cat > "${IMAGE_CONF}" <<EOF
@@ -63,14 +60,19 @@ EOF
   fi
 fi
 
+update_install_ui "镜像已就绪，正在重建容器…"
+export SKIP_REMOTE_PULL=1
+
 if resolve_local_image_name "$(get_compose_image)" >/dev/null 2>&1; then
   if recreate_compose_stack; then
     log_line "升级后容器已重建"
+    update_install_ui "升级完成"
   else
     log_line "容器暂未启动，请在应用中心停用再启用"
+    update_install_ui "镜像已拉取完成，请停用再启用应用"
   fi
 else
-  log_line "本地暂无可用镜像，请先 SSH: docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest"
+  fail_install "升级完成但未检测到本地镜像。"
 fi
 
 ensure_desktop_entry || true

@@ -35,14 +35,14 @@ start)
     fi
   fi
 
-  # 启用时拉镜像最多 90 秒，避免飞牛 UI 长时间「启用中」后失败
-  export IMAGE_PULL_TIMEOUT=90
+  # 启用 / 安装后启动：只用本地镜像，不在后台长时间拉取
+  export SKIP_REMOTE_PULL=1
 
   if ! recreate_compose_stack; then
     tip="容器启动失败。"
     if ! docker image inspect "${LOCAL_IMAGE_ALIAS}" >/dev/null 2>&1 \
       && ! docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -qE 'lemon-muisc|lemon-music'; then
-      tip="${tip} 本地无 Docker 镜像，请先 SSH: docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest && docker tag ghcr.1ms.run/jia070310/lemon-muisc:latest lemon-music:latest"
+      tip="${tip} 本地无 Docker 镜像，请重新安装应用（安装时会拉取），或 SSH: docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest && docker tag ghcr.1ms.run/jia070310/lemon-muisc:latest lemon-music:latest"
     else
       tip="${tip} 请检查 7983 端口是否占用，或查看日志 ${TRIM_PKGVAR}/log/compose.recreate.log"
     fi

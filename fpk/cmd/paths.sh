@@ -383,6 +383,11 @@ ensure_image_available() {
     return 0
   fi
 
+  if [ "${SKIP_REMOTE_PULL:-0}" = "1" ]; then
+    log_config "no local image (remote pull disabled on enable/start)"
+    return 1
+  fi
+
   mkdir -p "$(dirname "${log_file}")" 2>/dev/null || true
   {
     echo "=== pull missing image $(date -Iseconds) timeout=${pull_timeout}s ==="

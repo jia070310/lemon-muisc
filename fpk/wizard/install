@@ -4,7 +4,7 @@
     "items": [
       {
         "type": "tips",
-        "helpText": "<b>进度停在 50%~60% 通常是在拉 Docker 镜像（约 500MB）</b>，网络慢时会很久且界面几乎不动。<br><br><b>推荐做法：</b>先 SSH 执行 <code>docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest</code> 和 <code>docker tag … lemon-music:latest</code>，安装向导里选「<b>跳过拉取</b>」。<br><br>装完后到访问权限添加文件夹，再停用/启用。"
+        "helpText": "<b>安装时会在线拉取 Docker 镜像（约 500MB）</b>，进度条停在 50%~60% 属正常，下方会显示 layer 拉取进度，请耐心等待直到 100%。<br><br>安装完成即表示镜像已拉取完毕，启用时不再后台下载。<br><br>若网络极差，可先 SSH 手动 pull，安装向导里改选「跳过拉取」。"
       }
     ]
   },
@@ -40,10 +40,10 @@
         "type": "select",
         "field": "wizard_pull_source",
         "label": "拉取方式",
-        "initValue": "skip_pull",
+        "initValue": "ghcr_direct",
         "options": [
-          { "label": "跳过拉取（推荐，需先 SSH 拉镜像）", "value": "skip_pull" },
-          { "label": "在线拉取 ghcr.1ms.run", "value": "ghcr_direct" },
+          { "label": "在线拉取 ghcr.1ms.run（推荐，安装时完成下载）", "value": "ghcr_direct" },
+          { "label": "跳过拉取（已 SSH 手动拉好镜像）", "value": "skip_pull" },
           { "label": "自定义镜像地址", "value": "custom_image" }
         ]
       },
@@ -54,8 +54,8 @@
         "initValue": "latest",
         "options": [
           { "label": "latest（最新）", "value": "latest" },
-          { "label": "1.0.5", "value": "1.0.5" },
-          { "label": "1.0.4", "value": "1.0.4" }
+          { "label": "1.0.6", "value": "1.0.6" },
+          { "label": "1.0.5", "value": "1.0.5" }
         ]
       },
       {

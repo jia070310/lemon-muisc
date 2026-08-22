@@ -31,45 +31,48 @@ esac
 
 log_config "install paths music=${music_path} downloads=${downloads_path} config=${config_path}"
 
-# 再次清理：防止 install_init 之后仍有残留，或本脚本早前跑过 docker run
 docker stop "${CONTAINER_NAME}" >/dev/null 2>&1 || true
 docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
 docker compose -p "${COMPOSE_PROJECT}" -f "${COMPOSE_FILE}" down --remove-orphans >/dev/null 2>&1 || true
-docker compose -p "lemon-music" down --remove-orphans >/dev/null 2>&1 || true
+docker compose -p "lemon-music" -f "${COMPOSE_FILE}" down --remove-orphans >/dev/null 2>&1 || true
 
-echo "正在拉取 Docker 镜像，请稍候…" > "${TRIM_TEMP_LOGFILE}" 2>/dev/null || true
+update_install_ui "正在拉取 Docker 镜像（约 500MB），进度 55% 左右属正常，请查看下方 layer 进度…"
 
-SOFT_PULL_FAIL=1
 if [ "${wizard_pull_source:-ghcr_direct}" = "skip_pull" ]; then
-  pull_image_with_progress "安装" || true
-elif pull_image_with_progress "安装"; then
-  log_config "install pull ok image=${IMAGE}"
-else
-  log_config "install pull deferred to enable"
-  log_line "脚本拉取未成功，启用时会再尝试拉取"
-fi
-
-if resolved="$(resolve_local_image_name "$(get_compose_image)" 2>/dev/null)"; then
-  IMAGE="${resolved}"
-  mkdir -p "${TRIM_PKGETC}" 2>/dev/null || true
-  cat > "${IMAGE_CONF}" <<EOF
-SAVED_IMAGE="${IMAGE}"
-SAVED_AT="$(date -Iseconds)"
-EOF
-  write_compose_file "${music_path}" "${downloads_path}" "${config_path}"
-  log_config "install using image ${IMAGE}"
-fi
-
-# 安装阶段不启动容器；若本地已有镜像则尝试快速启动一次，失败也不阻断安装
-if resolve_local_image_name "$(get_compose_image)" >/dev/null 2>&1; then
-  export IMAGE_PULL_TIMEOUT=30
-  if recreate_compose_stack; then
-    log_config "install docker run ok"
-  else
-    log_config "install container deferred — will start on enable"
+  SOFT_PULL_FAIL=1
+  if ! pull_image_with_progress "安装"; then
+    fail_install "本地不存在镜像 ${IMAGE}。请先 SSH 执行 docker pull，或改用「在线拉取」。"
   fi
 else
-  log_config "no local image yet — enable will pull/start"
+  unset SOFT_PULL_FAIL
+  if ! pull_image_with_progress "安装"; then
+    fail_install "镜像拉取失败。请检查网络、增大拉取超时，或 SSH 手动 pull 后选手动安装并选「跳过拉取」。"
+  fi
+fi
+
+if ! resolve_local_image_name "$(get_compose_image)" >/dev/null 2>&1; then
+  fail_install "安装未完成：未检测到本地 Docker 镜像。"
+fi
+
+IMAGE="$(resolve_local_image_name "$(get_compose_image)")"
+mkdir -p "${TRIM_PKGETC}" 2>/dev/null || true
+cat > "${IMAGE_CONF}" <<EOF
+SAVED_IMAGE="${LOCAL_IMAGE_ALIAS}"
+REMOTE_IMAGE="${IMAGE}"
+SAVED_AT="$(date -Iseconds)"
+EOF
+write_compose_file "${music_path}" "${downloads_path}" "${config_path}"
+log_config "install using image ${IMAGE}"
+
+update_install_ui "镜像已拉取完成，正在启动容器…"
+
+export SKIP_REMOTE_PULL=1
+if recreate_compose_stack; then
+  log_config "install docker run ok"
+  update_install_ui "安装完成，镜像已就绪并已启动"
+else
+  log_config "install container start deferred"
+  update_install_ui "镜像已拉取完成。若未自动启动，请在应用中心启用应用"
 fi
 
 ensure_desktop_entry || true
