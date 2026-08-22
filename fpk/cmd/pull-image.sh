@@ -130,7 +130,7 @@ start_pull_progress_reporter() {
   local image="$2"
   local done_flag="$3"
   (
-    local last_size=0 stall=0
+    local last_size=0 stall=0 tick=0 last_log_tick=0
     while [ ! -f "${done_flag}" ]; do
       local cur_size=0
       if [ -f "${log_file}" ]; then
@@ -142,6 +142,16 @@ start_pull_progress_reporter() {
       else
         stall=0
         last_size="${cur_size}"
+      fi
+      tick=$((tick + 1))
+      # 每 30 秒把 pull 进度摘要写入 install.log，便于 tail -f install.log 观察
+      if [ "${tick}" -ge 30 ] && [ $((tick - last_log_tick)) -ge 30 ]; then
+        last_log_tick="${tick}"
+        if [ -s "${log_file}" ]; then
+          echo "[$(date '+%Y-%m-%d %H:%M:%S')] 拉取进度: $(format_pull_progress_from_log "${log_file}")" >> "${LOG_FILE}" 2>/dev/null || true
+        elif [ "${stall}" -ge 30 ]; then
+          echo "[$(date '+%Y-%m-%d %H:%M:%S')] 拉取进行中，尚未收到 docker 输出（已等待 ${stall}s）…" >> "${LOG_FILE}" 2>/dev/null || true
+        fi
       fi
       if [ "${stall}" -ge 20 ] && [ "${cur_size}" -lt 200 ]; then
         update_install_ui "【镜像仓库连接较慢 / 无流量】
@@ -407,6 +417,7 @@ docker_pull_with_timeout() {
   : > "${pull_log}" 2>/dev/null || true
 
   preflight_registry "${IMAGE}"
+  log_line "预检完成，开始 docker pull（实时层进度见 ${pull_log}，也可用 tail -f 该文件）"
   update_install_pull_ui "${IMAGE}" "${pull_log}"
   local reporter_pid
   reporter_pid="$(start_pull_progress_reporter "${pull_log}" "${IMAGE}" "${done_flag}")"
