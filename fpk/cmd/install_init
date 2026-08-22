@@ -8,21 +8,45 @@ resolve_image_from_wizard
 ensure_docker
 
 cleanup_stale_containers() {
-  log_line "清理可能冲突的旧容器/网络…"
+  log_line "清理可能冲突的旧容器…"
   docker stop "${CONTAINER_NAME}" >/dev/null 2>&1 || true
   docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
   if [ -f "${COMPOSE_FILE}" ]; then
     docker compose -p "${COMPOSE_PROJECT}" -f "${COMPOSE_FILE}" down --remove-orphans >/dev/null 2>&1 || true
   fi
-  docker compose -p "lemon-music" down --remove-orphans >/dev/null 2>&1 || true
-  docker network rm "lemon-music_default" >/dev/null 2>&1 || true
 }
 
 cleanup_stale_containers
 
-# install_init 在「解压前」执行，此处不做 docker pull（会卡住 40% 且无网速）
-update_install_ui "正在准备安装（解压应用文件）…
-下一步将拉取镜像：${IMAGE}
-请稍候，拉取进度将在解压完成后显示"
-log_line "install_init 完成（不在此阶段拉取镜像）: ${IMAGE}"
+if [ "${wizard_pull_source:-ghcr_direct}" = "skip_pull" ]; then
+  update_install_ui "已选择跳过拉取，安装时将校验本地镜像…"
+  log_line "install_init: skip_pull"
+  exit 0
+fi
+
+if image_already_pulled; then
+  normalize_pulled_image 2>/dev/null || true
+  update_install_ui "【镜像已就绪 100%】检测到本地镜像，跳过下载
+${IMAGE}"
+  log_line "install_init: 本地已有镜像 ${IMAGE}"
+  exit 0
+fi
+
+# 与 SSH 终端相同：只用 docker pull，不用 compose pull（飞牛 55% 处 compose pull 易卡住）
+update_install_pull_ui "${IMAGE}" "${TRIM_PKGVAR}/pull.last.log"
+log_line "install_init: docker pull ${IMAGE}（与终端相同方式）"
+
+SOFT_PULL_FAIL=1
+if docker_pull_with_timeout && normalize_pulled_image; then
+  update_install_ui "【镜像拉取 100%】install_init 已完成下载
+${IMAGE}
+飞牛进度到 55% 时将直接使用本地镜像"
+  log_line "install_init: 拉取并 retag 完成 -> ${IMAGE}"
+else
+  update_install_ui "install_init 拉取未完成，安装将继续尝试…
+${IMAGE}"
+  log_line "install_init: 拉取未完成，交给 install_callback"
+fi
+unset SOFT_PULL_FAIL
+
 exit 0

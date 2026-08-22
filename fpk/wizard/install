@@ -4,7 +4,7 @@
     "items": [
       {
         "type": "tips",
-        "helpText": "<b>安装分两步：</b>约 40% 为解压应用包（几乎无网速）；<b>解压完成后</b>才开始拉取镜像（约 500MB），请看下方「实际拉取进度 XX%」。<br><br>若长时间无下载流量，请检查 NAS 网络，或 SSH 手动 pull 后选「跳过拉取」。"
+        "helpText": "<b>推荐流程（避免 55% 卡住）：</b><br>1. SSH 执行 <code>docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest</code><br>2. 安装向导选「<b>跳过拉取</b>」<br><br>若选在线拉取：install_init 会用与 SSH 相同的 docker pull 预下载，55% 处飞牛会直接使用本地镜像。"
       }
     ]
   },
@@ -40,10 +40,10 @@
         "type": "select",
         "field": "wizard_pull_source",
         "label": "拉取方式",
-        "initValue": "ghcr_direct",
+        "initValue": "skip_pull",
         "options": [
-          { "label": "在线拉取 ghcr.1ms.run（推荐，安装时完成下载）", "value": "ghcr_direct" },
-          { "label": "跳过拉取（已 SSH 手动拉好镜像）", "value": "skip_pull" },
+          { "label": "跳过拉取（推荐：已 SSH docker pull 或 install 会自动拉）", "value": "skip_pull" },
+          { "label": "在线拉取 ghcr.1ms.run（install_init 用 docker pull）", "value": "ghcr_direct" },
           { "label": "自定义镜像地址", "value": "custom_image" }
         ]
       },

@@ -484,11 +484,11 @@ pull_image_with_fallback() {
 
   if [ "${source}" = "custom_image" ]; then
     update_compose_image
-    if docker_pull_with_timeout || compose_pull_with_timeout; then
+    if docker_pull_with_timeout; then
       if normalize_pulled_image; then
         return 0
       fi
-      log_line "警告: pull 返回成功但 inspect 未命中，继续尝试其他方式…"
+      log_line "警告: pull 返回成功但 inspect 未命中…"
     fi
     last_log="$(tail -n 8 "${TRIM_PKGVAR}/pull.last.log" 2>/dev/null | tr '\n' ' ')"
     abort_pull "镜像拉取失败: ${IMAGE}。${last_log}请 SSH 执行: docker pull ${IMAGE}"
@@ -506,17 +506,7 @@ pull_image_with_fallback() {
         log_line "docker pull 成功，本地可用: ${IMAGE}"
         break
       fi
-      log_line "docker pull 退出码成功，但本地未识别到镜像名，尝试 compose / 下一源…"
-    fi
-
-    log_line "尝试 compose pull..."
-    if compose_pull_with_timeout; then
-      if normalize_pulled_image; then
-        pulled=1
-        log_line "compose 拉取成功，本地可用: ${IMAGE}"
-        break
-      fi
-      log_line "compose pull 退出码成功，但本地未识别到镜像名"
+      log_line "docker pull 退出码成功，但本地未识别到镜像名，尝试下一源…"
     fi
 
     last_err="${IMAGE}"
@@ -567,19 +557,11 @@ pull_image_with_progress() {
       fail_install "本地不存在镜像 ${IMAGE}。请先 SSH 执行 docker pull，或不要选「跳过拉取」。"
     fi
   else
-    if image_already_pulled; then
-      log_line "检测到镜像已存在，跳过在线拉取: ${IMAGE}"
+    if image_already_pulled && normalize_pulled_image 2>/dev/null; then
+      log_line "镜像已在 install_init / SSH 拉取完成，跳过重复下载: ${IMAGE}"
       update_install_ui "【实际拉取进度 100% · 镜像已存在】
-镜像：${IMAGE}
-正在校验并写入配置…"
-      if ! normalize_pulled_image; then
-        log_line "本地镜像校验失败，重新在线拉取…"
-        if ! pull_image_with_fallback; then
-          update_compose_image
-          save_image_config
-          return 1
-        fi
-      fi
+${IMAGE}
+正在写入配置…"
     elif ! pull_image_with_fallback; then
       update_compose_image
       save_image_config
