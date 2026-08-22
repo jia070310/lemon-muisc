@@ -7,7 +7,7 @@ init_log
 resolve_image_from_wizard
 
 if command -v docker >/dev/null 2>&1; then
-  log_line "install_init 通过（拉取在 install_callback 进行） image=${IMAGE} source=${wizard_pull_source:-ghcr_direct}"
+  log_line "install_init 通过；镜像拉取由 install_callback + 飞牛 docker-project 完成 image=${IMAGE}"
 else
   log_line "install_init 通过（未检测到 docker 命令，将在 install_callback 检查） image=${IMAGE}"
 fi

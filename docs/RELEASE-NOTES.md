@@ -14,7 +14,9 @@
 - 网络极差或 Docker 不稳定时可选手动 SSH pull +「跳过拉取」
 - 安装向导可选 **国内镜像加速**：1ms.run / 南大 nju / dockerproxy / DaoCloud；失败自动换源
 - 修复应用中心安装无网速：避免卡在需密码的 `sudo docker`（与 SSH 用户权限不一致时）
-- **恢复 v1.0.4 安装策略**：55% 阶段不长时间阻塞 pull；无 docker 权限时秒完成安装，启用/SSH 再拉镜像
+- **恢复飞牛 docker-project**：安装时系统进度条可再 55→65 递增（与早期版本一致）
+- 脚本 `docker pull` 输出到安装窗口（tee），不再只写文件导致假死
+- 脚本 pull 与 docker-project **并行**，轮询等待镜像就绪
 
 ### v1.0.5 — 酷我 / 酷狗歌词修复
 - 酷我改用 www.kuwo.cn 接口，修复大量歌曲歌词为空

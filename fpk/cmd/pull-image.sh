@@ -429,15 +429,18 @@ docker_pull_with_timeout() {
   : > "${pull_log}" 2>/dev/null || true
 
   preflight_registry "${IMAGE}"
-  log_line "预检完成，开始 docker pull（实时层进度见 ${pull_log}，也可用 tail -f 该文件）"
+  log_line "预检完成，开始 docker pull（输出同时写入日志与安装窗口）"
   update_install_pull_ui "${IMAGE}" "${pull_log}"
   local reporter_pid
   reporter_pid="$(start_pull_progress_reporter "${pull_log}" "${IMAGE}" "${done_flag}")"
 
-  if run_with_timeout "${timeout_sec}" docker_cmd pull --progress plain "${IMAGE}" >> "${pull_log}" 2>&1; then
-    rc=0
+  set -o pipefail 2>/dev/null || true
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "${timeout_sec}" docker_cmd pull --progress plain "${IMAGE}" 2>&1 | tee -a "${pull_log}"
+    rc=${PIPESTATUS[0]:-$?}
   else
-    rc=$?
+    docker_cmd pull --progress plain "${IMAGE}" 2>&1 | tee -a "${pull_log}"
+    rc=${PIPESTATUS[0]:-$?}
   fi
 
   touch "${done_flag}" 2>/dev/null || true
@@ -531,6 +534,31 @@ normalize_pulled_image() {
   update_compose_image
   save_image_config
   return 0
+}
+
+# 等待本地出现镜像（脚本 pull 与飞牛 docker-project 并行时轮询）
+wait_for_local_image() {
+  local max_sec="${1:-600}"
+  local waited=0
+  local resolved=""
+
+  while [ "${waited}" -lt "${max_sec}" ]; do
+    if resolved="$(resolve_local_image_name "$(get_compose_image)" 2>/dev/null)"; then
+      IMAGE="${resolved}"
+      log_line "镜像已就绪（等待 ${waited}s）: ${IMAGE}"
+      return 0
+    fi
+    sleep 5
+    waited=$((waited + 5))
+    if [ $((waited % 15)) -eq 0 ]; then
+      log_line "等待镜像… ${waited}/${max_sec}s（飞牛 docker-project 与脚本 pull 并行）"
+      update_install_ui "正在拉取镜像 ${waited}/${max_sec} 秒…
+上方 55→65 为飞牛系统进度（需已启用 docker-project）
+下方为脚本检测状态"
+      echo "waiting image ${waited}s" > "${TRIM_PKGVAR}/install.status" 2>/dev/null || true
+    fi
+  done
+  return 1
 }
 
 pull_image_with_fallback() {

@@ -31,22 +31,23 @@ init_docker_access 2>/dev/null || true
 docker_cmd stop "${CONTAINER_NAME}" >/dev/null 2>&1 || true
 docker_cmd rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
 
-update_install_ui "正在尝试拉取镜像…"
+resolve_image_from_wizard
+update_compose_image 2>/dev/null || true
+_pull_timeout="$(get_pull_timeout)"
 
-export INSTALL_PULL_SOFT=1
-export SOFT_PULL_FAIL=1
-_saved_pull_timeout="${wizard_pull_timeout:-600}"
-wizard_pull_timeout="${INSTALL_PULL_TIMEOUT:-120}"
+update_install_ui "正在拉取升级镜像…"
 
 if [ "${wizard_pull_source:-mirror_1ms}" = "skip_pull" ]; then
-  unset INSTALL_PULL_SOFT
-  pull_image_with_progress "升级" || fail_install "本地无镜像，请先 SSH pull 或选在线拉取"
+  SOFT_PULL_FAIL=1
+  pull_image_with_progress "升级" || fail_install "本地无镜像，请先 SSH pull"
 else
-  pull_image_with_progress "升级" || log_line "升级阶段在线拉取未成功，将在启用时重试"
+  SOFT_PULL_FAIL=1
+  pull_image_with_progress "升级" || log_line "升级脚本 pull 未完成，等待 docker-project…"
+  if ! wait_for_local_image "${_pull_timeout}"; then
+    fail_install "升级拉取超时。请 SSH pull 或选跳过拉取。"
+  fi
+  normalize_pulled_image || true
 fi
-
-wizard_pull_timeout="${_saved_pull_timeout}"
-unset INSTALL_PULL_SOFT
 
 if resolved="$(resolve_local_image_name "$(get_compose_image)" 2>/dev/null)"; then
   IMAGE="${resolved}"
@@ -57,29 +58,20 @@ REMOTE_IMAGE="${resolved}"
 SAVED_PULL_SOURCE="${wizard_pull_source:-mirror_1ms}"
 SAVED_AT="$(date -Iseconds)"
 EOF
-  if paths_ready || resolve_paths; then
-    music="${RESOLVED_MUSIC:-${wizard_music_path}}"
-    downloads="${RESOLVED_DOWNLOADS:-${wizard_downloads_path}}"
-    config="$(resolve_config_path)"
-    write_compose_file "${music}" "${downloads}" "${config}"
-    log_line "已写入 compose 镜像: ${IMAGE}"
-  fi
 fi
 
-update_install_ui "正在重建容器…"
+update_install_ui "镜像已就绪，正在重建容器…"
+export SKIP_REMOTE_PULL=1
 
 if resolve_local_image_name "$(get_compose_image)" >/dev/null 2>&1; then
-  export SKIP_REMOTE_PULL=1
   if recreate_compose_stack; then
     log_line "升级后容器已重建"
     update_install_ui "升级完成"
   else
-    log_line "容器暂未启动，请在应用中心停用再启用"
-    update_install_ui "镜像已就绪，请停用再启用应用"
+    log_line "容器暂未启动，请停用再启用"
   fi
 else
-  log_line "升级完成但本地暂无镜像，启用时将自动拉取"
-  update_install_ui "升级完成。请点击「启用」拉取镜像并启动"
+  fail_install "升级完成但未检测到本地镜像。"
 fi
 
 ensure_desktop_entry || true
