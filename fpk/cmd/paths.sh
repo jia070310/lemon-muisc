@@ -13,6 +13,10 @@ DEFAULT_IMAGE="${LOCAL_IMAGE_ALIAS}"
 CONTAINER_NAME="lemon-music"
 COMPOSE_PROJECT="${TRIM_APPNAME:-lemon-music}"
 
+is_container_running() {
+  docker inspect -f '{{.State.Running}}' "${CONTAINER_NAME}" 2>/dev/null | grep -qi true
+}
+
 default_config_path() {
   echo "${TRIM_PKGVAR}/config"
 }
@@ -357,6 +361,7 @@ ensure_image_available() {
   local image="${1:-}"
   local remote resolved
   local log_file="${TRIM_PKGVAR}/log/compose.recreate.log"
+  local pull_timeout="${IMAGE_PULL_TIMEOUT:-180}"
 
   if [ -z "${image}" ]; then
     image="$(get_compose_image)"
@@ -373,29 +378,32 @@ ensure_image_available() {
     return 0
   fi
 
-  mkdir -p "$(dirname "${log_file}")" 2>/dev/null || true
-  {
-    echo "=== pull missing image $(date -Iseconds) ==="
-    echo "wanted=${image}"
-  } >> "${log_file}" 2>&1
-
-  for remote in "${REMOTE_IMAGE_FALLBACKS[@]}"; do
-    log_config "image missing, pulling: ${remote}"
-    echo "pull ${remote}" >> "${log_file}" 2>&1
-    if docker pull "${remote}" >> "${log_file}" 2>&1; then
-      if resolved="$(promote_to_local_image_alias "${remote}")"; then
-        log_config "docker pull ok, aliased as: ${resolved}"
-        return 0
-      fi
-    fi
-  done
-
-  if resolved="$(resolve_local_image_name "${image}")"; then
+  if resolved="$(resolve_local_image_name "${image}" 2>/dev/null)"; then
     log_config "using existing image: ${resolved}"
     return 0
   fi
 
-  log_config "all image pulls failed"
+  mkdir -p "$(dirname "${log_file}")" 2>/dev/null || true
+  {
+    echo "=== pull missing image $(date -Iseconds) timeout=${pull_timeout}s ==="
+    echo "wanted=${image}"
+  } >> "${log_file}" 2>&1
+
+  for remote in "${REMOTE_IMAGE_FALLBACKS[@]}"; do
+    log_config "image missing, pulling: ${remote} (timeout ${pull_timeout}s)"
+    echo "pull ${remote}" >> "${log_file}" 2>&1
+    if command -v timeout >/dev/null 2>&1; then
+      timeout "${pull_timeout}" docker pull "${remote}" >> "${log_file}" 2>&1 || continue
+    else
+      docker pull "${remote}" >> "${log_file}" 2>&1 || continue
+    fi
+    if resolved="$(promote_to_local_image_alias "${remote}")"; then
+      log_config "docker pull ok, aliased as: ${resolved}"
+      return 0
+    fi
+  done
+
+  log_config "all image pulls failed or timed out"
   return 1
 }
 
@@ -458,7 +466,11 @@ recreate_compose_stack() {
       -e "DOWNLOADS_HOST_PATH=${downloads}" \
       --label "com.lemon-music.managed=1" \
       "${image}" >> "${log_file}" 2>&1; then
-    log_config "docker run failed: $(tr '\n' ' ' < "${log_file}" 2>/dev/null)"
+    log_config "docker run failed: $(tail -n 5 "${log_file}" 2>/dev/null | tr '\n' ' ')"
+    if is_container_running; then
+      log_config "container already running with same name"
+      return 0
+    fi
     return 1
   fi
 
@@ -497,6 +509,10 @@ recreate_compose_stack() {
   fi
 
   log_config "docker run up but mounts mismatch: $(docker inspect -f '{{range .Mounts}}{{.Destination}}={{.Source}};{{end}}' "${CONTAINER_NAME}" 2>/dev/null)"
+  if is_container_running; then
+    log_config "container is running, treat enable as success (check mounts in app settings if paths wrong)"
+    return 0
+  fi
   return 1
 }
 

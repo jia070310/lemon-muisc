@@ -20,16 +20,34 @@ start)
   elif [ -f "${COMPOSE_ENV}" ]; then
     # shellcheck disable=SC1090
     . "${COMPOSE_ENV}"
-    write_compose_file "${wizard_music_path}" "${wizard_downloads_path}" "${wizard_config_path}"
+    write_compose_file "${wizard_music_path}" "${wizard_downloads_path}" "${wizard_config_path:-$(default_config_path)}"
   else
-    echo "请先在应用设置 → 访问权限添加两个文件夹，或在运行设置填写路径。" > "${TRIM_TEMP_LOGFILE}"
-    exit 1
+    load_paths
+    if paths_ready; then
+      config="$(resolve_config_path)"
+      write_compose_file "${wizard_music_path}" "${wizard_downloads_path}" "${config}"
+    else
+      music="$(default_music_path)"
+      downloads="$(default_downloads_path)"
+      config="$(default_config_path)"
+      save_paths "${music}" "${downloads}" "${config}"
+      write_compose_file "${music}" "${downloads}" "${config}"
+    fi
   fi
 
+  # 启用时拉镜像最多 90 秒，避免飞牛 UI 长时间「启用中」后失败
+  export IMAGE_PULL_TIMEOUT=90
+
   if ! recreate_compose_stack; then
-    tip="容器启动失败。请确认已配置路径，并 SSH 执行: docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest && docker tag ghcr.1ms.run/jia070310/lemon-muisc:latest lemon-music:latest 。日志: ${TRIM_PKGVAR}/log/compose.recreate.log"
+    tip="容器启动失败。"
+    if ! docker image inspect "${LOCAL_IMAGE_ALIAS}" >/dev/null 2>&1 \
+      && ! docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -qE 'lemon-muisc|lemon-music'; then
+      tip="${tip} 本地无 Docker 镜像，请先 SSH: docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest && docker tag ghcr.1ms.run/jia070310/lemon-muisc:latest lemon-music:latest"
+    else
+      tip="${tip} 请检查 7983 端口是否占用，或查看日志 ${TRIM_PKGVAR}/log/compose.recreate.log"
+    fi
     if [ -f "${TRIM_PKGVAR}/pull.last.log" ]; then
-      tip="${tip} | $(tail -n 5 "${TRIM_PKGVAR}/pull.last.log" 2>/dev/null | tr '\n' ' ')"
+      tip="${tip} | $(tail -n 3 "${TRIM_PKGVAR}/log/compose.recreate.log" 2>/dev/null | tr '\n' ' ')"
     fi
     echo "${tip}" > "${TRIM_TEMP_LOGFILE}"
     exit 1
