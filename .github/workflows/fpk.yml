@@ -58,5 +58,7 @@ jobs:
             else
               gh release create "$TAG" --title "$TAG" --notes "Release ${TAG}" --repo "${{ github.repository }}"
             fi
+          elif [ -f docs/RELEASE-NOTES.md ]; then
+            gh release edit "$TAG" --notes-file docs/RELEASE-NOTES.md --repo "${{ github.repository }}"
           fi
           gh release upload "$TAG" "$FPK" --clobber --repo "${{ github.repository }}"
