@@ -19,7 +19,7 @@ docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest
 docker tag ghcr.1ms.run/jia070310/lemon-muisc:latest lemon-music:latest
 ```
 
-应用中心：**手动安装** `lemon-music-1.0.6.fpk` → 选「跳过拉取」→ 停用 → 启用
+应用中心：**手动安装** `lemon-music-1.0.6.fpk` → 默认「在线拉取」，等待安装完成 → 配置访问权限 → 启用
 
 ## Docker 镜像
 
