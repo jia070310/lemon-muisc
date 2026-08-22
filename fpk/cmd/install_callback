@@ -1,6 +1,5 @@
 #!/bin/bash
-# 55% 起：写 compose → 脚本 docker pull（stdout 可见）→ 等待飞牛 docker-project 拉取完成。
-# 早期顺畅版依赖 resource.json 的 docker-project，进度条会 55→56→58→65 递增。
+# 55% 起：写 compose → 飞牛 docker-project 主拉取 + 脚本轮询本地镜像（不长时间独占 docker pull）。
 
 . "$(dirname "$0")/pull-image.sh"
 . "$(dirname "$0")/paths.sh"
@@ -45,28 +44,24 @@ docker_cmd compose -p "${COMPOSE_PROJECT}" -f "${COMPOSE_FILE}" down --remove-or
 docker_cmd compose -p "lemon-music" -f "${COMPOSE_FILE}" down --remove-orphans >/dev/null 2>&1 || true
 
 _pull_timeout="$(get_pull_timeout)"
+SOFT_PULL_FAIL=1
+INSTALL_PULL_SOFT=1
+INSTALL_SCRIPT_PULL_MAX=120
 
 if [ "${wizard_pull_source:-mirror_1ms}" = "skip_pull" ]; then
-  SOFT_PULL_FAIL=1
   if ! pull_image_with_progress "安装"; then
-    fail_install "本地不存在镜像。请先 SSH pull 并 docker tag … lemon-music:latest"
+    if ! wait_for_local_image 60; then
+      fail_install "本地不存在镜像。请先 SSH pull 并 docker tag … lemon-music:latest"
+    fi
+    normalize_pulled_image || true
   fi
 else
   update_install_ui "【开始拉取】目标：${IMAGE}
-请观察进度条 55→65 与下方说明（约 500MB）"
+飞牛系统进度 55→80%，脚本并行检测 Docker 本地镜像…"
 
-  SOFT_PULL_FAIL=1
-  if pull_image_with_progress "安装"; then
-    log_config "install script pull ok image=${IMAGE}"
-  else
-    log_line "脚本 pull 暂未成功，继续等待飞牛 docker-project 拉取…"
-  fi
-
-  if ! wait_for_local_image "${_pull_timeout}"; then
+  if ! install_pull_with_docker_project "${_pull_timeout}" "安装"; then
     fail_install "等待镜像超时（${_pull_timeout}s）。请检查网络，或 SSH pull 后选手动安装并选「跳过拉取」。"
   fi
-
-  normalize_pulled_image || true
 fi
 
 if resolved="$(resolve_local_image_name "$(get_compose_image)" 2>/dev/null)"; then

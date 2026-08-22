@@ -266,6 +266,65 @@ get_pull_timeout() {
   echo "${t}"
 }
 
+# 安装阶段脚本 pull 上限（与飞牛 docker-project 并行，避免独占 docker 数分钟）
+get_script_pull_timeout() {
+  local full max_cap
+  full="$(get_pull_timeout)"
+  if [ "${INSTALL_PULL_SOFT:-0}" = "1" ]; then
+    max_cap="${INSTALL_SCRIPT_PULL_MAX:-120}"
+    if ! echo "${max_cap}" | grep -Eq '^[0-9]+$'; then
+      max_cap=120
+    fi
+    if [ "${max_cap}" -lt 30 ]; then
+      max_cap=30
+    fi
+    if [ "${full}" -gt "${max_cap}" ]; then
+      echo "${max_cap}"
+      return 0
+    fi
+  fi
+  echo "${full}"
+}
+
+# 飞牛部分环境无 GNU timeout，用后台进程 + kill 兜底
+run_with_timeout() {
+  local sec="$1"
+  shift
+
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "${sec}" "$@"
+    return $?
+  fi
+
+  "$@" &
+  local pid=$!
+  local elapsed=0
+  while kill -0 "${pid}" 2>/dev/null; do
+    if [ "${elapsed}" -ge "${sec}" ]; then
+      kill "${pid}" 2>/dev/null || true
+      wait "${pid}" 2>/dev/null || true
+      return 124
+    fi
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
+  wait "${pid}"
+  return $?
+}
+
+# 安装进程无 inspect 权限时，仍可通过 docker images 列表判断（docker-project 已拉完）
+any_lemon_image_in_docker_list() {
+  local line="" runner
+  for runner in docker_cmd docker; do
+    line="$(${runner} images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -E 'lemon-muisc|lemon-music' | head -n 1 || true)"
+    if [ -n "${line}" ]; then
+      printf '%s\n' "${line}"
+      return 0
+    fi
+  done
+  return 1
+}
+
 ensure_docker() {
   if ! command -v docker >/dev/null 2>&1; then
     if [ "${SOFT_PULL_FAIL:-0}" = "1" ]; then
@@ -418,7 +477,7 @@ compose_pull_with_timeout() {
 
 docker_pull_with_timeout() {
   local timeout_sec
-  timeout_sec="$(get_pull_timeout)"
+  timeout_sec="$(get_script_pull_timeout)"
   log_line "执行 docker pull ${IMAGE}（超时 ${timeout_sec} 秒）..."
   echo "pulling ${IMAGE} at $(date -Iseconds)" > "${TRIM_PKGVAR}/install.status" 2>/dev/null || true
 
@@ -435,13 +494,8 @@ docker_pull_with_timeout() {
   reporter_pid="$(start_pull_progress_reporter "${pull_log}" "${IMAGE}" "${done_flag}")"
 
   set -o pipefail 2>/dev/null || true
-  if command -v timeout >/dev/null 2>&1; then
-    timeout "${timeout_sec}" docker_cmd pull --progress plain "${IMAGE}" 2>&1 | tee -a "${pull_log}"
-    rc=${PIPESTATUS[0]:-$?}
-  else
-    docker_cmd pull --progress plain "${IMAGE}" 2>&1 | tee -a "${pull_log}"
-    rc=${PIPESTATUS[0]:-$?}
-  fi
+  run_with_timeout "${timeout_sec}" docker_cmd pull --progress plain "${IMAGE}" 2>&1 | tee -a "${pull_log}"
+  rc=${PIPESTATUS[0]:-$?}
 
   touch "${done_flag}" 2>/dev/null || true
   wait "${reporter_pid}" 2>/dev/null || true
@@ -454,13 +508,15 @@ docker_pull_with_timeout() {
   fi
 
   if [ "${rc}" -eq 0 ]; then
-    if pull_log_indicates_success "${pull_log}" || docker_cmd image inspect "${IMAGE}" >/dev/null 2>&1; then
+    if pull_log_indicates_success "${pull_log}" \
+      || docker_cmd image inspect "${IMAGE}" >/dev/null 2>&1 \
+      || any_lemon_image_in_docker_list >/dev/null 2>&1; then
       update_install_pull_ui "${IMAGE}" "${pull_log}"
       echo "pull done ${IMAGE} at $(date -Iseconds)" > "${TRIM_PKGVAR}/pull.progress" 2>/dev/null || true
       echo "pull done ${IMAGE} at $(date -Iseconds)" > "${TRIM_PKGVAR}/install.status" 2>/dev/null || true
       return 0
     fi
-    log_line "docker pull 退出码为 0，但日志与本地 inspect 均未确认成功"
+    log_line "docker pull 退出码为 0，但日志与本地 inspect/列表 均未确认成功"
     return 1
   fi
 
@@ -503,6 +559,11 @@ image_exists_locally() {
     return 0
   fi
 
+  if listed="$(any_lemon_image_in_docker_list 2>/dev/null)"; then
+    IMAGE="${listed}"
+    return 0
+  fi
+
   return 1
 }
 
@@ -534,19 +595,6 @@ normalize_pulled_image() {
   update_compose_image
   save_image_config
   return 0
-}
-
-# 安装进程无 inspect 权限时，仍可通过 docker images 列表判断（docker-project 已拉完）
-any_lemon_image_in_docker_list() {
-  local line="" runner
-  for runner in docker_cmd docker; do
-    line="$(${runner} images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -E 'lemon-muisc|lemon-music' | head -n 1 || true)"
-    if [ -n "${line}" ]; then
-      printf '%s\n' "${line}"
-      return 0
-    fi
-  done
-  return 1
 }
 
 # 等待本地出现镜像（脚本 pull 与飞牛 docker-project 并行时轮询）
@@ -590,6 +638,75 @@ wait_for_local_image() {
       echo "waiting image ${waited}s" > "${TRIM_PKGVAR}/install.status" 2>/dev/null || true
     fi
   done
+  return 1
+}
+
+# 安装专用：飞牛 docker-project 负责主拉取；脚本后台短 pull + 轮询 docker images（不阻塞 600s）
+install_pull_with_docker_project() {
+  local max_wait="${1:-600}"
+  local phase="${2:-安装}"
+  local listed="" pull_log="${TRIM_PKGVAR}/pull.last.log"
+  local done_flag="${pull_log}.done"
+  local pull_pid="" reporter_pid="" script_max wait_rc=0
+
+  resolve_image_from_wizard
+  ensure_docker || log_line "Docker 暂不可用，仅等待 docker-project / 镜像列表…"
+  show_wizard_summary
+
+  log_line "=========================================="
+  log_line "柠檬音乐下载 · ${phase}"
+  log_line "=========================================="
+  log_line "安装策略：飞牛 docker-project 主拉取 + 脚本检测本地镜像（后台 pull 最多 ${INSTALL_SCRIPT_PULL_MAX:-120}s）"
+  update_compose_image
+
+  if listed="$(any_lemon_image_in_docker_list 2>/dev/null)"; then
+    IMAGE="${listed}"
+    normalize_pulled_image || true
+    log_line "本地已有镜像: ${IMAGE}"
+    update_compose_image
+    save_image_config
+    return 0
+  fi
+
+  script_max="$(get_script_pull_timeout)"
+  rm -f "${done_flag}" 2>/dev/null || true
+  : > "${pull_log}" 2>/dev/null || true
+
+  if init_docker_access 2>/dev/null; then
+    update_install_ui "【飞牛拉取中】系统进度 55→80%
+脚本后台尝试 pull（最多 ${script_max}s），同时检测 Docker「本地镜像」…"
+    log_line "后台 docker pull ${IMAGE}（最多 ${script_max}s，与 docker-project 并行）"
+    (
+      preflight_registry "${IMAGE}" 2>/dev/null || true
+      run_with_timeout "${script_max}" docker_cmd pull --progress plain "${IMAGE}" >> "${pull_log}" 2>&1 || true
+      touch "${done_flag}" 2>/dev/null || true
+    ) &
+    pull_pid=$!
+    reporter_pid="$(start_pull_progress_reporter "${pull_log}" "${IMAGE}" "${done_flag}")"
+  else
+    update_install_ui "【等待飞牛 docker-project 拉取】
+脚本无法访问 Docker，请观察系统进度 55→80%…"
+    log_line "脚本无 Docker 权限，等待 docker-project 完成拉取"
+    touch "${done_flag}" 2>/dev/null || true
+  fi
+
+  wait_for_local_image "${max_wait}" || wait_rc=$?
+
+  if [ -n "${pull_pid}" ]; then
+    kill "${pull_pid}" 2>/dev/null || true
+    wait "${pull_pid}" 2>/dev/null || true
+  fi
+  touch "${done_flag}" 2>/dev/null || true
+  [ -n "${reporter_pid}" ] && wait "${reporter_pid}" 2>/dev/null || true
+  append_pull_log_to_install_log "${pull_log}"
+
+  if [ "${wait_rc}" -eq 0 ]; then
+    normalize_pulled_image || true
+    update_compose_image
+    save_image_config
+    log_line "镜像拉取/检测完成。"
+    return 0
+  fi
   return 1
 }
 
@@ -649,6 +766,13 @@ EOF
         pulled=1
         log_line "docker pull 成功，本地可用: ${IMAGE}"
         break
+      elif listed="$(any_lemon_image_in_docker_list 2>/dev/null)"; then
+        IMAGE="${listed}"
+        if normalize_pulled_image; then
+          pulled=1
+          log_line "docker pull 成功（docker images 列表）: ${IMAGE}"
+          break
+        fi
       fi
       log_line "docker pull 退出码成功，但本地未识别到镜像名，尝试下一源…"
     elif [ "${pull_rc}" -eq 124 ]; then
@@ -699,6 +823,10 @@ pull_image_with_progress() {
     elif image_exists_locally; then
       normalize_pulled_image || true
       log_line "本地已存在镜像: ${IMAGE}"
+    elif listed="$(any_lemon_image_in_docker_list 2>/dev/null)"; then
+      IMAGE="${listed}"
+      normalize_pulled_image || true
+      log_line "本地已存在镜像（docker images）: ${IMAGE}"
     else
       if [ "${SOFT_PULL_FAIL:-0}" = "1" ]; then
         log_line "本地暂无镜像，安装将继续；请稍后 SSH 拉取或启用时自动拉取"

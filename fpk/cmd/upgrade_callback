@@ -34,19 +34,18 @@ docker_cmd rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
 resolve_image_from_wizard
 update_compose_image 2>/dev/null || true
 _pull_timeout="$(get_pull_timeout)"
+SOFT_PULL_FAIL=1
+INSTALL_PULL_SOFT=1
+INSTALL_SCRIPT_PULL_MAX=120
 
 update_install_ui "正在拉取升级镜像…"
 
 if [ "${wizard_pull_source:-mirror_1ms}" = "skip_pull" ]; then
-  SOFT_PULL_FAIL=1
   pull_image_with_progress "升级" || fail_install "本地无镜像，请先 SSH pull"
 else
-  SOFT_PULL_FAIL=1
-  pull_image_with_progress "升级" || log_line "升级脚本 pull 未完成，等待 docker-project…"
-  if ! wait_for_local_image "${_pull_timeout}"; then
+  if ! install_pull_with_docker_project "${_pull_timeout}" "升级"; then
     fail_install "升级拉取超时。请 SSH pull 或选跳过拉取。"
   fi
-  normalize_pulled_image || true
 fi
 
 if resolved="$(resolve_local_image_name "$(get_compose_image)" 2>/dev/null)"; then
