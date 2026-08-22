@@ -251,9 +251,9 @@ const embedItems = [
 ]
 
 const lrcToggleItems = [
-  { key: 'download.isDownloadLrc', label: '下载歌词文件', desc: '同时保存 .lrc 歌词文件' },
-  { key: 'download.isDownloadTLrc', label: '下载翻译歌词', desc: '保存翻译版歌词文件' },
-  { key: 'download.isDownloadRLrc', label: '下载罗马音歌词', desc: '保存罗马音歌词文件' },
+  { key: 'download.isDownloadLrc', label: '下载歌词文件', desc: '在下载目录保存同名 .lrc 文件' },
+  { key: 'download.isDownloadTLrc', label: '下载翻译歌词', desc: '写入 .lrc 时附带翻译' },
+  { key: 'download.isDownloadRLrc', label: '下载罗马音歌词', desc: '写入 .lrc 时附带罗马音' },
 ]
 
 const currentTab = computed(() => tabs.find(t => t.id === activeTab.value) || tabs[0])

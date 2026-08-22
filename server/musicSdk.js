@@ -31,6 +31,7 @@ async function kwSearch(keyword, page = 1, limit = 30) {
         interval: formatTime(parseInt(item.DURATION) || 0),
         source: 'kw',
         songId: item.MUSICRID?.replace('MUSIC_', '') || item.DC_TARGETID || '',
+        picUrl: kwPicUrl(item),
       }, types)
     }),
     allPage: Math.ceil((parseInt(data.TOTAL) || 0) / limit),
@@ -58,6 +59,7 @@ async function kgSearch(keyword, page = 1, limit = 30) {
         songId: item.FileHash || '',
         hash: item.FileHash || '',
         albumId: item.AlbumID || '',
+        picUrl: kgPicUrl(item),
       }, types)
     }),
     allPage: Math.ceil(total / limit),
@@ -148,6 +150,7 @@ async function mgSearch(keyword, page = 1, limit = 30) {
         source: 'mg',
         songId: item.copyrightId || item.id || '',
         copyrightId: item.copyrightId || '',
+        picUrl: mgPicUrl(item),
       }, types)
     }),
     allPage: Math.ceil(total / limit),
@@ -156,6 +159,35 @@ async function mgSearch(keyword, page = 1, limit = 30) {
 }
 
 // --- utils ---
+function kwPicUrl(item) {
+  const album = String(item.web_albumpic_short || '').trim()
+  if (album) {
+    return `https://img4.kuwo.cn/star/albumcover/${album.replace(/120/, '500')}`
+  }
+  const artist = String(item.web_artistpic_short || '').trim()
+  if (artist) {
+    return `https://img1.kuwo.cn/star/starheads/${artist.replace(/120/, '500')}`
+  }
+  return ''
+}
+
+function kgPicUrl(item) {
+  let img = item.Image || item.AlbumImage || item.album_img || ''
+  if (typeof img === 'string' && img) {
+    return img.replace(/\{size\}/g, '400')
+  }
+  return ''
+}
+
+function mgPicUrl(item) {
+  const imgs = item.imgItems || item.imgList || []
+  if (Array.isArray(imgs) && imgs.length) {
+    const best = imgs.find(i => i.imgSizeType === '03' || i.imgSizeType === '02') || imgs[0]
+    return best?.img || best?.url || ''
+  }
+  return item.imgUrl || item.cover || ''
+}
+
 function cleanHtml(str) {
   if (!str) return ''
   let s = String(str).replace(/<[^>]+>/g, '')
@@ -323,8 +355,12 @@ async function txLyric(songmid) {
 }
 
 async function kwLyric(songId) {
-  const buf = await req('get', `https://m.kuwo.cn/newh5/singles/songinfoandlrc?musicId=${songId}&httpsStatus=1`, null, { Referer: 'https://kuwo.cn' })
-  const data = parseJSON(buf)
+  const buf = await req('get', `https://m.kuwo.cn/newh5/singles/songinfoandlrc?musicId=${songId}&httpsStatus=1`, null, {
+    Referer: 'https://m.kuwo.cn/',
+    'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15',
+  })
+  const text = Buffer.isBuffer(buf) ? buf.toString() : String(buf || '')
+  const data = parseJSON(text.trim()) || parseJSON(text.replace(/^[^{\[]+/, ''))
   if (!data?.data?.lrclist) return { lyric: '', tlyric: '' }
   const lines = data.data.lrclist.map(l => `[${fmtLrcTime(parseFloat(l.time))}]${l.lineLyric}`).join('\n')
   return { lyric: lines, tlyric: '' }

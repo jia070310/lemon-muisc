@@ -220,6 +220,7 @@ async function downloadOne(item, quality) {
       hash: item.hash || '',
       songmid: item.songmid || '',
       copyrightId: item.copyrightId || '',
+      albummid: item.albummid || item.meta?.albummid || '',
       id: item.id,
       picUrl: item.picUrl || item.meta?.picUrl || item.img || '',
       qualitys: item.qualitys || item.types?.map(t => t.type) || item.meta?.qualitys || [],

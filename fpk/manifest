@@ -1,5 +1,5 @@
 appname        = lemon-music
-version        = 1.0.0
+version        = 1.0.1
 display_name   = 柠檬音乐下载
 desc           = <b>音乐搜索、试听、下载与标签管理工具</b><br><br><b>安装</b>：会拉取镜像，需等待完成。已有镜像可选「跳过拉取」。<br><br><b>目录</b>：装完后 → 应用设置 → 访问权限（两个文件夹）→ 保存 → 停用再启用。<br><br>手动拉镜像：<code>docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest</code>
 platform       = x86

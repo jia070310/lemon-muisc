@@ -3,6 +3,7 @@ name: Build FPK
 on:
   push:
     branches: [main]
+    tags: ['v*']
   workflow_dispatch:
 
 permissions:
@@ -23,28 +24,39 @@ jobs:
           sudo mv fnpack /usr/local/bin/fnpack
 
       - name: Build FPK
+        id: build
         run: |
+          VERSION="$(awk -F= '/^version/{gsub(/ /,"",$2); print $2; exit}' fpk/manifest)"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Building FPK for version ${VERSION}"
           find fpk/cmd -type f -exec chmod +x {} +
           find fpk/cmd -type f -exec sed -i 's/\r$//' {} +
           fnpack build --directory fpk
           FPK="$(find . -type f -name '*.fpk' | head -n 1)"
           echo "found: ${FPK}"
           test -n "$FPK"
-          mv "$FPK" lemon-music-1.0.0.fpk
-          ls -lh lemon-music-1.0.0.fpk
+          mv "$FPK" "lemon-music-${VERSION}.fpk"
+          ls -lh "lemon-music-${VERSION}.fpk"
 
       - name: Upload FPK artifact
         uses: actions/upload-artifact@v4
         with:
           name: lemon-music-fpk
-          path: lemon-music-1.0.0.fpk
+          path: lemon-music-${{ steps.build.outputs.version }}.fpk
           if-no-files-found: error
 
-      - name: Attach FPK to GitHub Release v1.0.0
+      - name: Attach FPK to GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if ! gh release view v1.0.0 --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            gh release create v1.0.0 --title "v1.0.0" --notes "Test build" --repo "${{ github.repository }}"
+          VERSION="${{ steps.build.outputs.version }}"
+          TAG="v${VERSION}"
+          FPK="lemon-music-${VERSION}.fpk"
+          if ! gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            if [ -f docs/RELEASE-NOTES.md ]; then
+              gh release create "$TAG" --title "$TAG" --notes-file docs/RELEASE-NOTES.md --repo "${{ github.repository }}"
+            else
+              gh release create "$TAG" --title "$TAG" --notes "Release ${TAG}" --repo "${{ github.repository }}"
+            fi
           fi
-          gh release upload v1.0.0 lemon-music-1.0.0.fpk --clobber --repo "${{ github.repository }}"
+          gh release upload "$TAG" "$FPK" --clobber --repo "${{ github.repository }}"
