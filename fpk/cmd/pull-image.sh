@@ -268,12 +268,21 @@ get_pull_timeout() {
 
 ensure_docker() {
   if ! command -v docker >/dev/null 2>&1; then
+    if [ "${SOFT_PULL_FAIL:-0}" = "1" ]; then
+      log_line "警告: 未检测到 docker 命令，跳过在线拉取"
+      return 1
+    fi
     fail_install "未检测到 Docker。请先在飞牛系统中安装并启用 Docker，再重新安装本应用。"
   fi
   log_line "Docker 检测: 用户=$(id -un 2>/dev/null || echo '?') uid=$(id -u 2>/dev/null || echo '?')"
   if ! init_docker_access; then
+    if [ "${SOFT_PULL_FAIL:-0}" = "1" ]; then
+      log_line "警告: 安装/升级进程无法访问 Docker（与 SSH 用户权限不同），跳过在线拉取"
+      return 1
+    fi
     fail_install "安装脚本无法访问 Docker（与 SSH 不同用户/无 socket 权限）。请先 SSH 执行: docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest && docker tag ghcr.1ms.run/jia070310/lemon-muisc:latest lemon-music:latest ，再选手动安装并选「跳过拉取」。"
   fi
+  return 0
 }
 
 docker_compose_cmd() {
@@ -540,6 +549,12 @@ pull_image_with_fallback() {
 $(pull_registry_hosts "${source}")
 EOF
 
+  # 飞牛 install_callback 内 docker 常不可用：只试用户选的加速源，且受 INSTALL_PULL_SOFT 限制时长
+  if [ "${INSTALL_PULL_SOFT:-0}" = "1" ] && [ "${#registry_hosts[@]}" -gt 1 ]; then
+    registry_hosts=("${registry_hosts[0]}")
+    log_line "安装阶段软拉取：仅尝试首选源 ${registry_hosts[0]}"
+  fi
+
   if [ "${source}" = "custom_image" ]; then
     update_compose_image
     pull_rc=0
@@ -604,7 +619,11 @@ pull_image_with_progress() {
   local phase="$1"
 
   resolve_image_from_wizard
-  ensure_docker
+  if ! ensure_docker; then
+    update_compose_image
+    save_image_config
+    return 1
+  fi
   show_wizard_summary
 
   log_line "=========================================="

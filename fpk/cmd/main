@@ -36,8 +36,14 @@ start)
     fi
   fi
 
-  # 启用 / 安装后启动：只用本地镜像，不在后台长时间拉取
-  export SKIP_REMOTE_PULL=1
+  # 启用：有本地镜像则直接用；没有则在线拉取（SSH 与启用阶段通常有 docker 权限）
+  if resolve_local_image_name "$(get_compose_image)" >/dev/null 2>&1 \
+    || prefer_local_image_alias >/dev/null 2>&1; then
+    export SKIP_REMOTE_PULL=1
+  else
+    unset SKIP_REMOTE_PULL
+    export IMAGE_PULL_TIMEOUT="${wizard_pull_timeout:-600}"
+  fi
 
   if ! recreate_compose_stack; then
     tip="容器启动失败。"

@@ -31,17 +31,22 @@ init_docker_access 2>/dev/null || true
 docker_cmd stop "${CONTAINER_NAME}" >/dev/null 2>&1 || true
 docker_cmd rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
 
-update_install_ui "正在拉取 Docker 镜像，请耐心等待…"
+update_install_ui "正在尝试拉取镜像…"
 
-if [ "${wizard_pull_source:-ghcr_direct}" = "skip_pull" ]; then
-  SOFT_PULL_FAIL=1
-  pull_image_with_progress "升级" || true
+export INSTALL_PULL_SOFT=1
+export SOFT_PULL_FAIL=1
+_saved_pull_timeout="${wizard_pull_timeout:-600}"
+wizard_pull_timeout="${INSTALL_PULL_TIMEOUT:-120}"
+
+if [ "${wizard_pull_source:-mirror_1ms}" = "skip_pull" ]; then
+  unset INSTALL_PULL_SOFT
+  pull_image_with_progress "升级" || fail_install "本地无镜像，请先 SSH pull 或选在线拉取"
 else
-  unset SOFT_PULL_FAIL
-  if ! pull_image_with_progress "升级"; then
-    fail_install "升级时镜像拉取失败。请检查网络或 SSH 手动 pull 后选「跳过拉取」。"
-  fi
+  pull_image_with_progress "升级" || log_line "升级阶段在线拉取未成功，将在启用时重试"
 fi
+
+wizard_pull_timeout="${_saved_pull_timeout}"
+unset INSTALL_PULL_SOFT
 
 if resolved="$(resolve_local_image_name "$(get_compose_image)" 2>/dev/null)"; then
   IMAGE="${resolved}"
@@ -49,7 +54,7 @@ if resolved="$(resolve_local_image_name "$(get_compose_image)" 2>/dev/null)"; th
   cat > "${IMAGE_CONF}" <<EOF
 SAVED_IMAGE="${LOCAL_IMAGE_ALIAS}"
 REMOTE_IMAGE="${resolved}"
-SAVED_PULL_SOURCE="${wizard_pull_source:-ghcr_direct}"
+SAVED_PULL_SOURCE="${wizard_pull_source:-mirror_1ms}"
 SAVED_AT="$(date -Iseconds)"
 EOF
   if paths_ready || resolve_paths; then
@@ -61,19 +66,20 @@ EOF
   fi
 fi
 
-update_install_ui "镜像已就绪，正在重建容器…"
-export SKIP_REMOTE_PULL=1
+update_install_ui "正在重建容器…"
 
 if resolve_local_image_name "$(get_compose_image)" >/dev/null 2>&1; then
+  export SKIP_REMOTE_PULL=1
   if recreate_compose_stack; then
     log_line "升级后容器已重建"
     update_install_ui "升级完成"
   else
     log_line "容器暂未启动，请在应用中心停用再启用"
-    update_install_ui "镜像已拉取完成，请停用再启用应用"
+    update_install_ui "镜像已就绪，请停用再启用应用"
   fi
 else
-  fail_install "升级完成但未检测到本地镜像。"
+  log_line "升级完成但本地暂无镜像，启用时将自动拉取"
+  update_install_ui "升级完成。请点击「启用」拉取镜像并启动"
 fi
 
 ensure_desktop_entry || true
