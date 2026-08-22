@@ -5,12 +5,15 @@
 
 init_log
 log_line "升级前检查..."
-ensure_docker
+
+if ! command -v docker >/dev/null 2>&1; then
+  fail_install "未检测到 Docker，请先在飞牛系统中启用 Docker 后再升级。"
+fi
 
 docker stop "${CONTAINER_NAME}" >/dev/null 2>&1 || true
 docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
 docker compose -p "${COMPOSE_PROJECT}" -f "${COMPOSE_FILE}" down --remove-orphans >/dev/null 2>&1 || true
-docker compose -p "lemon-music" down --remove-orphans >/dev/null 2>&1 || true
+docker compose -p "lemon-music" -f "${COMPOSE_FILE}" down --remove-orphans >/dev/null 2>&1 || true
 
 log_line "升级检查通过。"
 exit 0

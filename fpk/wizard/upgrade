@@ -4,7 +4,7 @@
     "items": [
       {
         "type": "tips",
-        "helpText": "升级将重新拉取 Docker 镜像，进度显示在本窗口。配置与上次安装一致，可在下方调整拉取方式与超时。"
+        "helpText": "<b>请使用「手动安装」选择 FPK 文件升级</b>，应用卡片上的「更新」按钮对第三方应用通常无效。<br><br>升级会重新拉取 Docker 镜像。若拉取较慢，可先 SSH 执行 <code>docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest</code>，再选「跳过拉取」。配置与路径会保留。"
       },
       {
         "type": "select",
@@ -12,9 +12,9 @@
         "label": "拉取方式",
         "initValue": "ghcr_direct",
         "options": [
-          { "label": "国内加速 ghcr.1ms.run", "value": "ghcr_direct" },
+          { "label": "国内加速 ghcr.1ms.run（推荐）", "value": "ghcr_direct" },
           { "label": "自定义镜像地址", "value": "custom_image" },
-          { "label": "跳过拉取", "value": "skip_pull" }
+          { "label": "跳过拉取（本地已有最新镜像）", "value": "skip_pull" }
         ]
       },
       {
@@ -23,15 +23,17 @@
         "label": "镜像标签",
         "initValue": "latest",
         "options": [
-          { "label": "latest", "value": "latest" },
-          { "label": "v1.0.0", "value": "v1.0.0" }
+          { "label": "latest（最新）", "value": "latest" },
+          { "label": "1.0.3", "value": "1.0.3" },
+          { "label": "1.0.2", "value": "1.0.2" }
         ]
       },
       {
         "type": "text",
         "field": "wizard_custom_image",
         "label": "自定义镜像地址",
-        "initValue": ""
+        "initValue": "ghcr.1ms.run/jia070310/lemon-muisc:latest",
+        "placeholder": "ghcr.1ms.run/jia070310/lemon-muisc:latest"
       },
       {
         "type": "select",
@@ -40,7 +42,7 @@
         "initValue": "600",
         "options": [
           { "label": "5 分钟", "value": "300" },
-          { "label": "10 分钟", "value": "600" },
+          { "label": "10 分钟（推荐）", "value": "600" },
           { "label": "15 分钟", "value": "900" },
           { "label": "30 分钟", "value": "1800" }
         ]
