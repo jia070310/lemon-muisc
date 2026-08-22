@@ -173,11 +173,21 @@ function formatSize(bytes) {
   return `${(n / 1024 / 1024).toFixed(1)}MB`
 }
 
-function buildTypes(qualityMap) {
+function buildTypes(qualityMap, formatMap = {}) {
   const types = []
   for (const [type, size] of Object.entries(qualityMap)) {
     if (size !== false && size !== 0 && size != null) {
-      types.push({ type, size: typeof size === 'string' ? size : formatSize(size) })
+      const entry = {
+        type,
+        size: typeof size === 'string' ? size : (size === true ? '' : formatSize(size)),
+      }
+      const fmt = formatMap[type]
+      if (fmt) entry.format = String(fmt).toLowerCase()
+      else if (type === '128k' || type === '320k') entry.format = 'mp3'
+      else if (type === 'flac' || type === 'flac24bit' || type === 'hires' || type === 'master') entry.format = 'flac'
+      else if (type === 'atmos' || type === 'atmos_plus') entry.format = 'm4a'
+      if (!entry.size) delete entry.size
+      types.push(entry)
     }
   }
   return types
@@ -186,17 +196,19 @@ function buildTypes(qualityMap) {
 function parseKwTypes(item) {
   if (!item.N_MINFO) return []
   const map = {}
+  const formats = {}
   for (const part of item.N_MINFO.split(';')) {
     const m = part.match(/level:(\w+),bitrate:(\d+),format:(\w+),size:([\w.]+)/)
     if (!m) continue
+    const fmt = m[3]
     switch (m[2]) {
-      case '4000': map.flac24bit = m[4].toUpperCase(); break
-      case '2000': map.flac = m[4].toUpperCase(); break
-      case '320': map['320k'] = m[4].toUpperCase(); break
-      case '128': map['128k'] = m[4].toUpperCase(); break
+      case '4000': map.flac24bit = m[4].toUpperCase(); formats.flac24bit = fmt; break
+      case '2000': map.flac = m[4].toUpperCase(); formats.flac = fmt; break
+      case '320': map['320k'] = m[4].toUpperCase(); formats['320k'] = fmt; break
+      case '128': map['128k'] = m[4].toUpperCase(); formats['128k'] = fmt; break
     }
   }
-  return buildTypes(map)
+  return buildTypes(map, formats)
 }
 
 function parseKgTypes(item) {
@@ -211,15 +223,16 @@ function parseKgTypes(item) {
 function parseTxTypes(item) {
   const f = item.file || {}
   const map = {}
+  const formats = {}
   const s128 = f.size_128mp3 ?? item.size128
   const s320 = f.size_320mp3 ?? item.size320
   const sflac = f.size_flac ?? item.sizeflac
   const shires = f.size_hires ?? item.sizehires
-  if (s128) map['128k'] = s128
-  if (s320) map['320k'] = s320
-  if (sflac) map.flac = sflac
-  if (shires) map.flac24bit = shires
-  return buildTypes(map)
+  if (s128) { map['128k'] = s128; formats['128k'] = 'mp3' }
+  if (s320) { map['320k'] = s320; formats['320k'] = 'mp3' }
+  if (sflac) { map.flac = sflac; formats.flac = 'flac' }
+  if (shires) { map.flac24bit = shires; formats.flac24bit = 'flac' }
+  return buildTypes(map, formats)
 }
 
 function parseWyTypes(item) {

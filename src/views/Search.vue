@@ -224,7 +224,7 @@ async function downloadOne(item, quality) {
       picUrl: item.picUrl || item.meta?.picUrl || item.img || '',
       qualitys: item.qualitys || item.types?.map(t => t.type) || item.meta?.qualitys || [],
     }])
-    showToast(`已添加下载: ${item.name} (${getQualityLabel(quality)})`, 'success')
+    showToast(`已添加下载: ${item.name} (${getQualityLabel(quality, item.types)})`, 'success')
   } catch (e) {
     showToast(e.message, 'error')
   }
