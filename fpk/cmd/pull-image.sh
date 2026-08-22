@@ -536,25 +536,57 @@ normalize_pulled_image() {
   return 0
 }
 
+# 安装进程无 inspect 权限时，仍可通过 docker images 列表判断（docker-project 已拉完）
+any_lemon_image_in_docker_list() {
+  local line="" runner
+  for runner in docker_cmd docker; do
+    line="$(${runner} images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -E 'lemon-muisc|lemon-music' | head -n 1 || true)"
+    if [ -n "${line}" ]; then
+      printf '%s\n' "${line}"
+      return 0
+    fi
+  done
+  return 1
+}
+
 # 等待本地出现镜像（脚本 pull 与飞牛 docker-project 并行时轮询）
 wait_for_local_image() {
   local max_sec="${1:-600}"
   local waited=0
-  local resolved=""
+  local resolved="" listed="" pull_log="${TRIM_PKGVAR}/pull.last.log"
 
   while [ "${waited}" -lt "${max_sec}" ]; do
+    init_docker_access 2>/dev/null || true
+
     if resolved="$(resolve_local_image_name "$(get_compose_image)" 2>/dev/null)"; then
       IMAGE="${resolved}"
-      log_line "镜像已就绪（等待 ${waited}s）: ${IMAGE}"
+      log_line "镜像已就绪（inspect ${waited}s）: ${IMAGE}"
       return 0
     fi
+
+    if listed="$(any_lemon_image_in_docker_list)"; then
+      IMAGE="${listed}"
+      log_line "镜像已就绪（docker images 列表 ${waited}s）: ${IMAGE}"
+      normalize_pulled_image || true
+      return 0
+    fi
+
+    if [ -s "${pull_log}" ] && pull_log_indicates_success "${pull_log}"; then
+      if listed="$(any_lemon_image_in_docker_list)"; then
+        IMAGE="${listed}"
+        log_line "pull 日志已成功且镜像在列表中: ${IMAGE}"
+        normalize_pulled_image || true
+        return 0
+      fi
+    fi
+
     sleep 5
     waited=$((waited + 5))
     if [ $((waited % 15)) -eq 0 ]; then
-      log_line "等待镜像… ${waited}/${max_sec}s（飞牛 docker-project 与脚本 pull 并行）"
-      update_install_ui "正在拉取镜像 ${waited}/${max_sec} 秒…
-上方 55→65 为飞牛系统进度（需已启用 docker-project）
-下方为脚本检测状态"
+      log_line "等待镜像… ${waited}/${max_sec}s（docker-project / 脚本 pull）"
+      update_install_ui "正在拉取/确认镜像 ${waited}/${max_sec}s…
+镜像已在 Docker「本地镜像」出现后，安装将很快到 100%。
+装完后请点「启用」启动容器。"
       echo "waiting image ${waited}s" > "${TRIM_PKGVAR}/install.status" 2>/dev/null || true
     fi
   done

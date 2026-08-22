@@ -71,10 +71,16 @@ fi
 
 if resolved="$(resolve_local_image_name "$(get_compose_image)" 2>/dev/null)"; then
   IMAGE="${resolved}"
+elif listed="$(any_lemon_image_in_docker_list 2>/dev/null)"; then
+  IMAGE="${listed}"
+  normalize_pulled_image || true
+fi
+
+if [ -n "${IMAGE:-}" ]; then
   mkdir -p "${TRIM_PKGETC}" 2>/dev/null || true
   cat > "${IMAGE_CONF}" <<EOF
 SAVED_IMAGE="${LOCAL_IMAGE_ALIAS}"
-REMOTE_IMAGE="${resolved}"
+REMOTE_IMAGE="${IMAGE}"
 SAVED_AT="$(date -Iseconds)"
 EOF
   write_compose_file "${music_path}" "${downloads_path}" "${config_path}"
@@ -83,19 +89,17 @@ EOF
 fi
 
 mark_install_complete "安装"
+ensure_desktop_entry || true
 
-if resolve_local_image_name "$(get_compose_image)" >/dev/null 2>&1; then
-  export SKIP_REMOTE_PULL=1
-  if recreate_compose_stack; then
-    log_config "install docker run ok"
-    update_install_ui "【安装完成】镜像已拉取并已启动"
-  else
-    log_config "install container deferred — enable will start"
-    update_install_ui "【安装完成】请在应用中心点击「启用」"
-  fi
+# 不在 install 阶段 docker run：避免与 docker-project 争抢导致 80% 假死；启用时 main 会按目录重建容器
+if any_lemon_image_in_docker_list >/dev/null 2>&1 \
+  || resolve_local_image_name "$(get_compose_image)" >/dev/null 2>&1; then
+  log_line "镜像已在本地，安装完成；请在本应用点击「启用」启动容器"
+  update_install_ui "【安装完成】镜像已就绪（Docker 本地镜像中可见）。
+请点击应用中心「启用」启动容器并访问 http://<NAS_IP>:7983"
 else
-  log_config "install complete but no image — enable will pull"
+  log_line "安装完成但暂未检测到镜像名，启用时将自动拉取"
+  update_install_ui "【安装完成】请点击「启用」；若无镜像将自动拉取"
 fi
 
-ensure_desktop_entry || true
 exit 0
