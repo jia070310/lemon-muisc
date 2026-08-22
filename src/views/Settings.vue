@@ -113,6 +113,16 @@
       <div v-if="activeTab === 'player'" class="panel-body">
         <div class="setting-item">
           <div class="setting-item-info">
+            <div class="setting-item-label">界面主题</div>
+            <div class="setting-item-desc">深色夜间模式或浅色日间模式</div>
+          </div>
+          <select v-model="settings['ui.theme']" @change="saveTheme" class="setting-select">
+            <option value="dark">深色</option>
+            <option value="light">浅色</option>
+          </select>
+        </div>
+        <div class="setting-item">
+          <div class="setting-item-info">
             <div class="setting-item-label">封面样式</div>
             <div class="setting-item-desc">播放栏封面显示方式</div>
           </div>
@@ -208,10 +218,11 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { api } from '../api.js'
 import { loadCoverStyle } from '../stores/player.js'
 import { canPickFolder, pickFolder } from '../utils/fnos.js'
+import { applyTheme, theme as currentTheme, THEME_KEY } from '../utils/theme.js'
 
 const settings = reactive({})
 const sourceList = ref([])
@@ -258,6 +269,10 @@ const lrcToggleItems = [
 
 const currentTab = computed(() => tabs.find(t => t.id === activeTab.value) || tabs[0])
 
+watch(currentTheme, (v) => {
+  settings[THEME_KEY] = v
+})
+
 onMounted(async () => {
   try {
     fnosAvailable.value = await canPickFolder()
@@ -267,6 +282,8 @@ onMounted(async () => {
     Object.assign(settings, s)
     activeSourceId.value = settings['source.active'] || ''
     if (!settings['player.coverStyle']) settings['player.coverStyle'] = 'disc'
+    if (!settings[THEME_KEY]) settings[THEME_KEY] = currentTheme.value
+    applyTheme(settings[THEME_KEY])
   } catch {}
   try {
     sourceList.value = await api.source.list()
@@ -406,7 +423,13 @@ async function saveSetting(key) {
   try {
     await api.settings.update({ [key]: settings[key] })
     if (key === 'player.coverStyle') loadCoverStyle()
+    if (key === THEME_KEY) applyTheme(settings[key])
   } catch (e) { showToast(e.message, 'error') }
+}
+
+async function saveTheme() {
+  applyTheme(settings[THEME_KEY])
+  await saveSetting(THEME_KEY)
 }
 
 function toggleSetting(key) {

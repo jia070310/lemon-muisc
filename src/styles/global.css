@@ -1,10 +1,13 @@
 :root {
+  color-scheme: dark;
   --bg: #121212;
   --bg-sidebar: #181818;
   --bg-card: #1e1e1e;
   --bg-elevated: #252525;
   --bg-input: #2a2a2a;
   --bg-hover: #2e2e2e;
+  --bg-player: rgba(24, 24, 24, 0.92);
+  --bg-nav: rgba(24, 24, 24, 0.96);
   --accent: #3c6ef7;
   --accent-hover: #5a84f8;
   --accent-muted: rgba(60, 110, 247, 0.15);
@@ -16,6 +19,8 @@
   --success: #34c759;
   --warning: #ff9f0a;
   --error: #ff453a;
+  --scrollbar: #444;
+  --scrollbar-hover: #555;
   --radius: 8px;
   --radius-lg: 12px;
   --radius-pill: 999px;
@@ -23,6 +28,32 @@
   --sidebar-width: 220px;
   --player-height: 64px;
   --mobile-nav-height: 56px;
+}
+
+html[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f4f6fa;
+  --bg-sidebar: #ffffff;
+  --bg-card: #ffffff;
+  --bg-elevated: #f0f2f6;
+  --bg-input: #ffffff;
+  --bg-hover: #e8ecf4;
+  --bg-player: rgba(255, 255, 255, 0.92);
+  --bg-nav: rgba(255, 255, 255, 0.96);
+  --accent: #2f62ef;
+  --accent-hover: #1d4ed8;
+  --accent-muted: rgba(47, 98, 239, 0.12);
+  --text: #1c2333;
+  --text-secondary: #5b6475;
+  --text-muted: #8a93a4;
+  --border: #d8dee8;
+  --border-light: #e6ebf2;
+  --success: #248a3d;
+  --warning: #c47b00;
+  --error: #d70015;
+  --scrollbar: #c5ccd8;
+  --scrollbar-hover: #aeb6c4;
+  --shadow: 0 8px 28px rgba(28, 35, 51, 0.1);
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -92,7 +123,7 @@ input:focus, textarea:focus, select:focus {
   color: var(--text-secondary);
   border: 1px solid var(--border);
 }
-.btn-ghost:hover:not(:disabled) { background: var(--bg-hover); color: var(--text); border-color: #444; }
+.btn-ghost:hover:not(:disabled) { background: var(--bg-hover); color: var(--text); border-color: var(--border); }
 
 .btn-danger {
   background: transparent;
@@ -125,8 +156,8 @@ input:focus, textarea:focus, select:focus {
 
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: #555; }
+::-webkit-scrollbar-thumb { background: var(--scrollbar); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-hover); }
 
 @media (max-width: 768px) {
   .page-title { font-size: 20px; }

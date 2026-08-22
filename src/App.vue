@@ -39,6 +39,11 @@
       </nav>
 
       <div class="sidebar-footer">
+        <button class="theme-toggle" type="button" :title="theme === 'light' ? '切换深色模式' : '切换浅色模式'" @click="toggleTheme">
+          <svg v-if="theme === 'dark'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+          <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 14.5A8.5 8.5 0 1 1 9.5 3 7 7 0 0 0 21 14.5z"/></svg>
+          <span>{{ theme === 'light' ? '浅色模式' : '深色模式' }}</span>
+        </button>
         <div class="ws-status" :class="{ online: wsConnected }">
           <span class="dot"></span>
           {{ wsConnected ? '服务已连接' : '服务未连接' }}
@@ -90,11 +95,21 @@ import { connectWS, connected as wsConnected } from './ws.js'
 import { initPlayer } from './stores/player.js'
 import { checkForUpdate, hasUpdate } from './composables/useUpdateCheck.js'
 import { api } from './api.js'
+import { applyTheme, theme, THEME_KEY } from './utils/theme.js'
 import PlayerBar from './components/PlayerBar.vue'
 
 const route = useRoute()
 const isTagPage = computed(() => route.path === '/tag' || route.path.startsWith('/tag/'))
 const setupBanner = ref(false)
+
+async function persistTheme(next) {
+  applyTheme(next)
+  try { await api.settings.update({ [THEME_KEY]: theme.value }) } catch {}
+}
+
+function toggleTheme() {
+  persistTheme(theme.value === 'light' ? 'dark' : 'light')
+}
 
 onMounted(() => {
   connectWS()
@@ -102,6 +117,9 @@ onMounted(() => {
   checkForUpdate()
   api.paths.list().then((res) => {
     setupBanner.value = Boolean(res.setup?.needsPathConfig)
+  }).catch(() => {})
+  api.settings.get().then((s) => {
+    if (s?.[THEME_KEY]) applyTheme(s[THEME_KEY])
   }).catch(() => {})
 })
 </script>
@@ -203,6 +221,20 @@ onMounted(() => {
   padding: 16px 20px;
   border-top: 1px solid var(--border-light);
 }
+.theme-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.theme-toggle:hover { background: var(--bg-hover); color: var(--text); }
+.theme-toggle svg { width: 16px; height: 16px; flex-shrink: 0; }
 .ws-status {
   font-size: 12px;
   color: var(--text-muted);
@@ -309,7 +341,7 @@ onMounted(() => {
     z-index: 120;
     height: calc(var(--mobile-nav-height) + env(safe-area-inset-bottom, 0px));
     padding: 0 4px env(safe-area-inset-bottom, 0px);
-    background: rgba(24, 24, 24, 0.96);
+    background: var(--bg-nav);
     backdrop-filter: blur(12px);
     border-top: 1px solid var(--border-light);
     justify-content: space-around;

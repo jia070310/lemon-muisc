@@ -144,7 +144,7 @@ async function onPlayAt(index) {
   left: var(--sidebar-width);
   right: 0;
   height: 64px;
-  background: rgba(24, 24, 24, 0.92);
+  background: var(--bg-player);
   backdrop-filter: blur(12px);
   border-top: 1px solid var(--border-light);
   display: flex;
@@ -350,6 +350,10 @@ async function onPlayAt(index) {
   flex-direction: column;
   box-shadow: var(--shadow);
   z-index: 60;
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
 }
 .queue-header {
   display: flex;
