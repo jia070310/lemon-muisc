@@ -112,6 +112,7 @@
             </div>
             <div class="cover-box">
               <img v-if="editForm.pictureBase64" :src="editForm.pictureBase64" alt="cover" />
+              <img v-else-if="editForm.picUrl" :src="editForm.picUrl" alt="cover" referrerpolicy="no-referrer" />
               <div v-else class="cover-placeholder">无封面</div>
             </div>
             <input type="file" accept="image/*" @change="onCoverUpload" />
@@ -365,6 +366,27 @@ function toggleAll() {
 
 async function openEdit(f) {
   editingFile.value = f
+  fetchResults.value = []
+  fetchPreview.value = null
+  fetchPreviewMeta.value = null
+
+  // 自动匹配 / 手动改过但未保存：优先用内存中的结果，避免磁盘旧标签覆盖
+  if (f._modified) {
+    editForm.value = reactive({
+      title: f.title || f.parsedTitle || '',
+      artist: f.artist || f.parsedArtist || '',
+      album: f.album || '',
+      year: f.year ? String(f.year) : '',
+      genre: f.genre || '',
+      comment: f.comment || '',
+      lyric: f.lyric || '',
+      pictureBase64: f.pictureBase64 || '',
+      picUrl: f.picUrl || '',
+    })
+    loadingDetail.value = false
+    return
+  }
+
   loadingDetail.value = true
   editForm.value = reactive({
     title: f.title || f.parsedTitle || '',
@@ -373,30 +395,41 @@ async function openEdit(f) {
     year: f.year ? String(f.year) : '',
     genre: f.genre || '',
     comment: f.comment || '',
-    lyric: '',
-    pictureBase64: '',
-    picUrl: '',
+    lyric: f.lyric || '',
+    pictureBase64: f.pictureBase64 || '',
+    picUrl: f.picUrl || '',
   })
-  fetchResults.value = []
-  fetchPreview.value = null
-  fetchPreviewMeta.value = null
 
   try {
     const res = await api.tag.read(f.filePath)
     const meta = res.data || {}
-    Object.assign(f, meta)
-    f._detailLoaded = true
-    editForm.value = reactive({
-      title: meta.title || f.parsedTitle || '',
-      artist: meta.artist || f.parsedArtist || '',
-      album: meta.album || '',
-      year: meta.year ? String(meta.year) : '',
-      genre: meta.genre || '',
-      comment: meta.comment || '',
-      lyric: typeof meta.lyric === 'string' ? meta.lyric : '',
-      pictureBase64: meta.pictureBase64 || '',
-      picUrl: '',
-    })
+    // 仅回填尚未有值的字段，避免冲掉列表里已有信息
+    if (!f._modified) {
+      Object.assign(f, {
+        title: meta.title || f.title,
+        artist: meta.artist || f.artist,
+        album: meta.album || f.album,
+        year: meta.year || f.year,
+        genre: meta.genre || f.genre,
+        comment: meta.comment || f.comment,
+        lyric: typeof meta.lyric === 'string' ? meta.lyric : (f.lyric || ''),
+        pictureBase64: meta.pictureBase64 || f.pictureBase64 || '',
+        hasPicture: meta.hasPicture ?? Boolean(meta.pictureBase64 || f.pictureBase64),
+        hasLyrics: meta.hasLyrics ?? Boolean(meta.lyric || f.lyric),
+      })
+      f._detailLoaded = true
+      editForm.value = reactive({
+        title: f.title || f.parsedTitle || '',
+        artist: f.artist || f.parsedArtist || '',
+        album: f.album || '',
+        year: f.year ? String(f.year) : '',
+        genre: f.genre || '',
+        comment: f.comment || '',
+        lyric: f.lyric || '',
+        pictureBase64: f.pictureBase64 || '',
+        picUrl: f.picUrl || '',
+      })
+    }
   } catch (e) {
     showToast(`读取文件详情失败：${e.message}`, 'error')
   } finally {
@@ -424,15 +457,16 @@ function buildMetaFromForm() {
 }
 
 function applyMetaToFile(f, meta) {
-  f.title = meta.title ?? f.title
-  f.artist = meta.artist ?? f.artist
-  f.album = meta.album ?? f.album
-  f.year = meta.year ?? f.year
-  f.genre = meta.genre ?? f.genre
-  f.comment = meta.comment ?? f.comment
-  f.lyric = meta.lyric ?? f.lyric
+  if (meta.title) f.title = meta.title
+  if (meta.artist) f.artist = meta.artist
+  if (meta.album) f.album = meta.album
+  if (meta.year) f.year = meta.year
+  if (meta.genre) f.genre = meta.genre
+  if (meta.comment) f.comment = meta.comment
+  if (meta.lyric) f.lyric = meta.lyric
   if (meta.pic) f.pictureBase64 = meta.pic
-  f.hasPicture = Boolean(f.pictureBase64 || meta.picUrl)
+  if (meta.picUrl) f.picUrl = meta.picUrl
+  f.hasPicture = Boolean(f.pictureBase64 || f.picUrl)
   f.hasLyrics = Boolean(f.lyric)
   f._modified = true
 }
@@ -612,12 +646,16 @@ async function autoMatchSelected() {
     )
     let ok = 0
     let fail = 0
+    let withCover = 0
+    let withLyric = 0
     for (const item of res.data || []) {
       const f = files.value.find(x => x.filePath === item.filePath)
       if (f && item.ok && item.meta) {
         applyMetaToFile(f, item.meta)
         if (item.meta.pic) f.pictureBase64 = item.meta.pic
         if (item.meta.picUrl) f.picUrl = item.meta.picUrl
+        if (f.pictureBase64 || f.picUrl) withCover++
+        if (f.lyric) withLyric++
         ok++
         if (editingFile.value?.filePath === f.filePath) {
           editForm.value = {
@@ -636,8 +674,8 @@ async function autoMatchSelected() {
         fail++
       }
     }
-    if (ok && !fail) showToast(`自动匹配完成 ${ok}/${selectedFiles.value.length}`, 'success')
-    else if (ok) showToast(`自动匹配成功 ${ok}，失败 ${fail}`, 'info')
+    if (ok && !fail) showToast(`自动匹配完成 ${ok}（封面 ${withCover}，歌词 ${withLyric}）`, 'success')
+    else if (ok) showToast(`成功 ${ok}，失败 ${fail}（封面 ${withCover}，歌词 ${withLyric}）`, 'info')
     else showToast('自动匹配未找到可用结果，可改用「网络获取信息」手动选择', 'error')
   } catch (e) {
     showToast(e.message, 'error')

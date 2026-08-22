@@ -86,7 +86,7 @@ async function txSearch(keyword, page = 1, limit = 30) {
         songId: item.songmid || '',
         songmid: item.songmid || '',
         albummid: item.albummid || '',
-        picUrl: item.albummid ? `https://y.gtimg.cn/music/photo_new/T002R300x300M000${item.albummid}.jpg` : '',
+        picUrl: item.albummid ? `https://y.gtimg.cn/music/photo_new/T002R500x500M000${item.albummid}.jpg` : '',
       }, types)
     }),
     allPage: Math.ceil(total / limit),
@@ -292,9 +292,21 @@ async function wyLyric(songId) {
 }
 
 async function txLyric(songmid) {
-  const buf = await req('get', `https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg?songmid=${songmid}&format=json&nobase64=1`, null, { Referer: 'https://y.qq.com' })
+  const buf = await req('get',
+    `https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg?songmid=${songmid}&format=json&nobase64=1`,
+    null,
+    { Referer: 'https://y.qq.com/portal/player.html' })
   const data = parseJSON(buf)
-  return { lyric: data?.lyric || '', tlyric: data?.trans || '' }
+  let lyric = data?.lyric || ''
+  let tlyric = data?.trans || ''
+  // 部分环境仍返回 base64
+  if (lyric && !lyric.includes('[') && /^[A-Za-z0-9+/=\s]+$/.test(lyric.slice(0, 80))) {
+    try { lyric = Buffer.from(lyric, 'base64').toString('utf8') } catch {}
+  }
+  if (tlyric && !tlyric.includes('[') && /^[A-Za-z0-9+/=\s]+$/.test(tlyric.slice(0, 80))) {
+    try { tlyric = Buffer.from(tlyric, 'base64').toString('utf8') } catch {}
+  }
+  return { lyric, tlyric }
 }
 
 async function kwLyric(songId) {

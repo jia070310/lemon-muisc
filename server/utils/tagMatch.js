@@ -1,7 +1,7 @@
 import { searchMusic } from '../musicSdk.js'
 import { parseFilename, scoreMatch } from './filenameParse.js'
 import { getLyric } from '../musicSdk.js'
-import { fetchPicBuffer } from './fetchPic.js'
+import { fetchPicBuffer, detectImageMime } from './fetchPic.js'
 
 const SOURCE_MAP = {
   wy: 'wy',
@@ -82,7 +82,7 @@ export async function fetchMatchMeta(match, source, fields = null) {
   const wantCover = !fields || fields.includes('cover')
 
   let lyric = ''
-  if (wantLyric) {
+  if (wantLyric && songId) {
     try {
       const lrc = await getLyric(songId, sdkSource)
       lyric = lrc.lyric || ''
@@ -91,10 +91,17 @@ export async function fetchMatchMeta(match, source, fields = null) {
 
   let pic = ''
   let picUrl = match.picUrl || ''
-  if (wantCover && match.picUrl) {
+  // QQ：无 picUrl 时用 albummid 拼封面
+  if (!picUrl && match.albummid) {
+    picUrl = `https://y.gtimg.cn/music/photo_new/T002R500x500M000${match.albummid}.jpg`
+  }
+  if (wantCover && picUrl) {
     try {
-      const buf = await fetchPicBuffer(match.picUrl)
-      if (buf) pic = `data:image/jpeg;base64,${buf.toString('base64')}`
+      const buf = await fetchPicBuffer(picUrl)
+      if (buf) {
+        const mime = detectImageMime(buf)
+        pic = `data:${mime};base64,${buf.toString('base64')}`
+      }
     } catch {}
   }
 
