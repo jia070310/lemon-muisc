@@ -69,10 +69,10 @@ esac
 log_config "install paths music=${music_path} downloads=${downloads_path} config=${config_path}"
 log_config "install using image ${IMAGE}"
 
-docker stop "${CONTAINER_NAME}" >/dev/null 2>&1 || true
-docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
-docker compose -p "${COMPOSE_PROJECT}" -f "${COMPOSE_FILE}" down --remove-orphans >/dev/null 2>&1 || true
-docker compose -p "lemon-music" -f "${COMPOSE_FILE}" down --remove-orphans >/dev/null 2>&1 || true
+docker_cmd stop "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+docker_cmd rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+docker_cmd compose -p "${COMPOSE_PROJECT}" -f "${COMPOSE_FILE}" down --remove-orphans >/dev/null 2>&1 || true
+docker_cmd compose -p "lemon-music" -f "${COMPOSE_FILE}" down --remove-orphans >/dev/null 2>&1 || true
 
 update_install_ui "【实际拉取进度 100%】正在启动容器…"
 

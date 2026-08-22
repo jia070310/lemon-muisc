@@ -3,12 +3,13 @@
 . "$(dirname "$0")/paths.sh"
 
 is_docker_running() {
-  docker inspect -f '{{.State.Running}}' "${CONTAINER_NAME}" 2>/dev/null | grep -qi true
+  docker_cmd inspect -f '{{.State.Running}}' "${CONTAINER_NAME}" 2>/dev/null | grep -qi true
 }
 
 case $1 in
 start)
   save_accessible_paths
+  init_docker_access 2>/dev/null || true
 
   # 优先：运行设置 / 访问权限；不要沿用飞牛 docker-project 冻住的 @appdata
   if apply_saved_paths; then
@@ -40,8 +41,8 @@ start)
 
   if ! recreate_compose_stack; then
     tip="容器启动失败。"
-    if ! docker image inspect "${LOCAL_IMAGE_ALIAS}" >/dev/null 2>&1 \
-      && ! docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -qE 'lemon-muisc|lemon-music'; then
+    if ! docker_cmd image inspect "${LOCAL_IMAGE_ALIAS}" >/dev/null 2>&1 \
+      && ! docker_cmd images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -qE 'lemon-muisc|lemon-music'; then
       tip="${tip} 本地无 Docker 镜像，请重新安装应用（安装时会拉取），或 SSH: docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest && docker tag ghcr.1ms.run/jia070310/lemon-muisc:latest lemon-music:latest"
     else
       tip="${tip} 请检查 7983 端口是否占用，或查看日志 ${TRIM_PKGVAR}/log/compose.recreate.log"
@@ -55,8 +56,9 @@ start)
   exit 0
   ;;
 stop)
-  docker stop "${CONTAINER_NAME}" >/dev/null 2>&1 || true
-  docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+  init_docker_access 2>/dev/null || true
+  docker_cmd stop "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+  docker_cmd rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
   exit 0
   ;;
 status)

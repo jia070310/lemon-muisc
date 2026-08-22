@@ -4,8 +4,11 @@
 . "$(dirname "$0")/pull-image.sh"
 
 init_log
-ensure_docker
 resolve_image_from_wizard
 
-log_line "install_init 通过（拉取在 install_callback 进行） image=${IMAGE} source=${wizard_pull_source:-ghcr_direct}"
+if command -v docker >/dev/null 2>&1; then
+  log_line "install_init 通过（拉取在 install_callback 进行） image=${IMAGE} source=${wizard_pull_source:-ghcr_direct}"
+else
+  log_line "install_init 通过（未检测到 docker 命令，将在 install_callback 检查） image=${IMAGE}"
+fi
 exit 0

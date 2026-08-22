@@ -27,8 +27,9 @@ else
   fi
 fi
 
-docker stop "${CONTAINER_NAME}" >/dev/null 2>&1 || true
-docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+init_docker_access 2>/dev/null || true
+docker_cmd stop "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+docker_cmd rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
 
 update_install_ui "正在拉取 Docker 镜像，请耐心等待…"
 

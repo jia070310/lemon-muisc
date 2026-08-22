@@ -14,7 +14,7 @@ CONTAINER_NAME="lemon-music"
 COMPOSE_PROJECT="${TRIM_APPNAME:-lemon-music}"
 
 is_container_running() {
-  docker inspect -f '{{.State.Running}}' "${CONTAINER_NAME}" 2>/dev/null | grep -qi true
+  docker_cmd inspect -f '{{.State.Running}}' "${CONTAINER_NAME}" 2>/dev/null | grep -qi true
 }
 
 default_config_path() {
@@ -175,7 +175,7 @@ get_compose_image() {
   if [ -f "${IMAGE_CONF}" ]; then
     # shellcheck disable=SC1090
     . "${IMAGE_CONF}"
-    if [ -n "${SAVED_IMAGE}" ] && docker image inspect "${SAVED_IMAGE}" >/dev/null 2>&1; then
+    if [ -n "${SAVED_IMAGE}" ] && docker_cmd image inspect "${SAVED_IMAGE}" >/dev/null 2>&1; then
       echo "${SAVED_IMAGE}"
       return 0
     fi
@@ -289,9 +289,9 @@ apply_saved_paths() {
 compose_up() {
   local project="${1:-${COMPOSE_PROJECT}}"
   if [ -f "${COMPOSE_ENV}" ]; then
-    docker compose -p "${project}" -f "${COMPOSE_FILE}" --env-file "${COMPOSE_ENV}" up -d --force-recreate --remove-orphans
+    docker_cmd compose -p "${project}" -f "${COMPOSE_FILE}" --env-file "${COMPOSE_ENV}" up -d --force-recreate --remove-orphans
   else
-    docker compose -p "${project}" -f "${COMPOSE_FILE}" up -d --force-recreate --remove-orphans
+    docker_cmd compose -p "${project}" -f "${COMPOSE_FILE}" up -d --force-recreate --remove-orphans
   fi
 }
 
@@ -301,11 +301,11 @@ mount_matches_expected() {
   local expected_downloads="${2:-}"
   local mounts
 
-  if ! docker inspect "${CONTAINER_NAME}" >/dev/null 2>&1; then
+  if ! docker_cmd inspect "${CONTAINER_NAME}" >/dev/null 2>&1; then
     return 1
   fi
 
-  mounts="$(docker inspect -f '{{range .Mounts}}{{.Destination}}={{.Source}};{{end}}' "${CONTAINER_NAME}" 2>/dev/null || true)"
+  mounts="$(docker_cmd inspect -f '{{range .Mounts}}{{.Destination}}={{.Source}};{{end}}' "${CONTAINER_NAME}" 2>/dev/null || true)"
   echo "${mounts}" | grep -q "/music=${expected_music};" || return 1
   echo "${mounts}" | grep -q "/downloads=${expected_downloads};" || return 1
   return 0
@@ -337,7 +337,7 @@ resolve_local_image_name() {
     case "${candidate}" in
       ghcr.io/ghcr.io/*|ghcr.1ms.run/ghcr.1ms.run/*|ghcr.io/ghcr.1ms.run/*|ghcr.1ms.run/ghcr.io/*) continue ;;
     esac
-    if docker image inspect "${candidate}" >/dev/null 2>&1; then
+    if docker_cmd image inspect "${candidate}" >/dev/null 2>&1; then
       if promote_to_local_image_alias "${candidate}" >/dev/null 2>&1; then
         echo "${LOCAL_IMAGE_ALIAS}"
         return 0
@@ -347,8 +347,8 @@ resolve_local_image_name() {
     fi
   done
 
-  repo="$(docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -E 'lemon-muisc|lemon-music' | head -n 1 || true)"
-  if [ -n "${repo}" ] && docker image inspect "${repo}" >/dev/null 2>&1; then
+  repo="$(docker_cmd images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -E 'lemon-muisc|lemon-music' | head -n 1 || true)"
+  if [ -n "${repo}" ] && docker_cmd image inspect "${repo}" >/dev/null 2>&1; then
     if promote_to_local_image_alias "${repo}" >/dev/null 2>&1; then
       echo "${LOCAL_IMAGE_ALIAS}"
       return 0
@@ -400,9 +400,9 @@ ensure_image_available() {
     log_config "image missing, pulling: ${remote} (timeout ${pull_timeout}s)"
     echo "pull ${remote}" >> "${log_file}" 2>&1
     if command -v timeout >/dev/null 2>&1; then
-      timeout "${pull_timeout}" docker pull "${remote}" >> "${log_file}" 2>&1 || continue
+      timeout "${pull_timeout}" docker_cmd pull "${remote}" >> "${log_file}" 2>&1 || continue
     else
-      docker pull "${remote}" >> "${log_file}" 2>&1 || continue
+      docker_cmd pull "${remote}" >> "${log_file}" 2>&1 || continue
     fi
     if resolved="$(promote_to_local_image_alias "${remote}")"; then
       log_config "docker pull ok, aliased as: ${resolved}"
@@ -416,6 +416,7 @@ ensure_image_available() {
 
 recreate_compose_stack() {
   local log_file="${TRIM_PKGVAR}/log/compose.recreate.log"
+  init_docker_access 2>/dev/null || true
   local music downloads config image
   mkdir -p "$(dirname "${log_file}")" 2>/dev/null || true
 
@@ -453,13 +454,13 @@ recreate_compose_stack() {
     echo "downloads=${downloads}"
     echo "config=${config}"
     echo "image=${image}"
-    docker stop "${CONTAINER_NAME}" 2>/dev/null || true
-    docker rm -f "${CONTAINER_NAME}" 2>/dev/null || true
-    docker compose -p "${COMPOSE_PROJECT}" -f "${COMPOSE_FILE}" down --remove-orphans 2>/dev/null || true
-    docker compose -p "lemon-music" -f "${COMPOSE_FILE}" down --remove-orphans 2>/dev/null || true
+    docker_cmd stop "${CONTAINER_NAME}" 2>/dev/null || true
+    docker_cmd rm -f "${CONTAINER_NAME}" 2>/dev/null || true
+    docker_cmd compose -p "${COMPOSE_PROJECT}" -f "${COMPOSE_FILE}" down --remove-orphans 2>/dev/null || true
+    docker_cmd compose -p "lemon-music" -f "${COMPOSE_FILE}" down --remove-orphans 2>/dev/null || true
   } >> "${log_file}" 2>&1
 
-  if ! docker run -d \
+  if ! docker_cmd run -d \
       --name "${CONTAINER_NAME}" \
       --restart unless-stopped \
       -p 7983:7983 \
@@ -490,12 +491,12 @@ recreate_compose_stack() {
   # 飞牛 docker-project 可能抢着重启成 @appdata：再强制重建一次
   {
     echo "=== remount retry $(date -Iseconds) ==="
-    docker stop "${CONTAINER_NAME}" 2>/dev/null || true
-    docker rm -f "${CONTAINER_NAME}" 2>/dev/null || true
-    docker compose -p "${COMPOSE_PROJECT}" -f "${COMPOSE_FILE}" down --remove-orphans 2>/dev/null || true
+    docker_cmd stop "${CONTAINER_NAME}" 2>/dev/null || true
+    docker_cmd rm -f "${CONTAINER_NAME}" 2>/dev/null || true
+    docker_cmd compose -p "${COMPOSE_PROJECT}" -f "${COMPOSE_FILE}" down --remove-orphans 2>/dev/null || true
   } >> "${log_file}" 2>&1
 
-  if docker run -d \
+  if docker_cmd run -d \
       --name "${CONTAINER_NAME}" \
       --restart unless-stopped \
       -p 7983:7983 \
@@ -515,7 +516,7 @@ recreate_compose_stack() {
     return 0
   fi
 
-  log_config "docker run up but mounts mismatch: $(docker inspect -f '{{range .Mounts}}{{.Destination}}={{.Source}};{{end}}' "${CONTAINER_NAME}" 2>/dev/null)"
+  log_config "docker run up but mounts mismatch: $(docker_cmd inspect -f '{{range .Mounts}}{{.Destination}}={{.Source}};{{end}}' "${CONTAINER_NAME}" 2>/dev/null)"
   if is_container_running; then
     log_config "container is running, treat enable as success (check mounts in app settings if paths wrong)"
     return 0

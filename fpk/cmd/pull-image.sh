@@ -35,7 +35,25 @@ log_hint_paths() {
 }
 
 log_line() {
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "${LOG_FILE}"
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "${LOG_FILE}" 2>/dev/null || true
+}
+
+pull_log_has_fatal_error() {
+  local log="$1"
+  [ -s "${log}" ] || return 1
+  grep -qiE 'permission denied while trying to connect to the Docker daemon|Cannot connect to the Docker daemon|Is the docker daemon running\?' "${log}" 2>/dev/null
+}
+
+pull_log_indicates_success() {
+  local log="$1"
+  grep -qiE 'Downloaded newer image|Status: Downloaded newer image|Image is up to date|Pull complete|pull complete' "${log}" 2>/dev/null
+}
+
+append_pull_log_to_install_log() {
+  local pull_log="$1"
+  if [ -s "${pull_log}" ]; then
+    cat "${pull_log}" >> "${LOG_FILE}" 2>/dev/null || true
+  fi
 }
 
 fail_install() {
@@ -147,7 +165,7 @@ preflight_registry() {
   update_install_ui "正在连接镜像仓库…
 ${image}"
   if command -v timeout >/dev/null 2>&1; then
-    if timeout 20 docker manifest inspect "${image}" >/dev/null 2>&1; then
+    if timeout 20 docker_cmd manifest inspect "${image}" >/dev/null 2>&1; then
       log_line "仓库预检 OK: ${image}"
     else
       log_line "仓库预检未响应（仍将尝试 pull，可能是镜像加速域名限制 manifest）"
@@ -166,7 +184,7 @@ image_already_pulled() {
     "ghcr.io/jia070310/lemon-muisc:${tag}" \
     "${LOCAL_IMAGE_ALIAS}"
   do
-    if docker image inspect "${candidate}" >/dev/null 2>&1; then
+    if docker_cmd image inspect "${candidate}" >/dev/null 2>&1; then
       IMAGE="${candidate}"
       return 0
     fi
@@ -240,14 +258,17 @@ ensure_docker() {
   if ! command -v docker >/dev/null 2>&1; then
     fail_install "未检测到 Docker。请先在飞牛系统中安装并启用 Docker，再重新安装本应用。"
   fi
+  if ! init_docker_access; then
+    fail_install "无法连接 Docker（permission denied）。请确认应用权限为 root 运行，或 SSH 用管理员执行: docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest"
+  fi
 }
 
 docker_compose_cmd() {
   if [ ! -f "${COMPOSE_FILE}" ]; then
     return 127
   fi
-  if docker compose version >/dev/null 2>&1; then
-    docker compose -f "${COMPOSE_FILE}" "$@"
+  if docker_cmd compose version >/dev/null 2>&1; then
+    docker_cmd compose -f "${COMPOSE_FILE}" "$@"
     return $?
   fi
   if command -v docker-compose >/dev/null 2>&1; then
@@ -316,7 +337,7 @@ compose_pull_with_timeout() {
   read_image_from_compose
   case "${IMAGE}" in
     lemon-music:*|lemon-music)
-      if ! docker image inspect "${IMAGE}" >/dev/null 2>&1; then
+      if ! docker_cmd image inspect "${IMAGE}" >/dev/null 2>&1; then
         log_line "compose 为本地短名 ${IMAGE} 且不存在，跳过 compose pull（避免误拉 Docker Hub）"
         return 127
       fi
@@ -337,11 +358,11 @@ compose_pull_with_timeout() {
   reporter_pid="$(start_pull_progress_reporter "${pull_log}" "${IMAGE}" "${done_flag}")"
 
   local rc=0
-  if docker compose version >/dev/null 2>&1; then
+  if docker_cmd compose version >/dev/null 2>&1; then
     if command -v timeout >/dev/null 2>&1; then
-      timeout "${timeout_sec}" docker compose -p "${TRIM_APPNAME}" -f "${COMPOSE_FILE}" pull --progress plain > "${pull_log}" 2>&1 || rc=$?
+      timeout "${timeout_sec}" docker_cmd compose -p "${TRIM_APPNAME}" -f "${COMPOSE_FILE}" pull --progress plain > "${pull_log}" 2>&1 || rc=$?
     else
-      docker compose -p "${TRIM_APPNAME}" -f "${COMPOSE_FILE}" pull --progress plain > "${pull_log}" 2>&1 || rc=$?
+      docker_cmd compose -p "${TRIM_APPNAME}" -f "${COMPOSE_FILE}" pull --progress plain > "${pull_log}" 2>&1 || rc=$?
     fi
   elif command -v docker-compose >/dev/null 2>&1; then
     if command -v timeout >/dev/null 2>&1; then
@@ -358,7 +379,7 @@ compose_pull_with_timeout() {
 
   touch "${done_flag}" 2>/dev/null || true
   wait "${reporter_pid}" 2>/dev/null || true
-  cat "${pull_log}" | tee -a "${LOG_FILE}" || true
+  append_pull_log_to_install_log "${pull_log}"
 
   if [ "${rc}" -eq 0 ]; then
     update_install_pull_ui "${IMAGE}" "${pull_log}"
@@ -390,18 +411,33 @@ docker_pull_with_timeout() {
   local reporter_pid
   reporter_pid="$(start_pull_progress_reporter "${pull_log}" "${IMAGE}" "${done_flag}")"
 
-  if run_with_timeout "${timeout_sec}" docker pull --progress plain "${IMAGE}" >> "${pull_log}" 2>&1; then
-    touch "${done_flag}" 2>/dev/null || true
-    wait "${reporter_pid}" 2>/dev/null || true
-    cat "${pull_log}" | tee -a "${LOG_FILE}"
-    update_install_pull_ui "${IMAGE}" "${pull_log}"
-    echo "pull done ${IMAGE} at $(date -Iseconds)" > "${TRIM_PKGVAR}/pull.progress" 2>/dev/null || true
-    return 0
+  if run_with_timeout "${timeout_sec}" docker_cmd pull --progress plain "${IMAGE}" >> "${pull_log}" 2>&1; then
+    rc=0
+  else
+    rc=$?
   fi
-  rc=$?
+
   touch "${done_flag}" 2>/dev/null || true
   wait "${reporter_pid}" 2>/dev/null || true
-  cat "${pull_log}" | tee -a "${LOG_FILE}" || true
+  append_pull_log_to_install_log "${pull_log}"
+
+  if pull_log_has_fatal_error "${pull_log}"; then
+    log_line "Docker 守护进程不可用（permission denied / 未运行）"
+    update_install_ui "无法连接 Docker。请确认飞牛 Docker 已启动，且应用以 root 运行；或 SSH 手动 pull 后选「跳过拉取」。"
+    return 125
+  fi
+
+  if [ "${rc}" -eq 0 ]; then
+    if pull_log_indicates_success "${pull_log}" || docker_cmd image inspect "${IMAGE}" >/dev/null 2>&1; then
+      update_install_pull_ui "${IMAGE}" "${pull_log}"
+      echo "pull done ${IMAGE} at $(date -Iseconds)" > "${TRIM_PKGVAR}/pull.progress" 2>/dev/null || true
+      echo "pull done ${IMAGE} at $(date -Iseconds)" > "${TRIM_PKGVAR}/install.status" 2>/dev/null || true
+      return 0
+    fi
+    log_line "docker pull 退出码为 0，但日志与本地 inspect 均未确认成功"
+    return 1
+  fi
+
   if [ "${rc}" -eq 124 ]; then
     log_line "镜像拉取超时（${timeout_sec} 秒）"
     update_install_ui "镜像拉取超时（${timeout_sec}s），可 SSH 手动 pull 后选「跳过拉取」"
@@ -428,14 +464,14 @@ image_exists_locally() {
     case "${candidate}" in
       ghcr.io/ghcr.io/*|ghcr.1ms.run/ghcr.1ms.run/*|ghcr.io/ghcr.1ms.run/*|ghcr.1ms.run/ghcr.io/*) continue ;;
     esac
-    if docker image inspect "${candidate}" >/dev/null 2>&1; then
+    if docker_cmd image inspect "${candidate}" >/dev/null 2>&1; then
       IMAGE="${candidate}"
       return 0
     fi
   done
 
   repo="$(find_newest_remote_image "${wizard_image_tag:-latest}" 2>/dev/null || true)"
-  if [ -n "${repo}" ] && docker image inspect "${repo}" >/dev/null 2>&1; then
+  if [ -n "${repo}" ] && docker_cmd image inspect "${repo}" >/dev/null 2>&1; then
     IMAGE="${repo}"
     log_line "检测到最新远程镜像: ${IMAGE}"
     return 0
@@ -449,7 +485,7 @@ normalize_pulled_image() {
   local remote="${IMAGE:-}"
   local promoted=""
 
-  if ! docker image inspect "${remote}" >/dev/null 2>&1; then
+  if ! docker_cmd image inspect "${remote}" >/dev/null 2>&1; then
     remote="$(find_newest_remote_image "${wizard_image_tag:-latest}" 2>/dev/null || true)"
   fi
 
@@ -481,14 +517,18 @@ pull_image_with_fallback() {
   local pulled=0
   local last_err=""
   local last_log=""
+  local pull_rc=0
 
   if [ "${source}" = "custom_image" ]; then
     update_compose_image
-    if docker_pull_with_timeout; then
-      if normalize_pulled_image; then
-        return 0
-      fi
-      log_line "警告: pull 返回成功但 inspect 未命中…"
+    pull_rc=0
+    docker_pull_with_timeout || pull_rc=$?
+    if [ "${pull_rc}" -eq 125 ]; then
+      abort_pull "无法连接 Docker。请确认 Docker 已启动且应用有权限访问 /var/run/docker.sock"
+      return 1
+    fi
+    if [ "${pull_rc}" -eq 0 ] && normalize_pulled_image; then
+      return 0
     fi
     last_log="$(tail -n 8 "${TRIM_PKGVAR}/pull.last.log" 2>/dev/null | tr '\n' ' ')"
     abort_pull "镜像拉取失败: ${IMAGE}。${last_log}请 SSH 执行: docker pull ${IMAGE}"
@@ -500,13 +540,25 @@ pull_image_with_fallback() {
     update_compose_image
     log_line "尝试镜像源: ${IMAGE}"
 
-    if docker_pull_with_timeout; then
+    pull_rc=0
+    docker_pull_with_timeout || pull_rc=$?
+
+    if [ "${pull_rc}" -eq 125 ]; then
+      abort_pull "无法连接 Docker。请确认 Docker 已启动且应用有 root 权限，或 SSH 手动 pull 后选「跳过拉取」。"
+      return 1
+    fi
+
+    if [ "${pull_rc}" -eq 0 ]; then
       if normalize_pulled_image; then
         pulled=1
         log_line "docker pull 成功，本地可用: ${IMAGE}"
         break
       fi
       log_line "docker pull 退出码成功，但本地未识别到镜像名，尝试下一源…"
+    elif [ "${pull_rc}" -eq 124 ]; then
+      last_err="${IMAGE} (超时)"
+      log_line "镜像源超时，尝试下一个..."
+      continue
     fi
 
     last_err="${IMAGE}"
@@ -519,7 +571,7 @@ pull_image_with_fallback() {
       log_line "未直接拉取，但本地已有可用镜像: ${IMAGE}"
       return 0
     fi
-    docker images 2>&1 | tee -a "${LOG_FILE}" || true
+    docker_cmd images 2>&1 >> "${LOG_FILE}" || true
     last_log="$(tail -n 8 "${TRIM_PKGVAR}/pull.last.log" 2>/dev/null | tr '\n' ' ')"
     abort_pull "镜像拉取失败。详情: ${last_log}可先 SSH: docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest 后再启用。最后尝试: ${last_err}"
     return 1
@@ -567,7 +619,7 @@ pull_image_with_progress() {
     update_install_ui "【实际拉取进度 100% · 镜像拉取完成】
 镜像：${IMAGE}
 正在写入配置…"
-    docker images "${IMAGE}" 2>&1 | tee -a "${LOG_FILE}" || true
+    docker_cmd images "${IMAGE}" 2>&1 >> "${LOG_FILE}" || true
   fi
 
   update_compose_image
