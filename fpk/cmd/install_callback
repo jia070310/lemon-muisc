@@ -1,5 +1,6 @@
 #!/bin/bash
 # 55% 起：写 compose → 飞牛 docker-project 主拉取 + 脚本轮询本地镜像（不长时间独占 docker pull）。
+# 镜像确认就绪后软启动容器，避免仅依赖「启用」时飞牛报「docker不可用」。
 
 . "$(dirname "$0")/pull-image.sh"
 . "$(dirname "$0")/paths.sh"
@@ -86,12 +87,21 @@ fi
 mark_install_complete "安装"
 ensure_desktop_entry || true
 
-# 不在 install 阶段 docker run：避免与 docker-project 争抢导致 80% 假死；启用时 main 会按目录重建容器
+# 镜像已确认本地后再软启动：此时 docker-project 拉取已结束，不会像安装中途 docker run 那样卡 80%。
+# 飞牛点「启用」偶发「docker不可用」时，装完已有容器仍可直接访问 :7983。
+export SKIP_REMOTE_PULL=1
 if any_lemon_image_in_docker_list >/dev/null 2>&1 \
   || resolve_local_image_name "$(get_compose_image)" >/dev/null 2>&1; then
-  log_line "镜像已在本地，安装完成；请在本应用点击「启用」启动容器"
-  update_install_ui "【安装完成】镜像已就绪（Docker 本地镜像中可见）。
-请点击应用中心「启用」启动容器并访问 http://<NAS_IP>:7983"
+  if init_docker_access 2>/dev/null && recreate_compose_stack; then
+    log_line "安装阶段已启动容器 ${CONTAINER_NAME}"
+    update_install_ui "【安装完成】镜像与容器已就绪。
+可直接访问 http://<NAS_IP>:7983
+若应用中心仍显示未启用，可再点一次「启用」（忽略偶发「docker不可用」亦可）"
+  else
+    log_line "镜像已在本地，但安装阶段未能启动容器；请稍后点「启用」，或 SSH 手动 docker run"
+    update_install_ui "【安装完成】镜像已就绪。
+请点应用中心「启用」启动容器。若提示 docker 不可用：先在「Docker」确认服务正常，或 SSH 手动启动后访问 http://<NAS_IP>:7983"
+  fi
 else
   log_line "安装完成但暂未检测到镜像名，启用时将自动拉取"
   update_install_ui "【安装完成】请点击「启用」；若无镜像将自动拉取"

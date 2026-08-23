@@ -1,6 +1,6 @@
 services:
   lemon-music:
-    image: ghcr.1ms.run/jia070310/lemon-muisc:latest
+    image: lemon-music:latest
     container_name: lemon-music
     restart: unless-stopped
     ports:

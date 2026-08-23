@@ -9,7 +9,12 @@ is_docker_running() {
 case $1 in
 start)
   save_accessible_paths
-  init_docker_access 2>/dev/null || true
+
+  # 飞牛「启用」前若 Docker 异常会弹「docker不可用」；此处再检一次并给出可操作提示
+  if ! init_docker_access 2>/dev/null; then
+    echo "Docker 当前不可用。请到飞牛「Docker」确认服务已启动，或 SSH 执行: systemctl restart docker ；然后重试启用。镜像已在本地时可: docker start lemon-music 或按 paths.conf 路径 docker run。" > "${TRIM_TEMP_LOGFILE}"
+    exit 1
+  fi
 
   # 优先：运行设置 / 访问权限；不要沿用飞牛 docker-project 冻住的 @appdata
   if apply_saved_paths; then
@@ -36,7 +41,7 @@ start)
     fi
   fi
 
-  # 启用：有本地镜像则直接用；没有则在线拉取（SSH 与启用阶段通常有 docker 权限）
+  # 启用：有本地镜像则直接用；没有则在线拉取
   if resolve_local_image_name "$(get_compose_image)" >/dev/null 2>&1 \
     || prefer_local_image_alias >/dev/null 2>&1; then
     export SKIP_REMOTE_PULL=1
@@ -45,15 +50,23 @@ start)
     export IMAGE_PULL_TIMEOUT="${wizard_pull_timeout:-600}"
   fi
 
+  # 安装阶段已拉起容器时，直接视为启用成功
+  if is_container_running; then
+    ensure_mounts_applied || true
+    if is_container_running; then
+      exit 0
+    fi
+  fi
+
   if ! recreate_compose_stack; then
     tip="容器启动失败。"
-    if ! docker_cmd image inspect "${LOCAL_IMAGE_ALIAS}" >/dev/null 2>&1 \
+    if ! docker_cmd info >/dev/null 2>&1; then
+      tip="Docker 不可用。请先在飞牛 Docker 中确认服务正常，或 SSH: systemctl restart docker 后重试启用。"
+    elif ! docker_cmd image inspect "${LOCAL_IMAGE_ALIAS}" >/dev/null 2>&1 \
       && ! docker_cmd images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -qE 'lemon-muisc|lemon-music'; then
       tip="${tip} 本地无 Docker 镜像，请重新安装应用（安装时会拉取），或 SSH: docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest && docker tag ghcr.1ms.run/jia070310/lemon-muisc:latest lemon-music:latest"
     else
       tip="${tip} 请检查 7983 端口是否占用，或查看日志 ${TRIM_PKGVAR}/log/compose.recreate.log"
-    fi
-    if [ -f "${TRIM_PKGVAR}/pull.last.log" ]; then
       tip="${tip} | $(tail -n 3 "${TRIM_PKGVAR}/log/compose.recreate.log" 2>/dev/null | tr '\n' ' ')"
     fi
     echo "${tip}" > "${TRIM_TEMP_LOGFILE}"
