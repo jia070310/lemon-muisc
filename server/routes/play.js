@@ -201,10 +201,10 @@ playRouter.post('/lyric', async (req, res) => {
   try {
     const { songId, source, lyric } = req.body
     if (typeof lyric === 'string' && lyric) {
-      return res.json({ ok: true, lyric, tlyric: '' })
+      return res.json({ ok: true, lyric, tlyric: '', rlyric: '' })
     }
     if (!songId || !source || source === 'local') {
-      return res.json({ ok: true, lyric: '', tlyric: '' })
+      return res.json({ ok: true, lyric: '', tlyric: '', rlyric: '' })
     }
 
     const musicInfo = buildMusicInfo(req.body)
@@ -220,13 +220,18 @@ playRouter.post('/lyric', async (req, res) => {
       try {
         const fromSource = await requestSource(source, 'lyric', { musicInfo })
         if (fromSource?.lyric) {
-          return res.json({ ok: true, lyric: fromSource.lyric, tlyric: fromSource.tlyric || '' })
+          return res.json({
+            ok: true,
+            lyric: fromSource.lyric,
+            tlyric: fromSource.tlyric || '',
+            rlyric: fromSource.rlyric || '',
+          })
         }
       } catch {}
     }
 
-    res.json({ ok: true, lyric: '', tlyric: '' })
+    res.json({ ok: true, lyric: '', tlyric: '', rlyric: '' })
   } catch {
-    res.json({ ok: true, lyric: '', tlyric: '' })
+    res.json({ ok: true, lyric: '', tlyric: '', rlyric: '' })
   }
 })

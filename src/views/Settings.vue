@@ -173,8 +173,8 @@
         </div>
         <div class="setting-item">
           <div class="setting-item-info">
-            <div class="setting-item-label">按列表名分组</div>
-            <div class="setting-item-desc">按专辑名创建子文件夹保存</div>
+            <div class="setting-item-label">按专辑名分组</div>
+            <div class="setting-item-desc">按歌曲专辑名创建子文件夹保存</div>
           </div>
           <label class="toggle"><input type="checkbox" :checked="settings['download.isSavePathGroupByListName'] === 'true'" @change="toggleSetting('download.isSavePathGroupByListName')" /><span class="slider"></span></label>
         </div>

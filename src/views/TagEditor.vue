@@ -56,13 +56,13 @@
             <thead>
               <tr>
                 <th class="col-check"></th>
-                <th class="col-play"></th>
                 <th>文件名</th>
                 <th>标题</th>
                 <th>歌手</th>
                 <th>专辑</th>
                 <th>封面</th>
                 <th>歌词</th>
+                <th class="col-play"></th>
               </tr>
             </thead>
             <tbody>
@@ -72,6 +72,12 @@
                 @click="openEdit(f)"
               >
                 <td @click.stop><input type="checkbox" v-model="f._selected" /></td>
+                <td class="cell-file" :title="f.filePath">{{ f.fileName }}</td>
+                <td class="cell-text">{{ f.title || '-' }}</td>
+                <td class="cell-text">{{ f.artist || '-' }}</td>
+                <td class="cell-text">{{ f.album || '-' }}</td>
+                <td>{{ f.hasPicture ? '✓' : '-' }}</td>
+                <td>{{ f.hasLyrics ? '✓' : '-' }}</td>
                 <td class="col-play" @click.stop>
                   <button
                     class="play-btn"
@@ -92,12 +98,6 @@
                     <svg v-else viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
                   </button>
                 </td>
-                <td class="cell-file" :title="f.filePath">{{ f.fileName }}</td>
-                <td class="cell-text">{{ f.title || '-' }}</td>
-                <td class="cell-text">{{ f.artist || '-' }}</td>
-                <td class="cell-text">{{ f.album || '-' }}</td>
-                <td>{{ f.hasPicture ? '✓' : '-' }}</td>
-                <td>{{ f.hasLyrics ? '✓' : '-' }}</td>
               </tr>
             </tbody>
           </table>
@@ -968,6 +968,7 @@ tbody tr.playing { background: var(--accent-muted); }
 .col-play {
   width: 72px;
   white-space: nowrap;
+  text-align: right;
 }
 .col-play .play-btn,
 .col-play .queue-add-btn {

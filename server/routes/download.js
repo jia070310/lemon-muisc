@@ -229,7 +229,7 @@ async function writeMetaIfNeeded(task, meta, filePath, ext, settings) {
   let lrcResult = null
   if (wantEmbedLyric || wantLrcFile) {
     try {
-      lrcResult = await fetchLyric(source, musicInfo, meta, task)
+      lrcResult = await fetchLyric(source, musicInfo, meta, task, settings)
       if (lrcResult?.lyric && source === 'kg') {
         lrcResult.lyric = fixKgLyric(lrcResult.lyric)
       }
@@ -308,7 +308,7 @@ async function fetchCover(source, musicInfo, meta, task) {
   return null
 }
 
-async function fetchLyric(source, musicInfo, meta, task) {
+async function fetchLyric(source, musicInfo, meta, task, settings) {
   const songId = meta.songmid || meta.hash || meta.songId || meta.copyrightId
     || musicInfo.songmid || musicInfo.hash || musicInfo.songId
 
@@ -325,21 +325,36 @@ async function fetchLyric(source, musicInfo, meta, task) {
   // 2) 音源脚本 lyric 接口
   try {
     const lrcResult = await requestSource(source, 'lyric', { musicInfo })
-    if (lrcResult?.lyric) return lrcResult
+    if (lrcResult?.lyric) {
+      return {
+        lyric: lrcResult.lyric,
+        tlyric: lrcResult.tlyric || '',
+        rlyric: lrcResult.rlyric || '',
+      }
+    }
   } catch (e) {
     console.warn('音源获取歌词失败:', e?.message || e)
   }
 
-  // 3) 按歌名再搜确认 ID 后取歌词
+  // 3) 按歌名搜索补歌词（可选跨平台）
   try {
     const keyword = [task?.name, task?.singer].filter(Boolean).join(' ')
     if (!keyword) return null
-    const result = await searchMusic(keyword, source, 1, 5)
-    for (const hit of result.list || []) {
-      const id = hit.songmid || hit.hash || hit.songId || hit.copyrightId || hit.id
-      if (!id) continue
-      const lrc = await getLyric(id, hit.source || source, lyricLookupExtra(hit))
-      if (lrc?.lyric) return lrc
+    const useOther = settings?.['download.isUseOtherSource'] !== 'false'
+    const fallbackSources = useOther
+      ? ['wy', 'tx', 'kw', 'kg', 'mg']
+      : [source]
+    const seen = new Set()
+    for (const src of fallbackSources) {
+      if (seen.has(src)) continue
+      seen.add(src)
+      const result = await searchMusic(keyword, src, 1, 5)
+      for (const hit of result.list || []) {
+        const id = hit.songmid || hit.hash || hit.songId || hit.copyrightId || hit.id
+        if (!id) continue
+        const lrc = await getLyric(id, hit.source || src, lyricLookupExtra(hit))
+        if (lrc?.lyric) return lrc
+      }
     }
   } catch (e) {
     console.warn('搜索补歌词失败:', e?.message || e)

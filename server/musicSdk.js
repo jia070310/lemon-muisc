@@ -431,6 +431,44 @@ export function parsePlaylistInput(source, raw) {
   }
 }
 
+async function wyFetchSongsByIds(ids, headers) {
+  const BATCH = 200
+  const songs = []
+  const privileges = []
+  const postHeaders = {
+    ...headers,
+    'Content-Type': 'application/x-www-form-urlencoded',
+  }
+
+  for (let i = 0; i < ids.length; i += BATCH) {
+    const chunk = ids.slice(i, i + BATCH)
+    const c = JSON.stringify(chunk.map(id => ({ id: String(id) })))
+    const buf = await req('post', 'https://music.163.com/api/v3/song/detail', `c=${encodeURIComponent(c)}`, postHeaders)
+    const data = parseJSON(buf)
+    if (data?.code !== 200) continue
+    if (data.songs?.length) songs.push(...data.songs)
+    if (data.privileges?.length) privileges.push(...data.privileges)
+  }
+
+  return { songs, privileges }
+}
+
+function mapWyPlaylistTrack(item, priv, pl) {
+  const types = parseWyTypes({ ...item, privilege: priv })
+  return withTypes({
+    id: String(item.id),
+    name: cleanHtml(item.name),
+    singer: cleanHtml((item.ar || []).map(a => a.name).join('/')),
+    album: cleanHtml(item.al?.name),
+    albumName: cleanHtml(item.al?.name),
+    interval: formatTime(Math.floor((item.dt || 0) / 1000)),
+    source: 'wy',
+    songId: String(item.id),
+    songmid: String(item.id),
+    picUrl: item.al?.picUrl || pl.coverImgUrl || '',
+  }, types)
+}
+
 async function wyPlaylist({ id, token }) {
   const headers = {
     Referer: 'https://music.163.com',
@@ -446,27 +484,21 @@ async function wyPlaylist({ id, token }) {
 
   const pl = data.playlist
   const privMap = new Map((data.privileges || []).map(p => [p.id, p]))
-  const tracks = pl.tracks || []
-  if (!tracks.length && (pl.trackIds?.length || pl.trackCount)) {
+  const trackIdList = (pl.trackIds || []).map(t => (typeof t === 'object' ? t.id : t)).filter(Boolean)
+  let tracks = pl.tracks || []
+
+  if (trackIdList.length > tracks.length) {
+    const fetched = await wyFetchSongsByIds(trackIdList, headers)
+    for (const p of fetched.privileges) privMap.set(p.id, p)
+    const trackMap = new Map(fetched.songs.map(t => [t.id, t]))
+    tracks = trackIdList.map(tid => trackMap.get(tid)).filter(Boolean)
+  }
+
+  if (!tracks.length && (trackIdList.length || pl.trackCount)) {
     throw new Error('歌单歌曲未返回，若为私人歌单请在链接或 ID 后加 ###MUSIC_U')
   }
 
-  const list = tracks.map(item => {
-    const priv = privMap.get(item.id)
-    const types = parseWyTypes({ ...item, privilege: priv })
-    return withTypes({
-      id: String(item.id),
-      name: cleanHtml(item.name),
-      singer: cleanHtml((item.ar || []).map(a => a.name).join('/')),
-      album: cleanHtml(item.al?.name),
-      albumName: cleanHtml(item.al?.name),
-      interval: formatTime(Math.floor((item.dt || 0) / 1000)),
-      source: 'wy',
-      songId: String(item.id),
-      songmid: String(item.id),
-      picUrl: item.al?.picUrl || pl.coverImgUrl || '',
-    }, types)
-  })
+  const list = tracks.map(item => mapWyPlaylistTrack(item, privMap.get(item.id), pl))
 
   return {
     list,
@@ -946,6 +978,14 @@ const LYRIC_HEADERS = {
   },
 }
 
+function normalizeLyricResult(result) {
+  return {
+    lyric: result?.lyric || '',
+    tlyric: result?.tlyric || '',
+    rlyric: result?.rlyric || '',
+  }
+}
+
 function parseKwLrcPayload(data) {
   const list = data?.data?.lrclist || data?.data?.lrcList || data?.lrclist
   if (!Array.isArray(list) || !list.length) return null
@@ -953,7 +993,7 @@ function parseKwLrcPayload(data) {
     .filter(l => l?.lineLyric != null && l?.time != null)
     .map(l => `[${fmtLrcTime(parseFloat(l.time))}]${l.lineLyric}`)
     .join('\n')
-  return lines.trim() ? { lyric: lines, tlyric: '' } : null
+  return lines.trim() ? normalizeLyricResult({ lyric: lines }) : null
 }
 
 async function fetchKwLyricById(musicId) {
@@ -976,9 +1016,13 @@ async function fetchKwLyricById(musicId) {
 }
 
 async function wyLyric(songId) {
-  const buf = await req('get', `https://music.163.com/api/song/lyric?id=${songId}&lv=1&tv=1`, null, { Referer: 'https://music.163.com' })
+  const buf = await req('get', `https://music.163.com/api/song/lyric?id=${songId}&lv=1&tv=1&rv=1`, null, { Referer: 'https://music.163.com' })
   const data = parseJSON(buf)
-  return { lyric: data?.lrc?.lyric || '', tlyric: data?.tlyric?.lyric || '' }
+  return normalizeLyricResult({
+    lyric: data?.lrc?.lyric || '',
+    tlyric: data?.tlyric?.lyric || '',
+    rlyric: data?.romalrc?.lyric || '',
+  })
 }
 
 async function txLyric(songmid) {
@@ -989,6 +1033,7 @@ async function txLyric(songmid) {
   const data = parseJSON(buf)
   let lyric = data?.lyric || ''
   let tlyric = data?.trans || ''
+  let rlyric = data?.roma || data?.rom || ''
   // 部分环境仍返回 base64
   if (lyric && !lyric.includes('[') && /^[A-Za-z0-9+/=\s]+$/.test(lyric.slice(0, 80))) {
     try { lyric = Buffer.from(lyric, 'base64').toString('utf8') } catch {}
@@ -996,7 +1041,10 @@ async function txLyric(songmid) {
   if (tlyric && !tlyric.includes('[') && /^[A-Za-z0-9+/=\s]+$/.test(tlyric.slice(0, 80))) {
     try { tlyric = Buffer.from(tlyric, 'base64').toString('utf8') } catch {}
   }
-  return { lyric, tlyric }
+  if (rlyric && !rlyric.includes('[') && /^[A-Za-z0-9+/=\s]+$/.test(rlyric.slice(0, 80))) {
+    try { rlyric = Buffer.from(rlyric, 'base64').toString('utf8') } catch {}
+  }
+  return normalizeLyricResult({ lyric, tlyric, rlyric })
 }
 
 async function kwLyric(songId, extra = {}) {
@@ -1028,7 +1076,7 @@ async function kwLyric(songId, extra = {}) {
     } catch {}
   }
 
-  return { lyric: '', tlyric: '' }
+  return normalizeLyricResult({})
 }
 
 async function kgDownloadLyric(candidate) {
@@ -1041,7 +1089,7 @@ async function kgDownloadLyric(candidate) {
       const lrcData = parseJSON(lrcBuf)
       if (!lrcData?.content) continue
       const lyric = Buffer.from(lrcData.content, 'base64').toString('utf-8').trim()
-      if (lyric) return { lyric, tlyric: '' }
+      if (lyric) return normalizeLyricResult({ lyric })
     } catch {}
   }
   return null
@@ -1069,7 +1117,7 @@ async function kgSearchLyricCandidates(hash, extra = {}) {
 }
 
 async function kgLyric(hash, extra = {}) {
-  if (!hash) return { lyric: '', tlyric: '' }
+  if (!hash) return normalizeLyricResult({})
 
   const candidates = await kgSearchLyricCandidates(hash, extra)
   for (const c of candidates) {
@@ -1097,13 +1145,17 @@ async function kgLyric(hash, extra = {}) {
     } catch {}
   }
 
-  return { lyric: '', tlyric: '' }
+  return normalizeLyricResult({})
 }
 
 async function mgLyric(copyrightId) {
   const buf = await req('get', `https://music.migu.cn/v3/api/music/audioPlayer/getLyric?copyrightId=${copyrightId}`, null, { Referer: 'https://music.migu.cn' })
   const data = parseJSON(buf)
-  return { lyric: data?.lyric || '', tlyric: data?.translatedLyric || '' }
+  return normalizeLyricResult({
+    lyric: data?.lyric || '',
+    tlyric: data?.translatedLyric || '',
+    rlyric: data?.transliterationLyric || data?.romaLyric || '',
+  })
 }
 
 function fmtLrcTime(sec) {
@@ -1116,10 +1168,10 @@ const lyricMap = { wy: wyLyric, tx: txLyric, kw: kwLyric, kg: kgLyric, mg: mgLyr
 
 export async function getLyric(songId, source, extra = {}) {
   const fn = lyricMap[source]
-  if (!fn || !songId) return { lyric: '', tlyric: '' }
+  if (!fn || !songId) return normalizeLyricResult({})
   try {
-    return await fn(songId, extra)
+    return normalizeLyricResult(await fn(songId, extra))
   } catch {
-    return { lyric: '', tlyric: '' }
+    return normalizeLyricResult({})
   }
 }
