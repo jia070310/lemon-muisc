@@ -166,41 +166,80 @@ paths_ready() {
   [ -n "${wizard_music_path}" ] && [ -n "${wizard_downloads_path}" ]
 }
 
-get_compose_image() {
-  if prefer_local_image_alias >/dev/null 2>&1; then
-    echo "${LOCAL_IMAGE_ALIAS}"
-    return 0
-  fi
+# 飞牛 docker-project 会按 compose 的 image 去拉仓库。
+# 短名（lemon-music:latest）会被解析成 registry-1.docker.io，国内必超时。
+# compose 里永远写带 registry 的完整地址；本地短名只用于 docker run。
+compose_registry_image() {
+  local img="${1:-}"
+  local remote=""
 
   if [ -f "${IMAGE_CONF}" ]; then
     # shellcheck disable=SC1090
     . "${IMAGE_CONF}"
-    if [ -n "${SAVED_IMAGE}" ] && docker_cmd image inspect "${SAVED_IMAGE}" >/dev/null 2>&1; then
-      echo "${SAVED_IMAGE}"
+    remote="${REMOTE_IMAGE:-}"
+  fi
+
+  case "${img}" in
+    ""|lemon-music|lemon-music:*)
+      if [ -n "${remote}" ]; then
+        case "${remote}" in
+          */*|ghcr.*|*.*/*) printf '%s\n' "${remote}"; return 0 ;;
+        esac
+      fi
+      printf '%s\n' "${REMOTE_IMAGE_DEFAULT}"
+      return 0
+      ;;
+    */*|ghcr.*|*.*/*)
+      printf '%s\n' "${img}"
+      return 0
+      ;;
+    *)
+      # 其它无仓库前缀短名同样会打到 Docker Hub
+      printf '%s\n' "${REMOTE_IMAGE_DEFAULT}"
+      return 0
+      ;;
+  esac
+}
+
+get_compose_image() {
+  local parsed="" remote=""
+
+  if [ -f "${IMAGE_CONF}" ]; then
+    # shellcheck disable=SC1090
+    . "${IMAGE_CONF}"
+    if [ -n "${REMOTE_IMAGE:-}" ]; then
+      compose_registry_image "${REMOTE_IMAGE}"
       return 0
     fi
   fi
 
   if [ -f "${COMPOSE_FILE}" ]; then
-    local parsed
     parsed="$(grep -E '^[[:space:]]*image:[[:space:]]*' "${COMPOSE_FILE}" | head -n 1 | sed -E 's/^[[:space:]]*image:[[:space:]]*//' | tr -d '\r' | xargs)"
     if [ -n "${parsed}" ]; then
-      case "${parsed}" in
-        lemon-music:*|lemon-music)
-          echo "${REMOTE_IMAGE_DEFAULT}"
-          ;;
-        ghcr.*|ghcr.io/*|*/lemon-muisc:*)
-          echo "${parsed}"
-          ;;
-        *)
-          echo "${parsed}"
-          ;;
-      esac
+      compose_registry_image "${parsed}"
       return 0
     fi
   fi
 
+  if [ -n "${IMAGE:-}" ]; then
+    compose_registry_image "${IMAGE}"
+    return 0
+  fi
+
   echo "${REMOTE_IMAGE_DEFAULT}"
+}
+
+# docker run 优先本地短名，避免依赖仓库可达性
+get_runtime_image() {
+  if prefer_local_image_alias >/dev/null 2>&1; then
+    echo "${LOCAL_IMAGE_ALIAS}"
+    return 0
+  fi
+  if resolved="$(resolve_local_image_name "$(get_compose_image)" 2>/dev/null)"; then
+    echo "${resolved}"
+    return 0
+  fi
+  get_compose_image
 }
 
 json_escape() {
@@ -243,7 +282,8 @@ write_compose_file() {
   mkdir -p "${COMPOSE_DIR}" 2>/dev/null || true
   write_compose_env "${music}" "${downloads}" "${config}"
 
-  # 必须写入绝对路径：飞牛 docker-project 不会把运行设置里的 wizard_* 注入到挂载
+  # compose 只用完整仓库地址（飞牛 docker-project）；挂载必须写绝对路径
+  image="$(compose_registry_image "${image}")"
   cat > "${COMPOSE_FILE}" <<EOF
 services:
   lemon-music:
@@ -446,7 +486,9 @@ recreate_compose_stack() {
     echo "本地没有 Docker 镜像，自动拉取也失败。请检查网络，或在 SSH 执行: docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest && docker tag ghcr.1ms.run/jia070310/lemon-muisc:latest lemon-music:latest" >> "${log_file}"
     return 1
   fi
-  image="$(get_compose_image)"
+  # compose 仍写完整仓库地址；实际 docker run 优先本地短名
+  write_compose_file "${music}" "${downloads}" "${config}"
+  image="$(get_runtime_image)"
 
   {
     echo "=== recreate $(date -Iseconds) ==="

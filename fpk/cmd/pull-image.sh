@@ -364,25 +364,38 @@ update_compose_image() {
     log_line "警告: 未找到 compose 文件 ${COMPOSE_FILE}"
     return 0
   fi
-  local tmp="${COMPOSE_FILE}.tmp"
-  sed -E "s|^([[:space:]]*)image:[[:space:]]*.*|\1image: ${IMAGE}|" "${COMPOSE_FILE}" > "${tmp}" \
+  local compose_img tmp
+  # 禁止把短名写入 compose，否则飞牛 docker-project 会去拉 Docker Hub
+  if declare -F compose_registry_image >/dev/null 2>&1; then
+    compose_img="$(compose_registry_image "${IMAGE}")"
+  else
+    compose_img="${IMAGE}"
+    case "${compose_img}" in
+      lemon-music|lemon-music:*) compose_img="${REMOTE_IMAGE_DEFAULT}" ;;
+    esac
+  fi
+  tmp="${COMPOSE_FILE}.tmp"
+  sed -E "s|^([[:space:]]*)image:[[:space:]]*.*|\1image: ${compose_img}|" "${COMPOSE_FILE}" > "${tmp}" \
     && mv "${tmp}" "${COMPOSE_FILE}"
-  log_line "已写入 compose 镜像: ${IMAGE}"
+  log_line "已写入 compose 镜像: ${compose_img}"
 }
 
 save_image_config() {
   mkdir -p "${TRIM_PKGETC}" 2>/dev/null || true
-  local saved="${IMAGE}"
-  case "${saved}" in
-    ghcr.*|ghcr.io/*|*/lemon-muisc:*|*/lemon-music:*) saved="${LOCAL_IMAGE_ALIAS}" ;;
+  local saved="${LOCAL_IMAGE_ALIAS}"
+  local remote="${IMAGE}"
+  case "${remote}" in
+    lemon-music|lemon-music:*)
+      remote="${REMOTE_IMAGE:-${REMOTE_IMAGE_DEFAULT}}"
+      ;;
   esac
   cat > "${IMAGE_CONF}" << EOF
 SAVED_IMAGE="${saved}"
+REMOTE_IMAGE="${remote}"
 SAVED_PULL_SOURCE="${wizard_pull_source:-ghcr_direct}"
 SAVED_PULL_TIMEOUT="${wizard_pull_timeout:-600}"
 SAVED_AT="$(date -Iseconds)"
 EOF
-  IMAGE="${saved}"
 }
 
 show_wizard_summary() {
@@ -567,7 +580,7 @@ image_exists_locally() {
   return 1
 }
 
-# 拉取后把远程镜像 retag 为 lemon-music:latest，并写回 compose
+# 拉取后把远程镜像 retag 为 lemon-music:latest；compose 仍写完整仓库地址（避免飞牛打 Docker Hub）
 normalize_pulled_image() {
   local remote="${IMAGE:-}"
   local promoted=""
@@ -582,6 +595,13 @@ normalize_pulled_image() {
 
   [ -n "${remote}" ] || remote="${IMAGE}"
 
+  case "${remote}" in
+    lemon-music|lemon-music:*)
+      remote="$(find_newest_remote_image "${wizard_image_tag:-latest}" 2>/dev/null || true)"
+      [ -n "${remote}" ] || remote="${REMOTE_IMAGE_DEFAULT}"
+      ;;
+  esac
+
   if promoted="$(promote_to_local_image_alias "${remote}")"; then
     IMAGE="${promoted}"
     log_line "已打本地短名: ${IMAGE} ← ${remote}"
@@ -592,7 +612,12 @@ normalize_pulled_image() {
     return 1
   fi
 
+  # compose 写远程完整地址；IMAGE 保持短名供运行时使用
+  REMOTE_IMAGE="${remote}"
+  export REMOTE_IMAGE
+  IMAGE="${remote}"
   update_compose_image
+  IMAGE="${promoted}"
   save_image_config
   return 0
 }

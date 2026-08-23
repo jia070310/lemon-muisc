@@ -120,9 +120,13 @@ promote_to_local_image_alias() {
 
   if [ -n "${TRIM_PKGETC:-}" ]; then
     mkdir -p "${TRIM_PKGETC}" 2>/dev/null || true
+    local remote_save="${src}"
+    case "${remote_save}" in
+      lemon-music|lemon-music:*) remote_save="${REMOTE_IMAGE_DEFAULT}" ;;
+    esac
     cat > "${TRIM_PKGETC}/image.conf" <<EOF
 SAVED_IMAGE="${LOCAL_IMAGE_ALIAS}"
-REMOTE_IMAGE="${src}"
+REMOTE_IMAGE="${remote_save}"
 SAVED_AT="$(date -Iseconds)"
 EOF
   fi

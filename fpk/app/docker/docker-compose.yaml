@@ -1,6 +1,7 @@
 services:
   lemon-music:
-    image: lemon-music:latest
+    # 必须用完整仓库地址；短名 lemon-music 会被飞牛当成 Docker Hub 拉取并超时
+    image: ghcr.1ms.run/jia070310/lemon-muisc:latest
     container_name: lemon-music
     restart: unless-stopped
     ports:
