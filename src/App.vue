@@ -70,11 +70,12 @@
       <div class="source-fault-modal">
         <h3>音源异常</h3>
         <template v-if="sourceFault">
-          <p class="fault-desc">当前音源「{{ sourceFault.name }}」运行出错，已自动停用以避免影响应用。您可以选择删除该音源，或删除后尝试重新导入。</p>
+          <p class="fault-desc">当前音源「{{ sourceFault.name }}」运行出错，已自动停用以避免影响应用。若为临时网络问题，可保留音源稍后重试；若音源脚本损坏，请删除或重新导入。</p>
           <div class="fault-error">{{ sourceFault.message }}</div>
         </template>
         <p v-if="faultResult" class="fault-result" :class="{ ok: faultResult.ok }">{{ faultResult.text }}</p>
         <div v-if="sourceFault" class="fault-actions">
+          <button class="btn-ghost" :disabled="faultBusy" @click="handleFaultDismiss">知道了，保留音源</button>
           <button class="btn-ghost" :disabled="faultBusy" @click="handleFaultDelete">删除音源</button>
           <button class="btn-primary" :disabled="faultBusy" @click="handleFaultReimport">
             {{ faultBusy ? '处理中…' : '删除并重新导入' }}
@@ -146,6 +147,18 @@ async function loadSourceFault() {
     const fault = await api.source.getFault()
     sourceFault.value = fault?.id ? fault : null
   } catch {}
+}
+
+async function handleFaultDismiss() {
+  faultBusy.value = true
+  try {
+    await api.source.dismissFault()
+    closeFaultModal()
+  } catch (e) {
+    faultResult.value = { ok: false, text: e.message || '操作失败' }
+  } finally {
+    faultBusy.value = false
+  }
 }
 
 async function handleFaultDelete() {

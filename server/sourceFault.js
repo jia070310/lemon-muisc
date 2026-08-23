@@ -4,6 +4,25 @@ import { broadcast } from './ws.js'
 
 const FAULT_KEY = 'source.fault'
 
+/** 临时网络错误：不应停用整个音源 */
+export function isTransientNetworkError(error) {
+  const message = error?.message || String(error)
+  const code = error?.code || ''
+  const text = `${message} ${code}`
+
+  if (/socket hang up|ECONNRESET|ETIMEDOUT|EPIPE|ECONNABORTED|ERR_SOCKET/i.test(text)) {
+    return true
+  }
+  if (/timeout|timed out|请求超时/i.test(text) && !/音源初始化超时/i.test(text)) {
+    return true
+  }
+  return false
+}
+
+export function shouldRecordSourceFault(error) {
+  return !isTransientNetworkError(error)
+}
+
 export function getSourceFault() {
   const row = getDB().prepare('SELECT value FROM settings WHERE key = ?').get(FAULT_KEY)
   if (!row?.value) return null
@@ -19,6 +38,11 @@ export function clearSourceFault() {
 }
 
 export function recordSourceFault(sourceId, error) {
+  if (!shouldRecordSourceFault(error)) {
+    console.warn(`[音源] 临时网络错误（不停用音源）: ${error?.message || error}`)
+    return null
+  }
+
   const message = error?.message || String(error)
   const row = getDB().prepare('SELECT id, name, homepage FROM user_apis WHERE id = ?').get(sourceId)
 
@@ -50,6 +74,10 @@ export function recordSourceFault(sourceId, error) {
 export function handleRuntimeSourceFault(error) {
   const active = getActiveSource()
   if (!active?.id) return false
+  if (!shouldRecordSourceFault(error)) {
+    console.warn(`[音源] 未捕获的临时网络错误（不停用音源）: ${error?.message || error}`)
+    return true
+  }
   recordSourceFault(active.id, error)
   return true
 }

@@ -52,6 +52,7 @@ export const api = {
     active: () => request('/source/active'),
     getFault: () => request('/source/fault'),
     deleteFault: () => request('/source/fault/delete', { method: 'POST' }),
+    dismissFault: () => request('/source/fault/dismiss', { method: 'POST' }),
     reimportFault: () => request('/source/fault/reimport', { method: 'POST' }),
     request: (source, action, info) => request('/source/request', { method: 'POST', body: { source, action, info } }),
   },

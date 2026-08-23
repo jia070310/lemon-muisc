@@ -72,6 +72,11 @@ sourceRouter.get('/fault', (_req, res) => {
   res.json(getSourceFault())
 })
 
+sourceRouter.post('/fault/dismiss', (_req, res) => {
+  clearSourceFault()
+  res.json({ ok: true })
+})
+
 sourceRouter.post('/fault/delete', (_req, res) => {
   try {
     const fault = getSourceFault()
@@ -164,8 +169,11 @@ sourceRouter.post('/activate/:id', async (req, res) => {
     clearSourceFault()
     res.json({ ok: true, sources, name: fields.name })
   } catch (e) {
-    recordSourceFault(req.params.id, e)
-    res.status(500).json({ error: e.message, fault: true })
+    if (recordSourceFault(req.params.id, e)) {
+      res.status(500).json({ error: e.message, fault: true })
+    } else {
+      res.status(500).json({ error: e.message || '音源请求失败，请稍后重试' })
+    }
   }
 })
 
