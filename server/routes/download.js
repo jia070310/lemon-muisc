@@ -46,9 +46,14 @@ downloadRouter.post('/add', async (req, res) => {
           musicId: t.musicId || '',
           rid: t.rid || '',
           dcTargetId: t.dcTargetId || '',
-          albummid: t.albummid || '',
-          picUrl: t.picUrl || '',
+          albummid: t.albummid || t.albumMid || t.albumId || '',
+          albumId: t.albumId || t.albumMid || t.albummid || '',
+          albumMid: t.albumMid || t.albummid || t.albumId || '',
+          strMediaMid: t.strMediaMid || '',
+          img: t.img || t.picUrl || '',
+          picUrl: t.picUrl || t.img || '',
           source: t.source,
+          types: t.types || [],
           qualitys: t.qualitys || [],
         })
         insert.run(id, t.name, t.singer || '', t.source || '', t.album || '', t.interval || '', t.quality || '320k', meta)
@@ -138,6 +143,7 @@ async function downloadTask(task, settings) {
 
     const urlResult = await requestSource(source, 'musicUrl', {
       type: quality,
+      quality,
       musicInfo,
     })
 

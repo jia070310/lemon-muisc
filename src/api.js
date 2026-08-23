@@ -59,6 +59,12 @@ export const api = {
     search: (keyword, source, page = 1) => request(`/search?keyword=${encodeURIComponent(keyword)}&source=${source}&page=${page}`),
     sources: () => request('/search/sources'),
   },
+  playlist: {
+    fetch: (url, source) => request(`/playlist?url=${encodeURIComponent(url)}&source=${source}`, { timeout: 120000 }),
+    recommend: (source, sort = 'hot', page = 1) =>
+      request(`/playlist/recommend?source=${source}&sort=${sort}&page=${page}`),
+    sources: () => request('/playlist/sources'),
+  },
   download: {
     list: () => request('/download/list'),
     add: (tasks) => request('/download/add', { method: 'POST', body: { tasks } }),
@@ -68,8 +74,12 @@ export const api = {
     clearCompleted: () => request('/download/clear-completed', { method: 'POST' }),
   },
   play: {
-    getUrl: (songId, source, name, singer, quality, localPath) =>
-      request('/play/url', { method: 'POST', body: { songId, source, name, singer, quality, localPath } }),
+    getUrl: (payload, source, name, singer, quality, localPath) => {
+      const body = typeof payload === 'object' && payload !== null
+        ? payload
+        : { songId: payload, source, name, singer, quality, localPath }
+      return request('/play/url', { method: 'POST', body })
+    },
     getLyric: (songIdOrPayload, source, lyric) =>
       request('/play/lyric', {
         method: 'POST',

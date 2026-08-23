@@ -1,12 +1,33 @@
 import { Router } from 'express'
 import fs from 'fs'
 import path from 'path'
+import needle from 'needle'
 import { requestSource, getActiveSource } from '../sourceManager.js'
 import { getLyric } from '../musicSdk.js'
 import { buildMusicInfo, lyricLookupExtra } from '../utils/musicInfo.js'
 import { isAllowedMediaPath } from '../utils/filePaths.js'
 
 export const playRouter = Router()
+
+function formatPlayError(err) {
+  const msg = err?.message || String(err)
+  if (/104003|"code"\s*:\s*"104003"/.test(msg)) {
+    return '该歌曲暂无播放权限（版权或 VIP 限制）'
+  }
+  if (/104001|104002/.test(msg)) {
+    return '该歌曲暂时无法播放'
+  }
+  if (msg.includes('未获取到URL') || msg.includes('获取URL失败') || msg.includes('获取播放链接失败')) {
+    if (msg.length > 120 || msg.includes('traceid')) {
+      return '无法获取播放链接，该歌曲可能受版权限制或暂不可用'
+    }
+    return msg.replace(/:\s*\{[\s\S]*\}$/, '').trim() || '无法获取播放链接'
+  }
+  if (msg.length > 200 && (msg.includes('{') || msg.includes('traceid'))) {
+    return '无法获取播放链接，请尝试其他歌曲'
+  }
+  return msg
+}
 
 const AUDIO_MIME = {
   '.mp3': 'audio/mpeg',
@@ -18,6 +39,42 @@ const AUDIO_MIME = {
   '.opus': 'audio/ogg',
   '.wav': 'audio/wav',
   '.webm': 'audio/webm',
+}
+
+const SOURCE_HEADERS = {
+  tx: { Referer: 'https://y.qq.com/', Origin: 'https://y.qq.com' },
+  kw: { Referer: 'https://www.kuwo.cn/' },
+  kg: { Referer: 'https://www.kugou.com/' },
+  wy: { Referer: 'https://music.163.com/' },
+  mg: { Referer: 'https://music.migu.cn/' },
+}
+
+function isAllowedRemoteUrl(raw) {
+  try {
+    const u = new URL(raw)
+    if (!['http:', 'https:'].includes(u.protocol)) return false
+    const host = u.hostname.toLowerCase()
+    if (host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host.endsWith('.local')) return false
+    if (/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host)) return false
+    return true
+  } catch {
+    return false
+  }
+}
+
+function guessMimeFromUrl(url) {
+  try {
+    const ext = path.extname(new URL(url).pathname).toLowerCase()
+    return AUDIO_MIME[ext] || 'audio/mpeg'
+  } catch {
+    return 'audio/mpeg'
+  }
+}
+
+function wrapPlayUrl(url, source) {
+  if (!url || url.startsWith('/api/play/')) return url
+  if (!/^https?:\/\//i.test(url)) return url
+  return `/api/play/proxy?url=${encodeURIComponent(url)}&source=${encodeURIComponent(source || '')}`
 }
 
 playRouter.post('/url', async (req, res) => {
@@ -39,17 +96,21 @@ playRouter.post('/url', async (req, res) => {
     const active = getActiveSource()
     if (!active?.handler) return res.status(400).json({ error: '没有激活的音源，请先在设置中激活音源' })
 
+    const type = quality || req.body.quality || '128k'
+    const musicInfo = buildMusicInfo({ ...req.body, source, quality: type })
+
     const result = await requestSource(source, 'musicUrl', {
-      type: quality || '128k',
-      musicInfo: buildMusicInfo(req.body),
+      type,
+      quality: type,
+      musicInfo,
     })
 
     const url = typeof result === 'string' ? result : result?.url
     if (!url) return res.status(500).json({ error: '获取播放链接失败' })
 
-    res.json({ ok: true, url })
+    res.json({ ok: true, url: wrapPlayUrl(url, source) })
   } catch (e) {
-    res.status(500).json({ error: e.message })
+    res.status(500).json({ error: formatPlayError(e) })
   }
 })
 
@@ -95,6 +156,45 @@ playRouter.get('/local', (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
+})
+
+playRouter.get('/proxy', (req, res) => {
+  const url = req.query.url
+  const source = typeof req.query.source === 'string' ? req.query.source : ''
+  if (!url || typeof url !== 'string' || !isAllowedRemoteUrl(url)) {
+    return res.status(400).json({ error: '无效播放链接' })
+  }
+
+  const headers = {
+    connection: 'close',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    ...(SOURCE_HEADERS[source] || {}),
+  }
+  if (req.headers.range) headers.Range = req.headers.range
+
+  const upstream = needle.get(url, { follow_max: 5, headers, parse_response: false })
+
+  upstream.on('header', (statusCode, respHeaders) => {
+    if (statusCode >= 400) {
+      if (!res.headersSent) res.status(statusCode).json({ error: '远程音频不可用' })
+      return
+    }
+    const mime = respHeaders['content-type']?.split(';')[0]?.trim() || guessMimeFromUrl(url)
+    res.setHeader('Content-Type', mime)
+    res.setHeader('Accept-Ranges', 'bytes')
+    res.setHeader('Cache-Control', 'private, no-cache')
+    if (respHeaders['content-length']) res.setHeader('Content-Length', respHeaders['content-length'])
+    if (statusCode === 206 && respHeaders['content-range']) {
+      res.status(206)
+      res.setHeader('Content-Range', respHeaders['content-range'])
+    }
+  })
+
+  upstream.on('err', (err) => {
+    if (!res.headersSent) res.status(502).json({ error: err.message || '音频流传输失败' })
+  })
+
+  upstream.pipe(res)
 })
 
 playRouter.post('/lyric', async (req, res) => {

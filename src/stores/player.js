@@ -1,6 +1,7 @@
 import { ref, computed } from 'vue'
 import { api } from '../api.js'
 import { cleanTrackItem } from '../utils/text.js'
+import { buildPlayPayload } from '../utils/musicPayload.js'
 
 export const currentPlaying = ref(null)
 export const loadingPlay = ref(null)
@@ -47,6 +48,18 @@ function pickItemFields(item) {
     hash: cleaned.hash,
     songId: cleaned.songId,
     copyrightId: cleaned.copyrightId,
+    strMediaMid: cleaned.strMediaMid,
+    albumAudioId: cleaned.albumAudioId,
+    albumId: cleaned.albumId,
+    albumMid: cleaned.albumMid,
+    albummid: cleaned.albummid,
+    img: cleaned.img,
+    musicId: cleaned.musicId,
+    rid: cleaned.rid,
+    dcTargetId: cleaned.dcTargetId,
+    duration: cleaned.duration,
+    types: cleaned.types,
+    qualitys: cleaned.qualitys,
     picUrl: cleaned.picUrl,
     interval: cleaned.interval,
     album: cleaned.album,
@@ -220,7 +233,7 @@ export function initPlayer() {
   audio.addEventListener('canplay', syncDurationFromAudio)
   audio.addEventListener('ended', onTrackEnded)
   audio.addEventListener('error', () => {
-    playerError.value = '播放失败，请检查音源是否可用'
+    playerError.value = '音频加载失败，请尝试其他歌曲'
     loadingPlay.value = null
   })
 
@@ -385,11 +398,10 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 }
     const isLocal = Boolean(item.localPath) || source === 'local'
     let url = ''
     if (isLocal) {
-      const res = await api.play.getUrl(item.id, 'local', item.name, item.singer, '128k', item.localPath)
+      const res = await api.play.getUrl(buildPlayPayload(item, 'local', '128k', { localPath: item.localPath }))
       url = res.url
     } else {
-      const songId = item.songmid || item.hash || item.songId || item.copyrightId || item.id
-      const res = await api.play.getUrl(songId, source, item.name, item.singer, '128k')
+      const res = await api.play.getUrl(buildPlayPayload(item, source, '128k'))
       url = res.url
     }
     if (!url) throw new Error('获取播放链接失败')
@@ -425,28 +437,54 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 }
     }
     saveQueueState()
   } catch (e) {
-    playerError.value = e.message || '试听失败，请确认音源已激活'
-    throw e
+    const message = formatPlayClientError(e)
+    playerError.value = message
+    throw new Error(message)
   } finally {
     loadingPlay.value = null
   }
 }
 
+function formatPlayClientError(e) {
+  const msg = e?.message || ''
+  if (e?.name === 'NotSupportedError' || /no supported sources/i.test(msg)) {
+    return '浏览器无法播放该音频，请尝试其他歌曲或音质'
+  }
+  if (/failed to load|network|audio/i.test(msg)) {
+    return '音频加载失败，请检查网络或更换歌曲'
+  }
+  return msg || '试听失败，请确认音源已激活'
+}
+
 function waitForAudioReady() {
-  return new Promise(resolve => {
+  return new Promise((resolve, reject) => {
     if (!audio) { resolve(); return }
-    if (audio.readyState >= 1) {
+    if (audio.readyState >= 1 && !audio.error) {
       syncDurationFromAudio()
       resolve()
       return
     }
+    let settled = false
     const finish = () => {
+      if (settled) return
+      settled = true
+      if (audio.error) {
+        reject(new Error(formatPlayClientError({ name: 'NotSupportedError' })))
+        return
+      }
       syncDurationFromAudio()
       resolve()
     }
+    const onError = () => {
+      if (settled) return
+      settled = true
+      reject(new Error(formatPlayClientError({ name: 'NotSupportedError' })))
+    }
     audio.addEventListener('loadedmetadata', finish, { once: true })
+    audio.addEventListener('canplay', finish, { once: true })
     audio.addEventListener('durationchange', finish, { once: true })
-    setTimeout(finish, 2500)
+    audio.addEventListener('error', onError, { once: true })
+    setTimeout(finish, 8000)
   })
 }
 
@@ -533,23 +571,10 @@ export function toggleQueuePanel() {
 }
 
 async function fetchLyric(item, activeSource) {
-  const songId = item.songmid || item.hash || item.songId || item.copyrightId || item.id
   const source = item.source || activeSource
   try {
     const res = await api.play.getLyric({
-      songId,
-      source,
-      name: item.name,
-      singer: item.singer,
-      album: item.album || item.albumName,
-      hash: item.hash,
-      songmid: item.songmid,
-      copyrightId: item.copyrightId,
-      albumAudioId: item.albumAudioId,
-      duration: item.duration || item.interval,
-      musicId: item.musicId,
-      rid: item.rid,
-      dcTargetId: item.dcTargetId,
+      ...buildPlayPayload(item, source, '128k'),
       lyric: item.lyric,
     })
     if (res.lyric) lyricLines.value = parseLrc(res.lyric)
