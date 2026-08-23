@@ -59,6 +59,7 @@
         "initValue": "latest",
         "options": [
           { "label": "latest（最新）", "value": "latest" },
+          { "label": "1.0.7", "value": "1.0.7" },
           { "label": "1.0.6", "value": "1.0.6" },
           { "label": "1.0.5", "value": "1.0.5" }
         ]

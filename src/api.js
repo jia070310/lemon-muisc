@@ -50,6 +50,9 @@ export const api = {
     activate: (id) => request(`/source/activate/${id}`, { method: 'POST' }),
     deactivate: () => request('/source/deactivate', { method: 'POST' }),
     active: () => request('/source/active'),
+    getFault: () => request('/source/fault'),
+    deleteFault: () => request('/source/fault/delete', { method: 'POST' }),
+    reimportFault: () => request('/source/fault/reimport', { method: 'POST' }),
     request: (source, action, info) => request('/source/request', { method: 'POST', body: { source, action, info } }),
   },
   search: {

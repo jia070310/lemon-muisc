@@ -62,6 +62,27 @@
 
     <PlayerBar />
 
+    <div v-if="showFaultModal" class="modal-overlay source-fault-overlay">
+      <div class="source-fault-modal">
+        <h3>音源异常</h3>
+        <template v-if="sourceFault">
+          <p class="fault-desc">当前音源「{{ sourceFault.name }}」运行出错，已自动停用以避免影响应用。您可以选择删除该音源，或删除后尝试重新导入。</p>
+          <div class="fault-error">{{ sourceFault.message }}</div>
+        </template>
+        <p v-if="faultResult" class="fault-result" :class="{ ok: faultResult.ok }">{{ faultResult.text }}</p>
+        <div v-if="sourceFault" class="fault-actions">
+          <button class="btn-ghost" :disabled="faultBusy" @click="handleFaultDelete">删除音源</button>
+          <button class="btn-primary" :disabled="faultBusy" @click="handleFaultReimport">
+            {{ faultBusy ? '处理中…' : '删除并重新导入' }}
+          </button>
+        </div>
+        <div v-else class="fault-actions">
+          <router-link to="/settings" class="btn-primary fault-settings-btn" @click="closeFaultModal">前往设置 → 音源管理</router-link>
+          <button class="btn-ghost" @click="closeFaultModal">关闭</button>
+        </div>
+      </div>
+    </div>
+
     <nav class="mobile-tabbar" aria-label="主导航">
       <router-link to="/search" class="tab-item" active-class="active">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
@@ -89,9 +110,9 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
-import { connectWS, connected as wsConnected } from './ws.js'
+import { connectWS, connected as wsConnected, onWS } from './ws.js'
 import { initPlayer } from './stores/player.js'
 import { checkForUpdate, hasUpdate } from './composables/useUpdateCheck.js'
 import { api } from './api.js'
@@ -101,6 +122,54 @@ import PlayerBar from './components/PlayerBar.vue'
 const route = useRoute()
 const isTagPage = computed(() => route.path === '/tag' || route.path.startsWith('/tag/'))
 const setupBanner = ref(false)
+const sourceFault = ref(null)
+const faultBusy = ref(false)
+const faultResult = ref(null)
+const showFaultModal = computed(() => Boolean(sourceFault.value || faultResult.value))
+let offSourceFaultWS = null
+
+function closeFaultModal() {
+  sourceFault.value = null
+  faultResult.value = null
+}
+
+async function loadSourceFault() {
+  try {
+    const fault = await api.source.getFault()
+    sourceFault.value = fault?.id ? fault : null
+  } catch {}
+}
+
+async function handleFaultDelete() {
+  faultBusy.value = true
+  try {
+    await api.source.deleteFault()
+    closeFaultModal()
+  } catch (e) {
+    faultResult.value = { ok: false, text: e.message || '删除失败' }
+  } finally {
+    faultBusy.value = false
+  }
+}
+
+async function handleFaultReimport() {
+  faultBusy.value = true
+  try {
+    const res = await api.source.reimportFault()
+    sourceFault.value = null
+    if (res.reimported) {
+      faultResult.value = { ok: true, text: `已重新导入音源「${res.name}」，请在设置中重新激活。` }
+    } else if (res.hint) {
+      faultResult.value = { ok: false, text: res.error ? `${res.hint}（${res.error}）` : res.hint }
+    } else {
+      closeFaultModal()
+    }
+  } catch (e) {
+    faultResult.value = { ok: false, text: e.message || '重新导入失败' }
+  } finally {
+    faultBusy.value = false
+  }
+}
 
 async function persistTheme(next) {
   applyTheme(next)
@@ -115,12 +184,21 @@ onMounted(() => {
   connectWS()
   initPlayer()
   checkForUpdate()
+  loadSourceFault()
+  offSourceFaultWS = onWS('source.fault', (fault) => {
+    sourceFault.value = fault?.id ? fault : null
+    faultResult.value = null
+  })
   api.paths.list().then((res) => {
     setupBanner.value = Boolean(res.setup?.needsPathConfig)
   }).catch(() => {})
   api.settings.get().then((s) => {
     if (s?.[THEME_KEY]) applyTheme(s[THEME_KEY])
   }).catch(() => {})
+})
+
+onUnmounted(() => {
+  offSourceFaultWS?.()
 })
 </script>
 
@@ -383,5 +461,71 @@ onMounted(() => {
     border-radius: 50%;
     background: var(--warning);
   }
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.source-fault-modal {
+  width: min(480px, 100%);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+  border-radius: 12px;
+  padding: 24px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+}
+
+.source-fault-modal h3 {
+  margin: 0 0 12px;
+  font-size: 18px;
+  color: var(--error);
+}
+
+.fault-desc {
+  margin: 0 0 12px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.fault-error {
+  margin-bottom: 16px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(244, 67, 54, 0.1);
+  border: 1px solid rgba(244, 67, 54, 0.25);
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text);
+  word-break: break-word;
+}
+
+.fault-result {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--error);
+}
+.fault-result.ok { color: var(--success); }
+
+.fault-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.fault-settings-btn {
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 </style>

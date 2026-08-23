@@ -69,6 +69,7 @@ export function initDB(configPath) {
     'download.isUseOtherSource': 'true',
     'download.isSavePathGroupByListName': 'false',
     'source.active': '',
+    'source.fault': '',
     'player.coverStyle': 'disc',
     'ui.theme': 'dark',
     'file.paths': '[]',

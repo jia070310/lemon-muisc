@@ -11,6 +11,9 @@ import { apiRouter } from './routes/index.js'
 import { setupWebSocket } from './ws.js'
 import { loadSource } from './sourceManager.js'
 import { refreshStoredSourceMeta } from './routes/source.js'
+import { installSourceFaultHandlers, recordSourceFault, getSourceFault } from './sourceFault.js'
+
+installSourceFaultHandlers()
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PORT = process.env.PORT || 7983
@@ -49,17 +52,25 @@ server.listen(PORT, '0.0.0.0', async () => {
   console.log(`Download path: ${DATA_PATH}`)
   console.log(`Config path: ${CONFIG_PATH}`)
 
-  // 自动恢复上次激活的音源
+  // 自动恢复上次激活的音源（若该音源已记录故障则跳过，避免反复崩溃）
   try {
+    const fault = getSourceFault()
     const row = getDB().prepare("SELECT value FROM settings WHERE key = 'source.active'").get()
-    if (row?.value) {
+    if (row?.value && row.value !== fault?.id) {
       const api = getDB().prepare('SELECT id, script FROM user_apis WHERE id = ?').get(row.value)
       if (api) {
         const sources = await loadSource(api.id, api.script)
         console.log(`已自动激活音源: ${api.id}`, Object.keys(sources))
       }
+    } else if (fault) {
+      console.warn(`跳过自动激活故障音源: ${fault.name} (${fault.id})`)
     }
   } catch (e) {
-    console.error('自动激活音源失败:', e.message)
+    const row = getDB().prepare("SELECT value FROM settings WHERE key = 'source.active'").get()
+    if (row?.value) {
+      recordSourceFault(row.value, e)
+    } else {
+      console.error('自动激活音源失败:', e.message)
+    }
   }
 })

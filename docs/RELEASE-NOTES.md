@@ -1,37 +1,42 @@
-# 柠檬音乐下载 v1.0.6
+# 柠檬音乐下载 v1.0.7
 
 ## 更新内容
 
-### 飞牛 FPK 安装 / 启用（2026-08-23 最新修复版）
+### 音源故障隔离（重点）
 
-- **禁止 compose 使用短名 `lemon-music`**：短名会被飞牛当成 Docker Hub（`registry-1.docker.io`）拉取并超时；compose 固定写 `ghcr.1ms.run/jia070310/lemon-muisc:latest`
-- **安装确认镜像后软启动容器**：减少「启用」时偶发「docker不可用」导致无容器的情况
-- **安装拉取不死锁**：飞牛 `docker-project` 主拉取 + 脚本后台短 pull（≤120s）+ `docker images` 列表轮询，避免卡住数十分钟
-- **80% 假死修复**：镜像已在「本地镜像」列表即可判定成功；安装阶段不与飞牛抢建容器
-- 安装向导可选 **国内加速**：1ms / 南大 nju / dockerproxy / DaoCloud；也可「跳过拉取」
-- 默认在线拉取 `ghcr.1ms.run`；本地已有镜像时建议选手动安装 +「跳过拉取」
-- 启用时优先用本地镜像；Docker 不可用时给出可操作提示
+- **音源异常不再拖垮整个应用**：未捕获的 Promise 拒绝 / 运行时错误会自动停用当前音源，主进程继续运行
+- **启动时跳过故障音源**：避免容器因反复激活坏音源而重启循环
+- **全局提示弹窗**：打开 Web UI 时提示音源名称与错误信息
+- **用户可选操作**：
+  - **删除音源** — 移除故障脚本并清除记录
+  - **删除并重新导入** — 优先从音源 homepage 链接重新下载，失败则使用本地脚本副本
+
+### v1.0.6 — 飞牛 FPK 安装 / 启用
+
+- compose 固定使用 `ghcr.1ms.run/jia070310/lemon-muisc`，避免短名误拉 Docker Hub
+- 安装确认镜像后软启动容器；拉取不死锁；80% 假死修复
+- 安装向导可选国内加速或「跳过拉取」
 
 ### v1.0.5 — 酷我 / 酷狗歌词修复
 
-- 酷我改用 www.kuwo.cn 接口，修复大量歌曲歌词为空
-- 酷狗携带 album_audio_id，提升歌词命中率
+- 酷我改用 www.kuwo.cn 接口；酷狗携带 album_audio_id
 
 ## 安装 / 更新
 
-应用中心：**手动安装** [`lemon-music-1.0.6.fpk`](https://github.com/jia070310/lemon-muisc/releases/tag/v1.0.6)  
+应用中心：**手动安装** [`lemon-music-1.0.7.fpk`](https://github.com/jia070310/lemon-muisc/releases/tag/v1.0.7)  
 （勿点卡片「更新」；覆盖安装即可）
 
-本地已有镜像时：向导选 **「跳过拉取」** → 装完点 **「启用」** → `http://<NAS_IP>:7983`
+**v1.0.7 含应用本体更新，建议拉取新镜像**（或选 `1.0.7` 标签）后再启用。
 
 ```bash
-# 可选：SSH 预拉 / 打短名
-docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest
-docker tag ghcr.1ms.run/jia070310/lemon-muisc:latest lemon-music:latest
+docker pull ghcr.1ms.run/jia070310/lemon-muisc:1.0.7
+docker tag ghcr.1ms.run/jia070310/lemon-muisc:1.0.7 lemon-music:latest
 ```
+
+本地已有 `latest` 且安装向导选「跳过拉取」时，需先 SSH 拉取上述镜像并打 tag，再覆盖安装 FPK。
 
 ## Docker 镜像
 
-- **无需单独升镜像**：本轮仅 FPK 安装脚本修复，应用本体与 v1.0.6 镜像一致
-- `ghcr.io/jia070310/lemon-muisc:latest`（可用加速：`ghcr.1ms.run/jia070310/lemon-muisc:latest`）
-- `ghcr.io/jia070310/lemon-muisc:1.0.6`
+- `ghcr.io/jia070310/lemon-muisc:latest`
+- `ghcr.io/jia070310/lemon-muisc:1.0.7`
+- 国内加速：`ghcr.1ms.run/jia070310/lemon-muisc:1.0.7`

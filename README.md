@@ -2,7 +2,7 @@
 
 面向飞牛 NAS 的音乐搜索、试听、下载与标签管理工具。兼容落雪音乐（LX Music）自定义音源脚本。
 
-当前版本：**v1.0.6**  
+当前版本：**v1.0.7**  
 仓库：[https://github.com/jia070310/lemon-muisc](https://github.com/jia070310/lemon-muisc)
 
 ![搜索页：检索、试听队列与底栏播放器](docs/screenshots/search.png)
