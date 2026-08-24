@@ -347,14 +347,21 @@ onUnmounted(() => {
 
 .fs-lyric-col {
   height: min(62vh, 560px);
+  overflow-x: hidden;
   overflow-y: auto;
   mask-image: linear-gradient(to bottom, transparent, #000 12%, #000 88%, transparent);
   -webkit-mask-image: linear-gradient(to bottom, transparent, #000 12%, #000 88%, transparent);
   scrollbar-width: thin;
 }
+.fs-lyric-col::-webkit-scrollbar {
+  width: 6px;
+  height: 0;
+}
 .fs-lyric-list {
   padding: 30% 12px;
   text-align: center;
+  max-width: 100%;
+  overflow-x: hidden;
 }
 .fs-lyric-line {
   margin: 0;
@@ -362,14 +369,17 @@ onUnmounted(() => {
   font-size: 16px;
   line-height: 1.6;
   color: rgba(255, 255, 255, 0.35);
-  transition: color 0.25s, transform 0.25s, font-size 0.25s;
+  transition: color 0.25s, font-size 0.25s;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .fs-lyric-line.near { color: rgba(255, 255, 255, 0.55); }
 .fs-lyric-line.active {
   color: #fff;
   font-size: 22px;
   font-weight: 600;
-  transform: scale(1.02);
 }
 .fs-lyric-empty {
   height: 100%;
