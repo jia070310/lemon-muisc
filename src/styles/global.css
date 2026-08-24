@@ -160,10 +160,6 @@ input:focus, textarea:focus, select:focus {
 ::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-hover); }
 
 @media (max-width: 768px) {
-  :root {
-    --player-height: 76px;
-  }
-
   .page-title { font-size: 20px; }
   .page-subtitle { margin-bottom: 14px; }
 }

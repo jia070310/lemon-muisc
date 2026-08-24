@@ -1,5 +1,5 @@
 <template>
-  <div class="player-bar" ref="playerBarRef">
+  <div class="player-bar" ref="playerBarRef" :class="{ compact: isCompact }">
     <div class="bar-left">
       <div class="cover-progress-wrap" :class="coverStyle === 'disc' ? 'wrap-disc' : 'wrap-card'">
         <svg
@@ -140,11 +140,30 @@ import {
   playNext, playPrev, togglePlayMode, toggleQueuePanel,
   removeFromQueue, clearQueue, playTrackAt,
 } from '../stores/player.js'
-import { onMounted, onUnmounted, ref, computed } from 'vue'
+import { onMounted, onUnmounted, ref, computed, watch } from 'vue'
 import { cleanText } from '../utils/text.js'
 
 const queuePanelRef = ref(null)
 const queueBtnRef = ref(null)
+const playerBarRef = ref(null)
+const isCompact = ref(false)
+
+const COMPACT_ON = 980
+const COMPACT_OFF = 1040
+
+let compactObserver = null
+
+function applyCompact(width) {
+  if (isCompact.value) {
+    if (width >= COMPACT_OFF) isCompact.value = false
+  } else if (width <= COMPACT_ON) {
+    isCompact.value = true
+  }
+}
+
+watch(isCompact, (compact) => {
+  document.documentElement.style.setProperty('--player-height', compact ? '76px' : '64px')
+}, { immediate: true })
 
 const RING_CENTER = 26
 const DISC_RING_RADIUS = 22
@@ -165,10 +184,21 @@ const cardDashoffset = computed(() => 100 * (1 - progressRatio.value))
 onMounted(() => {
   initPlayer()
   document.addEventListener('click', onDocumentClick)
+  if (playerBarRef.value && typeof ResizeObserver !== 'undefined') {
+    compactObserver = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect?.width
+      if (typeof width === 'number') applyCompact(width)
+    })
+    compactObserver.observe(playerBarRef.value)
+    applyCompact(playerBarRef.value.clientWidth)
+  }
 })
 
 onUnmounted(() => {
   document.removeEventListener('click', onDocumentClick)
+  compactObserver?.disconnect()
+  compactObserver = null
+  document.documentElement.style.removeProperty('--player-height')
 })
 
 function onDocumentClick(e) {
@@ -209,7 +239,7 @@ async function onQueuePlayClick(index) {
   bottom: 0;
   left: var(--sidebar-width);
   right: 0;
-  height: 64px;
+  height: var(--player-height);
   background: var(--bg-player);
   backdrop-filter: blur(12px);
   border-top: 1px solid var(--border-light);
@@ -578,131 +608,133 @@ async function onQueuePlayClick(index) {
   color: var(--text-muted);
 }
 
+.player-bar.compact {
+  padding: 8px 12px;
+  gap: 0;
+}
+
+.player-bar.compact .bar-left {
+  flex: 1;
+  width: auto;
+  min-width: 0;
+  gap: 10px;
+}
+
+.player-bar.compact .cover-progress-wrap {
+  width: 50px;
+  height: 50px;
+}
+
+.player-bar.compact .cover-progress-ring {
+  display: block;
+}
+
+.player-bar.compact .cover-progress-wrap.wrap-disc {
+  width: 50px;
+  height: 50px;
+}
+
+.player-bar.compact .cover-progress-wrap.wrap-disc .bar-cover {
+  width: 40px;
+  height: 40px;
+}
+
+.player-bar.compact .cover-progress-wrap.wrap-card {
+  width: 44px;
+  height: 44px;
+}
+
+.player-bar.compact .cover-progress-wrap.wrap-card .bar-cover {
+  width: 40px;
+  height: 40px;
+}
+
+.player-bar.compact .player-info {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.player-bar.compact .player-name {
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.player-bar.compact .player-lyric {
+  display: block;
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--accent);
+  opacity: 0.95;
+}
+
+.player-bar.compact .player-lyric.empty {
+  color: var(--text-muted);
+  opacity: 1;
+}
+
+.player-bar.compact .player-time-mobile {
+  display: block;
+}
+
+.player-bar.compact .bar-center {
+  flex-shrink: 0;
+  gap: 2px;
+  margin: 0 6px;
+}
+
+.player-bar.compact .ctrl-main {
+  width: 38px;
+  height: 38px;
+}
+
+.player-bar.compact .ctrl-sub {
+  width: 32px;
+  height: 32px;
+}
+
+.player-bar.compact .ctrl-mode,
+.player-bar.compact .ctrl-sub[title="停止"],
+.player-bar.compact .player-volume,
+.player-bar.compact .player-progress {
+  display: none;
+}
+
+.player-bar.compact .bar-right {
+  flex: 0 0 auto;
+  width: auto;
+  margin-left: 0;
+}
+
+.player-bar.compact .ctrl-queue {
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+}
+
+.player-bar.compact .queue-panel {
+  left: 12px;
+  right: 12px;
+  bottom: calc(var(--player-height) + 12px);
+  width: auto;
+  max-height: min(50vh, 360px);
+}
+
+.player-bar.compact .queue-play-btn {
+  width: 32px;
+  height: 32px;
+}
+
+.player-bar.compact .queue-remove {
+  opacity: 1;
+}
+
 @media (max-width: 768px) {
   .player-bar {
     left: 0;
     bottom: calc(var(--mobile-nav-height) + env(safe-area-inset-bottom, 0px));
-    height: var(--player-height);
-    padding: 8px 12px;
-    gap: 0;
-    align-items: center;
-  }
-
-  .bar-left {
-    flex: 1;
-    min-width: 0;
-    gap: 10px;
-  }
-
-  .cover-progress-wrap {
-    width: 50px;
-    height: 50px;
-  }
-
-  .cover-progress-ring {
-    display: block;
-  }
-
-  .cover-progress-wrap.wrap-disc {
-    width: 50px;
-    height: 50px;
-  }
-
-  .cover-progress-wrap.wrap-disc .bar-cover {
-    width: 40px;
-    height: 40px;
-  }
-
-  .cover-progress-wrap.wrap-card {
-    width: 44px;
-    height: 44px;
-  }
-
-  .cover-progress-wrap.wrap-card .bar-cover {
-    width: 40px;
-    height: 40px;
-  }
-
-  .player-info {
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    gap: 2px;
-    min-width: 0;
-  }
-
-  .player-name {
-    font-size: 12px;
-    line-height: 1.3;
-  }
-
-  .player-lyric {
-    display: block;
-    font-size: 11px;
-    line-height: 1.3;
-    color: var(--accent);
-    opacity: 0.95;
-  }
-
-  .player-lyric.empty {
-    color: var(--text-muted);
-    opacity: 1;
-  }
-
-  .player-time-mobile {
-    display: block;
-  }
-
-  .bar-center {
-    flex-shrink: 0;
-    gap: 2px;
-    margin: 0 6px;
-  }
-
-  .ctrl-main {
-    width: 38px;
-    height: 38px;
-  }
-
-  .ctrl-sub {
-    width: 32px;
-    height: 32px;
-  }
-
-  .ctrl-mode,
-  .ctrl-sub[title="停止"],
-  .player-volume,
-  .player-progress {
-    display: none;
-  }
-
-  .bar-right {
-    flex: 0 0 auto;
-    width: auto;
-    margin-left: 0;
-  }
-
-  .ctrl-queue {
-    width: 38px;
-    height: 38px;
-    flex-shrink: 0;
-  }
-
-  .queue-panel {
-    left: 12px;
-    right: 12px;
-    bottom: calc(var(--player-height) + 12px);
-    width: auto;
-    max-height: min(50vh, 360px);
-  }
-
-  .queue-play-btn {
-    width: 32px;
-    height: 32px;
-  }
-
-  .queue-remove {
-    opacity: 1;
   }
 }
 </style>
