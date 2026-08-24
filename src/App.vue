@@ -2,9 +2,9 @@
   <div class="app">
     <aside class="sidebar">
       <div class="logo">
-        <img src="/icon.png" alt="Lemon Music" class="logo-img" />
+        <img src="/icon.png" alt="柠檬音乐下载" class="logo-img" />
         <div>
-          <h1>Lemon Music</h1>
+          <h1>柠檬音乐下载</h1>
           <span class="logo-sub">音乐下载工具</span>
         </div>
       </div>
