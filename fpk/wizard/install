@@ -4,7 +4,16 @@
     "items": [
       {
         "type": "tips",
-        "helpText": "<b>安装时会拉取镜像</b>（约 500MB），进度 55→80 为拉取阶段。镜像出现在 Docker「本地镜像」后，安装会很快到 100%。<br><br><b>容器不会在安装阶段创建</b>，装完后请点「启用」启动（避免卡在 80%）。"
+        "helpText": "<b>柠檬音乐下载</b>会通过 Docker 运行，安装包<b>不含镜像</b>（约 500MB，安装时拉取）。<br><br>1. 应用中心 → <b>手动安装</b> → 选择本 FPK<br>2. 填写数据目录（或装完后在「访问权限」选择）<br>3. 选择镜像源；国内默认 1ms 加速。已有镜像可选「跳过拉取」<br>4. 安装窗口 55%～80% 为拉镜像；完成后请<b>启用</b>应用<br>5. 浏览器访问 <code>http://NAS的IP:7983</code><br><br>升级请再次「手动安装」覆盖，<b>不要点卡片上的「更新」</b>。"
+      }
+    ]
+  },
+  {
+    "stepTitle": "注意事项",
+    "items": [
+      {
+        "type": "tips",
+        "helpText": "<b>请先阅读：</b><br><br>1. 仅用于管理你<b>个人已合法授权</b>的音乐，请遵守当地法律与平台条款。<br>2. 目录请填<b>本机绝对路径</b>：文件管理 → 右键文件夹 → 详细信息 → <b>复制原始路径</b>。不要照抄别人的 <code>/vol1/1000/...</code>。<br>3. 安装时也可留空，装完后到应用设置 → <b>访问权限</b> 添加音乐库、下载目录并保存，再停用/启用一次。<br>4. 若安装窗口无网速或一直停在 55%～80%：用 SSH 手动 <code>docker pull</code> 后，选「跳过拉取」再装。<br>5. <b>卸载</b>时可选择「保留数据」或「删除数据」。删除的是应用配置（音源、任务记录等），<b>不会删除</b>你自己指定的音乐库/下载文件夹里的音频。"
       }
     ]
   },
@@ -13,7 +22,7 @@
     "items": [
       {
         "type": "tips",
-        "helpText": "若已知道绝对路径可在此填写；留空则安装后用「访问权限」选择（带文件夹窗口，并自动授权）。示例格式 <code>/vol1/1000/Music</code>，请改成你自己的目录。"
+        "helpText": "知道绝对路径可在此填写；留空则安装后用「访问权限」选择（带文件夹窗口，并自动授权）。路径示例 <code>/vol1/1000/Music</code>，请改成你自己的目录。"
       },
       {
         "type": "text",
@@ -21,7 +30,7 @@
         "label": "音乐库目录（挂载到 /music）",
         "initValue": "",
         "placeholder": "可留空，安装后用访问权限选择",
-        "helpText": "选填。填写则以 / 开头的 NAS 绝对路径"
+        "helpText": "选填。须以 / 开头的 NAS 绝对路径"
       },
       {
         "type": "text",
@@ -59,9 +68,9 @@
         "initValue": "latest",
         "options": [
           { "label": "latest（最新）", "value": "latest" },
+          { "label": "1.0.10", "value": "1.0.10" },
           { "label": "1.0.7", "value": "1.0.7" },
-          { "label": "1.0.6", "value": "1.0.6" },
-          { "label": "1.0.5", "value": "1.0.5" }
+          { "label": "1.0.6", "value": "1.0.6" }
         ]
       },
       {
@@ -90,7 +99,7 @@
     "items": [
       {
         "type": "tips",
-        "helpText": "任选其一在 SSH 执行（拉完再选手动安装 +「跳过拉取」）：<br><code>docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest</code><br><code>docker pull ghcr.nju.edu.cn/jia070310/lemon-muisc:latest</code><br><code>docker pull ghcr.dockerproxy.com/jia070310/lemon-muisc:latest</code><br><code>docker pull docker.m.daocloud.io/ghcr.io/jia070310/lemon-muisc:latest</code><br>然后：<code>docker tag &lt;上面拉到的名&gt; lemon-music:latest</code>"
+        "helpText": "任选其一在 SSH 执行（拉完再选手动安装 +「跳过拉取」）：<br><code>docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest</code><br><code>docker pull ghcr.nju.edu.cn/jia070310/lemon-muisc:latest</code><br>然后：<code>docker tag ghcr.1ms.run/jia070310/lemon-muisc:latest lemon-music:latest</code>"
       }
     ]
   }

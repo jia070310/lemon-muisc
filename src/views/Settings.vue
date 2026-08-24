@@ -131,6 +131,13 @@
             <option value="card">圆角方形（固定不转）</option>
           </select>
         </div>
+        <div class="setting-item">
+          <div class="setting-item-info">
+            <div class="setting-item-label">音频可视化</div>
+            <div class="setting-item-desc">播放栏背景与全屏播放页显示频谱动态效果</div>
+          </div>
+          <label class="toggle"><input type="checkbox" :checked="settings['player.visualizer'] === 'true'" @change="toggleSetting('player.visualizer')" /><span class="slider"></span></label>
+        </div>
       </div>
 
       <!-- 下载设置 -->
@@ -220,7 +227,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { api } from '../api.js'
-import { loadCoverStyle } from '../stores/player.js'
+import { loadCoverStyle, loadVisualizerSetting } from '../stores/player.js'
 import { canPickFolder, pickFolder } from '../utils/fnos.js'
 import { applyTheme, theme as currentTheme, THEME_KEY } from '../utils/theme.js'
 
@@ -282,6 +289,7 @@ onMounted(async () => {
     Object.assign(settings, s)
     activeSourceId.value = settings['source.active'] || ''
     if (!settings['player.coverStyle']) settings['player.coverStyle'] = 'disc'
+    if (settings['player.visualizer'] == null) settings['player.visualizer'] = 'true'
     if (!settings[THEME_KEY]) settings[THEME_KEY] = currentTheme.value
     applyTheme(settings[THEME_KEY])
   } catch {}
@@ -423,6 +431,7 @@ async function saveSetting(key) {
   try {
     await api.settings.update({ [key]: settings[key] })
     if (key === 'player.coverStyle') loadCoverStyle()
+    if (key === 'player.visualizer') loadVisualizerSetting()
     if (key === THEME_KEY) applyTheme(settings[key])
   } catch (e) { showToast(e.message, 'error') }
 }

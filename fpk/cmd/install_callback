@@ -5,15 +5,20 @@
 . "$(dirname "$0")/pull-image.sh"
 . "$(dirname "$0")/paths.sh"
 . "$(dirname "$0")/desktop_fix.sh"
+. "$(dirname "$0")/app-data.sh"
 
 init_log
 
 echo "callback started $(date -Iseconds)" > "${TRIM_PKGVAR}/install.status" 2>/dev/null || true
 update_install_ui "安装脚本已启动，正在写入 compose…"
 
+# 上次卸载选择「保留数据」时，先恢复配置
+restore_app_data >/dev/null 2>&1 || true
+load_paths
+
 music_path="${wizard_music_path:-}"
 downloads_path="${wizard_downloads_path:-}"
-config_path="$(default_config_path)"
+config_path="$(resolve_config_path)"
 
 if [ -z "${music_path}" ]; then
   music_path="$(default_music_path)"

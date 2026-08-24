@@ -14,6 +14,8 @@ export const coverUrl = ref('')
 export const lyricLines = ref([])
 export const activeLyricIdx = ref(-1)
 export const coverStyle = ref('disc')
+export const visualizerEnabled = ref(true)
+export const showFullscreenPlayer = ref(false)
 export const playerError = ref('')
 
 /** 试听列表 @type {import('vue').Ref<Array<{ key: string, item: object, source: string }>>} */
@@ -30,6 +32,13 @@ export const playModeLabel = computed(() => {
 
 let audio = null
 let inited = false
+/** @type {AudioContext | null} */
+let audioCtx = null
+/** @type {AnalyserNode | null} */
+let analyser = null
+/** @type {MediaElementAudioSourceNode | null} */
+let mediaSource = null
+let audioGraphReady = false
 /** @type {number[]} */
 let playHistory = []
 let lastSessionSave = 0
@@ -228,6 +237,7 @@ export function initPlayer() {
   inited = true
 
   audio = new Audio()
+  audio.crossOrigin = 'anonymous'
   try {
     const savedVolRaw = localStorage.getItem(VOLUME_KEY)
     const savedMute = localStorage.getItem(MUTE_KEY)
@@ -268,6 +278,7 @@ export function initPlayer() {
 
   restoreSessionState()
   loadCoverStyle()
+  loadVisualizerSetting()
 
   window.addEventListener('beforeunload', saveQueueState)
   document.addEventListener('visibilitychange', () => {
@@ -279,6 +290,7 @@ async function onTrackEnded() {
   if (playMode.value === 'single' && audio) {
     audio.currentTime = 0
     applyAudioOutput()
+    await ensureAudioAnalyser()
     await audio.play()
     isPaused.value = false
     return
@@ -310,6 +322,59 @@ export async function loadCoverStyle() {
       coverStyle.value = settings['player.coverStyle']
     }
   } catch {}
+}
+
+export async function loadVisualizerSetting() {
+  try {
+    const settings = await api.settings.get()
+    visualizerEnabled.value = settings['player.visualizer'] !== 'false'
+  } catch {
+    visualizerEnabled.value = true
+  }
+}
+
+export function openFullscreenPlayer() {
+  if (!currentPlaying.value) return
+  showFullscreenPlayer.value = true
+  showQueuePanel.value = false
+}
+
+export function closeFullscreenPlayer() {
+  showFullscreenPlayer.value = false
+}
+
+/** 建立 Web Audio 分析链路（仅一次），供频谱可视化使用 */
+export async function ensureAudioAnalyser() {
+  if (!audio) return null
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext
+    if (!AC) return null
+    if (!audioCtx) audioCtx = new AC()
+    if (audioCtx.state === 'suspended') await audioCtx.resume()
+    if (!audioGraphReady) {
+      mediaSource = audioCtx.createMediaElementSource(audio)
+      analyser = audioCtx.createAnalyser()
+      analyser.fftSize = 256
+      analyser.smoothingTimeConstant = 0.72
+      mediaSource.connect(analyser)
+      analyser.connect(audioCtx.destination)
+      audioGraphReady = true
+    }
+    return analyser
+  } catch {
+    return analyser
+  }
+}
+
+export function getAnalyser() {
+  return analyser
+}
+
+export function getFrequencyData(target) {
+  if (!analyser) return null
+  const buf = target || new Uint8Array(analyser.frequencyBinCount)
+  analyser.getByteFrequencyData(buf)
+  return buf
 }
 
 export function isPlayingItem(item) {
@@ -450,6 +515,7 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 }
         currentTime.value = resumeTime
       } catch {}
     }
+    await ensureAudioAnalyser()
     await audio.play()
     applyAudioOutput()
 
@@ -559,13 +625,20 @@ export function togglePause() {
   }
   if (audio.paused) {
     applyAudioOutput()
-    audio.play()
-    isPaused.value = false
+    ensureAudioAnalyser().then(() => {
+      audio.play()
+      isPaused.value = false
+      saveQueueState()
+    }).catch(() => {
+      audio.play()
+      isPaused.value = false
+      saveQueueState()
+    })
   } else {
     audio.pause()
     isPaused.value = true
+    saveQueueState()
   }
-  saveQueueState()
 }
 
 export function stopPlay() {

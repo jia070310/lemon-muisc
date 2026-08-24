@@ -4,7 +4,7 @@
     "items": [
       {
         "type": "tips",
-        "helpText": "<b>请使用「手动安装」选择 FPK 文件升级</b>，应用卡片上的「更新」按钮对第三方应用通常无效。<br><br>若应用中心拉取无网速，请 SSH 手动 pull 后选「跳过拉取」。配置与路径会保留。"
+        "helpText": "<b>请使用「手动安装」选择 FPK 文件升级</b>，卡片上的「更新」对第三方应用通常无效。<br><br>配置、路径与下载记录会保留。若安装窗口无网速，请 SSH 手动 pull 后选「跳过拉取」。"
       },
       {
         "type": "select",
@@ -28,9 +28,9 @@
         "initValue": "latest",
         "options": [
           { "label": "latest（最新）", "value": "latest" },
+          { "label": "1.0.10", "value": "1.0.10" },
           { "label": "1.0.7", "value": "1.0.7" },
-          { "label": "1.0.6", "value": "1.0.6" },
-          { "label": "1.0.5", "value": "1.0.5" }
+          { "label": "1.0.6", "value": "1.0.6" }
         ]
       },
       {

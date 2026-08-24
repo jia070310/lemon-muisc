@@ -1,117 +1,108 @@
 # 飞牛 FPK 安装说明
 
-FPK **不包含 Docker 镜像**（约 40KB）。点击「安装」后，在**安装窗口内**完成镜像拉取，不是后台静默执行。
+FPK **不含 Docker 镜像**（安装包约几十 KB）。点击「安装」后，在**安装窗口内**拉取镜像（约 500MB），不是后台静默执行。
+
+## 注意事项
+
+1. **用「手动安装」**覆盖升级，不要点应用卡片上的「更新」（第三方应用该按钮通常无效）。
+2. **路径必须是本机绝对路径**：文件管理 → 右键文件夹 → 详细信息 → **复制原始路径**。不要照抄别人的 `/vol1/1000/...`。
+3. 安装向导里目录**可以留空**，装完后到应用设置 → **访问权限** 添加音乐库、下载目录并保存，再停用/启用一次。
+4. 安装窗口 **55%～80%** 是拉镜像。若无网速或一直卡住：SSH 手动 `docker pull` 后，向导选「跳过拉取」。
+5. 请仅用于管理你**个人已合法授权**的音乐资源。
+6. **卸载**时可选择保留或删除应用配置。删除配置**不会删除**你自己指定的音乐库/下载文件夹中的音频。
 
 ## 安装流程
 
-1. 应用中心 → **手动安装** → 选择 `fpk/lemon-music.fpk`
-2. **安装向导**：
-   - **数据目录**：填写你自己的音乐库、下载目录（NAS 原始路径，必填）
-   - 拉取方式 / 镜像标签 / 超时
-3. 点击「安装」→ 拉取镜像，并把你填的路径写入 Docker 挂载
-4. 启动应用 → `http://飞牛IP:7983`，工具内使用 `/music`、`/downloads`
-
-> 路径因人而异。在文件管理中右键文件夹 → 详细信息 → **复制原始路径**，不要照抄别人的 `/vol1/1000/...`。
+1. 应用中心 → **手动安装** → 选择 `fpk/lemon-music.fpk`（或发布页的版本号文件）
+2. 阅读「安装说明」「注意事项」
+3. **数据目录**（可选）：填写音乐库、下载目录
+4. **镜像拉取**：国内默认 1ms 加速；已有镜像选「跳过拉取」
+5. 点击「安装」→ 等待拉取完成
+6. **启用**应用 → 浏览器打开 `http://飞牛IP:7983`
 
 ## 安装向导选项
 
 | 选项 | 说明 |
 |------|------|
-| 音乐库目录 | 挂载到容器 `/music`，必填 |
-| 下载目录 | 挂载到容器 `/downloads`，必填 |
-| 官方 / 加速镜像 | `ghcr.1ms.run/jia070310/lemon-muisc:<标签>` |
-| 自定义镜像地址 | 国内同步后的完整地址 |
-| 跳过拉取 | 已 `docker load` 或本地有镜像时使用 |
+| 音乐库目录 | 挂载到容器 `/music`，可留空后用访问权限选择 |
+| 下载目录 | 挂载到容器 `/downloads`，可留空；可与音乐库相同 |
+| 拉取方式 | 1ms / 南大 / dockerproxy / DaoCloud / 官方 ghcr.io / 跳过 / 自定义 |
+| 镜像标签 | `latest` 或指定版本如 `1.0.10` |
+| 自定义镜像地址 | 选「自定义」时填写完整地址 |
+| 跳过拉取 | 已 SSH `docker pull` + `docker tag` 或 `docker load` 时使用 |
+
+## 卸载
+
+卸载向导提供两项：
+
+| 选项 | 行为 |
+|------|------|
+| **保留数据（默认）** | 停止并删除容器；保存应用配置、音源脚本、任务记录，重装后可恢复 |
+| **删除数据** | 同时清除上述应用配置，并尝试删除本应用 Docker 镜像 |
+
+无论选哪一项：
+
+- **不会删除**你在访问权限或向导中指定的音乐库、下载目录里的音频文件
+- 仅当目录位于应用自己的数据目录内（安装时未改路径的占位目录）时，才会随「删除数据」一并清理
+
+重装且上次选择「保留数据」时，安装脚本会尝试恢复配置。
 
 ## 进度与日志
 
 | 内容 | 位置 |
 |------|------|
 | 安装窗口进度 | 向导确认后的 `install_callback` 输出 |
-| 详细日志 | `/var/apps/lemon-music/var/log/install.log` |
-| 状态文件 | `/var/apps/lemon-music/var/install.status` |
+| 详细日志 | 应用数据目录下 `log/install.log` |
 | 失败原因 | 应用中心弹窗 |
 
+SSH 示例（路径以实际应用数据目录为准）：
+
 ```bash
-tail -f /var/apps/lemon-music/var/log/install.log
+tail -f /vol1/@appdata/lemon-music/log/install.log
 ```
+
+## 镜像加速与 SSH 手动拉取
+
+Docker Hub 加速**不能**代理 ghcr.io。请换加速域名，或自定义完整镜像地址。
+
+```bash
+docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest
+docker tag ghcr.1ms.run/jia070310/lemon-muisc:latest lemon-music:latest
+```
+
+然后手动安装 FPK，向导选「跳过拉取」。
+
+更多加速说明见下文「ghcr.io 镜像加速」。
+
+---
 
 ## ghcr.io 镜像加速
 
-拉取由 **飞牛内置 Docker** 执行。Docker Hub 镜像加速 **对 ghcr.io 无效**。
-
-### 有 ghcr 加速吗？
-
-有，但用法和 Docker Hub 不同，需 **换域名** 或 **自定义镜像地址**，不能指望 `registry-mirrors` 自动代理 ghcr.io。
+拉取由 **飞牛内置 Docker** 执行。
 
 | 方式 | 说明 |
 |------|------|
-| 公开 GHCR 前缀 | 如 `ghcr.1ms.run`、`ghcr.m.daocloud.io`（可用性会变，需自测） |
-| 商业专属域名 | 如轩辕 `xxx-ghcr.xuanyuan.run` |
-| 同步到国内仓库 | 阿里云 ACR / 腾讯云 TCR（最稳） |
+| 公开 GHCR 前缀 | 如 `ghcr.1ms.run`、`ghcr.nju.edu.cn`（可用性会变，需自测） |
+| 同步到国内仓库 | 阿里云 ACR / 腾讯云 TCR（较稳） |
 | 离线 `docker load` | 向导选「跳过拉取」 |
 
-### 安装向导里使用加速
-
-选 **「自定义镜像地址」**，填写例如：
+向导选 **「自定义完整镜像地址」** 时可填：
 
 ```text
 ghcr.1ms.run/jia070310/lemon-muisc:latest
 ```
 
-或同步到国内后的：
-
-```text
-registry.cn-hangzhou.aliyuncs.com/你的命名空间/lemon-music:latest
-```
-
-### SSH 测试加速是否可用
-
-```bash
-docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest
-```
-
-成功后再在安装向导填同一地址。
-
 ---
 
-## 数据目录（安装时配置）
+## 数据目录
 
-安装向导会要求填写音乐库与下载目录，并写入 Docker 挂载。之后可在 **应用设置 → 运行设置** 修改。
+| 设置项 | 说明 |
+|--------|------|
+| 音乐库 | 挂载到 `/music` |
+| 下载目录 | 挂载到 `/downloads` |
+| 配置目录 | 自动使用应用数据目录，挂载到 `/config` |
 
-| 设置项 | 变量名 | 说明 |
-|--------|--------|------|
-| 音乐库目录 | `wizard_music_path` | 安装/运行设置中填写，挂载到 `/music` |
-| 下载目录 | `wizard_downloads_path` | 安装/运行设置中填写，挂载到 `/downloads` |
-| 配置目录 | （自动） | 使用应用数据目录，挂载到 `/config` |
-
-**任意用户首次安装：**
-
-1. 安装向导填写自己的两个 NAS 路径
-2. 安装完成 → 启用应用
-3. 在 Docker「存储位置」确认已是自己填的路径（不是 `@appdata/.../music`）
-4. Web 设置里使用容器路径 `/music`、`/downloads`
-
-路径持久化在 `${TRIM_PKGETC}/paths.conf`。
-
----
-
-## 修改数据目录（旧版说明）
-
-<details>
-<summary>手动编辑 compose（高级用户）</summary>
-
-`fpk/app/docker/docker-compose.yaml` 使用环境变量：
-
-```yaml
-volumes:
-  - "${wizard_music_path}:/music"
-  - "${wizard_downloads_path}:/downloads"
-  - "${wizard_config_path}:/config"
-```
-
-一般无需手动编辑，请优先使用应用设置。
-</details>
+Web 设置页请使用容器路径 `/music`、`/downloads`。之后可在 **访问权限** 或 **运行设置** 修改宿主路径。
 
 ---
 
@@ -121,4 +112,4 @@ volumes:
 npm run fpk:build
 ```
 
-输出：`fpk/lemon-music.fpk`（不提交 git）。
+输出：`fpk/lemon-music.fpk`（不要提交到 git）。

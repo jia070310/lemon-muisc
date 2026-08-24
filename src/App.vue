@@ -65,6 +65,7 @@
     </main>
 
     <PlayerBar />
+    <FullscreenPlayer />
 
     <div v-if="showFaultModal" class="modal-overlay source-fault-overlay">
       <div class="source-fault-modal">
@@ -127,6 +128,7 @@ import { checkForUpdate, hasUpdate } from './composables/useUpdateCheck.js'
 import { api } from './api.js'
 import { applyTheme, theme, THEME_KEY } from './utils/theme.js'
 import PlayerBar from './components/PlayerBar.vue'
+import FullscreenPlayer from './components/FullscreenPlayer.vue'
 
 const route = useRoute()
 const isTagPage = computed(() => route.path === '/tag' || route.path.startsWith('/tag/'))

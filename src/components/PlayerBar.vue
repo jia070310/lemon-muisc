@@ -1,7 +1,15 @@
 <template>
   <div class="player-bar" ref="playerBarRef" :class="{ compact: isCompact }">
+    <div v-if="visualizerEnabled" class="bar-spectrum">
+      <SpectrumVisualizer mode="bar" :active="visualizerEnabled && !!currentPlaying && !showFullscreenPlayer" />
+    </div>
     <div class="bar-left">
-      <div class="cover-progress-wrap" :class="coverStyle === 'disc' ? 'wrap-disc' : 'wrap-card'">
+      <div
+        class="cover-progress-wrap"
+        :class="[coverStyle === 'disc' ? 'wrap-disc' : 'wrap-card', { clickable: !!currentPlaying }]"
+        :title="currentPlaying ? '打开全屏播放' : ''"
+        @click="onCoverClick"
+      >
         <svg
           v-if="currentPlaying && coverStyle === 'card'"
           class="cover-progress-ring cover-progress-card"
@@ -81,7 +89,7 @@
         <input type="range" min="0" :max="displayDuration || 1" :value="currentTime" @input="onSeek" class="progress-slider" />
         <span class="time-display">{{ fmtTime(currentTime) }} / {{ fmtTime(displayDuration) }}</span>
       </div>
-      <button ref="queueBtnRef" class="ctrl-btn ctrl-queue" @click.stop="toggleQueuePanel" :title="`试听列表 (${playQueue.length})`" :class="{ active: showQueuePanel }">
+      <button ref="queueBtnRef" class="ctrl-btn ctrl-queue" @click="onToggleQueuePanel" :title="`试听列表 (${playQueue.length})`" :class="{ active: showQueuePanel }">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
           <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/>
           <circle cx="4" cy="6" r="1" fill="currentColor"/><circle cx="4" cy="12" r="1" fill="currentColor"/><circle cx="4" cy="18" r="1" fill="currentColor"/>
@@ -174,14 +182,15 @@
 <script setup>
 import {
   currentPlaying, isPaused, currentTime, displayDuration, volume, isMuted,
-  coverUrl, coverStyle, currentLyricText,
+  coverUrl, coverStyle, currentLyricText, visualizerEnabled, showFullscreenPlayer,
   playQueue, currentQueueIndex, playMode, playModeLabel, showQueuePanel,
   togglePause, stopPlay, seekTo, setVolume, toggleMute, fmtTime, initPlayer,
-  playNext, playPrev, togglePlayMode, toggleQueuePanel,
-  removeFromQueue, clearQueue, playTrackAt,
+  playNext, playPrev, togglePlayMode,
+  removeFromQueue, clearQueue, playTrackAt, openFullscreenPlayer,
 } from '../stores/player.js'
 import { onMounted, onUnmounted, ref, computed, watch } from 'vue'
 import { cleanText } from '../utils/text.js'
+import SpectrumVisualizer from './SpectrumVisualizer.vue'
 
 const queuePanelRef = ref(null)
 const queueBtnRef = ref(null)
@@ -261,7 +270,16 @@ function onDocumentClick(e) {
   }
 }
 
+function onToggleQueuePanel() {
+  showQueuePanel.value = !showQueuePanel.value
+}
+
 function onSeek(e) { seekTo(Number(e.target.value)) }
+
+function onCoverClick() {
+  if (!currentPlaying.value) return
+  openFullscreenPlayer()
+}
 
 function onVolumePercent(e) {
   setVolume(Number(e.target.value) / 100)
@@ -326,6 +344,24 @@ async function onQueuePlayClick(index) {
   z-index: 50;
 }
 
+.bar-spectrum {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  opacity: 0.45;
+  pointer-events: none;
+  mask-image: linear-gradient(to top, #000 20%, transparent 95%);
+  -webkit-mask-image: linear-gradient(to top, #000 20%, transparent 95%);
+}
+
+.bar-left,
+.bar-center,
+.bar-right {
+  position: relative;
+  z-index: 1;
+}
+
 .bar-left {
   display: flex;
   align-items: center;
@@ -340,6 +376,12 @@ async function onQueuePlayClick(index) {
   flex-shrink: 0;
   width: 44px;
   height: 44px;
+}
+.cover-progress-wrap.clickable {
+  cursor: pointer;
+}
+.cover-progress-wrap.clickable:hover .bar-cover {
+  filter: brightness(1.08);
 }
 
 .cover-progress-ring {

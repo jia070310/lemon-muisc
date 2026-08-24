@@ -71,6 +71,7 @@ export function initDB(configPath) {
     'source.active': '',
     'source.fault': '',
     'player.coverStyle': 'disc',
+    'player.visualizer': 'true',
     'ui.theme': 'dark',
     'file.paths': '[]',
     'tag.dirs': '[]',
