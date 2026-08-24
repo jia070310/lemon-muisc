@@ -1,13 +1,47 @@
 <template>
   <div class="player-bar" ref="playerBarRef">
     <div class="bar-left">
-      <div class="bar-cover" :class="coverStyle === 'disc' ? 'cover-disc' : 'cover-card'">
-        <img v-if="coverUrl" :src="coverUrl" alt="" :class="{ spinning: coverStyle === 'disc' && !isPaused && currentPlaying }" />
-        <div v-else class="cover-placeholder" :class="{ spinning: coverStyle === 'disc' && !isPaused && currentPlaying }">♪</div>
+      <div class="cover-progress-wrap" :class="coverStyle === 'disc' ? 'wrap-disc' : 'wrap-card'">
+        <svg
+          v-if="currentPlaying && coverStyle === 'card'"
+          class="cover-progress-ring cover-progress-card"
+          viewBox="0 0 44 44"
+          aria-hidden="true"
+        >
+          <path class="ring-bg" :d="CARD_PROGRESS_PATH" pathLength="100" />
+          <path
+            class="ring-fg"
+            :d="CARD_PROGRESS_PATH"
+            pathLength="100"
+            stroke-dasharray="100"
+            :stroke-dashoffset="cardDashoffset"
+          />
+        </svg>
+        <svg
+          v-else-if="currentPlaying"
+          class="cover-progress-ring cover-progress-disc"
+          viewBox="0 0 52 52"
+          aria-hidden="true"
+        >
+          <circle class="ring-bg" :cx="RING_CENTER" :cy="RING_CENTER" :r="DISC_RING_RADIUS" />
+          <circle
+            class="ring-fg"
+            :cx="RING_CENTER"
+            :cy="RING_CENTER"
+            :r="DISC_RING_RADIUS"
+            :stroke-dasharray="DISC_RING_CIRC"
+            :stroke-dashoffset="discRingDashoffset"
+          />
+        </svg>
+        <div class="bar-cover" :class="coverStyle === 'disc' ? 'cover-disc' : 'cover-card'">
+          <img v-if="coverUrl" :src="coverUrl" alt="" :class="{ spinning: coverStyle === 'disc' && !isPaused && currentPlaying }" />
+          <div v-else class="cover-placeholder" :class="{ spinning: coverStyle === 'disc' && !isPaused && currentPlaying }">♪</div>
+        </div>
       </div>
       <div class="player-info">
         <span class="player-name">{{ currentPlaying ? `${cleanText(currentPlaying.name)} - ${cleanText(currentPlaying.singer)}` : '未选择歌曲' }}</span>
-        <span class="player-lyric">{{ currentPlaying ? (currentLyricText || '暂无歌词') : '未知艺术家' }}</span>
+        <span class="player-lyric" :class="{ empty: currentPlaying && !currentLyricText }">{{ currentPlaying ? (currentLyricText || '暂无歌词') : '未知艺术家' }}</span>
+        <span v-if="currentPlaying" class="player-time-mobile">{{ fmtTime(currentTime) }} / {{ fmtTime(displayDuration) }}</span>
       </div>
     </div>
 
@@ -31,7 +65,7 @@
         <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><polygon points="19,20 9,12 19,4"/><line x1="5" y1="4" x2="5" y2="20" stroke="currentColor" stroke-width="2"/></svg>
       </button>
       <button class="ctrl-btn ctrl-main" @click="currentPlaying ? togglePause() : null" :disabled="!currentPlaying" :title="isPaused ? '播放' : '暂停'">
-        <svg v-if="!currentPlaying || isPaused" viewBox="0 0 24 24" width="20" height="20" fill="#fff"><polygon points="5,3 19,12 5,21"/></svg>
+        <svg v-if="!currentPlaying || isPaused" viewBox="0 0 24 24" width="20" height="20" fill="#fff"><polygon points="7,3 21,12 7,21"/></svg>
         <svg v-else viewBox="0 0 24 24" width="20" height="20" fill="#fff"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
       </button>
       <button class="ctrl-btn ctrl-sub" @click="onPlayNext" :disabled="!playQueue.length" title="下一曲">
@@ -81,6 +115,14 @@
             <div class="queue-name">{{ cleanText(entry.item.name) }}</div>
             <div class="queue-meta">{{ cleanText(entry.item.singer) }}</div>
           </div>
+          <button
+            class="queue-play-btn"
+            @click.stop="onQueuePlayClick(i)"
+            :title="i === currentQueueIndex && currentPlaying && !isPaused ? '暂停' : '播放'"
+          >
+            <svg v-if="i === currentQueueIndex && currentPlaying && !isPaused" viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+            <svg v-else viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><polygon points="7,3 21,12 7,21"/></svg>
+          </button>
           <button class="queue-remove" @click.stop="removeFromQueue(i)" title="移除">×</button>
         </div>
       </div>
@@ -98,11 +140,27 @@ import {
   playNext, playPrev, togglePlayMode, toggleQueuePanel,
   removeFromQueue, clearQueue, playTrackAt,
 } from '../stores/player.js'
-import { onMounted, onUnmounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref, computed } from 'vue'
 import { cleanText } from '../utils/text.js'
 
 const queuePanelRef = ref(null)
 const queueBtnRef = ref(null)
+
+const RING_CENTER = 26
+const DISC_RING_RADIUS = 22
+const DISC_RING_CIRC = 2 * Math.PI * DISC_RING_RADIUS
+
+/** 圆角方形进度路径（40×40 封面，rx=8，从顶边中点顺时针） */
+const CARD_PROGRESS_PATH = 'M 22,2 L 34,2 A 8,8 0 0 1 42,10 L 42,34 A 8,8 0 0 1 34,42 L 10,42 A 8,8 0 0 1 2,34 L 2,10 A 8,8 0 0 1 10,2 L 22,2 Z'
+
+const progressRatio = computed(() => {
+  const dur = displayDuration.value
+  if (!dur || dur <= 0) return 0
+  return Math.min(1, Math.max(0, currentTime.value / dur))
+})
+
+const discRingDashoffset = computed(() => DISC_RING_CIRC * (1 - progressRatio.value))
+const cardDashoffset = computed(() => 100 * (1 - progressRatio.value))
 
 onMounted(() => {
   initPlayer()
@@ -135,6 +193,14 @@ async function onPlayPrev() {
 async function onPlayAt(index) {
   try { await playTrackAt(index) } catch {}
 }
+
+async function onQueuePlayClick(index) {
+  if (index === currentQueueIndex.value && currentPlaying.value) {
+    togglePause()
+    return
+  }
+  await onPlayAt(index)
+}
 </script>
 
 <style scoped>
@@ -163,11 +229,55 @@ async function onPlayAt(index) {
   min-width: 0;
 }
 
+.cover-progress-wrap {
+  position: relative;
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+}
+
+.cover-progress-ring {
+  display: none;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.cover-progress-disc {
+  transform: rotate(-90deg);
+}
+
+.cover-progress-card {
+  transform: none;
+}
+
+.ring-bg {
+  fill: none;
+  stroke: var(--border);
+  stroke-width: 2;
+}
+
+.ring-fg {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.15s linear;
+}
+
 .bar-cover {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
   flex-shrink: 0;
   width: 44px;
   height: 44px;
   overflow: hidden;
+  z-index: 1;
 }
 .bar-cover img,
 .cover-placeholder {
@@ -208,6 +318,14 @@ async function onPlayAt(index) {
   text-overflow: ellipsis;
   white-space: nowrap;
   line-height: 1.4;
+}
+
+.player-time-mobile {
+  display: none;
+  font-size: 10px;
+  color: var(--text-muted);
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
 }
 
 .bar-center {
@@ -425,9 +543,34 @@ async function onPlayAt(index) {
   padding: 0 4px;
   opacity: 0;
   transition: opacity 0.15s;
+  flex-shrink: 0;
 }
 .queue-item:hover .queue-remove { opacity: 1; }
 .queue-remove:hover { color: var(--error); }
+
+.queue-play-btn {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: all 0.15s;
+}
+.queue-play-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-muted);
+}
+.queue-item.active .queue-play-btn {
+  color: var(--accent);
+  border-color: var(--accent);
+}
 .queue-empty {
   padding: 32px 16px;
   text-align: center;
@@ -440,34 +583,126 @@ async function onPlayAt(index) {
     left: 0;
     bottom: calc(var(--mobile-nav-height) + env(safe-area-inset-bottom, 0px));
     height: var(--player-height);
-    padding: 0 10px;
-    gap: 8px;
+    padding: 8px 12px;
+    gap: 0;
+    align-items: center;
   }
+
   .bar-left {
-    width: auto;
     flex: 1;
     min-width: 0;
+    gap: 10px;
   }
-  .bar-cover {
+
+  .cover-progress-wrap {
+    width: 50px;
+    height: 50px;
+  }
+
+  .cover-progress-ring {
+    display: block;
+  }
+
+  .cover-progress-wrap.wrap-disc {
+    width: 50px;
+    height: 50px;
+  }
+
+  .cover-progress-wrap.wrap-disc .bar-cover {
     width: 40px;
     height: 40px;
   }
-  .player-lyric { display: none; }
-  .bar-center { gap: 4px; }
-  .ctrl-mode, .ctrl-sub[title="停止"], .player-volume { display: none; }
+
+  .cover-progress-wrap.wrap-card {
+    width: 44px;
+    height: 44px;
+  }
+
+  .cover-progress-wrap.wrap-card .bar-cover {
+    width: 40px;
+    height: 40px;
+  }
+
+  .player-info {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .player-name {
+    font-size: 12px;
+    line-height: 1.3;
+  }
+
+  .player-lyric {
+    display: block;
+    font-size: 11px;
+    line-height: 1.3;
+    color: var(--accent);
+    opacity: 0.95;
+  }
+
+  .player-lyric.empty {
+    color: var(--text-muted);
+    opacity: 1;
+  }
+
+  .player-time-mobile {
+    display: block;
+  }
+
+  .bar-center {
+    flex-shrink: 0;
+    gap: 2px;
+    margin: 0 6px;
+  }
+
+  .ctrl-main {
+    width: 38px;
+    height: 38px;
+  }
+
+  .ctrl-sub {
+    width: 32px;
+    height: 32px;
+  }
+
+  .ctrl-mode,
+  .ctrl-sub[title="停止"],
+  .player-volume,
   .player-progress {
     display: none;
   }
+
   .bar-right {
-    flex: 0;
-    gap: 6px;
+    flex: 0 0 auto;
+    width: auto;
+    margin-left: 0;
   }
+
+  .ctrl-queue {
+    width: 38px;
+    height: 38px;
+    flex-shrink: 0;
+  }
+
   .queue-panel {
     left: 12px;
     right: 12px;
     bottom: calc(var(--player-height) + 12px);
     width: auto;
     max-height: min(50vh, 360px);
+  }
+
+  .queue-play-btn {
+    width: 32px;
+    height: 32px;
+  }
+
+  .queue-remove {
+    opacity: 1;
   }
 }
 </style>
