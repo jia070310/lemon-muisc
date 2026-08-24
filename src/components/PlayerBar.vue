@@ -102,7 +102,7 @@
           :title="volumeTip"
           @click.stop="onVolumeBtnClick"
         >
-          <svg v-if="volumePercent === 0" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+          <svg v-if="isMuted" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
             <polygon points="11,5 6,9 2,9 2,15 6,15 11,19"/>
             <line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>
           </svg>
@@ -117,22 +117,19 @@
           </svg>
         </button>
         <div class="vol-popover" @click.stop @mouseenter="onVolumeEnter" @mouseleave="onVolumeLeave">
-          <span class="vol-percent">{{ volumePercent }}%</span>
-          <div class="vol-slider-wrap" :style="{ '--vol-pct': volumePercent + '%' }">
+          <span class="vol-percent">{{ isMuted ? '静音' : volumePercent + '%' }}</span>
+          <div class="vol-slider-wrap" :style="{ '--vol-pct': (isMuted ? 0 : volumePercent) + '%' }">
             <input
               type="range"
               class="vol-slider-v"
               min="0"
               max="100"
               step="1"
-              :value="volumePercent"
+              :value="isMuted ? 0 : volumePercent"
               @input="onVolumePercent"
               @change="onVolumePercent"
             />
           </div>
-          <button v-if="isCompact" type="button" class="vol-mute-btn" @click.stop="toggleMute">
-            {{ volumePercent === 0 ? '取消静音' : '静音' }}
-          </button>
         </div>
       </div>
     </div>
@@ -176,7 +173,7 @@
 
 <script setup>
 import {
-  currentPlaying, isPaused, currentTime, displayDuration, volume,
+  currentPlaying, isPaused, currentTime, displayDuration, volume, isMuted,
   coverUrl, coverStyle, currentLyricText,
   playQueue, currentQueueIndex, playMode, playModeLabel, showQueuePanel,
   togglePause, stopPlay, seekTo, setVolume, toggleMute, fmtTime, initPlayer,
@@ -200,7 +197,7 @@ let compactObserver = null
 let volumeLeaveTimer = null
 
 const volumePercent = computed(() => Math.round((volume.value || 0) * 100))
-const volumeTip = computed(() => (volumePercent.value === 0 ? '取消静音' : `音量 ${volumePercent.value}%（点击静音）`))
+const volumeTip = computed(() => (isMuted.value ? '取消静音' : `音量 ${volumePercent.value}%（点击静音）`))
 
 function applyCompact(width) {
   if (isCompact.value) {
@@ -288,10 +285,6 @@ function onVolumeLeave() {
 }
 
 function onVolumeBtnClick() {
-  if (isCompact.value) {
-    showVolumePanel.value = !showVolumePanel.value
-    return
-  }
   toggleMute()
 }
 
@@ -665,18 +658,6 @@ async function onQueuePlayClick(index) {
   background: var(--accent);
   cursor: pointer;
 }
-.vol-mute-btn {
-  border: none;
-  background: transparent;
-  color: var(--text-muted);
-  font-size: 11px;
-  padding: 0;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.vol-mute-btn:hover {
-  color: var(--accent);
-}
 
 .queue-panel {
   position: absolute;
@@ -888,7 +869,8 @@ async function onQueuePlayClick(index) {
 }
 
 .player-bar.compact .ctrl-sub[title="停止"],
-.player-bar.compact .player-progress {
+.player-bar.compact .player-progress,
+.player-bar.compact .player-volume {
   display: none;
 }
 
@@ -902,11 +884,6 @@ async function onQueuePlayClick(index) {
   width: 38px;
   height: 38px;
   flex-shrink: 0;
-}
-
-.player-bar.compact .ctrl-vol {
-  width: 38px;
-  height: 38px;
 }
 
 .player-bar.compact .queue-panel {

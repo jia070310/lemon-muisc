@@ -9,6 +9,7 @@ export const isPaused = ref(false)
 export const currentTime = ref(0)
 export const duration = ref(0)
 export const volume = ref(0.8)
+export const isMuted = ref(false)
 export const coverUrl = ref('')
 export const lyricLines = ref([])
 export const activeLyricIdx = ref(-1)
@@ -36,7 +37,15 @@ let lastSessionSave = 0
 const QUEUE_STORAGE_KEY = 'lx-music-nas:play-queue'
 const SESSION_STORAGE_KEY = 'lx-music-nas:play-session'
 const VOLUME_KEY = 'lx-music-nas:volume'
+const MUTE_KEY = 'lx-music-nas:muted'
 let volumeBeforeMute = 0.8
+
+function applyAudioOutput() {
+  if (!audio) return
+  const level = Math.min(1, Math.max(0, volume.value))
+  audio.volume = level > 0 ? level : 1
+  audio.muted = isMuted.value || level <= 0.001
+}
 
 function pickItemFields(item) {
   if (!item) return null
@@ -220,13 +229,24 @@ export function initPlayer() {
 
   audio = new Audio()
   try {
-    const savedVol = Number(localStorage.getItem(VOLUME_KEY))
-    if (Number.isFinite(savedVol)) {
-      volume.value = Math.min(1, Math.max(0, Math.round(savedVol * 100) / 100))
-      if (volume.value > 0.001) volumeBeforeMute = volume.value
+    const savedVolRaw = localStorage.getItem(VOLUME_KEY)
+    const savedMute = localStorage.getItem(MUTE_KEY)
+    if (savedVolRaw != null && savedVolRaw !== '') {
+      const savedVol = Number(savedVolRaw)
+      if (Number.isFinite(savedVol) && savedVol > 0.001) {
+        volume.value = Math.min(1, Math.max(0, Math.round(savedVol * 100) / 100))
+        volumeBeforeMute = volume.value
+      } else if (Number.isFinite(savedVol) && savedVol <= 0.001) {
+        // 兼容旧版：曾把静音存成 volume=0
+        volume.value = 0.8
+        volumeBeforeMute = 0.8
+        isMuted.value = true
+      }
     }
+    if (savedMute === 'true') isMuted.value = true
+    else if (savedMute === 'false') isMuted.value = false
   } catch {}
-  audio.volume = volume.value
+  applyAudioOutput()
   audio.addEventListener('timeupdate', () => {
     currentTime.value = audio.currentTime
     updateActiveLyric(audio.currentTime)
@@ -258,6 +278,7 @@ export function initPlayer() {
 async function onTrackEnded() {
   if (playMode.value === 'single' && audio) {
     audio.currentTime = 0
+    applyAudioOutput()
     await audio.play()
     isPaused.value = false
     return
@@ -421,6 +442,7 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 }
     applyDurationFallback(item)
 
     audio.src = url
+    applyAudioOutput()
     await waitForAudioReady()
     if (resumeTime > 0) {
       try {
@@ -429,6 +451,7 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 }
       } catch {}
     }
     await audio.play()
+    applyAudioOutput()
 
     syncDurationFromAudio()
     applyDurationFallback(item)
@@ -535,6 +558,7 @@ export function togglePause() {
     return
   }
   if (audio.paused) {
+    applyAudioOutput()
     audio.play()
     isPaused.value = false
   } else {
@@ -566,18 +590,33 @@ export function seekTo(time) {
 export function setVolume(val) {
   const next = Math.min(1, Math.max(0, Number(val)))
   const rounded = Math.round(next * 100) / 100
-  volume.value = rounded
-  if (audio) audio.volume = rounded
-  try { localStorage.setItem(VOLUME_KEY, String(rounded)) } catch {}
+  if (rounded <= 0.001) {
+    volumeBeforeMute = volume.value > 0.001 ? volume.value : volumeBeforeMute
+    isMuted.value = true
+  } else {
+    volume.value = rounded
+    volumeBeforeMute = rounded
+    isMuted.value = false
+  }
+  applyAudioOutput()
+  try {
+    localStorage.setItem(VOLUME_KEY, String(volumeBeforeMute > 0.001 ? volumeBeforeMute : rounded || 0.8))
+    localStorage.setItem(MUTE_KEY, String(isMuted.value))
+  } catch {}
 }
 
 export function toggleMute() {
-  if (volume.value > 0.001) {
-    volumeBeforeMute = volume.value
-    setVolume(0)
+  if (isMuted.value) {
+    isMuted.value = false
+    if (volume.value <= 0.001) {
+      volume.value = volumeBeforeMute > 0.001 ? volumeBeforeMute : 0.8
+    }
   } else {
-    setVolume(volumeBeforeMute > 0.001 ? volumeBeforeMute : 0.8)
+    volumeBeforeMute = volume.value > 0.001 ? volume.value : volumeBeforeMute
+    isMuted.value = true
   }
+  applyAudioOutput()
+  try { localStorage.setItem(MUTE_KEY, String(isMuted.value)) } catch {}
 }
 
 export function fmtTime(sec) {
