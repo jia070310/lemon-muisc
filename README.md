@@ -100,6 +100,7 @@
 ### 飞牛 NAS 特性
 
 - **FPK 应用包** + **Docker 镜像** 双渠道部署，Web UI 端口默认 **7983**
+- Docker 镜像支持 **x86_64 / ARM64** 多架构；飞牛 x86、飞牛 ARM 设备使用同一个镜像 tag 即可自动匹配
 - 安装向导支持镜像拉取进度、国内加速地址（如 `ghcr.1ms.run`）；含**注意事项**步骤
 - **卸载向导**：可选「保留数据」或「删除数据」，不会删除用户自己的音乐文件
 - 可通过飞牛 **文件选择器** 添加 NAS 路径（自动映射为容器内路径）
@@ -184,6 +185,7 @@ docker compose up -d
 国内网络可将镜像改为 `ghcr.1ms.run/jia070310/lemon-muisc:latest`，详见 [docs/docker-compose.md](docs/docker-compose.md)。
 
 > FPK 安装包体积小，**不内置镜像**；安装时由飞牛 Docker 拉取。国内说明见 [docs/fpk-install.md](docs/fpk-install.md)。
+> 同一镜像 tag 同时支持 **x86_64 / ARM64**，Docker 会按设备架构自动选择。
 
 ---
 
