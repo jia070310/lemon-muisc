@@ -35,6 +35,8 @@ let lastSessionSave = 0
 
 const QUEUE_STORAGE_KEY = 'lx-music-nas:play-queue'
 const SESSION_STORAGE_KEY = 'lx-music-nas:play-session'
+const VOLUME_KEY = 'lx-music-nas:volume'
+let volumeBeforeMute = 0.8
 
 function pickItemFields(item) {
   if (!item) return null
@@ -217,6 +219,13 @@ export function initPlayer() {
   inited = true
 
   audio = new Audio()
+  try {
+    const savedVol = Number(localStorage.getItem(VOLUME_KEY))
+    if (Number.isFinite(savedVol)) {
+      volume.value = Math.min(1, Math.max(0, Math.round(savedVol * 100) / 100))
+      if (volume.value > 0.001) volumeBeforeMute = volume.value
+    }
+  } catch {}
   audio.volume = volume.value
   audio.addEventListener('timeupdate', () => {
     currentTime.value = audio.currentTime
@@ -555,8 +564,20 @@ export function seekTo(time) {
 }
 
 export function setVolume(val) {
-  volume.value = val
-  if (audio) audio.volume = val
+  const next = Math.min(1, Math.max(0, Number(val)))
+  const rounded = Math.round(next * 100) / 100
+  volume.value = rounded
+  if (audio) audio.volume = rounded
+  try { localStorage.setItem(VOLUME_KEY, String(rounded)) } catch {}
+}
+
+export function toggleMute() {
+  if (volume.value > 0.001) {
+    volumeBeforeMute = volume.value
+    setVolume(0)
+  } else {
+    setVolume(volumeBeforeMute > 0.001 ? volumeBeforeMute : 0.8)
+  }
 }
 
 export function fmtTime(sec) {

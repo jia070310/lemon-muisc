@@ -88,9 +88,52 @@
         </svg>
         <span v-if="playQueue.length" class="queue-badge">{{ playQueue.length }}</span>
       </button>
-      <div class="player-volume">
-        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="var(--text-muted)" stroke-width="2"><polygon points="11,5 6,9 2,9 2,15 6,15 11,19"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
-        <input type="range" min="0" max="1" step="0.01" :value="volume" @input="onVolume" class="vol-slider" />
+      <div
+        class="player-volume"
+        ref="volumeWrapRef"
+        :class="{ open: showVolumePanel }"
+        @wheel.prevent="onVolumeWheel"
+        @mouseenter="onVolumeEnter"
+        @mouseleave="onVolumeLeave"
+      >
+        <button
+          class="ctrl-btn ctrl-vol"
+          type="button"
+          :title="volumeTip"
+          @click.stop="onVolumeBtnClick"
+        >
+          <svg v-if="volumePercent === 0" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="11,5 6,9 2,9 2,15 6,15 11,19"/>
+            <line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>
+          </svg>
+          <svg v-else-if="volumePercent < 50" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="11,5 6,9 2,9 2,15 6,15 11,19"/>
+            <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+          </svg>
+          <svg v-else viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="11,5 6,9 2,9 2,15 6,15 11,19"/>
+            <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+            <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
+          </svg>
+        </button>
+        <div class="vol-popover" @click.stop @mouseenter="onVolumeEnter" @mouseleave="onVolumeLeave">
+          <span class="vol-percent">{{ volumePercent }}%</span>
+          <div class="vol-slider-wrap" :style="{ '--vol-pct': volumePercent + '%' }">
+            <input
+              type="range"
+              class="vol-slider-v"
+              min="0"
+              max="100"
+              step="1"
+              :value="volumePercent"
+              @input="onVolumePercent"
+              @change="onVolumePercent"
+            />
+          </div>
+          <button v-if="isCompact" type="button" class="vol-mute-btn" @click.stop="toggleMute">
+            {{ volumePercent === 0 ? '取消静音' : '静音' }}
+          </button>
+        </div>
       </div>
     </div>
 
@@ -136,7 +179,7 @@ import {
   currentPlaying, isPaused, currentTime, displayDuration, volume,
   coverUrl, coverStyle, currentLyricText,
   playQueue, currentQueueIndex, playMode, playModeLabel, showQueuePanel,
-  togglePause, stopPlay, seekTo, setVolume, fmtTime, initPlayer,
+  togglePause, stopPlay, seekTo, setVolume, toggleMute, fmtTime, initPlayer,
   playNext, playPrev, togglePlayMode, toggleQueuePanel,
   removeFromQueue, clearQueue, playTrackAt,
 } from '../stores/player.js'
@@ -146,12 +189,18 @@ import { cleanText } from '../utils/text.js'
 const queuePanelRef = ref(null)
 const queueBtnRef = ref(null)
 const playerBarRef = ref(null)
+const volumeWrapRef = ref(null)
 const isCompact = ref(false)
+const showVolumePanel = ref(false)
 
 const COMPACT_ON = 980
 const COMPACT_OFF = 1040
 
 let compactObserver = null
+let volumeLeaveTimer = null
+
+const volumePercent = computed(() => Math.round((volume.value || 0) * 100))
+const volumeTip = computed(() => (volumePercent.value === 0 ? '取消静音' : `音量 ${volumePercent.value}%（点击静音）`))
 
 function applyCompact(width) {
   if (isCompact.value) {
@@ -163,6 +212,7 @@ function applyCompact(width) {
 
 watch(isCompact, (compact) => {
   document.documentElement.style.setProperty('--player-height', compact ? '76px' : '64px')
+  if (!compact) showVolumePanel.value = false
 }, { immediate: true })
 
 const RING_CENTER = 26
@@ -198,19 +248,52 @@ onUnmounted(() => {
   document.removeEventListener('click', onDocumentClick)
   compactObserver?.disconnect()
   compactObserver = null
+  clearTimeout(volumeLeaveTimer)
   document.documentElement.style.removeProperty('--player-height')
 })
 
 function onDocumentClick(e) {
-  if (!showQueuePanel.value) return
-  const panel = queuePanelRef.value
-  const btn = queueBtnRef.value
-  if (panel?.contains(e.target) || btn?.contains(e.target)) return
-  showQueuePanel.value = false
+  const t = e.target
+  if (showQueuePanel.value) {
+    const panel = queuePanelRef.value
+    const btn = queueBtnRef.value
+    if (!panel?.contains(t) && !btn?.contains(t)) showQueuePanel.value = false
+  }
+  if (showVolumePanel.value) {
+    if (!volumeWrapRef.value?.contains(t)) showVolumePanel.value = false
+  }
 }
 
 function onSeek(e) { seekTo(Number(e.target.value)) }
-function onVolume(e) { setVolume(Number(e.target.value)) }
+
+function onVolumePercent(e) {
+  setVolume(Number(e.target.value) / 100)
+}
+
+function onVolumeWheel(e) {
+  const delta = e.deltaY < 0 ? 2 : -2
+  setVolume((volumePercent.value + delta) / 100)
+  showVolumePanel.value = true
+}
+
+function onVolumeEnter() {
+  clearTimeout(volumeLeaveTimer)
+  if (!isCompact.value) showVolumePanel.value = true
+}
+
+function onVolumeLeave() {
+  volumeLeaveTimer = setTimeout(() => {
+    if (!isCompact.value) showVolumePanel.value = false
+  }, 220)
+}
+
+function onVolumeBtnClick() {
+  if (isCompact.value) {
+    showVolumePanel.value = !showVolumePanel.value
+    return
+  }
+  toggleMute()
+}
 
 async function onPlayNext() {
   try { await playNext() } catch {}
@@ -462,30 +545,137 @@ async function onQueuePlayClick(index) {
 }
 
 .player-volume {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 8px;
   flex-shrink: 0;
-  width: 100px;
 }
-.vol-slider {
-  flex: 1;
-  -webkit-appearance: none;
-  height: 3px;
-  background: var(--border);
-  border-radius: 2px;
-  outline: none;
-  cursor: pointer;
-  border: none;
-  padding: 0;
+.ctrl-vol {
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius);
+  background: transparent;
+  border: 1px solid var(--border);
 }
-.vol-slider::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 10px;
+.ctrl-vol:hover,
+.player-volume.open .ctrl-vol {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-muted);
+}
+.vol-popover {
+  display: none;
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 52px;
+  padding: 10px 8px 12px;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  z-index: 70;
+}
+.vol-popover::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -10px;
   height: 10px;
-  border-radius: 50%;
-  background: var(--text-secondary);
+}
+.player-volume:hover .vol-popover,
+.player-volume.open .vol-popover {
+  display: flex;
+}
+.vol-percent {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+.vol-slider-wrap {
+  position: relative;
+  width: 28px;
+  height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.vol-slider-wrap::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  transform: translateX(-50%);
+  width: 4px;
+  height: 120px;
+  border-radius: 2px;
+  background: linear-gradient(to top, var(--accent) var(--vol-pct), var(--border) var(--vol-pct));
+  pointer-events: none;
+  z-index: 0;
+}
+.vol-slider-v {
+  position: relative;
+  z-index: 1;
+  -webkit-appearance: none;
+  appearance: slider-vertical;
+  writing-mode: vertical-lr;
+  direction: rtl;
+  width: 28px;
+  height: 120px;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  border: none;
   cursor: pointer;
+  touch-action: none;
+}
+.vol-slider-v::-webkit-slider-runnable-track {
+  width: 4px;
+  border-radius: 2px;
+  background: transparent;
+}
+.vol-slider-v::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  margin-left: -6px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--bg-card);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+  cursor: pointer;
+}
+.vol-slider-v::-moz-range-track {
+  width: 4px;
+  border-radius: 2px;
+  background: transparent;
+}
+.vol-slider-v::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--bg-card);
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+}
+.vol-mute-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  padding: 0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.vol-mute-btn:hover {
+  color: var(--accent);
 }
 
 .queue-panel {
@@ -690,14 +880,14 @@ async function onQueuePlayClick(index) {
   height: 38px;
 }
 
-.player-bar.compact .ctrl-sub {
+.player-bar.compact .ctrl-sub,
+.player-bar.compact .ctrl-mode {
   width: 32px;
   height: 32px;
+  display: flex;
 }
 
-.player-bar.compact .ctrl-mode,
 .player-bar.compact .ctrl-sub[title="停止"],
-.player-bar.compact .player-volume,
 .player-bar.compact .player-progress {
   display: none;
 }
@@ -712,6 +902,11 @@ async function onQueuePlayClick(index) {
   width: 38px;
   height: 38px;
   flex-shrink: 0;
+}
+
+.player-bar.compact .ctrl-vol {
+  width: 38px;
+  height: 38px;
 }
 
 .player-bar.compact .queue-panel {
