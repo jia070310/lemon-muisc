@@ -15,7 +15,9 @@ FPK **不含 Docker 镜像**（安装包约几十 KB）。点击「安装」后�
 
 ## 安装流程
 
-1. 应用中心 → **手动安装** → 选择 `fpk/lemon-music.fpk`（或发布页的版本号文件）
+1. 应用中心 → **手动安装** → 按设备架构选择安装包：
+   - x86 设备：`fpk/lemon-music-1.0.12-x86.fpk`
+   - ARM 设备：`fpk/lemon-music-1.0.12-arm.fpk`
 2. 阅读「安装说明」「注意事项」
 3. **数据目录**（可选）：填写音乐库、下载目录
 4. **镜像拉取**：国内默认 1ms 加速；已有镜像选「跳过拉取」
@@ -114,4 +116,4 @@ Web 设置页请使用容器路径 `/music`、`/downloads`。之后可在 **访�
 npm run fpk:build
 ```
 
-输出：`fpk/lemon-music.fpk`（不要提交到 git）。
+输出：`fpk/lemon-music-1.0.12-x86.fpk` 与 `fpk/lemon-music-1.0.12-arm.fpk`（不要提交到 git）。

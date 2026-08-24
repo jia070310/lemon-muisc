@@ -1,3 +1,43 @@
+# 柠檬音乐下载 v1.0.12
+
+## 更新内容
+
+### ARM 适配
+
+- Docker 镜像改为 **多架构构建**：同时发布 `linux/amd64` 与 `linux/arm64`
+- 飞牛 ARM 设备可直接拉取同一镜像 tag，Docker 会自动选择匹配架构
+- FPK 改为 **双安装包发布**：
+  - `lemon-music-1.0.12-x86.fpk`
+  - `lemon-music-1.0.12-arm.fpk`
+
+### 全屏播放修复
+
+- 修复全屏歌词区域底部出现**横向滚动条**的问题
+- 限制歌词区仅纵向滚动，长歌词自动换行，当前行高亮不再撑宽容器
+
+## 安装 / 更新
+
+应用中心：**手动安装** 对应架构的 FPK  
+（勿点卡片「更新」；覆盖安装即可）
+
+- x86 设备：`lemon-music-1.0.12-x86.fpk`
+- ARM 设备：`lemon-music-1.0.12-arm.fpk`
+
+**v1.0.12 含应用本体更新，建议拉取新镜像。**
+
+```bash
+docker pull ghcr.1ms.run/jia070310/lemon-muisc:1.0.12
+docker tag ghcr.1ms.run/jia070310/lemon-muisc:1.0.12 lemon-music:latest
+```
+
+## Docker 镜像
+
+- `ghcr.io/jia070310/lemon-muisc:latest`
+- `ghcr.io/jia070310/lemon-muisc:1.0.12`
+- 国内加速：`ghcr.1ms.run/jia070310/lemon-muisc:1.0.12`
+
+---
+
 # 柠檬音乐下载 v1.0.11
 
 ## 更新内容

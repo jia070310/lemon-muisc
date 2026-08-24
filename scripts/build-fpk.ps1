@@ -4,6 +4,7 @@ $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 $FpkDir = Join-Path $Root "fpk"
 $TarPath = Join-Path $Root "fpk\app\docker\images\lemon-music.tar"
+$ManifestPath = Join-Path $FpkDir "manifest"
 
 if (Test-Path $TarPath) { Remove-Item -Force $TarPath -ErrorAction SilentlyContinue }
 
@@ -23,19 +24,36 @@ Get-ChildItem -Path (Join-Path $FpkDir "cmd") -File | ForEach-Object {
   $text = [IO.File]::ReadAllText($_.FullName).Replace("`r`n", "`n")
   [IO.File]::WriteAllText($_.FullName, $text)
 }
-Set-Location $FpkDir
-& $fnpackPath build
 
-$fpk = Join-Path $FpkDir "lemon-music.fpk"
-if (-not (Test-Path $fpk)) { throw "lemon-music.fpk was not created" }
-$manifest = Join-Path $FpkDir "manifest"
+$manifest = $ManifestPath
 $version = "1.0.0"
 if (Test-Path $manifest) {
   $m = Select-String -Path $manifest -Pattern '^\s*version\s*=\s*(.+)\s*$' | Select-Object -First 1
   if ($m) { $version = $m.Matches[0].Groups[1].Value.Trim() }
 }
-$versioned = Join-Path $FpkDir "lemon-music-$version.fpk"
-Copy-Item -Force $fpk $versioned
-$sizeMb = [math]::Round((Get-Item $fpk).Length / 1MB, 2)
-Write-Host "Done: $fpk ($sizeMb MB)" -ForegroundColor Green
-Write-Host "Also: $versioned" -ForegroundColor Green
+
+$originalManifest = [IO.File]::ReadAllText($ManifestPath)
+try {
+  foreach ($platform in @("x86", "arm")) {
+    $patchedManifest = [regex]::Replace(
+      $originalManifest,
+      '(?m)^(\s*platform\s*=\s*).+$',
+      "`$1$platform"
+    )
+    [IO.File]::WriteAllText($ManifestPath, $patchedManifest)
+
+    Set-Location $FpkDir
+    & $fnpackPath build
+
+    $fpk = Join-Path $FpkDir "lemon-music.fpk"
+    if (-not (Test-Path $fpk)) { throw "lemon-music.fpk was not created for platform $platform" }
+
+    $versioned = Join-Path $FpkDir "lemon-music-$version-$platform.fpk"
+    Copy-Item -Force $fpk $versioned
+    $sizeMb = [math]::Round((Get-Item $versioned).Length / 1MB, 2)
+    Write-Host "Done: $versioned ($sizeMb MB)" -ForegroundColor Green
+  }
+}
+finally {
+  [IO.File]::WriteAllText($ManifestPath, $originalManifest)
+}

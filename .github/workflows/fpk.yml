@@ -31,18 +31,34 @@ jobs:
           echo "Building FPK for version ${VERSION}"
           find fpk/cmd -type f -exec chmod +x {} +
           find fpk/cmd -type f -exec sed -i 's/\r$//' {} +
-          fnpack build --directory fpk
-          FPK="$(find . -type f -name '*.fpk' | head -n 1)"
-          echo "found: ${FPK}"
-          test -n "$FPK"
-          mv "$FPK" "lemon-music-${VERSION}.fpk"
-          ls -lh "lemon-music-${VERSION}.fpk"
+          ORIGINAL_MANIFEST="$(cat fpk/manifest)"
+          cleanup() {
+            printf '%s' "$ORIGINAL_MANIFEST" > fpk/manifest
+          }
+          trap cleanup EXIT
+          for PLATFORM in x86 arm; do
+            python3 - "$PLATFORM" <<'PY'
+import pathlib, re, sys
+platform = sys.argv[1]
+manifest = pathlib.Path("fpk/manifest")
+text = manifest.read_text(encoding="utf-8")
+text = re.sub(r'(?m)^(\s*platform\s*=\s*).+$', rf'\1{platform}', text)
+manifest.write_text(text, encoding="utf-8")
+PY
+            fnpack build --directory fpk
+            FPK="fpk/lemon-music.fpk"
+            test -f "$FPK"
+            mv "$FPK" "lemon-music-${VERSION}-${PLATFORM}.fpk"
+            ls -lh "lemon-music-${VERSION}-${PLATFORM}.fpk"
+          done
 
       - name: Upload FPK artifact
         uses: actions/upload-artifact@v4
         with:
           name: lemon-music-fpk
-          path: lemon-music-${{ steps.build.outputs.version }}.fpk
+          path: |
+            lemon-music-${{ steps.build.outputs.version }}-x86.fpk
+            lemon-music-${{ steps.build.outputs.version }}-arm.fpk
           if-no-files-found: error
 
       - name: Attach FPK to GitHub Release
@@ -51,7 +67,6 @@ jobs:
         run: |
           VERSION="${{ steps.build.outputs.version }}"
           TAG="v${VERSION}"
-          FPK="lemon-music-${VERSION}.fpk"
           if ! gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
             if [ -f docs/RELEASE-NOTES.md ]; then
               gh release create "$TAG" --title "$TAG" --notes-file docs/RELEASE-NOTES.md --repo "${{ github.repository }}"
@@ -61,4 +76,7 @@ jobs:
           elif [ -f docs/RELEASE-NOTES.md ]; then
             gh release edit "$TAG" --notes-file docs/RELEASE-NOTES.md --repo "${{ github.repository }}"
           fi
-          gh release upload "$TAG" "$FPK" --clobber --repo "${{ github.repository }}"
+          gh release upload "$TAG" \
+            "lemon-music-${VERSION}-x86.fpk" \
+            "lemon-music-${VERSION}-arm.fpk" \
+            --clobber --repo "${{ github.repository }}"

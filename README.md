@@ -2,7 +2,7 @@
 
 面向飞牛 NAS 与自托管环境的 **Web 音乐工具**：多平台搜索、歌单发现、在线试听、批量下载、本地标签管理。兼容落雪音乐（LX Music）自定义音源脚本，在浏览器中即可完成「找歌 → 试听 → 下载 → 整理」全流程。
 
-当前版本：**v1.0.11**  
+当前版本：**v1.0.12**  
 仓库：[https://github.com/jia070310/lemon-muisc](https://github.com/jia070310/lemon-muisc)
 
 ---
@@ -186,6 +186,7 @@ docker compose up -d
 
 > FPK 安装包体积小，**不内置镜像**；安装时由飞牛 Docker 拉取。国内说明见 [docs/fpk-install.md](docs/fpk-install.md)。
 > 同一镜像 tag 同时支持 **x86_64 / ARM64**，Docker 会按设备架构自动选择。
+> FPK 需按设备架构选择：`lemon-music-1.0.12-x86.fpk` 或 `lemon-music-1.0.12-arm.fpk`。
 
 ---
 
@@ -197,7 +198,7 @@ docker compose up -d
 npm run fpk:build
 ```
 
-生成 `fpk/lemon-music.fpk`，在飞牛 **应用中心 → 手动安装**（不要点卡片「更新」）。
+生成 `fpk/lemon-music-1.0.12-x86.fpk` 与 `fpk/lemon-music-1.0.12-arm.fpk`，在飞牛 **应用中心 → 手动安装** 选择与你设备架构对应的安装包（不要点卡片「更新」）。
 
 安装说明、注意事项、镜像加速与**卸载时保留/删除数据**见 [docs/fpk-install.md](docs/fpk-install.md)。
 
