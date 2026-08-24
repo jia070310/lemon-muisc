@@ -259,6 +259,7 @@ onUnmounted(() => {
 })
 
 function onDocumentClick(e) {
+  if (showFullscreenPlayer.value) return
   const t = e.target
   if (showQueuePanel.value) {
     const panel = queuePanelRef.value

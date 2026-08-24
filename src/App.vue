@@ -55,6 +55,22 @@
       </div>
     </aside>
 
+    <header class="mobile-topbar">
+      <div class="mobile-brand">
+        <img src="/icon.png" alt="" class="mobile-brand-icon" />
+        <span>柠檬音乐下载</span>
+      </div>
+      <button
+        class="mobile-theme-btn"
+        type="button"
+        :title="theme === 'light' ? '切换深色模式' : '切换浅色模式'"
+        @click="toggleTheme"
+      >
+        <svg v-if="theme === 'dark'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+        <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 14.5A8.5 8.5 0 1 1 9.5 3 7 7 0 0 0 21 14.5z"/></svg>
+      </button>
+    </header>
+
     <main class="content" :class="{ 'content-fixed': isTagPage }">
       <div v-if="setupBanner" class="setup-banner">
         <strong>首次使用请先配置数据目录</strong>
@@ -402,6 +418,7 @@ onUnmounted(() => {
 }
 .setup-link:hover { text-decoration: underline; }
 
+.mobile-topbar { display: none; }
 .mobile-tabbar { display: none; }
 
 @media (max-width: 768px) {
@@ -413,9 +430,66 @@ onUnmounted(() => {
 
   .content {
     margin-left: 0;
-    padding: 16px 14px calc(var(--player-height) + var(--mobile-nav-height) + 20px + env(safe-area-inset-bottom, 0px));
+    padding: calc(52px + env(safe-area-inset-top, 0px)) 14px calc(var(--player-height) + var(--mobile-nav-height) + 20px + env(safe-area-inset-bottom, 0px));
     min-height: auto;
     width: 100%;
+  }
+
+  .mobile-topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 110;
+    height: calc(52px + env(safe-area-inset-top, 0px));
+    padding: env(safe-area-inset-top, 0px) 12px 0 14px;
+    background: var(--bg-nav);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border-light);
+  }
+  .mobile-brand {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    font-size: 15px;
+    font-weight: 650;
+    color: var(--text);
+  }
+  .mobile-brand span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .mobile-brand-icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+    object-fit: cover;
+    flex-shrink: 0;
+  }
+  .mobile-theme-btn {
+    width: 40px;
+    height: 40px;
+    border: none;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    background: var(--bg-elevated);
+    color: var(--text);
+    cursor: pointer;
+  }
+  .mobile-theme-btn svg {
+    width: 18px;
+    height: 18px;
+  }
+  .mobile-theme-btn:hover {
+    background: var(--bg-hover);
   }
 
   .content-fixed {

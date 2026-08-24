@@ -90,7 +90,7 @@
             <button class="fs-btn" type="button" title="下一曲" :disabled="!playQueue.length" @click="onNext">
               <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><polygon points="5,4 15,12 5,20"/><line x1="19" y1="4" x2="19" y2="20" stroke="currentColor" stroke-width="2"/></svg>
             </button>
-            <button class="fs-btn" type="button" title="试听列表" @click="onOpenQueue">
+            <button class="fs-btn" type="button" title="试听列表" :class="{ active: showQueuePanel }" @click="onOpenQueue">
               <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
                 <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/>
                 <circle cx="4" cy="6" r="1" fill="currentColor"/><circle cx="4" cy="12" r="1" fill="currentColor"/><circle cx="4" cy="18" r="1" fill="currentColor"/>
@@ -131,6 +131,45 @@
             </div>
           </div>
         </div>
+
+        <div v-if="showQueuePanel" class="fs-queue-mask" @click="showQueuePanel = false">
+          <div class="fs-queue" @click.stop>
+            <div class="fs-queue-header">
+              <span class="fs-queue-title">试听列表 <em>{{ playQueue.length }}</em></span>
+              <div class="fs-queue-actions">
+                <span class="fs-queue-mode">{{ playModeLabel }}</span>
+                <button class="fs-queue-text" type="button" :disabled="!playQueue.length" @click="clearQueue">清空</button>
+                <button class="fs-queue-close" type="button" @click="showQueuePanel = false">×</button>
+              </div>
+            </div>
+            <div v-if="playQueue.length" class="fs-queue-list">
+              <div
+                v-for="(entry, i) in playQueue"
+                :key="entry.key"
+                class="fs-queue-item"
+                :class="{ active: i === currentQueueIndex }"
+                @dblclick="onPlayAt(i)"
+              >
+                <span class="fs-queue-index">{{ i === currentQueueIndex && !isPaused ? '▶' : i + 1 }}</span>
+                <div class="fs-queue-info">
+                  <div class="fs-queue-name">{{ cleanText(entry.item.name) }}</div>
+                  <div class="fs-queue-meta">{{ cleanText(entry.item.singer) }}</div>
+                </div>
+                <button
+                  class="fs-queue-play"
+                  type="button"
+                  :title="i === currentQueueIndex && currentPlaying && !isPaused ? '暂停' : '播放'"
+                  @click.stop="onQueuePlayClick(i)"
+                >
+                  <svg v-if="i === currentQueueIndex && currentPlaying && !isPaused" viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+                  <svg v-else viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><polygon points="7,3 21,12 7,21"/></svg>
+                </button>
+                <button class="fs-queue-remove" type="button" title="移除" @click.stop="removeFromQueue(i)">×</button>
+              </div>
+            </div>
+            <div v-else class="fs-queue-empty">列表为空</div>
+          </div>
+        </div>
       </div>
     </Transition>
   </Teleport>
@@ -140,10 +179,10 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   currentPlaying, isPaused, currentTime, displayDuration, coverUrl, coverStyle,
-  lyricLines, activeLyricIdx, playQueue, playMode, playModeLabel,
+  lyricLines, activeLyricIdx, playQueue, currentQueueIndex, playMode, playModeLabel,
   showFullscreenPlayer, visualizerEnabled, volume, isMuted,
   togglePause, seekTo, setVolume, toggleMute, fmtTime, playNext, playPrev, togglePlayMode,
-  closeFullscreenPlayer, showQueuePanel,
+  closeFullscreenPlayer, showQueuePanel, playTrackAt, removeFromQueue, clearQueue,
 } from '../stores/player.js'
 import { cleanText } from '../utils/text.js'
 import SpectrumVisualizer from './SpectrumVisualizer.vue'
@@ -188,8 +227,19 @@ async function onNext() {
 }
 
 function onOpenQueue() {
-  closeFullscreenPlayer()
-  showQueuePanel.value = true
+  showQueuePanel.value = !showQueuePanel.value
+}
+
+async function onPlayAt(index) {
+  try { await playTrackAt(index) } catch {}
+}
+
+async function onQueuePlayClick(index) {
+  if (index === currentQueueIndex.value && currentPlaying.value) {
+    togglePause()
+    return
+  }
+  await onPlayAt(index)
 }
 
 function scrollActiveLyric() {
@@ -204,7 +254,13 @@ function scrollActiveLyric() {
 
 function onKeydown(e) {
   if (!showFullscreenPlayer.value) return
-  if (e.key === 'Escape') closeFullscreenPlayer()
+  if (e.key === 'Escape') {
+    if (showQueuePanel.value) {
+      showQueuePanel.value = false
+      return
+    }
+    closeFullscreenPlayer()
+  }
   if (e.key === ' ') {
     e.preventDefault()
     togglePause()
@@ -544,6 +600,124 @@ onUnmounted(() => {
 }
 .fs-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 .fs-btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.12); }
+.fs-btn.active { background: rgba(255, 255, 255, 0.18); }
+
+.fs-queue-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  justify-content: flex-end;
+}
+.fs-queue {
+  width: min(380px, 100%);
+  height: 100%;
+  background: rgba(12, 14, 20, 0.96);
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  flex-direction: column;
+  backdrop-filter: blur(16px);
+}
+.fs-queue-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: calc(14px + env(safe-area-inset-top, 0px)) 16px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.fs-queue-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+.fs-queue-title em {
+  font-style: normal;
+  color: rgba(255, 255, 255, 0.5);
+  font-weight: 400;
+  margin-left: 4px;
+}
+.fs-queue-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.fs-queue-mode {
+  font-size: 11px;
+  color: var(--accent, #6c9eff);
+}
+.fs-queue-text {
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 12px;
+  cursor: pointer;
+}
+.fs-queue-text:disabled { opacity: 0.35; }
+.fs-queue-close {
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.fs-queue-list {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+.fs-queue-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.fs-queue-item.active {
+  background: rgba(60, 110, 247, 0.22);
+}
+.fs-queue-index {
+  width: 20px;
+  text-align: center;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.45);
+  flex-shrink: 0;
+}
+.fs-queue-item.active .fs-queue-index { color: #fff; }
+.fs-queue-info { flex: 1; min-width: 0; }
+.fs-queue-name {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fs-queue-meta {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.45);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fs-queue-play,
+.fs-queue-remove {
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.fs-queue-empty {
+  padding: 32px 16px;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 13px;
+}
+
 .fs-btn-main {
   width: 64px;
   height: 64px;
@@ -619,6 +793,9 @@ onUnmounted(() => {
     width: 100%;
     justify-content: center;
     order: 10;
+  }
+  .fs-queue {
+    width: min(100%, 420px);
   }
   .fs-vol-slider { width: min(160px, 50vw); }
 }
