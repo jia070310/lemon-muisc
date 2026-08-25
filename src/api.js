@@ -88,6 +88,11 @@ export const api = {
           ? songIdOrPayload
           : { songId: songIdOrPayload, source, lyric },
       }),
+    getCover: (payload) =>
+      request('/play/cover', {
+        method: 'POST',
+        body: typeof payload === 'object' && payload !== null ? payload : {},
+      }),
   },
   paths: {
     list: () => request('/paths'),

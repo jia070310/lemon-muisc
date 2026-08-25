@@ -3,8 +3,9 @@ import fs from 'fs'
 import path from 'path'
 import needle from 'needle'
 import { requestSource, getActiveSource } from '../sourceManager.js'
-import { getLyric } from '../musicSdk.js'
-import { buildMusicInfo, lyricLookupExtra } from '../utils/musicInfo.js'
+import { buildMusicInfo } from '../utils/musicInfo.js'
+import { fetchTrackLyric, fetchTrackCover } from '../utils/trackMeta.js'
+import { resolveCoverUrl } from '../utils/cover.js'
 import { isAllowedMediaPath } from '../utils/filePaths.js'
 
 export const playRouter = Router()
@@ -199,7 +200,9 @@ playRouter.get('/proxy', (req, res) => {
 
 playRouter.post('/lyric', async (req, res) => {
   try {
-    const { songId, source, lyric } = req.body
+    const { lyric } = req.body
+    const source = req.body.source
+    const songId = req.body.songId || req.body.songmid || req.body.hash || req.body.copyrightId || req.body.musicId
     if (typeof lyric === 'string' && lyric) {
       return res.json({ ok: true, lyric, tlyric: '', rlyric: '' })
     }
@@ -208,30 +211,42 @@ playRouter.post('/lyric', async (req, res) => {
     }
 
     const musicInfo = buildMusicInfo(req.body)
-    const extra = lyricLookupExtra(musicInfo)
+    const result = await fetchTrackLyric({
+      source,
+      songId,
+      musicInfo,
+      meta: req.body,
+      useOtherSource: true,
+    })
 
-    let result = await getLyric(songId, source, extra)
     if (result?.lyric) {
       return res.json({ ok: true, ...result })
     }
-
-    const active = getActiveSource()
-    if (active?.handler) {
-      try {
-        const fromSource = await requestSource(source, 'lyric', { musicInfo })
-        if (fromSource?.lyric) {
-          return res.json({
-            ok: true,
-            lyric: fromSource.lyric,
-            tlyric: fromSource.tlyric || '',
-            rlyric: fromSource.rlyric || '',
-          })
-        }
-      } catch {}
-    }
-
     res.json({ ok: true, lyric: '', tlyric: '', rlyric: '' })
   } catch {
     res.json({ ok: true, lyric: '', tlyric: '', rlyric: '' })
+  }
+})
+
+playRouter.post('/cover', async (req, res) => {
+  try {
+    const { source } = req.body
+    if (!source || source === 'local') {
+      return res.json({ ok: true, url: req.body.picUrl || req.body.img || '' })
+    }
+    const musicInfo = buildMusicInfo(req.body)
+    const direct = resolveCoverUrl(musicInfo)
+    if (direct) return res.json({ ok: true, url: direct })
+
+    const url = await fetchTrackCover({
+      source,
+      musicInfo,
+      meta: req.body,
+      asBuffer: false,
+      useOtherSource: true,
+    })
+    res.json({ ok: true, url: url || '' })
+  } catch {
+    res.json({ ok: true, url: '' })
   }
 })

@@ -131,7 +131,7 @@ function syncCurrentPlayingFromQueue(forcePaused = false) {
   const { item, source } = playQueue.value[currentQueueIndex.value]
   const cleaned = cleanTrackItem({ ...item, source: item.source || source })
   currentPlaying.value = cleaned
-  coverUrl.value = cleaned.picUrl || ''
+  coverUrl.value = cleaned.picUrl || cleaned.img || ''
   lyricLines.value = cleaned.lyric ? parseLrc(cleaned.lyric) : []
   activeLyricIdx.value = -1
   applyDurationFallback(cleaned)
@@ -145,7 +145,7 @@ function restoreSessionState() {
       const data = JSON.parse(raw)
       if (data.currentPlaying?.name) {
         currentPlaying.value = cleanTrackItem(data.currentPlaying)
-        coverUrl.value = data.currentPlaying.picUrl || ''
+        coverUrl.value = data.currentPlaying.picUrl || data.currentPlaying.img || ''
         lyricLines.value = data.currentPlaying.lyric ? parseLrc(data.currentPlaying.lyric) : []
         activeLyricIdx.value = -1
         currentTime.value = Number(data.currentTime) || 0
@@ -578,7 +578,7 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 }
 
     currentPlaying.value = cleanTrackItem(item)
     isPaused.value = false
-    coverUrl.value = item.picUrl || ''
+    coverUrl.value = item.picUrl || item.img || ''
     lyricLines.value = []
     activeLyricIdx.value = -1
 
@@ -586,6 +586,7 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 }
       lyricLines.value = parseLrc(item.lyric)
     } else if (!isLocal) {
       fetchLyric(item, source)
+      if (!(item.picUrl || item.img)) fetchCover(item, source)
     }
     saveQueueState()
   } catch (e) {
@@ -761,6 +762,21 @@ async function fetchLyric(item, activeSource) {
       lyric: item.lyric,
     })
     if (res.lyric) lyricLines.value = parseLrc(res.lyric)
+  } catch {}
+}
+
+async function fetchCover(item, activeSource) {
+  const source = item.source || activeSource
+  try {
+    const res = await api.play.getCover(buildPlayPayload(item, source, '128k'))
+    if (res.url && currentPlaying.value) {
+      const same = getTrackKey(currentPlaying.value, currentPlaying.value.source)
+        === getTrackKey(item, source)
+      if (same) {
+        coverUrl.value = res.url
+        currentPlaying.value = { ...currentPlaying.value, picUrl: res.url, img: res.url }
+      }
+    }
   } catch {}
 }
 

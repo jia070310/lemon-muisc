@@ -5,11 +5,10 @@ import { getDB } from '../db.js'
 import { broadcast } from '../ws.js'
 import { requestSource } from '../sourceManager.js'
 import { writeMeta } from '../meta.js'
-import { buildMusicInfoFromTask, lyricLookupExtra } from '../utils/musicInfo.js'
-import { buildEmbedLyrics, fixKgLyric } from '../utils/lyric.js'
+import { buildMusicInfoFromTask } from '../utils/musicInfo.js'
+import { buildEmbedLyrics } from '../utils/lyric.js'
 import { getDownloadSavePath } from '../utils/filePaths.js'
-import { getLyric, searchMusic } from '../musicSdk.js'
-import { fetchPicBuffer } from '../utils/fetchPic.js'
+import { fetchTrackLyric, fetchTrackCover } from '../utils/trackMeta.js'
 
 export const downloadRouter = Router()
 
@@ -220,7 +219,14 @@ async function writeMetaIfNeeded(task, meta, filePath, ext, settings) {
   let picBuf = null
   if (wantEmbedPic && canEmbed) {
     try {
-      picBuf = await fetchCover(source, musicInfo, meta, task)
+      picBuf = await fetchTrackCover({
+        source,
+        musicInfo,
+        meta,
+        task,
+        asBuffer: true,
+        useOtherSource: true,
+      })
     } catch (e) {
       console.warn('获取封面失败:', task.name, e.message)
     }
@@ -229,10 +235,16 @@ async function writeMetaIfNeeded(task, meta, filePath, ext, settings) {
   let lrcResult = null
   if (wantEmbedLyric || wantLrcFile) {
     try {
-      lrcResult = await fetchLyric(source, musicInfo, meta, task, settings)
-      if (lrcResult?.lyric && source === 'kg') {
-        lrcResult.lyric = fixKgLyric(lrcResult.lyric)
-      }
+      lrcResult = await fetchTrackLyric({
+        source,
+        songId: meta.songmid || meta.hash || meta.songId || meta.copyrightId
+          || musicInfo.songmid || musicInfo.hash || musicInfo.songId,
+        musicInfo,
+        meta,
+        task,
+        settings,
+        useOtherSource: true,
+      })
     } catch (e) {
       console.warn('获取歌词失败:', task.name, e.message)
     }
@@ -264,103 +276,6 @@ async function writeMetaIfNeeded(task, meta, filePath, ext, settings) {
       console.error('保存歌词文件失败:', task.name, e.message)
     }
   }
-}
-
-async function fetchCover(source, musicInfo, meta, task) {
-  // 1) 搜索结果里已有的封面（优先，最稳）
-  const directUrls = [
-    meta.picUrl,
-    meta.albummid ? `https://y.gtimg.cn/music/photo_new/T002R500x500M000${meta.albummid}.jpg` : '',
-  ].filter(Boolean)
-
-  for (const url of directUrls) {
-    const pic = await fetchPicBuffer(url)
-    if (pic) return pic
-  }
-
-  // 2) 音源脚本 pic 接口
-  try {
-    const picResult = await requestSource(source, 'pic', { musicInfo })
-    const picUrl = typeof picResult === 'string' ? picResult : (picResult?.url || picResult?.picUrl)
-    if (picUrl) {
-      const pic = await fetchPicBuffer(picUrl)
-      if (pic) return pic
-    }
-  } catch (e) {
-    console.warn('音源获取封面失败:', e?.message || e)
-  }
-
-  // 3) 按歌名再搜一次补封面（兼容旧任务无 picUrl）
-  try {
-    const keyword = [task?.name, task?.singer].filter(Boolean).join(' ')
-    if (keyword) {
-      const result = await searchMusic(keyword, source, 1, 5)
-      const hit = (result.list || []).find(i => i.picUrl) || result.list?.[0]
-      if (hit?.picUrl) {
-        const pic = await fetchPicBuffer(hit.picUrl)
-        if (pic) return pic
-      }
-    }
-  } catch (e) {
-    console.warn('搜索补封面失败:', e?.message || e)
-  }
-
-  return null
-}
-
-async function fetchLyric(source, musicInfo, meta, task, settings) {
-  const songId = meta.songmid || meta.hash || meta.songId || meta.copyrightId
-    || musicInfo.songmid || musicInfo.hash || musicInfo.songId
-
-  // 1) 内置 SDK（比自定义音源脚本更稳）
-  if (songId) {
-    try {
-      const lrc = await getLyric(songId, source, lyricLookupExtra({ ...musicInfo, ...meta, ...task }))
-      if (lrc?.lyric) return lrc
-    } catch (e) {
-      console.warn('SDK 获取歌词失败:', e?.message || e)
-    }
-  }
-
-  // 2) 音源脚本 lyric 接口
-  try {
-    const lrcResult = await requestSource(source, 'lyric', { musicInfo })
-    if (lrcResult?.lyric) {
-      return {
-        lyric: lrcResult.lyric,
-        tlyric: lrcResult.tlyric || '',
-        rlyric: lrcResult.rlyric || '',
-      }
-    }
-  } catch (e) {
-    console.warn('音源获取歌词失败:', e?.message || e)
-  }
-
-  // 3) 按歌名搜索补歌词（可选跨平台）
-  try {
-    const keyword = [task?.name, task?.singer].filter(Boolean).join(' ')
-    if (!keyword) return null
-    const useOther = settings?.['download.isUseOtherSource'] !== 'false'
-    const fallbackSources = useOther
-      ? ['wy', 'tx', 'kw', 'kg', 'mg']
-      : [source]
-    const seen = new Set()
-    for (const src of fallbackSources) {
-      if (seen.has(src)) continue
-      seen.add(src)
-      const result = await searchMusic(keyword, src, 1, 5)
-      for (const hit of result.list || []) {
-        const id = hit.songmid || hit.hash || hit.songId || hit.copyrightId || hit.id
-        if (!id) continue
-        const lrc = await getLyric(id, hit.source || src, lyricLookupExtra(hit))
-        if (lrc?.lyric) return lrc
-      }
-    }
-  } catch (e) {
-    console.warn('搜索补歌词失败:', e?.message || e)
-  }
-
-  return null
 }
 
 async function saveLrcFile(filePath, lrcResult, settings) {

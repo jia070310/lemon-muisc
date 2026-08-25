@@ -35,6 +35,7 @@ async function kwSearch(keyword, page = 1, limit = 30) {
         rid: item.MUSICRID?.replace('MUSIC_', '') || '',
         dcTargetId: item.DC_TARGETID || '',
         picUrl: kwPicUrl(item),
+        img: kwPicUrl(item),
       }, types)
     }),
     allPage: Math.ceil((parseInt(data.TOTAL) || 0) / limit),
@@ -65,6 +66,7 @@ async function kgSearch(keyword, page = 1, limit = 30) {
         albumAudioId: String(item.ID || item.AlbumAudioID || item.MixSongID || ''),
         duration: item.Duration || 0,
         picUrl: kgPicUrl(item),
+        img: kgPicUrl(item),
       }, types)
     }),
     allPage: Math.ceil(total / limit),
@@ -111,6 +113,7 @@ async function wySearch(keyword, page = 1, limit = 30) {
         source: 'wy',
         songId: String(item.id),
         picUrl: item.al?.picUrl || '',
+        img: item.al?.picUrl || '',
       }, types)
     }),
     allPage: Math.ceil(total / limit),
@@ -142,6 +145,7 @@ async function mgSearch(keyword, page = 1, limit = 30) {
         songId: item.copyrightId || item.id || '',
         copyrightId: item.copyrightId || '',
         picUrl: mgPicUrl(item),
+        img: mgPicUrl(item),
       }, types)
     }),
     allPage: Math.ceil(total / limit),
@@ -151,6 +155,7 @@ async function mgSearch(keyword, page = 1, limit = 30) {
 
 // --- utils ---
 function kwPicUrl(item) {
+  // 搜索接口
   const album = String(item.web_albumpic_short || '').trim()
   if (album) {
     return `https://img4.kuwo.cn/star/albumcover/${album.replace(/120/, '500')}`
@@ -159,11 +164,19 @@ function kwPicUrl(item) {
   if (artist) {
     return `https://img1.kuwo.cn/star/starheads/${artist.replace(/120/, '500')}`
   }
+  // 歌单 / 其它接口：pic、albumpic、artistPic 等
+  for (const key of ['albumpic', 'pic', 'pic120', 'musicPic', 'artistPic', 'img']) {
+    const v = item[key]
+    if (typeof v === 'string' && /^https?:\/\//i.test(v.trim())) {
+      return v.trim().replace(/\/120\//, '/500/')
+    }
+  }
   return ''
 }
 
 function kgPicUrl(item) {
-  let img = item.Image || item.AlbumImage || item.album_img || ''
+  let img = item.Image || item.AlbumImage || item.album_img
+    || item.album_info?.sizable_cover || item.cover || item.img || item.pic || ''
   if (typeof img === 'string' && img) {
     return img.replace(/\{size\}/g, '400')
   }
@@ -171,12 +184,15 @@ function kgPicUrl(item) {
 }
 
 function mgPicUrl(item) {
+  for (const key of ['img3', 'img2', 'img1', 'imgUrl', 'cover']) {
+    if (typeof item[key] === 'string' && item[key]) return item[key]
+  }
   const imgs = item.imgItems || item.imgList || []
   if (Array.isArray(imgs) && imgs.length) {
     const best = imgs.find(i => i.imgSizeType === '03' || i.imgSizeType === '02') || imgs[0]
     return best?.img || best?.url || ''
   }
-  return item.imgUrl || item.cover || ''
+  return ''
 }
 
 function cleanHtml(str) {
@@ -318,12 +334,16 @@ function formatTime(seconds) {
 
 /** 对齐落雪 LX Music tx 歌曲字段（songId / songmid / strMediaMid 分开） */
 function txCoverUrl(item, albumMid, albumName) {
-  if (albumMid && albumName && albumName !== '空') {
+  // 有 albumMid 即可拼封面，不强制要求专辑名（歌单里专辑名常为空）
+  if (albumMid && String(albumMid) !== '0') {
     return `https://y.gtimg.cn/music/photo_new/T002R500x500M000${albumMid}.jpg`
   }
   const singerMid = item.singer?.[0]?.mid
   if (singerMid) {
     return `https://y.gtimg.cn/music/photo_new/T001R500x500M000${singerMid}.jpg`
+  }
+  if (albumName && albumName !== '空') {
+    // 无 mid 时无法可靠拼 URL，仅占位避免误用
   }
   return ''
 }
@@ -478,6 +498,7 @@ function mapWyPlaylistTrack(item, priv, pl) {
     songId: String(item.id),
     songmid: String(item.id),
     picUrl: item.al?.picUrl || pl.coverImgUrl || '',
+    img: item.al?.picUrl || pl.coverImgUrl || '',
   }, types)
 }
 
@@ -618,6 +639,7 @@ async function kwPlaylist({ id, digestId }) {
         musicId: songId,
         albumId: item.albumid || '',
         picUrl: kwPicUrl(item),
+        img: kwPicUrl(item),
       }, types)
     })
 
@@ -665,6 +687,7 @@ async function mgPlaylist({ id }) {
         songId: item.copyrightId || item.songId || '',
         copyrightId: item.copyrightId || '',
         picUrl: item.img3 || item.img2 || item.img1 || mgPicUrl(item),
+        img: item.img3 || item.img2 || item.img1 || mgPicUrl(item),
       }, types)
     })
 
@@ -712,6 +735,7 @@ function mapKgSongItem(item) {
     albumAudioId,
     duration: Math.floor((audio.timelength || item.Duration || 0) / (audio.timelength ? 1000 : 1)),
     picUrl: kgPicUrl(item),
+    img: kgPicUrl(item),
   }, types)
 }
 
@@ -1037,26 +1061,37 @@ async function wyLyric(songId) {
   })
 }
 
-async function txLyric(songmid) {
-  const buf = await req('get',
-    `https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg?songmid=${songmid}&format=json&nobase64=1`,
-    null,
-    { Referer: 'https://y.qq.com/portal/player.html' })
-  const data = parseJSON(buf)
-  let lyric = data?.lyric || ''
-  let tlyric = data?.trans || ''
-  let rlyric = data?.roma || data?.rom || ''
-  // 部分环境仍返回 base64
-  if (lyric && !lyric.includes('[') && /^[A-Za-z0-9+/=\s]+$/.test(lyric.slice(0, 80))) {
-    try { lyric = Buffer.from(lyric, 'base64').toString('utf8') } catch {}
+async function txLyric(songmid, extra = {}) {
+  const ids = [...new Set([
+    extra.songmid,
+    extra.strMediaMid,
+    songmid,
+  ].filter(Boolean).map(String))]
+
+  for (const id of ids) {
+    try {
+      const buf = await req('get',
+        `https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg?songmid=${id}&format=json&nobase64=1`,
+        null,
+        { Referer: 'https://y.qq.com/portal/player.html' })
+      const data = parseJSON(buf)
+      let lyric = data?.lyric || ''
+      let tlyric = data?.trans || ''
+      let rlyric = data?.roma || data?.rom || ''
+      if (lyric && !lyric.includes('[') && /^[A-Za-z0-9+/=\s]+$/.test(lyric.slice(0, 80))) {
+        try { lyric = Buffer.from(lyric, 'base64').toString('utf8') } catch {}
+      }
+      if (tlyric && !tlyric.includes('[') && /^[A-Za-z0-9+/=\s]+$/.test(tlyric.slice(0, 80))) {
+        try { tlyric = Buffer.from(tlyric, 'base64').toString('utf8') } catch {}
+      }
+      if (rlyric && !rlyric.includes('[') && /^[A-Za-z0-9+/=\s]+$/.test(rlyric.slice(0, 80))) {
+        try { rlyric = Buffer.from(rlyric, 'base64').toString('utf8') } catch {}
+      }
+      const parsed = normalizeLyricResult({ lyric, tlyric, rlyric })
+      if (parsed.lyric) return parsed
+    } catch {}
   }
-  if (tlyric && !tlyric.includes('[') && /^[A-Za-z0-9+/=\s]+$/.test(tlyric.slice(0, 80))) {
-    try { tlyric = Buffer.from(tlyric, 'base64').toString('utf8') } catch {}
-  }
-  if (rlyric && !rlyric.includes('[') && /^[A-Za-z0-9+/=\s]+$/.test(rlyric.slice(0, 80))) {
-    try { rlyric = Buffer.from(rlyric, 'base64').toString('utf8') } catch {}
-  }
-  return normalizeLyricResult({ lyric, tlyric, rlyric })
+  return normalizeLyricResult({})
 }
 
 async function kwLyric(songId, extra = {}) {
@@ -1180,9 +1215,16 @@ const lyricMap = { wy: wyLyric, tx: txLyric, kw: kwLyric, kg: kgLyric, mg: mgLyr
 
 export async function getLyric(songId, source, extra = {}) {
   const fn = lyricMap[source]
-  if (!fn || !songId) return normalizeLyricResult({})
+  if (!fn) return normalizeLyricResult({})
+  // 各平台 ID 字段不同：QQ 要用 songmid，酷狗要用 hash，咪咕要用 copyrightId
+  let id = songId
+  if (source === 'tx') id = extra.songmid || extra.strMediaMid || songId
+  else if (source === 'kg') id = extra.hash || songId
+  else if (source === 'mg') id = extra.copyrightId || songId
+  else if (source === 'kw') id = extra.musicId || extra.rid || extra.dcTargetId || songId
+  if (!id) return normalizeLyricResult({})
   try {
-    return normalizeLyricResult(await fn(songId, extra))
+    return normalizeLyricResult(await fn(id, extra))
   } catch {
     return normalizeLyricResult({})
   }

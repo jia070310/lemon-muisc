@@ -1,8 +1,8 @@
 import { searchMusic } from '../musicSdk.js'
 import { parseFilename, scoreMatch } from './filenameParse.js'
-import { getLyric } from '../musicSdk.js'
 import { fetchPicBuffer, detectImageMime } from './fetchPic.js'
-import { lyricLookupExtra } from './musicInfo.js'
+import { fetchTrackLyric } from './trackMeta.js'
+import { resolveCoverUrl } from './cover.js'
 
 const SOURCE_MAP = {
   wy: 'wy',
@@ -83,19 +83,21 @@ export async function fetchMatchMeta(match, source, fields = null) {
   const wantCover = !fields || fields.includes('cover')
 
   let lyric = ''
-  if (wantLyric && songId) {
+  if (wantLyric) {
     try {
-      const lrc = await getLyric(songId, sdkSource, lyricLookupExtra(match))
-      lyric = lrc.lyric || ''
+      const lrc = await fetchTrackLyric({
+        source: sdkSource,
+        songId,
+        musicInfo: match,
+        meta: match,
+        useOtherSource: true,
+      })
+      lyric = lrc?.lyric || ''
     } catch {}
   }
 
   let pic = ''
-  let picUrl = match.picUrl || ''
-  // QQ：无 picUrl 时用 albummid 拼封面
-  if (!picUrl && match.albummid) {
-    picUrl = `https://y.gtimg.cn/music/photo_new/T002R500x500M000${match.albummid}.jpg`
-  }
+  let picUrl = resolveCoverUrl({ ...match, source: sdkSource })
   if (wantCover && picUrl) {
     try {
       const buf = await fetchPicBuffer(picUrl)
