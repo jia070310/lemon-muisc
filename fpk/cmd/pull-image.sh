@@ -313,14 +313,32 @@ run_with_timeout() {
 }
 
 # 安装进程无 inspect 权限时，仍可通过 docker images 列表判断（docker-project 已拉完）
+# 若传入 want（完整镜像名），只匹配同仓库且同 tag，避免把本地 latest 当成用户选的旧版。
 any_lemon_image_in_docker_list() {
-  local line="" runner
+  local want="${1:-}"
+  local want_tag="" line="" runner repo tag
+  if [ -n "${want}" ]; then
+    want_tag="${want##*:}"
+    case "${want}" in
+      *:*) ;;
+      *) want_tag="" ;;
+    esac
+  fi
   for runner in docker_cmd docker; do
-    line="$(${runner} images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -E 'lemon-muisc|lemon-music' | head -n 1 || true)"
-    if [ -n "${line}" ]; then
-      printf '%s\n' "${line}"
-      return 0
-    fi
+    while IFS= read -r line; do
+      [ -z "${line}" ] && continue
+      if [ -z "${want_tag}" ] || [ "${want_tag}" = "latest" ]; then
+        printf '%s\n' "${line}"
+        return 0
+      fi
+      tag="${line##*:}"
+      if [ "${tag}" = "${want_tag}" ]; then
+        printf '%s\n' "${line}"
+        return 0
+      fi
+    done <<EOF
+$(${runner} images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -E 'lemon-muisc|lemon-music' || true)
+EOF
   done
   return 1
 }
@@ -389,10 +407,17 @@ save_image_config() {
       remote="${REMOTE_IMAGE:-${REMOTE_IMAGE_DEFAULT}}"
       ;;
   esac
+  # 若向导指定了版本 tag，强制 REMOTE_IMAGE 带上该 tag（防止被旧 latest 覆盖）
+  if [ -n "${wizard_image_tag:-}" ] && [ "${wizard_image_tag}" != "latest" ]; then
+    case "${remote}" in
+      *:*) remote="${remote%:*}:${wizard_image_tag}" ;;
+    esac
+  fi
   cat > "${IMAGE_CONF}" << EOF
 SAVED_IMAGE="${saved}"
 REMOTE_IMAGE="${remote}"
 SAVED_PULL_SOURCE="${wizard_pull_source:-ghcr_direct}"
+SAVED_IMAGE_TAG="${wizard_image_tag:-latest}"
 SAVED_PULL_TIMEOUT="${wizard_pull_timeout:-600}"
 SAVED_AT="$(date -Iseconds)"
 EOF
@@ -405,6 +430,7 @@ show_wizard_summary() {
   log_line "------------------------------------------"
   log_line "安装向导配置:"
   log_line "  拉取方式: ${source}"
+  log_line "  镜像标签: ${wizard_image_tag:-latest}"
   log_line "  目标镜像: ${IMAGE}"
   log_line "  compose: ${COMPOSE_FILE}"
   log_line "  拉取超时: ${timeout_sec} 秒"
@@ -543,17 +569,17 @@ docker_pull_with_timeout() {
 
 image_exists_locally() {
   local candidate repo
+  local tag="${wizard_image_tag:-latest}"
   local pulled_ref="${IMAGE:-}"
 
-  # 刚拉取的远程引用优先，避免误用旧的 lemon-music:latest
+  # 刚拉取/向导选定的远程引用优先，避免误用旧的 lemon-music:latest
   for candidate in \
       "${pulled_ref}" \
       "ghcr.io/${pulled_ref#ghcr.1ms.run/}" \
       "ghcr.1ms.run/${pulled_ref#ghcr.io/}" \
-      "ghcr.1ms.run/jia070310/lemon-muisc:latest" \
-      "ghcr.io/jia070310/lemon-muisc:latest" \
-      "jia070310/lemon-muisc:latest" \
-      "${LOCAL_IMAGE_ALIAS}"
+      "ghcr.1ms.run/jia070310/lemon-muisc:${tag}" \
+      "ghcr.io/jia070310/lemon-muisc:${tag}" \
+      "jia070310/lemon-muisc:${tag}"
   do
     [ -z "${candidate}" ] && continue
     case "${candidate}" in
@@ -565,14 +591,20 @@ image_exists_locally() {
     fi
   done
 
-  repo="$(find_newest_remote_image "${wizard_image_tag:-latest}" 2>/dev/null || true)"
-  if [ -n "${repo}" ] && docker_cmd image inspect "${repo}" >/dev/null 2>&1; then
-    IMAGE="${repo}"
-    log_line "检测到最新远程镜像: ${IMAGE}"
+  # 仅当目标 tag 就是 latest 时，才把本地短名 alias 视为已就绪
+  if [ "${tag}" = "latest" ] && docker_cmd image inspect "${LOCAL_IMAGE_ALIAS}" >/dev/null 2>&1; then
+    IMAGE="${LOCAL_IMAGE_ALIAS}"
     return 0
   fi
 
-  if listed="$(any_lemon_image_in_docker_list 2>/dev/null)"; then
+  repo="$(find_newest_remote_image "${tag}" 2>/dev/null || true)"
+  if [ -n "${repo}" ] && docker_cmd image inspect "${repo}" >/dev/null 2>&1; then
+    IMAGE="${repo}"
+    log_line "检测到目标镜像: ${IMAGE}"
+    return 0
+  fi
+
+  if listed="$(any_lemon_image_in_docker_list "${pulled_ref}" 2>/dev/null)"; then
     IMAGE="${listed}"
     return 0
   fi
@@ -622,22 +654,41 @@ normalize_pulled_image() {
   return 0
 }
 
-# 等待本地出现镜像（脚本 pull 与飞牛 docker-project 并行时轮询）
+# 等待本地出现「向导选定」的镜像（不要把任意 lemon 镜像当成成功）
 wait_for_local_image() {
   local max_sec="${1:-600}"
   local waited=0
   local resolved="" listed="" pull_log="${TRIM_PKGVAR}/pull.last.log"
+  local want="${IMAGE:-}"
 
   while [ "${waited}" -lt "${max_sec}" ]; do
     init_docker_access 2>/dev/null || true
 
-    if resolved="$(resolve_local_image_name "$(get_compose_image)" 2>/dev/null)"; then
-      IMAGE="${resolved}"
-      log_line "镜像已就绪（inspect ${waited}s）: ${IMAGE}"
+    if image_exists_locally; then
+      log_line "镜像已就绪（目标匹配 ${waited}s）: ${IMAGE}"
       return 0
     fi
 
-    if listed="$(any_lemon_image_in_docker_list)"; then
+    if [ -n "${want}" ] && resolved="$(resolve_local_image_name "${want}" 2>/dev/null)"; then
+      # resolve_local_image_name 可能返回短名；若 want 是版本 tag，再确认 tag
+      case "${want}" in
+        *:latest|lemon-music|lemon-music:*)
+          IMAGE="${resolved}"
+          log_line "镜像已就绪（inspect ${waited}s）: ${IMAGE}"
+          return 0
+          ;;
+        *:*)
+          if docker_cmd image inspect "${want}" >/dev/null 2>&1 \
+            || listed="$(any_lemon_image_in_docker_list "${want}" 2>/dev/null)"; then
+            [ -n "${listed}" ] && IMAGE="${listed}" || IMAGE="${want}"
+            log_line "镜像已就绪（版本 tag ${waited}s）: ${IMAGE}"
+            return 0
+          fi
+          ;;
+      esac
+    fi
+
+    if listed="$(any_lemon_image_in_docker_list "${want}" 2>/dev/null)"; then
       IMAGE="${listed}"
       log_line "镜像已就绪（docker images 列表 ${waited}s）: ${IMAGE}"
       normalize_pulled_image || true
@@ -645,7 +696,7 @@ wait_for_local_image() {
     fi
 
     if [ -s "${pull_log}" ] && pull_log_indicates_success "${pull_log}"; then
-      if listed="$(any_lemon_image_in_docker_list)"; then
+      if listed="$(any_lemon_image_in_docker_list "${want}" 2>/dev/null)"; then
         IMAGE="${listed}"
         log_line "pull 日志已成功且镜像在列表中: ${IMAGE}"
         normalize_pulled_image || true
@@ -656,8 +707,9 @@ wait_for_local_image() {
     sleep 5
     waited=$((waited + 5))
     if [ $((waited % 15)) -eq 0 ]; then
-      log_line "等待镜像… ${waited}/${max_sec}s（docker-project / 脚本 pull）"
+      log_line "等待镜像… ${waited}/${max_sec}s 目标=${want:-?}（docker-project / 脚本 pull）"
       update_install_ui "正在拉取/确认镜像 ${waited}/${max_sec}s…
+目标：${want}
 镜像已在 Docker「本地镜像」出现后，安装将很快到 100%。
 装完后请点「启用」启动容器。"
       echo "waiting image ${waited}s" > "${TRIM_PKGVAR}/install.status" 2>/dev/null || true
@@ -682,12 +734,24 @@ install_pull_with_docker_project() {
   log_line "柠檬音乐下载 · ${phase}"
   log_line "=========================================="
   log_line "安装策略：飞牛 docker-project 主拉取 + 脚本检测本地镜像（后台 pull 最多 ${INSTALL_SCRIPT_PULL_MAX:-120}s）"
+  # 先把向导选定的镜像写入 compose + image.conf，避免飞牛仍按旧 latest 拉
+  REMOTE_IMAGE="${IMAGE}"
+  export REMOTE_IMAGE
+  save_image_config
   update_compose_image
 
-  if listed="$(any_lemon_image_in_docker_list 2>/dev/null)"; then
+  if image_exists_locally; then
+    log_line "本地已有目标镜像: ${IMAGE}"
+    normalize_pulled_image || true
+    update_compose_image
+    save_image_config
+    return 0
+  fi
+
+  if listed="$(any_lemon_image_in_docker_list "${IMAGE}" 2>/dev/null)"; then
     IMAGE="${listed}"
     normalize_pulled_image || true
-    log_line "本地已有镜像: ${IMAGE}"
+    log_line "本地已有目标 tag 镜像: ${IMAGE}"
     update_compose_image
     save_image_config
     return 0
@@ -699,6 +763,7 @@ install_pull_with_docker_project() {
 
   if init_docker_access 2>/dev/null; then
     update_install_ui "【飞牛拉取中】系统进度 55→80%
+目标：${IMAGE}
 脚本后台尝试 pull（最多 ${script_max}s），同时检测 Docker「本地镜像」…"
     log_line "后台 docker pull ${IMAGE}（最多 ${script_max}s，与 docker-project 并行）"
     (
@@ -710,6 +775,7 @@ install_pull_with_docker_project() {
     reporter_pid="$(start_pull_progress_reporter "${pull_log}" "${IMAGE}" "${done_flag}")"
   else
     update_install_ui "【等待飞牛 docker-project 拉取】
+目标：${IMAGE}
 脚本无法访问 Docker，请观察系统进度 55→80%…"
     log_line "脚本无 Docker 权限，等待 docker-project 完成拉取"
     touch "${done_flag}" 2>/dev/null || true

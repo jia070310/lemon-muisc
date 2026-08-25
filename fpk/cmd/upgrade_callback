@@ -32,7 +32,11 @@ docker_cmd stop "${CONTAINER_NAME}" >/dev/null 2>&1 || true
 docker_cmd rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
 
 resolve_image_from_wizard
+REMOTE_IMAGE="${IMAGE}"
+export REMOTE_IMAGE
+save_image_config 2>/dev/null || true
 update_compose_image 2>/dev/null || true
+log_line "向导镜像已写入 compose: ${IMAGE}"
 _pull_timeout="$(get_pull_timeout)"
 SOFT_PULL_FAIL=1
 INSTALL_PULL_SOFT=1
@@ -51,12 +55,16 @@ fi
 if resolved="$(resolve_local_image_name "$(get_compose_image)" 2>/dev/null)"; then
   IMAGE="${resolved}"
   mkdir -p "${TRIM_PKGETC}" 2>/dev/null || true
+  remote_for_compose="$(compose_registry_image "${REMOTE_IMAGE:-$(get_compose_image)}")"
   cat > "${IMAGE_CONF}" <<EOF
 SAVED_IMAGE="${LOCAL_IMAGE_ALIAS}"
-REMOTE_IMAGE="${resolved}"
+REMOTE_IMAGE="${remote_for_compose}"
 SAVED_PULL_SOURCE="${wizard_pull_source:-mirror_1ms}"
+SAVED_IMAGE_TAG="${wizard_image_tag:-latest}"
 SAVED_AT="$(date -Iseconds)"
 EOF
+  IMAGE="${remote_for_compose}"
+  update_compose_image 2>/dev/null || true
 fi
 
 update_install_ui "镜像已就绪，正在重建容器…"

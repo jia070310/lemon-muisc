@@ -81,19 +81,26 @@ image_created_at() {
   docker_cmd image inspect -f '{{.Created}}' "${ref}" 2>/dev/null
 }
 
-# Find the newest locally stored remote lemon-music image.
+# Find a locally stored remote lemon-music image for the requested tag only.
+# Do NOT fall back to :latest when user selected a version tag.
 find_newest_remote_image() {
   local tag="${1:-latest}"
   local newest="" created="" img c
-  for img in \
-    "ghcr.1ms.run/jia070310/lemon-muisc:${tag}" \
-    "ghcr.nju.edu.cn/jia070310/lemon-muisc:${tag}" \
-    "ghcr.dockerproxy.com/jia070310/lemon-muisc:${tag}" \
-    "docker.m.daocloud.io/ghcr.io/jia070310/lemon-muisc:${tag}" \
-    "ghcr.io/jia070310/lemon-muisc:${tag}" \
-    "ghcr.1ms.run/jia070310/lemon-muisc:latest" \
-    "ghcr.io/jia070310/lemon-muisc:latest"
-  do
+  local -a candidates=(
+    "ghcr.1ms.run/jia070310/lemon-muisc:${tag}"
+    "ghcr.nju.edu.cn/jia070310/lemon-muisc:${tag}"
+    "ghcr.dockerproxy.com/jia070310/lemon-muisc:${tag}"
+    "docker.m.daocloud.io/ghcr.io/jia070310/lemon-muisc:${tag}"
+    "ghcr.io/jia070310/lemon-muisc:${tag}"
+  )
+  # 仅当目标就是 latest 时才额外扫描无 tag 别名
+  if [ "${tag}" = "latest" ]; then
+    candidates+=(
+      "ghcr.1ms.run/jia070310/lemon-muisc:latest"
+      "ghcr.io/jia070310/lemon-muisc:latest"
+    )
+  fi
+  for img in "${candidates[@]}"; do
     if docker_cmd image inspect "${img}" >/dev/null 2>&1; then
       c="$(image_created_at "${img}")"
       if [ -z "${newest}" ] || [ "${c}" \> "${created}" ]; then

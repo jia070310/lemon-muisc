@@ -1,3 +1,38 @@
+# 柠檬音乐下载 v1.0.14
+
+## 更新内容
+
+### 安装向导 · 镜像标签修复
+
+- 修复安装/升级时选择旧版本镜像标签（如 `1.0.12`）仍被拉取 `latest` 的问题
+- compose 与 `image.conf` 现在**优先使用本次向导选择的 tag**，不再被上次安装的 latest 覆盖
+- 本地已有镜像时，只有**同 tag** 才会跳过拉取，不会误用本机旧的 latest
+- 安装日志会显示「镜像标签」与「目标镜像」，便于核对
+
+> 本版本主要为 **FPK 安装包脚本修复**。若已安装 v1.0.13 且运行正常，可只覆盖安装 FPK 以修复安装行为；应用功能与 v1.0.13 相同。若要最新应用，安装时选 `latest` 或 `1.0.14` 镜像即可。
+
+## 安装 / 更新
+
+应用中心：**手动安装** 对应架构的 FPK  
+（勿点卡片「更新」；覆盖安装即可）
+
+- x86 设备：`lemon-music-1.0.14-x86.fpk`
+- ARM 设备：`lemon-music-1.0.14-arm.fpk`
+
+```bash
+# 可选：拉取与 FPK 同版本镜像
+docker pull ghcr.1ms.run/jia070310/lemon-muisc:1.0.14
+docker tag ghcr.1ms.run/jia070310/lemon-muisc:1.0.14 lemon-music:latest
+```
+
+## Docker 镜像
+
+- `ghcr.io/jia070310/lemon-muisc:latest`
+- `ghcr.io/jia070310/lemon-muisc:1.0.14`
+- 国内加速：`ghcr.1ms.run/jia070310/lemon-muisc:1.0.14`
+
+---
+
 # 柠檬音乐下载 v1.0.13
 
 ## 更新内容

@@ -31,8 +31,13 @@ mkdir -p "${config_path}" "${music_path}" "${downloads_path}" 2>/dev/null || tru
 save_paths "${music_path}" "${downloads_path}" "${config_path}"
 write_mounts_meta "${music_path}" "${downloads_path}" "${config_path}"
 resolve_image_from_wizard
+# 立刻把向导选定的镜像写入 compose，供飞牛 docker-project 按正确 tag 拉取
+REMOTE_IMAGE="${IMAGE}"
+export REMOTE_IMAGE
+save_image_config 2>/dev/null || true
 write_compose_file "${music_path}" "${downloads_path}" "${config_path}"
 update_compose_image 2>/dev/null || true
+log_line "向导镜像已写入 compose: ${IMAGE}"
 
 case "${music_path}" in
   "${TRIM_PKGVAR}"/*) ;;
@@ -72,17 +77,22 @@ fi
 
 if resolved="$(resolve_local_image_name "$(get_compose_image)" 2>/dev/null)"; then
   IMAGE="${resolved}"
-elif listed="$(any_lemon_image_in_docker_list 2>/dev/null)"; then
+elif listed="$(any_lemon_image_in_docker_list "${IMAGE:-}" 2>/dev/null)"; then
   IMAGE="${listed}"
   normalize_pulled_image || true
 fi
 
 if [ -n "${IMAGE:-}" ]; then
   mkdir -p "${TRIM_PKGETC}" 2>/dev/null || true
-  remote_for_compose="$(compose_registry_image "${IMAGE}")"
+  # 保留向导选定的远程完整地址（含版本 tag），不要用短名写回最新
+  remote_for_compose="$(compose_registry_image "${REMOTE_IMAGE:-${IMAGE}}")"
+  case "${remote_for_compose}" in
+    lemon-music|lemon-music:*) remote_for_compose="$(compose_registry_image "${IMAGE}")" ;;
+  esac
   cat > "${IMAGE_CONF}" <<EOF
 SAVED_IMAGE="${LOCAL_IMAGE_ALIAS}"
 REMOTE_IMAGE="${remote_for_compose}"
+SAVED_IMAGE_TAG="${wizard_image_tag:-latest}"
 SAVED_AT="$(date -Iseconds)"
 EOF
   IMAGE="${remote_for_compose}"

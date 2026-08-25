@@ -201,8 +201,38 @@ compose_registry_image() {
   esac
 }
 
+# 当前向导/环境选定的完整镜像（优先于旧 image.conf，避免总是拉 latest）
+wizard_selected_image() {
+  if [ -n "${IMAGE:-}" ]; then
+    case "${IMAGE}" in
+      */*|ghcr.*|*.*/*)
+        printf '%s\n' "${IMAGE}"
+        return 0
+        ;;
+    esac
+  fi
+  if [ -n "${wizard_custom_image:-}" ] && [ "${wizard_pull_source:-}" = "custom_image" ]; then
+    printf '%s\n' "${wizard_custom_image}"
+    return 0
+  fi
+  if [ -n "${wizard_image_tag:-}" ] || [ -n "${wizard_pull_source:-}" ]; then
+    local host tag
+    host="$(wizard_registry_host "${wizard_pull_source:-mirror_1ms}")"
+    tag="${wizard_image_tag:-latest}"
+    image_ref_for_registry "${host}" "${tag}"
+    return 0
+  fi
+  return 1
+}
+
 get_compose_image() {
-  local parsed="" remote=""
+  local parsed="" remote="" selected=""
+
+  # 1) 本次安装/升级向导选择（最优先，否则会永远沿用上次的 latest）
+  if selected="$(wizard_selected_image 2>/dev/null)"; then
+    compose_registry_image "${selected}"
+    return 0
+  fi
 
   if [ -f "${IMAGE_CONF}" ]; then
     # shellcheck disable=SC1090
@@ -219,11 +249,6 @@ get_compose_image() {
       compose_registry_image "${parsed}"
       return 0
     fi
-  fi
-
-  if [ -n "${IMAGE:-}" ]; then
-    compose_registry_image "${IMAGE}"
-    return 0
   fi
 
   echo "${REMOTE_IMAGE_DEFAULT}"
@@ -354,7 +379,43 @@ mount_matches_expected() {
 # 启用/重建前确保本地有镜像（安装若秒完成、飞牛未拉取时，这里补拉）
 resolve_local_image_name() {
   local want="${1:-}"
-  local candidate repo
+  local candidate repo tag="latest"
+
+  case "${want}" in
+    *:*) tag="${want##*:}" ;;
+  esac
+  [ -n "${wizard_image_tag:-}" ] && tag="${wizard_image_tag}"
+
+  # 对明确版本号，优先精确匹配，不要用 sync latest 把旧版冲掉
+  if [ "${tag}" != "latest" ]; then
+    for candidate in \
+        "${want}" \
+        "ghcr.io/${want#ghcr.1ms.run/}" \
+        "ghcr.1ms.run/${want#ghcr.io/}" \
+        "ghcr.1ms.run/jia070310/lemon-muisc:${tag}" \
+        "ghcr.io/jia070310/lemon-muisc:${tag}"
+    do
+      [ -z "${candidate}" ] && continue
+      if docker_cmd image inspect "${candidate}" >/dev/null 2>&1; then
+        if promote_to_local_image_alias "${candidate}" >/dev/null 2>&1; then
+          echo "${LOCAL_IMAGE_ALIAS}"
+          return 0
+        fi
+        echo "${candidate}"
+        return 0
+      fi
+    done
+    if declare -F any_lemon_image_in_docker_list >/dev/null 2>&1 \
+      && listed="$(any_lemon_image_in_docker_list "${want:-jia070310/lemon-muisc:${tag}}" 2>/dev/null)"; then
+      if promote_to_local_image_alias "${listed}" >/dev/null 2>&1; then
+        echo "${LOCAL_IMAGE_ALIAS}"
+        return 0
+      fi
+      echo "${listed}"
+      return 0
+    fi
+    return 1
+  fi
 
   if synced="$(sync_local_image_alias latest 2>/dev/null)"; then
     echo "${synced}"
