@@ -1,3 +1,37 @@
+# 柠檬音乐下载 v1.0.15
+
+## 更新内容
+
+### 手机全屏歌词布局
+
+- 修复手机端全屏播放时歌词压到进度条、频谱与控制按钮上的问题
+- 歌词区严格占用封面与控制栏之间的剩余高度，内部独立滚动
+- 窄屏隐藏全屏音量条（与底栏一致，使用系统音量键），给歌词留出更多空间
+- 降低并上移频谱区域，减少遮挡；优化矮屏 / 横屏布局与当前行滚动定位
+
+**建议拉取新镜像**（含前端更新）。
+
+## 安装 / 更新
+
+应用中心：**手动安装** 对应架构的 FPK  
+（勿点卡片「更新」；覆盖安装即可）
+
+- x86 设备：`lemon-music-1.0.15-x86.fpk`
+- ARM 设备：`lemon-music-1.0.15-arm.fpk`
+
+```bash
+docker pull ghcr.1ms.run/jia070310/lemon-muisc:1.0.15
+docker tag ghcr.1ms.run/jia070310/lemon-muisc:1.0.15 lemon-music:latest
+```
+
+## Docker 镜像
+
+- `ghcr.io/jia070310/lemon-muisc:latest`
+- `ghcr.io/jia070310/lemon-muisc:1.0.15`
+- 国内加速：`ghcr.1ms.run/jia070310/lemon-muisc:1.0.15`
+
+---
+
 # 柠檬音乐下载 v1.0.14
 
 ## 更新内容

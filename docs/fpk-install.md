@@ -16,8 +16,8 @@ FPK **不含 Docker 镜像**（安装包约几十 KB）。点击「安装」后�
 ## 安装流程
 
 1. 应用中心 → **手动安装** → 按设备架构选择安装包：
-   - x86 设备：`fpk/lemon-music-1.0.14-x86.fpk`
-   - ARM 设备：`fpk/lemon-music-1.0.14-arm.fpk`
+   - x86 设备：`fpk/lemon-music-1.0.15-x86.fpk`
+   - ARM 设备：`fpk/lemon-music-1.0.15-arm.fpk`
 2. 阅读「安装说明」「注意事项」
 3. **数据目录**（可选）：填写音乐库、下载目录
 4. **镜像拉取**：国内默认 1ms 加速；已有镜像选「跳过拉取」
@@ -31,7 +31,7 @@ FPK **不含 Docker 镜像**（安装包约几十 KB）。点击「安装」后�
 | 音乐库目录 | 挂载到容器 `/music`，可留空后用访问权限选择 |
 | 下载目录 | 挂载到容器 `/downloads`，可留空；可与音乐库相同 |
 | 拉取方式 | 1ms / 南大 / dockerproxy / DaoCloud / 官方 ghcr.io / 跳过 / 自定义 |
-| 镜像标签 | `latest` 或指定版本如 `1.0.14`；安装脚本会按所选 tag 写入 compose 并拉取，**不会再被旧的 latest 配置覆盖** |
+| 镜像标签 | `latest` 或指定版本如 `1.0.15`；安装脚本会按所选 tag 写入 compose 并拉取，**不会再被旧的 latest 配置覆盖** |
 | 自定义镜像地址 | 选「自定义」时填写完整地址 |
 | 跳过拉取 | 已 SSH `docker pull` + `docker tag` 或 `docker load` 时使用 |
 
@@ -116,4 +116,4 @@ Web 设置页请使用容器路径 `/music`、`/downloads`。之后可在 **访�
 npm run fpk:build
 ```
 
-输出：`fpk/lemon-music-1.0.14-x86.fpk` 与 `fpk/lemon-music-1.0.14-arm.fpk`（不要提交到 git）。
+输出：`fpk/lemon-music-1.0.15-x86.fpk` 与 `fpk/lemon-music-1.0.15-arm.fpk`（不要提交到 git）。

@@ -248,8 +248,11 @@ function scrollActiveLyric() {
   const el = lyricLineEls.value[idx]
   const panel = lyricPanelRef.value
   if (!el || !panel) return
-  const top = el.offsetTop - panel.clientHeight / 2 + el.clientHeight / 2
-  panel.scrollTo({ top: Math.max(0, top), behavior: 'smooth' })
+  const panelRect = panel.getBoundingClientRect()
+  const elRect = el.getBoundingClientRect()
+  const delta = (elRect.top + elRect.height / 2) - (panelRect.top + panelRect.height / 2)
+  const nextTop = panel.scrollTop + delta
+  panel.scrollTo({ top: Math.max(0, nextTop), behavior: 'smooth' })
 }
 
 function onKeydown(e) {
@@ -748,55 +751,124 @@ onUnmounted(() => {
     display: flex;
     flex-direction: column;
     grid-template-columns: unset;
-    gap: 12px;
-    padding: calc(64px + env(safe-area-inset-top, 0px)) 16px 8px;
+    gap: 8px;
+    padding: calc(52px + env(safe-area-inset-top, 0px)) 14px 4px;
     align-items: stretch;
+    overflow: hidden;
+    min-height: 0;
   }
-  .fs-cover-col { flex-shrink: 0; }
+  .fs-cover-col {
+    flex: 0 0 auto;
+    gap: 10px;
+  }
   .fs-cover {
-    width: min(180px, 42vw);
+    width: min(140px, 34vw);
   }
   .fs-cover.spinning { animation-duration: 18s; }
-  .fs-title { font-size: 18px; }
+  .fs-meta { max-width: 100%; }
+  .fs-title { font-size: 17px; margin-bottom: 4px; }
+  .fs-artist { font-size: 13px; }
   .fs-lyric-col {
-    height: auto;
+    /* 强制吃掉剩余高度，避免内容撑破后压到控制栏 */
+    flex: 1 1 0;
+    height: 0;
     min-height: 0;
-    flex: 1;
+    max-height: none;
+    overflow-x: hidden;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    mask-image: linear-gradient(to bottom, transparent, #000 10%, #000 82%, transparent);
+    -webkit-mask-image: linear-gradient(to bottom, transparent, #000 10%, #000 82%, transparent);
   }
-  .fs-lyric-list { padding: 24% 4px; }
-  .fs-lyric-line { font-size: 15px; padding: 8px 4px; }
-  .fs-lyric-line.active { font-size: 18px; }
-  .fs-spectrum { height: min(36vh, 260px); opacity: 0.75; }
-  .fs-controls { padding: 6px 14px calc(14px + env(safe-area-inset-bottom, 0px)); }
+  .fs-lyric-list {
+    /* 上下留白用固定值，避免 % 按宽度算导致空隙过大 */
+    padding: 28vh 6px 22vh;
+  }
+  .fs-lyric-line { font-size: 15px; padding: 7px 4px; }
+  .fs-lyric-line.active { font-size: 17px; }
+  .fs-spectrum {
+    height: min(28vh, 180px);
+    opacity: 0.55;
+    /* 频谱停在控制区上方，减少盖住歌词 */
+    bottom: 72px;
+  }
+  .fs-controls {
+    flex: 0 0 auto;
+    z-index: 4;
+    padding: 4px 12px calc(10px + env(safe-area-inset-bottom, 0px));
+    background: linear-gradient(to top, rgba(0, 0, 0, 0.72) 55%, transparent);
+  }
+  .fs-progress { margin-bottom: 6px; }
   .fs-close {
     width: 44px;
     height: 44px;
   }
   .fs-btn {
-    width: 48px;
-    height: 48px;
+    width: 44px;
+    height: 44px;
   }
   .fs-btn svg {
-    width: 23px;
-    height: 23px;
+    width: 22px;
+    height: 22px;
   }
   .fs-btn-main {
-    width: 60px;
-    height: 60px;
+    width: 56px;
+    height: 56px;
   }
   .fs-btn-main svg {
-    width: 28px;
-    height: 28px;
+    width: 26px;
+    height: 26px;
   }
+  .fs-btns {
+    gap: 8px 14px;
+  }
+  /* 与底栏一致：窄屏隐藏音量，腾出歌词空间 */
   .fs-volume {
-    margin-left: 0;
-    width: 100%;
-    justify-content: center;
-    order: 10;
+    display: none;
   }
   .fs-queue {
     width: min(100%, 420px);
   }
-  .fs-vol-slider { width: min(160px, 50vw); }
+}
+
+/* 矮屏 / 横屏：进一步压缩封面，优先留给歌词 */
+@media (max-width: 860px) and (max-height: 700px) {
+  .fs-cover {
+    width: min(110px, 28vw);
+  }
+  .fs-cover-col { gap: 6px; }
+  .fs-body {
+    padding-top: calc(44px + env(safe-area-inset-top, 0px));
+    gap: 6px;
+  }
+  .fs-lyric-list { padding: 22vh 6px 18vh; }
+  .fs-spectrum {
+    height: min(22vh, 140px);
+    bottom: 64px;
+  }
+}
+
+@media (max-width: 860px) and (orientation: landscape) {
+  .fs-body {
+    flex-direction: row;
+    align-items: stretch;
+    padding: calc(12px + env(safe-area-inset-top, 0px)) 16px 4px;
+    gap: 16px;
+  }
+  .fs-cover-col {
+    width: min(160px, 28vw);
+    justify-content: center;
+  }
+  .fs-cover {
+    width: min(120px, 22vw);
+  }
+  .fs-lyric-col {
+    flex: 1 1 0;
+  }
+  .fs-lyric-list { padding: 18vh 8px; }
+  .fs-spectrum {
+    height: min(40vh, 160px);
+    bottom: 56px;
+  }
 }
 </style>

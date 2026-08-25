@@ -4,7 +4,7 @@
   "displayName": "柠檬音乐下载",
   "appTitle": "Lemon Music",
   "description": "音乐搜索、试听、下载与标签管理。安装向导可填目录；卸载时可选择保留或删除应用配置。",
-  "version": "1.0.14",
+  "version": "1.0.15",
   "author": "jia070310",
   "icon": "icon.png",
   "type": "docker",
