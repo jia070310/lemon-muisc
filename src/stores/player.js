@@ -36,8 +36,8 @@ let inited = false
 let audioCtx = null
 /** @type {AnalyserNode | null} */
 let analyser = null
-/** @type {MediaElementAudioSourceNode | null} */
-let mediaSource = null
+/** @type {MediaStreamAudioSourceNode | null} */
+let streamSource = null
 let audioGraphReady = false
 /** @type {number[]} */
 let playHistory = []
@@ -48,6 +48,24 @@ const SESSION_STORAGE_KEY = 'lx-music-nas:play-session'
 const VOLUME_KEY = 'lx-music-nas:volume'
 const MUTE_KEY = 'lx-music-nas:muted'
 let volumeBeforeMute = 0.8
+
+function resetAudioGraph() {
+  try { streamSource?.disconnect() } catch {}
+  streamSource = null
+  analyser = null
+  audioGraphReady = false
+}
+
+async function resumeAudioPlayback() {
+  try {
+    if (audioCtx?.state === 'suspended') await audioCtx.resume()
+  } catch {}
+  if (!audio || isPaused.value || !audio.src) return
+  if (audio.paused) {
+    try { await audio.play() } catch {}
+  }
+  scheduleAudioAnalyserRefresh()
+}
 
 function applyAudioOutput() {
   if (!audio) return
@@ -238,6 +256,8 @@ export function initPlayer() {
 
   audio = new Audio()
   audio.crossOrigin = 'anonymous'
+  audio.setAttribute('playsinline', '')
+  audio.setAttribute('webkit-playsinline', '')
   try {
     const savedVolRaw = localStorage.getItem(VOLUME_KEY)
     const savedMute = localStorage.getItem(MUTE_KEY)
@@ -282,16 +302,24 @@ export function initPlayer() {
 
   window.addEventListener('beforeunload', saveQueueState)
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden') saveQueueState()
+    if (document.visibilityState === 'hidden') {
+      saveQueueState()
+      resetAudioGraph()
+      try { audioCtx?.suspend() } catch {}
+      return
+    }
+    resumeAudioPlayback()
   })
+  window.addEventListener('focus', () => { resumeAudioPlayback() })
+  window.addEventListener('pageshow', () => { resumeAudioPlayback() })
 }
 
 async function onTrackEnded() {
   if (playMode.value === 'single' && audio) {
     audio.currentTime = 0
     applyAudioOutput()
-    await ensureAudioAnalyser()
     await audio.play()
+    scheduleAudioAnalyserRefresh()
     isPaused.value = false
     return
   }
@@ -343,27 +371,52 @@ export function closeFullscreenPlayer() {
   showFullscreenPlayer.value = false
 }
 
-/** 建立 Web Audio 分析链路（仅一次），供频谱可视化使用 */
+/** 建立 Web Audio 分析链路，用 captureStream 读取频谱，不劫持 audio 原生输出 */
 export async function ensureAudioAnalyser() {
-  if (!audio) return null
+  if (!audio || !visualizerEnabled.value) return null
+  if (document.visibilityState === 'hidden') return null
+  if (audio.paused || !audio.src) return null
   try {
     const AC = window.AudioContext || window.webkitAudioContext
     if (!AC) return null
     if (!audioCtx) audioCtx = new AC()
     if (audioCtx.state === 'suspended') await audioCtx.resume()
-    if (!audioGraphReady) {
-      mediaSource = audioCtx.createMediaElementSource(audio)
-      analyser = audioCtx.createAnalyser()
-      analyser.fftSize = 256
-      analyser.smoothingTimeConstant = 0.72
-      mediaSource.connect(analyser)
-      analyser.connect(audioCtx.destination)
-      audioGraphReady = true
-    }
+    if (audioGraphReady && analyser) return analyser
+
+    const capture = audio.captureStream || audio.mozCaptureStream
+    if (typeof capture !== 'function') return null
+    const stream = capture.call(audio)
+    if (!stream.getAudioTracks().length) return null
+
+    try { streamSource?.disconnect() } catch {}
+    streamSource = audioCtx.createMediaStreamSource(stream)
+    analyser = audioCtx.createAnalyser()
+    analyser.fftSize = 256
+    analyser.smoothingTimeConstant = 0.72
+    streamSource.connect(analyser)
+    // 不连接 destination，避免音频必须走 AudioContext（后台/锁屏会被挂起）
+    audioGraphReady = true
     return analyser
   } catch {
-    return analyser
+    resetAudioGraph()
+    return null
   }
+}
+
+/** 播放开始后重建频谱分析（captureStream 必须在 play 之后才有音频轨） */
+export function scheduleAudioAnalyserRefresh() {
+  if (!visualizerEnabled.value || !audio) return
+  resetAudioGraph()
+  const trySetup = () => {
+    ensureAudioAnalyser().catch(() => {})
+  }
+  const scheduleRetries = () => {
+    trySetup()
+    requestAnimationFrame(trySetup)
+    setTimeout(trySetup, 80)
+  }
+  if (!audio.paused) scheduleRetries()
+  else audio.addEventListener('playing', scheduleRetries, { once: true })
 }
 
 export function getAnalyser() {
@@ -507,6 +560,7 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 }
     applyDurationFallback(item)
 
     audio.src = url
+    resetAudioGraph()
     applyAudioOutput()
     await waitForAudioReady()
     if (resumeTime > 0) {
@@ -515,9 +569,9 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 }
         currentTime.value = resumeTime
       } catch {}
     }
-    await ensureAudioAnalyser()
     await audio.play()
     applyAudioOutput()
+    scheduleAudioAnalyserRefresh()
 
     syncDurationFromAudio()
     applyDurationFallback(item)
@@ -625,15 +679,11 @@ export function togglePause() {
   }
   if (audio.paused) {
     applyAudioOutput()
-    ensureAudioAnalyser().then(() => {
-      audio.play()
+    audio.play().then(() => {
       isPaused.value = false
       saveQueueState()
-    }).catch(() => {
-      audio.play()
-      isPaused.value = false
-      saveQueueState()
-    })
+      scheduleAudioAnalyserRefresh()
+    }).catch(() => {})
   } else {
     audio.pause()
     isPaused.value = true

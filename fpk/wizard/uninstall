@@ -1,26 +1,24 @@
 [
   {
-    "stepTitle": "卸载说明",
+    "stepTitle": "卸载选项",
     "items": [
       {
         "type": "tips",
-        "helpText": "<b>卸载将停止并移除本应用容器</b>。<br><br><b>保留数据（推荐）</b>：保存应用配置、音源脚本、下载任务记录，下次重装可恢复。<br><b>删除数据</b>：清除上述应用配置，并尝试删除本应用 Docker 镜像。<br><br><b>无论选哪一项，都不会删除你在「访问权限」或向导中指定的音乐库、下载目录里的音频文件</b>（仅会清理应用自己的配置目录）。"
-      }
-    ]
-  },
-  {
-    "stepTitle": "数据选项",
-    "items": [
+        "helpText": "卸载时可以保留或删除应用配置、音源脚本、下载任务记录等数据。"
+      },
       {
-        "type": "select",
+        "type": "radio",
         "field": "wizard_data_policy",
         "label": "应用数据",
         "initValue": "keep",
         "options": [
-          { "label": "保留数据（推荐，重装可恢复设置）", "value": "keep" },
-          { "label": "删除数据（清除配置，不删除你的音乐文件）", "value": "delete" }
+          { "label": "保留应用数据", "value": "keep" },
+          { "label": "删除应用数据", "value": "delete" }
         ],
-        "helpText": "默认保留。删除数据不可恢复，请确认没有需要保留的音源脚本或下载记录。"
+        "rules": [
+          { "required": true, "message": "请选择是否保留应用数据" }
+        ],
+        "helpText": "不会主动删除应用数据目录和应用共享目录以外的文件（例如你指定的音乐库、下载目录中的音频）。"
       }
     ]
   }

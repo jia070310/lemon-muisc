@@ -9,7 +9,7 @@
 
 <script setup>
 import { onMounted, onUnmounted, ref, watch } from 'vue'
-import { ensureAudioAnalyser, getAnalyser, getFrequencyData, isPaused } from '../stores/player.js'
+import { getAnalyser, getFrequencyData, isPaused, scheduleAudioAnalyserRefresh } from '../stores/player.js'
 
 const props = defineProps({
   /** @type {'full' | 'bar'} */
@@ -20,6 +20,8 @@ const props = defineProps({
 const canvasRef = ref(null)
 let rafId = 0
 let idlePhase = 0
+let analyserRetryTick = 0
+let silentAnalyserFrames = 0
 /** @type {Uint8Array | null} */
 let freqBuf = null
 let resizeObserver = null
@@ -60,12 +62,33 @@ function buildIdleHeights(count) {
 
 function sampleHeights(count) {
   const analyser = getAnalyser()
-  if (!analyser || isPaused.value) return buildIdleHeights(count)
+  if (!analyser || isPaused.value) {
+    if (!isPaused.value) {
+      analyserRetryTick++
+      if (analyserRetryTick % 24 === 0) scheduleAudioAnalyserRefresh()
+    }
+    return buildIdleHeights(count)
+  }
+  analyserRetryTick = 0
 
   if (!freqBuf || freqBuf.length !== analyser.frequencyBinCount) {
     freqBuf = new Uint8Array(analyser.frequencyBinCount)
   }
   getFrequencyData(freqBuf)
+
+  let peak = 0
+  for (let i = 0; i < freqBuf.length; i++) {
+    if (freqBuf[i] > peak) peak = freqBuf[i]
+  }
+  if (peak === 0) {
+    silentAnalyserFrames++
+    if (silentAnalyserFrames > 45) {
+      silentAnalyserFrames = 0
+      scheduleAudioAnalyserRefresh()
+    }
+    return buildIdleHeights(count)
+  }
+  silentAnalyserFrames = 0
 
   const usable = Math.floor(freqBuf.length * 0.72)
   const heights = new Array(count)
@@ -175,7 +198,7 @@ function roundRect(ctx, x, y, w, h, r) {
 
 function startLoop() {
   cancelAnimationFrame(rafId)
-  ensureAudioAnalyser().catch(() => {})
+  scheduleAudioAnalyserRefresh()
   rafId = requestAnimationFrame(drawFrame)
 }
 

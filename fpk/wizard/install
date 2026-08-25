@@ -68,9 +68,10 @@
         "initValue": "latest",
         "options": [
           { "label": "latest（最新）", "value": "latest" },
-          { "label": "1.0.10", "value": "1.0.10" },
-          { "label": "1.0.7", "value": "1.0.7" },
-          { "label": "1.0.6", "value": "1.0.6" }
+          { "label": "1.0.13", "value": "1.0.13" },
+          { "label": "1.0.12", "value": "1.0.12" },
+          { "label": "1.0.11", "value": "1.0.11" },
+          { "label": "1.0.10", "value": "1.0.10" }
         ]
       },
       {
