@@ -1,5 +1,5 @@
 appname        = lemon-music
-version        = 1.0.15
+version        = 1.0.16
 display_name   = 柠檬音乐下载
 desc           = <b>音乐搜索、试听、下载与标签管理</b><br><br><b>安装</b>：应用中心 → 手动安装 → 选 FPK（勿点卡片「更新」）。安装会拉取镜像，已有镜像可选「跳过拉取」。<br><b>目录</b>：向导填写绝对路径，或装完后 → 访问权限（音乐库 + 下载目录）→ 保存 → 停用再启用。<br><b>卸载</b>：可选择保留或删除应用配置；不会删除你自己的音乐文件。<br>手动拉镜像：<code>docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest</code>
 platform       = x86

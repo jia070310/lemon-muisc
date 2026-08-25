@@ -1,3 +1,38 @@
+# 柠檬音乐下载 v1.0.16
+
+## 更新内容
+
+### 封面与歌词修复
+
+- 修复搜索、歌单播放与下载时封面、歌词经常缺失的问题
+- QQ 音乐歌词改用正确的 `songmid`，不再误用数字 ID
+- 酷我歌单封面字段（`pic` / `albumpic` / `artistPic`）正确映射
+- 播放时增加封面回退与跨平台歌词补全；新增 `/api/play/cover` 供预览补图
+- 下载路径统一使用共享的封面/歌词获取逻辑，避免重复与不一致
+
+**建议拉取新镜像**（含前后端更新）。
+
+## 安装 / 更新
+
+应用中心：**手动安装** 对应架构的 FPK  
+（勿点卡片「更新」；覆盖安装即可）
+
+- x86 设备：`lemon-music-1.0.16-x86.fpk`
+- ARM 设备：`lemon-music-1.0.16-arm.fpk`
+
+```bash
+docker pull ghcr.1ms.run/jia070310/lemon-muisc:1.0.16
+docker tag ghcr.1ms.run/jia070310/lemon-muisc:1.0.16 lemon-music:latest
+```
+
+## Docker 镜像
+
+- `ghcr.io/jia070310/lemon-muisc:latest`
+- `ghcr.io/jia070310/lemon-muisc:1.0.16`
+- 国内加速：`ghcr.1ms.run/jia070310/lemon-muisc:1.0.16`
+
+---
+
 # 柠檬音乐下载 v1.0.15
 
 ## 更新内容
