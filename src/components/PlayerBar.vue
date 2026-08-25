@@ -47,7 +47,7 @@
         </div>
       </div>
       <div class="player-info">
-        <span class="player-name">{{ currentPlaying ? `${cleanText(currentPlaying.name)} - ${cleanText(currentPlaying.singer)}` : '未选择歌曲' }}</span>
+        <span class="player-name">{{ currentPlaying ? `${cleanText(currentPlaying.name)} - ${formatArtists(currentPlaying.singer)}` : '未选择歌曲' }}</span>
         <span class="player-lyric" :class="{ empty: currentPlaying && !currentLyricText }">{{ currentPlaying ? (currentLyricText || '暂无歌词') : '未知艺术家' }}</span>
         <span v-if="currentPlaying" class="player-time-mobile">{{ fmtTime(currentTime) }} / {{ fmtTime(displayDuration) }}</span>
       </div>
@@ -161,7 +161,7 @@
           <span class="queue-index">{{ i === currentQueueIndex && !isPaused ? '▶' : i + 1 }}</span>
           <div class="queue-info">
             <div class="queue-name">{{ cleanText(entry.item.name) }}</div>
-            <div class="queue-meta">{{ cleanText(entry.item.singer) }}</div>
+            <div class="queue-meta">{{ formatArtists(entry.item.singer) }}</div>
           </div>
           <button
             class="queue-play-btn"
@@ -189,7 +189,7 @@ import {
   removeFromQueue, clearQueue, playTrackAt, openFullscreenPlayer,
 } from '../stores/player.js'
 import { onMounted, onUnmounted, ref, computed, watch } from 'vue'
-import { cleanText } from '../utils/text.js'
+import { cleanText, formatArtists } from '../utils/text.js'
 import SpectrumVisualizer from './SpectrumVisualizer.vue'
 
 const queuePanelRef = ref(null)

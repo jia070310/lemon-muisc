@@ -26,7 +26,7 @@ async function kwSearch(keyword, page = 1, limit = 30) {
       return withTypes({
         id: item.MUSICRID?.replace('MUSIC_', '') || item.DC_TARGETID || '',
         name: cleanHtml(item.SONGNAME),
-        singer: cleanHtml(item.ARTIST),
+        singer: formatArtists(item.ARTIST),
         album: cleanHtml(item.ALBUM),
         interval: formatTime(parseInt(item.DURATION) || 0),
         source: 'kw',
@@ -55,7 +55,7 @@ async function kgSearch(keyword, page = 1, limit = 30) {
       return withTypes({
         id: item.FileHash || '',
         name: cleanHtml(item.SongName),
-        singer: cleanHtml(item.SingerName),
+        singer: formatArtists(item.SingerName),
         album: cleanHtml(item.AlbumName),
         interval: formatTime(item.Duration || 0),
         source: 'kg',
@@ -105,7 +105,7 @@ async function wySearch(keyword, page = 1, limit = 30) {
       return withTypes({
         id: String(item.id),
         name: cleanHtml(item.name),
-        singer: cleanHtml((item.ar || item.artists || []).map(a => a.name).join('/')),
+        singer: formatArtists((item.ar || item.artists || []).map(a => a.name).join('/')),
         album: cleanHtml(item.al?.name || item.album?.name),
         interval: formatTime(Math.floor((item.dt || item.duration || 0) / 1000)),
         source: 'wy',
@@ -135,7 +135,7 @@ async function mgSearch(keyword, page = 1, limit = 30) {
       return withTypes({
         id: item.copyrightId || item.id || '',
         name: cleanHtml(item.name),
-        singer: cleanHtml((item.singers || []).map(s => s.name).join('/')),
+        singer: formatArtists((item.singers || []).map(s => s.name).join('/')),
         album: cleanHtml(item.albums?.[0]?.name),
         interval: '',
         source: 'mg',
@@ -189,6 +189,16 @@ function cleanHtml(str) {
   s = s.replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCharCode(parseInt(h, 16)))
   s = s.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'")
   return s.replace(/\s+/g, ' ').trim()
+}
+
+function formatArtists(str) {
+  let s = cleanHtml(str)
+  if (!s) return ''
+  s = s.replace(/\\&/g, '&')
+  const parts = s.split(/(?:\s*&\s*|\s*\/\s*|;|、|，|,|\|)+/)
+    .map((p) => p.trim())
+    .filter(Boolean)
+  return parts.length > 1 ? parts.join(' ') : s
 }
 
 function formatSize(bytes) {
@@ -330,7 +340,7 @@ function mapTxSongItem(item) {
   return withTypes({
     id: songmid,
     name: cleanHtml(item.title || item.songname || item.name || ''),
-    singer: cleanHtml(
+    singer: formatArtists(
       Array.isArray(item.singer)
         ? item.singer.map(s => s.name).join('/')
         : (item.singername || ''),
@@ -460,7 +470,7 @@ function mapWyPlaylistTrack(item, priv, pl) {
   return withTypes({
     id: String(item.id),
     name: cleanHtml(item.name),
-    singer: cleanHtml((item.ar || []).map(a => a.name).join('/')),
+    singer: formatArtists((item.ar || []).map(a => a.name).join('/')),
     album: cleanHtml(item.al?.name),
     albumName: cleanHtml(item.al?.name),
     interval: formatTime(Math.floor((item.dt || 0) / 1000)),
@@ -598,7 +608,7 @@ async function kwPlaylist({ id, digestId }) {
       return withTypes({
         id: songId,
         name: cleanHtml(item.name),
-        singer: cleanHtml(item.artist),
+        singer: formatArtists(item.artist),
         album: cleanHtml(item.album),
         albumName: cleanHtml(item.album),
         interval: formatTime(parseInt(item.duration, 10) || 0),
@@ -647,7 +657,7 @@ async function mgPlaylist({ id }) {
       return withTypes({
         id: item.copyrightId || item.songId || '',
         name: cleanHtml(item.songName),
-        singer: cleanHtml((item.singerList || []).map(s => s.name).join('/')),
+        singer: formatArtists((item.singerList || []).map(s => s.name).join('/')),
         album: cleanHtml(item.album),
         albumName: cleanHtml(item.album),
         interval: formatTime(item.duration || 0),
@@ -692,7 +702,7 @@ function mapKgSongItem(item) {
   return withTypes({
     id: hash || albumAudioId,
     name: cleanHtml(item.songname || item.SongName || item.name),
-    singer: cleanHtml(item.author_name || item.SingerName || item.singer),
+    singer: formatArtists(item.author_name || item.SingerName || item.singer),
     album: cleanHtml(item.album_info?.album_name || item.AlbumName || item.album),
     albumName: cleanHtml(item.album_info?.album_name || item.AlbumName || item.album),
     interval: formatTime(Math.floor((audio.timelength || item.Duration || item.duration || 0) / (audio.timelength ? 1000 : 1))),

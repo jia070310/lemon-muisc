@@ -116,7 +116,7 @@
       >
         <span class="col-index">{{ i + 1 }}</span>
         <span class="col-name" :title="cleanText(item.name)">{{ cleanText(item.name) }}</span>
-        <span class="col-singer" :title="cleanText(item.singer)">{{ cleanText(item.singer) }}</span>
+        <span class="col-singer" :title="formatArtists(item.singer)">{{ formatArtists(item.singer) }}</span>
         <span class="col-album" :title="cleanText(item.album || item.albumName)">{{ cleanText(item.album || item.albumName) || '-' }}</span>
         <span class="col-duration">{{ item.interval || '-' }}</span>
         <span class="col-play">
@@ -171,7 +171,7 @@ import { api } from '../api.js'
 import { discoverState, loadDiscoverSources, sourcePlaceholders, recommendSortOptions } from '../stores/discover.js'
 import { loadingPlay, isPaused, isPlayingItem, playItem, addToQueue, isInQueue } from '../stores/player.js'
 import { sortQualities, getQualityLabel, getQualityDisplay } from '../utils/quality.js'
-import { cleanText, cleanTrackItem } from '../utils/text.js'
+import { cleanText, formatArtists, cleanTrackItem } from '../utils/text.js'
 
 const toast = ref(null)
 const qualityMenuId = ref(null)

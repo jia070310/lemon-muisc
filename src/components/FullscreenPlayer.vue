@@ -29,7 +29,7 @@
             </div>
             <div class="fs-meta">
               <div class="fs-title">{{ cleanText(currentPlaying?.name) || '未知歌曲' }}</div>
-              <div class="fs-artist">{{ cleanText(currentPlaying?.singer) || '未知艺术家' }}</div>
+              <div class="fs-artist">{{ formatArtists(currentPlaying?.singer) || '未知艺术家' }}</div>
             </div>
           </div>
 
@@ -153,7 +153,7 @@
                 <span class="fs-queue-index">{{ i === currentQueueIndex && !isPaused ? '▶' : i + 1 }}</span>
                 <div class="fs-queue-info">
                   <div class="fs-queue-name">{{ cleanText(entry.item.name) }}</div>
-                  <div class="fs-queue-meta">{{ cleanText(entry.item.singer) }}</div>
+                  <div class="fs-queue-meta">{{ formatArtists(entry.item.singer) }}</div>
                 </div>
                 <button
                   class="fs-queue-play"
@@ -184,7 +184,7 @@ import {
   togglePause, seekTo, setVolume, toggleMute, fmtTime, playNext, playPrev, togglePlayMode,
   closeFullscreenPlayer, showQueuePanel, playTrackAt, removeFromQueue, clearQueue,
 } from '../stores/player.js'
-import { cleanText } from '../utils/text.js'
+import { cleanText, formatArtists } from '../utils/text.js'
 import SpectrumVisualizer from './SpectrumVisualizer.vue'
 
 const lyricPanelRef = ref(null)

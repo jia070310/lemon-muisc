@@ -15,12 +15,23 @@ export function cleanText(str) {
   return s.replace(/\s+/g, ' ').trim()
 }
 
+/** 多歌手展示：统一解码后将 / & \\& 等分隔符规范为空格 */
+export function formatArtists(str) {
+  let s = cleanText(str)
+  if (!s) return ''
+  s = s.replace(/\\&/g, '&')
+  const parts = s.split(/(?:\s*&\s*|\s*\/\s*|;|、|，|,|\|)+/)
+    .map((p) => p.trim())
+    .filter(Boolean)
+  return parts.length > 1 ? parts.join(' ') : s
+}
+
 export function cleanTrackItem(item) {
   if (!item) return item
   return {
     ...item,
     name: cleanText(item.name),
-    singer: cleanText(item.singer),
+    singer: formatArtists(item.singer),
     album: cleanText(item.album || item.albumName),
     albumName: cleanText(item.albumName),
   }
