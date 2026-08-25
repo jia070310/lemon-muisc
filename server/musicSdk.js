@@ -182,6 +182,8 @@ function mgPicUrl(item) {
 function cleanHtml(str) {
   if (!str) return ''
   let s = String(str).replace(/<[^>]+>/g, '')
+  // 音源脚本偶发返回 \\u0026 这类转义
+  s = s.replace(/\\u([0-9a-fA-F]{4})/g, (_, h) => String.fromCharCode(parseInt(h, 16)))
   s = s.replace(/&nbsp;/gi, ' ')
   s = s.replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
   s = s.replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCharCode(parseInt(h, 16)))

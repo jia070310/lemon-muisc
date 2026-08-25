@@ -225,7 +225,10 @@ function showToast(text, type = 'info') {
 </script>
 
 <style scoped>
-.download-page { max-width: 900px; }
+.download-page {
+  width: 100%;
+  max-width: none;
+}
 
 .toolbar {
   display: flex;

@@ -248,7 +248,10 @@ function showToast(text, type = 'info') {
 </script>
 
 <style scoped>
-.search-page { max-width: 1100px; }
+.search-page {
+  width: 100%;
+  max-width: none;
+}
 
 .search-header { padding: 20px; margin-bottom: 16px; }
 
@@ -323,10 +326,10 @@ function showToast(text, type = 'info') {
 
 .result-header, .result-row {
   display: grid;
-  grid-template-columns: 40px 1fr 140px 140px 60px 44px 44px 44px;
+  grid-template-columns: 48px minmax(180px, 2.2fr) minmax(120px, 1fr) minmax(120px, 1fr) 64px 44px 44px 44px;
   align-items: center;
   padding: 10px 16px;
-  gap: 8px;
+  gap: 10px;
   font-size: 13px;
 }
 .result-header {

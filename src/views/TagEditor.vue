@@ -106,12 +106,12 @@
         <div v-else class="empty">添加目录并扫描，或选择左侧目录加载文件</div>
       </section>
 
-      <!-- 右侧：编辑面板 -->
-      <aside class="edit-panel card" v-if="editForm || loadingDetail">
+      <!-- 右侧：编辑面板（常驻，未选中时仅显示标题与占位） -->
+      <aside class="edit-panel card">
         <div class="panel-title">
-          {{ isBatchMode ? `批量编辑 (${selectedFiles.length})` : '单文件编辑' }}
+          {{ editPanelTitle }}
           <button
-            v-if="!isBatchMode && editingFile"
+            v-if="!isBatchMode && editingFile && (editForm || loadingDetail)"
             class="btn-ghost btn-sm play-inline"
             @click="togglePlayFile(editingFile)"
             :title="isPlayingFile(editingFile) && !isPaused ? '暂停' : '试听当前文件'"
@@ -122,7 +122,7 @@
 
         <div v-if="loadingDetail" class="detail-loading">正在读取文件内置信息...</div>
 
-        <div v-else class="edit-form">
+        <div v-else-if="editForm" class="edit-form">
           <label>标题<input v-model="editForm.title" @input="markModified" /></label>
           <label>歌手<input v-model="editForm.artist" @input="markModified" /></label>
           <label>专辑<input v-model="editForm.album" @input="markModified" /></label>
@@ -167,7 +167,11 @@
           </label>
         </div>
 
-        <div v-if="!loadingDetail" class="edit-actions">
+        <div v-else class="edit-empty">
+          <p>点击中间列表中的歌曲，在此编辑标题、歌手、专辑、封面与歌词。</p>
+        </div>
+
+        <div v-if="editForm && !loadingDetail" class="edit-actions">
           <button class="btn-primary" @click="applyToFiles" :disabled="!editForm">应用到{{ isBatchMode ? '选中' : '当前' }}</button>
           <button class="btn-ghost" @click="saveCurrent" :disabled="saving">
             {{ saving ? '保存中...' : '保存到文件' }}
@@ -308,6 +312,12 @@ const canConfirmFetch = computed(() => {
     return Boolean(fetchPreviewMeta.value.pic || fetchPreviewMeta.value.picUrl || fetchPreview.value?.picUrl)
   }
   return Boolean(fetchPreviewMeta.value.lyric)
+})
+const editPanelTitle = computed(() => {
+  if (loadingDetail.value) return '读取文件信息'
+  if (editForm.value && isBatchMode.value) return `批量编辑 (${selectedFiles.value.length})`
+  if (editForm.value) return '单文件编辑'
+  return '标签编辑'
 })
 
 onMounted(loadDirs)
@@ -814,7 +824,8 @@ function showToast(text, type = 'info') {
 
 <style scoped>
 .tag-page {
-  max-width: 1400px;
+  width: 100%;
+  max-width: none;
   height: 100%;
   display: flex;
   flex-direction: column;
@@ -833,7 +844,7 @@ function showToast(text, type = 'info') {
 
 .tag-layout {
   display: grid;
-  grid-template-columns: 220px 1fr 320px;
+  grid-template-columns: minmax(200px, 240px) minmax(0, 1fr) minmax(300px, 380px);
   gap: 16px;
   flex: 1;
   min-height: 0;
@@ -847,6 +858,28 @@ function showToast(text, type = 'info') {
   gap: 10px;
   min-height: 0;
   overflow: hidden;
+}
+.edit-panel {
+  min-width: 300px;
+}
+.edit-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 28px 16px;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.65;
+  border: 1px dashed var(--border-light);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  min-height: 160px;
+}
+.edit-empty p {
+  margin: 0;
+  max-width: 220px;
 }
 
 .file-panel {
