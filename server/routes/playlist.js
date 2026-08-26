@@ -1,5 +1,6 @@
 import { Router } from 'express'
 import { fetchPlaylist, fetchRecommendPlaylists, AVAILABLE_SOURCES } from '../musicSdk.js'
+import { formatUserError } from '../utils/userError.js'
 
 export const playlistRouter = Router()
 
@@ -16,7 +17,7 @@ playlistRouter.get('/recommend', async (req, res) => {
     const data = await fetchRecommendPlaylists(source, String(sort), Number(page))
     res.json({ ok: true, data })
   } catch (e) {
-    res.status(500).json({ error: e.message })
+    res.status(500).json({ error: formatUserError(e, '获取推荐歌单失败，请稍后重试') })
   }
 })
 
@@ -31,6 +32,6 @@ playlistRouter.get('/', async (req, res) => {
     const data = await fetchPlaylist(source, url)
     res.json({ ok: true, data })
   } catch (e) {
-    res.status(500).json({ error: e.message })
+    res.status(500).json({ error: formatUserError(e, '获取歌单失败，请检查链接后重试') })
   }
 })

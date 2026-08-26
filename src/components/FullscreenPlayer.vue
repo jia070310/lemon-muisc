@@ -30,6 +30,7 @@
             <div class="fs-meta">
               <div class="fs-title">{{ cleanText(currentPlaying?.name) || '未知歌曲' }}</div>
               <div class="fs-artist">{{ formatArtists(currentPlaying?.singer) || '未知艺术家' }}</div>
+              <div v-if="playerError" class="fs-error">{{ playerError }}</div>
             </div>
           </div>
 
@@ -83,7 +84,7 @@
             <button class="fs-btn" type="button" title="上一曲" :disabled="!playQueue.length" @click="onPrev">
               <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><polygon points="19,20 9,12 19,4"/><line x1="5" y1="4" x2="5" y2="20" stroke="currentColor" stroke-width="2"/></svg>
             </button>
-            <button class="fs-btn fs-btn-main" type="button" :title="isPaused ? '播放' : '暂停'" @click="togglePause">
+            <button class="fs-btn fs-btn-main" type="button" :title="isPaused ? '播放' : '暂停'" @click="onMainPlay">
               <svg v-if="isPaused" viewBox="0 0 24 24" width="28" height="28" fill="#fff"><polygon points="7,3 21,12 7,21"/></svg>
               <svg v-else viewBox="0 0 24 24" width="28" height="28" fill="#fff"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
             </button>
@@ -158,6 +159,7 @@
                 <button
                   class="fs-queue-play"
                   type="button"
+                  :class="{ playing: i === currentQueueIndex && currentPlaying && !isPaused }"
                   :title="i === currentQueueIndex && currentPlaying && !isPaused ? '暂停' : '播放'"
                   @click.stop="onQueuePlayClick(i)"
                 >
@@ -180,9 +182,10 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   currentPlaying, isPaused, currentTime, displayDuration, coverUrl, coverStyle,
   lyricLines, activeLyricIdx, playQueue, currentQueueIndex, playMode, playModeLabel,
-  showFullscreenPlayer, visualizerEnabled, volume, isMuted,
+  showFullscreenPlayer, visualizerEnabled, volume, isMuted, playerError,
   togglePause, seekTo, setVolume, toggleMute, fmtTime, playNext, playPrev, togglePlayMode,
   closeFullscreenPlayer, showQueuePanel, playTrackAt, removeFromQueue, clearQueue,
+  resumeOrTogglePause, unlockAudioFromGesture,
 } from '../stores/player.js'
 import { cleanText, formatArtists } from '../utils/text.js'
 import SpectrumVisualizer from './SpectrumVisualizer.vue'
@@ -218,12 +221,23 @@ function onVolumeWheel(e) {
   setVolume((volumePercent.value + delta) / 100)
 }
 
+async function onMainPlay() {
+  unlockAudioFromGesture()
+  try {
+    await resumeOrTogglePause()
+  } catch (e) {
+    playerError.value = e?.message || '播放失败'
+  }
+}
+
 async function onPrev() {
-  try { await playPrev() } catch {}
+  unlockAudioFromGesture()
+  try { await playPrev() } catch (e) { playerError.value = e?.message || '播放失败' }
 }
 
 async function onNext() {
-  try { await playNext() } catch {}
+  unlockAudioFromGesture()
+  try { await playNext() } catch (e) { playerError.value = e?.message || '播放失败' }
 }
 
 function onOpenQueue() {
@@ -231,12 +245,14 @@ function onOpenQueue() {
 }
 
 async function onPlayAt(index) {
-  try { await playTrackAt(index) } catch {}
+  unlockAudioFromGesture()
+  try { await playTrackAt(index) } catch (e) { playerError.value = e?.message || '播放失败' }
 }
 
 async function onQueuePlayClick(index) {
+  unlockAudioFromGesture()
   if (index === currentQueueIndex.value && currentPlaying.value) {
-    togglePause()
+    try { await togglePause() } catch (e) { playerError.value = e?.message || '播放失败' }
     return
   }
   await onPlayAt(index)
@@ -266,7 +282,7 @@ function onKeydown(e) {
   }
   if (e.key === ' ') {
     e.preventDefault()
-    togglePause()
+    onMainPlay()
   }
 }
 
@@ -402,6 +418,11 @@ onUnmounted(() => {
 .fs-artist {
   font-size: 14px;
   color: rgba(255, 255, 255, 0.65);
+}
+.fs-error {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #ff8b8b;
 }
 
 .fs-lyric-col {
@@ -707,12 +728,25 @@ onUnmounted(() => {
 .fs-queue-remove {
   width: 32px;
   height: 32px;
+  padding: 0;
   border: none;
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.08);
   color: #fff;
   cursor: pointer;
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  font-size: 18px;
+}
+.fs-queue-play svg {
+  display: block;
+}
+/* 播放三角视觉重心偏左，略右移光学居中 */
+.fs-queue-play:not(.playing) svg {
+  margin-left: 2px;
 }
 .fs-queue-empty {
   padding: 32px 16px;

@@ -1,6 +1,7 @@
 import { getDB } from './db.js'
 import { unloadSource, getActiveSource } from './sourceManager.js'
 import { broadcast } from './ws.js'
+import { formatUserError } from './utils/userError.js'
 
 const FAULT_KEY = 'source.fault'
 
@@ -43,7 +44,7 @@ export function recordSourceFault(sourceId, error) {
     return null
   }
 
-  const message = error?.message || String(error)
+  const message = formatUserError(error, error?.message || String(error) || '音源运行出错')
   const row = getDB().prepare('SELECT id, name, homepage FROM user_apis WHERE id = ?').get(sourceId)
 
   unloadSource()

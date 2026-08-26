@@ -1,3 +1,5 @@
+import { formatUserError } from './utils/userError.js'
+
 const BASE = '/api'
 const DEFAULT_TIMEOUT = 30000
 
@@ -20,12 +22,15 @@ async function request(url, options = {}) {
       throw new Error('服务器响应异常')
     }
 
-    if (!res.ok) throw new Error(data.error || '请求失败')
+    if (!res.ok) throw new Error(formatUserError(data.error || '请求失败', '请求失败，请稍后重试'))
     return data
   } catch (e) {
     if (e.name === 'AbortError') throw new Error('请求超时，请检查服务是否正常运行')
     if (e.message === 'Failed to fetch') throw new Error('无法连接服务器，请确认后端已启动')
-    throw e
+    if (e instanceof Error && /[\u4e00-\u9fff]/.test(e.message) && !/socket hang|Failed to fetch|ECONN/i.test(e.message)) {
+      throw e
+    }
+    throw new Error(formatUserError(e, '请求失败，请稍后重试'))
   } finally {
     clearTimeout(timeout)
   }
@@ -43,7 +48,9 @@ export const api = {
       const form = new FormData()
       form.append('file', file)
       const res = await fetch(BASE + '/source/import', { method: 'POST', body: form })
-      return res.json()
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(formatUserError(data.error || '导入失败', '导入失败'))
+      return data
     },
     importUrl: (url) => request('/source/import-url', { method: 'POST', body: { url } }),
     remove: (id) => request(`/source/${id}`, { method: 'DELETE' }),
@@ -72,6 +79,8 @@ export const api = {
     pause: (id) => request(`/download/pause/${id}`, { method: 'POST' }),
     resume: (id) => request(`/download/resume/${id}`, { method: 'POST' }),
     remove: (id) => request(`/download/${id}`, { method: 'DELETE' }),
+    confirmDowngrade: (id) => request(`/download/confirm-downgrade/${id}`, { method: 'POST' }),
+    rejectDowngrade: (id) => request(`/download/reject-downgrade/${id}`, { method: 'POST' }),
     clearCompleted: () => request('/download/clear-completed', { method: 'POST' }),
   },
   play: {

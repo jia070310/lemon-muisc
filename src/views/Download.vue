@@ -17,8 +17,10 @@
       <span class="c-accent">下载中 {{ countByStatus('downloading') }}</span>
       <span class="sep">|</span>
       <span class="c-warning">等待中 {{ countByStatus('waiting') }}</span>
-      <span class="sep" v-if="countByStatus('error')">|</span>
+      <span class="sep" v-if="countByStatus('error') || countByStatus('await_confirm')">|</span>
       <span class="c-error" v-if="countByStatus('error')">失败 {{ countByStatus('error') }}</span>
+      <span class="sep" v-if="countByStatus('error') && countByStatus('await_confirm')">|</span>
+      <span class="c-warning" v-if="countByStatus('await_confirm')">待确认 {{ countByStatus('await_confirm') }}</span>
     </div>
 
     <div class="task-list card" v-if="tasks.length">
@@ -31,7 +33,11 @@
         <div class="task-info">
           <div class="task-name">{{ task.name }}</div>
           <div class="task-meta">{{ task.singer }} · {{ task.quality }} · {{ statusText(task.status) }}</div>
-          <div class="task-error" v-if="task.status === 'error'">{{ task.error }}</div>
+          <div
+            class="task-error"
+            :class="{ warn: task.status === 'await_confirm' }"
+            v-if="task.status === 'error' || task.status === 'await_confirm'"
+          >{{ formatTaskError(task) }}</div>
         </div>
         <div class="task-progress" v-if="task.status === 'downloading'">
           <div class="progress-bar">
@@ -65,7 +71,20 @@
           </button>
           <button v-if="task.status === 'paused'" class="btn-sm btn-ghost" @click="resume(task.id)" title="继续">继续</button>
           <button v-if="task.status === 'downloading' || task.status === 'waiting'" class="btn-sm btn-ghost" @click="pause(task.id)" title="暂停">暂停</button>
-          <button v-if="task.status === 'error'" class="btn-sm btn-ghost" @click="resume(task.id)" title="重试">重试</button>
+          <button
+            v-if="task.status === 'await_confirm'"
+            class="btn-sm btn-ghost"
+            @click="retrySameQuality(task)"
+            title="保持原音质再试：失败常因音源/网络短暂中断，稍后重试可能成功"
+          >重试原音质</button>
+          <button
+            v-if="task.status === 'await_confirm'"
+            class="btn-sm btn-primary"
+            @click="confirmDowngrade(task)"
+            :title="downgradeTitle(task)"
+          >降质下载</button>
+          <button v-if="task.status === 'await_confirm'" class="btn-sm btn-ghost" @click="rejectDowngrade(task)" title="标记为失败，不再自动处理">放弃</button>
+          <button v-if="task.status === 'error'" class="btn-sm btn-ghost" @click="resume(task.id)" title="按当前音质重新排队下载">重试</button>
           <button class="btn-sm btn-ghost" @click="remove(task.id)" title="删除">删除</button>
         </div>
       </div>
@@ -84,6 +103,7 @@ import { onWS } from '../ws.js'
 import {
   loadingPlay, isPaused, isPlayingItem, playItem, addToQueue, isInQueue,
 } from '../stores/player.js'
+import { formatUserError } from '../utils/userError.js'
 
 const tasks = ref([])
 const toast = ref(null)
@@ -97,7 +117,15 @@ unsubs.push(onWS('download:progress', (d) => {
 }))
 unsubs.push(onWS('download:status', (d) => {
   const t = tasks.value.find(x => x.id === d.id)
-  if (t) { t.status = d.status; if (d.progress !== undefined) t.progress = d.progress; if (d.error) t.error = d.error }
+  if (t) {
+    t.status = d.status
+    if (d.progress !== undefined) t.progress = d.progress
+    if (d.error !== undefined) t.error = d.error
+    if (d.quality) t.quality = d.quality
+    if (d.downgradeOffer !== undefined) {
+      t.meta = { ...(t.meta || {}), downgradeOffer: d.downgradeOffer }
+    }
+  }
 }))
 unsubs.push(onWS('download:removed', (d) => {
   tasks.value = tasks.value.filter(x => x.id !== d.id)
@@ -204,17 +232,61 @@ async function loadList() {
 
 function countByStatus(s) { return tasks.value.filter(t => t.status === s).length }
 
+function formatTaskError(task) {
+  // 优先完整任务文案（含降质建议）；再回退到 offer.reason
+  return formatUserError(
+    task.error || task.meta?.downgradeOffer?.reason,
+    '下载失败，请稍后重试',
+  )
+}
+
 function statusText(s) {
-  const m = { waiting: '等待中', downloading: '下载中', completed: '已完成', paused: '已暂停', error: '失败' }
+  const m = {
+    waiting: '等待中',
+    downloading: '下载中',
+    completed: '已完成',
+    paused: '已暂停',
+    error: '失败',
+    await_confirm: '待确认降质',
+  }
   return m[s] || s
 }
 function statusIcon(s) {
-  const m = { completed: '✓', paused: '⏸', waiting: '⏳', error: '✕' }
+  const m = { completed: '✓', paused: '⏸', waiting: '⏳', error: '✕', await_confirm: '?' }
   return m[s] || ''
 }
 
 async function pause(id) { try { await api.download.pause(id) } catch {} }
 async function resume(id) { try { await api.download.resume(id) } catch {} }
+async function confirmDowngrade(task) {
+  try {
+    await api.download.confirmDowngrade(task.id)
+    showToast('已确认降质，重新排队下载', 'success')
+  } catch (e) {
+    showToast(e.message || '确认失败', 'error')
+  }
+}
+async function retrySameQuality(task) {
+  try {
+    await api.download.resume(task.id)
+    showToast('已按原音质重新排队（适合临时网络抖动后再试）', 'success')
+  } catch (e) {
+    showToast(e.message || '重试失败', 'error')
+  }
+}
+function downgradeTitle(task) {
+  const offer = task.meta?.downgradeOffer
+  const to = offer?.toLabel || offer?.toQuality || '更低音质'
+  return `改用 ${to} 下载：原音质多次失败时可换较低音质提高成功率`
+}
+async function rejectDowngrade(task) {
+  try {
+    await api.download.rejectDowngrade(task.id)
+    showToast('已放弃降质下载', 'info')
+  } catch (e) {
+    showToast(e.message || '操作失败', 'error')
+  }
+}
 async function remove(id) { try { await api.download.remove(id); tasks.value = tasks.value.filter(t => t.id !== id) } catch {} }
 async function clearCompleted() { try { await api.download.clearCompleted(); tasks.value = tasks.value.filter(t => t.status !== 'completed') } catch {} }
 
@@ -270,6 +342,8 @@ function showToast(text, type = 'info') {
 .task-name { font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .task-meta { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
 .task-error { font-size: 12px; color: var(--error); margin-top: 2px; }
+.task-error.warn { color: var(--warning); }
+.status-await_confirm { color: var(--warning); }
 
 .task-progress { width: 140px; display: flex; align-items: center; gap: 8px; }
 .progress-bar { flex: 1; height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; }

@@ -1,5 +1,6 @@
 import { Router } from 'express'
 import { searchMusic, AVAILABLE_SOURCES } from '../musicSdk.js'
+import { formatUserError } from '../utils/userError.js'
 
 export const searchRouter = Router()
 
@@ -15,7 +16,7 @@ searchRouter.get('/', async (req, res) => {
     const result = await searchMusic(keyword, source, Number(page), Number(limit))
     res.json({ ok: true, data: result })
   } catch (e) {
-    res.status(500).json({ error: e.message })
+    res.status(500).json({ error: formatUserError(e, '搜索失败，请稍后重试') })
   }
 })
 

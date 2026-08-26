@@ -2,6 +2,7 @@ import { ref, computed } from 'vue'
 import { api } from '../api.js'
 import { cleanTrackItem } from '../utils/text.js'
 import { buildPlayPayload } from '../utils/musicPayload.js'
+import { formatUserError } from '../utils/userError.js'
 
 export const currentPlaying = ref(null)
 export const loadingPlay = ref(null)
@@ -32,6 +33,8 @@ export const playModeLabel = computed(() => {
 
 let audio = null
 let inited = false
+/** 是否已加载可播放的媒体地址（避免 audio.src='' 被解析成页面 URL 误判） */
+let hasMediaSrc = false
 /** @type {AudioContext | null} */
 let audioCtx = null
 /** @type {AnalyserNode | null} */
@@ -60,11 +63,36 @@ async function resumeAudioPlayback() {
   try {
     if (audioCtx?.state === 'suspended') await audioCtx.resume()
   } catch {}
-  if (!audio || isPaused.value || !audio.src) return
+  if (!audio || isPaused.value || !hasMediaSrc) return
   if (audio.paused) {
     try { await audio.play() } catch {}
   }
   scheduleAudioAnalyserRefresh()
+}
+
+/** 在用户手势同步调用栈内解锁 AudioContext，避免异步拉链后 mobile 无法 play */
+export function unlockAudioFromGesture() {
+  if (!audio) initPlayer()
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext
+    if (AC && !audioCtx) audioCtx = new AC()
+    if (audioCtx?.state === 'suspended') {
+      audioCtx.resume().catch(() => {})
+    }
+  } catch {}
+}
+
+function hasPlayableAudioSrc() {
+  return Boolean(audio && hasMediaSrc)
+}
+
+function resolveQueueIndexForCurrent() {
+  if (currentQueueIndex.value >= 0 && currentQueueIndex.value < playQueue.value.length) {
+    return currentQueueIndex.value
+  }
+  if (!currentPlaying.value) return -1
+  const key = getTrackKey(currentPlaying.value, currentPlaying.value.source)
+  return playQueue.value.findIndex(q => q.key === key)
 }
 
 function applyAudioOutput() {
@@ -152,6 +180,13 @@ function restoreSessionState() {
         applyDurationFallback(currentPlaying.value)
         // 刷新后默认暂停，用户可点播放继续
         isPaused.value = true
+        // 同步队列下标，避免 currentPlaying 有值但 index=-1 导致按钮无效
+        const key = getTrackKey(currentPlaying.value, currentPlaying.value.source)
+        const idx = playQueue.value.findIndex(q => q.key === key)
+        if (idx >= 0) currentQueueIndex.value = idx
+        else if (currentQueueIndex.value < 0 && playQueue.value.length) {
+          currentQueueIndex.value = 0
+        }
         return
       }
     }
@@ -375,7 +410,7 @@ export function closeFullscreenPlayer() {
 export async function ensureAudioAnalyser() {
   if (!audio || !visualizerEnabled.value) return null
   if (document.visibilityState === 'hidden') return null
-  if (audio.paused || !audio.src) return null
+  if (audio.paused || !hasPlayableAudioSrc()) return null
   try {
     const AC = window.AudioContext || window.webkitAudioContext
     if (!AC) return null
@@ -518,18 +553,22 @@ export async function playItem(item, activeSource) {
 }
 
 export async function resumeOrTogglePause() {
+  unlockAudioFromGesture()
   if (!currentPlaying.value) return
-  if (!audio?.src) {
-    if (currentQueueIndex.value >= 0) {
-      await playTrackAt(currentQueueIndex.value, { resumeTime: currentTime.value })
+  if (!hasPlayableAudioSrc()) {
+    const idx = resolveQueueIndexForCurrent()
+    if (idx >= 0) {
+      await playTrackAt(idx, { resumeTime: currentTime.value })
     }
     return
   }
-  togglePause()
+  await togglePause()
 }
 
 export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 } = {}) {
   if (index < 0 || index >= playQueue.value.length) return
+
+  unlockAudioFromGesture()
 
   const prevIndex = currentQueueIndex.value
   if (!fromHistory && prevIndex >= 0 && prevIndex !== index) {
@@ -560,6 +599,7 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 }
     applyDurationFallback(item)
 
     audio.src = url
+    hasMediaSrc = true
     resetAudioGraph()
     applyAudioOutput()
     await waitForAudioReady()
@@ -569,7 +609,14 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 }
         currentTime.value = resumeTime
       } catch {}
     }
-    await audio.play()
+    try {
+      await audio.play()
+    } catch (playErr) {
+      if (playErr?.name === 'NotAllowedError') {
+        throw new Error('浏览器拦截了自动播放，请再点一次播放')
+      }
+      throw playErr
+    }
     applyAudioOutput()
     scheduleAudioAnalyserRefresh()
 
@@ -599,14 +646,7 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 }
 }
 
 function formatPlayClientError(e) {
-  const msg = e?.message || ''
-  if (e?.name === 'NotSupportedError' || /no supported sources/i.test(msg)) {
-    return '浏览器无法播放该音频，请尝试其他歌曲或音质'
-  }
-  if (/failed to load|network|audio/i.test(msg)) {
-    return '音频加载失败，请检查网络或更换歌曲'
-  }
-  return msg || '试听失败，请确认音源已激活'
+  return formatUserError(e, '试听失败，请确认音源已激活')
 }
 
 function waitForAudioReady() {
@@ -670,21 +710,34 @@ export async function playPrev() {
   await playTrackAt(prev, { fromHistory: true })
 }
 
-export function togglePause() {
+export async function togglePause() {
   if (!currentPlaying.value) return
-  if (!audio?.src) {
-    if (currentQueueIndex.value >= 0) {
-      playTrackAt(currentQueueIndex.value, { resumeTime: currentTime.value }).catch(() => {})
+  unlockAudioFromGesture()
+  if (!hasPlayableAudioSrc()) {
+    const idx = resolveQueueIndexForCurrent()
+    if (idx >= 0) {
+      try {
+        await playTrackAt(idx, { resumeTime: currentTime.value })
+      } catch (e) {
+        playerError.value = e?.message || '播放失败'
+      }
     }
     return
   }
   if (audio.paused) {
     applyAudioOutput()
-    audio.play().then(() => {
+    try {
+      await audio.play()
       isPaused.value = false
       saveQueueState()
       scheduleAudioAnalyserRefresh()
-    }).catch(() => {})
+    } catch (e) {
+      if (e?.name === 'NotAllowedError') {
+        playerError.value = '浏览器拦截了自动播放，请再点一次播放'
+      } else {
+        playerError.value = e?.message || '播放失败'
+      }
+    }
   } else {
     audio.pause()
     isPaused.value = true
@@ -693,7 +746,12 @@ export function togglePause() {
 }
 
 export function stopPlay() {
-  if (audio) { audio.pause(); audio.src = '' }
+  if (audio) {
+    audio.pause()
+    audio.removeAttribute('src')
+    try { audio.load() } catch {}
+  }
+  hasMediaSrc = false
   currentPlaying.value = null
   currentQueueIndex.value = -1
   isPaused.value = true
@@ -702,6 +760,7 @@ export function stopPlay() {
   coverUrl.value = ''
   lyricLines.value = []
   activeLyricIdx.value = -1
+  playerError.value = ''
   saveQueueState()
 }
 

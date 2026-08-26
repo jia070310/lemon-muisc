@@ -65,9 +65,15 @@
         type="button"
         :title="theme === 'light' ? '切换深色模式' : '切换浅色模式'"
         @click="toggleTheme"
+        :aria-label="theme === 'light' ? '切换深色模式' : '切换浅色模式'"
       >
-        <svg v-if="theme === 'dark'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
-        <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 14.5A8.5 8.5 0 1 1 9.5 3 7 7 0 0 0 21 14.5z"/></svg>
+        <svg v-if="theme === 'dark'" class="theme-icon" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="4.5"/>
+          <path d="M12 2.5v2M12 19.5v2M4.4 4.4l1.4 1.4M18.2 18.2l1.4 1.4M2.5 12h2M19.5 12h2M4.4 19.6l1.4-1.4M18.2 5.8l1.4-1.4"/>
+        </svg>
+        <svg v-else class="theme-icon" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M20.5 14.2A8.2 8.2 0 0 1 9.8 3.5 7 7 0 1 0 20.5 14.2z"/>
+        </svg>
       </button>
     </header>
 
@@ -88,7 +94,7 @@
         <h3>音源异常</h3>
         <template v-if="sourceFault">
           <p class="fault-desc">当前音源「{{ sourceFault.name }}」运行出错，已自动停用以避免影响应用。若为临时网络问题，可保留音源稍后重试；若音源脚本损坏，请删除或重新导入。</p>
-          <div class="fault-error">{{ sourceFault.message }}</div>
+          <div class="fault-error">{{ formatPromptReason(sourceFault.message) }}</div>
         </template>
         <p v-if="faultResult" class="fault-result" :class="{ ok: faultResult.ok }">{{ faultResult.text }}</p>
         <div v-if="sourceFault" class="fault-actions">
@@ -101,6 +107,37 @@
         <div v-else class="fault-actions">
           <router-link to="/settings" class="btn-primary fault-settings-btn" @click="closeFaultModal">前往设置 → 音源管理</router-link>
           <button class="btn-ghost" @click="closeFaultModal">关闭</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="downgradePrompt" class="modal-overlay downgrade-overlay" @click.self="dismissDowngradePrompt">
+      <div class="downgrade-modal">
+        <h3>下载失败，请选择下一步</h3>
+        <p class="downgrade-desc">
+          「{{ downgradePrompt.name }}」在
+          <strong>{{ downgradePrompt.offer?.fromLabel || downgradePrompt.offer?.fromQuality }}</strong>
+          音质下已自动重试多次仍失败。
+        </p>
+        <div v-if="downgradePrompt.offer?.reason" class="downgrade-reason">
+          <div class="downgrade-reason-label">失败原因</div>
+          <div>{{ formatPromptReason(downgradePrompt.offer.reason) }}</div>
+        </div>
+        <div class="downgrade-hint">
+          <p><strong>重试原音质：</strong>失败多半是音源服务或网络短暂中断，稍后再用同一音质常能成功。</p>
+          <p><strong>降质下载：</strong>改用
+            <em>{{ downgradePrompt.offer?.toLabel || downgradePrompt.offer?.toQuality }}</em>
+            ，取链通常更稳，但音质会低于你最初的选择。
+          </p>
+        </div>
+        <div class="downgrade-actions">
+          <button class="btn-ghost" :disabled="downgradeBusy" @click="rejectDowngradePrompt">暂不处理</button>
+          <button class="btn-ghost" :disabled="downgradeBusy" @click="retrySameQualityPrompt" title="保持原音质再试一次（适合临时网络抖动）">
+            {{ downgradeBusy === 'retry' ? '重试中…' : '重试原音质' }}
+          </button>
+          <button class="btn-primary" :disabled="downgradeBusy" @click="acceptDowngradePrompt" title="改用更低音质重新下载">
+            {{ downgradeBusy === 'downgrade' ? '处理中…' : '确认降质下载' }}
+          </button>
         </div>
       </div>
     </div>
@@ -143,6 +180,7 @@ import { initPlayer } from './stores/player.js'
 import { checkForUpdate, hasUpdate } from './composables/useUpdateCheck.js'
 import { api } from './api.js'
 import { applyTheme, theme, THEME_KEY } from './utils/theme.js'
+import { formatUserError } from './utils/userError.js'
 import PlayerBar from './components/PlayerBar.vue'
 import FullscreenPlayer from './components/FullscreenPlayer.vue'
 
@@ -154,6 +192,113 @@ const faultBusy = ref(false)
 const faultResult = ref(null)
 const showFaultModal = computed(() => Boolean(sourceFault.value || faultResult.value))
 let offSourceFaultWS = null
+
+const downgradePrompt = ref(null)
+/** @type {import('vue').Ref<false | 'retry' | 'downgrade' | 'reject'>} */
+const downgradeBusy = ref(false)
+let offDowngradeWS = null
+/** @type {Array<{ id: string, name?: string, singer?: string, offer?: object, downgradeOffer?: object }>} */
+const downgradeQueue = []
+
+function enqueueDowngradePrompt(payload) {
+  const offer = payload?.downgradeOffer || payload?.offer
+  if (!payload?.id || !offer?.toQuality) return
+  const item = {
+    id: payload.id,
+    name: payload.name || '未知歌曲',
+    singer: payload.singer || '',
+    offer,
+    downgradeOffer: offer,
+  }
+  if (downgradePrompt.value?.id === item.id) {
+    downgradePrompt.value = item
+    return
+  }
+  if (downgradePrompt.value) {
+    if (!downgradeQueue.some(q => q.id === item.id)) downgradeQueue.push(item)
+    return
+  }
+  downgradePrompt.value = item
+}
+
+function showNextDowngradePrompt() {
+  downgradePrompt.value = downgradeQueue.shift() || null
+}
+
+function formatPromptReason(reason) {
+  return formatUserError(reason, '音源取链失败，请稍后重试')
+}
+
+/** 仅关闭弹窗，任务仍保持「待确认」，可在下载页再操作 */
+function dismissDowngradePrompt() {
+  if (downgradeBusy.value) return
+  downgradePrompt.value = null
+  showNextDowngradePrompt()
+}
+
+async function acceptDowngradePrompt() {
+  const cur = downgradePrompt.value
+  if (!cur?.id) return
+  downgradeBusy.value = 'downgrade'
+  try {
+    await api.download.confirmDowngrade(cur.id)
+    downgradePrompt.value = null
+    showNextDowngradePrompt()
+  } catch (e) {
+    alert(e.message || '确认降质失败')
+  } finally {
+    downgradeBusy.value = false
+  }
+}
+
+/** 保持原音质重新排队（临时网络问题常见，再试可能成功） */
+async function retrySameQualityPrompt() {
+  const cur = downgradePrompt.value
+  if (!cur?.id) return
+  downgradeBusy.value = 'retry'
+  try {
+    await api.download.resume(cur.id)
+    downgradePrompt.value = null
+    showNextDowngradePrompt()
+  } catch (e) {
+    alert(e.message || '重试失败')
+  } finally {
+    downgradeBusy.value = false
+  }
+}
+
+async function rejectDowngradePrompt() {
+  const cur = downgradePrompt.value
+  if (!cur?.id) {
+    downgradePrompt.value = null
+    return
+  }
+  downgradeBusy.value = 'reject'
+  try {
+    await api.download.rejectDowngrade(cur.id)
+  } catch {}
+  finally {
+    downgradeBusy.value = false
+    downgradePrompt.value = null
+    showNextDowngradePrompt()
+  }
+}
+
+async function loadPendingDowngradePrompts() {
+  try {
+    const list = await api.download.list()
+    for (const task of list || []) {
+      if (task.status === 'await_confirm' && task.meta?.downgradeOffer?.toQuality) {
+        enqueueDowngradePrompt({
+          id: task.id,
+          name: task.name,
+          singer: task.singer,
+          downgradeOffer: task.meta.downgradeOffer,
+        })
+      }
+    }
+  } catch {}
+}
 
 function closeFaultModal() {
   sourceFault.value = null
@@ -224,9 +369,19 @@ onMounted(() => {
   initPlayer()
   checkForUpdate()
   loadSourceFault()
+  loadPendingDowngradePrompts()
   offSourceFaultWS = onWS('source.fault', (fault) => {
     sourceFault.value = fault?.id ? fault : null
     faultResult.value = null
+  })
+  offDowngradeWS = onWS('download:status', (d) => {
+    if (d?.status === 'await_confirm' && d.downgradeOffer?.toQuality) {
+      enqueueDowngradePrompt(d)
+    } else if (d?.id && downgradePrompt.value?.id === d.id && d.status !== 'await_confirm') {
+      // 已在下载页点确认/放弃时，关掉对应弹窗
+      downgradePrompt.value = null
+      showNextDowngradePrompt()
+    }
   })
   api.paths.list().then((res) => {
     setupBanner.value = Boolean(res.setup?.needsPathConfig)
@@ -238,6 +393,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   offSourceFaultWS?.()
+  offDowngradeWS?.()
 })
 </script>
 
@@ -472,24 +628,34 @@ onUnmounted(() => {
     flex-shrink: 0;
   }
   .mobile-theme-btn {
-    width: 40px;
-    height: 40px;
+    width: 38px;
+    height: 38px;
     border: none;
     border-radius: 50%;
-    display: flex;
+    display: inline-flex;
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
     background: var(--bg-elevated);
     color: var(--text);
     cursor: pointer;
+    padding: 0;
+    line-height: 0;
   }
+  .mobile-theme-btn .theme-icon,
   .mobile-theme-btn svg {
-    width: 18px;
-    height: 18px;
+    width: 22px !important;
+    height: 22px !important;
+    min-width: 22px;
+    min-height: 22px;
+    display: block;
+    flex-shrink: 0;
   }
   .mobile-theme-btn:hover {
     background: var(--bg-hover);
+  }
+  .mobile-theme-btn:active {
+    transform: scale(0.94);
   }
 
   .content-fixed {
@@ -624,5 +790,77 @@ onUnmounted(() => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+}
+
+.downgrade-modal {
+  width: min(440px, 100%);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+  border-radius: 12px;
+  padding: 24px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+}
+.downgrade-modal h3 {
+  margin: 0 0 12px;
+  font-size: 18px;
+  color: var(--text);
+}
+.downgrade-desc {
+  margin: 0 0 8px;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+.downgrade-desc strong {
+  color: var(--accent);
+  font-weight: 650;
+}
+.downgrade-reason {
+  margin: 10px 0 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-muted);
+  word-break: break-word;
+}
+.downgrade-reason-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+.downgrade-hint {
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(60, 110, 247, 0.08);
+  border: 1px solid rgba(60, 110, 247, 0.2);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+.downgrade-hint p {
+  margin: 0 0 8px;
+}
+.downgrade-hint p:last-child {
+  margin-bottom: 0;
+}
+.downgrade-hint strong {
+  color: var(--text);
+}
+.downgrade-hint em {
+  color: var(--accent);
+  font-style: normal;
+  font-weight: 650;
+}
+.downgrade-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  margin-top: 8px;
 }
 </style>

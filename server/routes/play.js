@@ -7,27 +7,12 @@ import { buildMusicInfo } from '../utils/musicInfo.js'
 import { fetchTrackLyric, fetchTrackCover } from '../utils/trackMeta.js'
 import { resolveCoverUrl } from '../utils/cover.js'
 import { isAllowedMediaPath } from '../utils/filePaths.js'
+import { formatUserError } from '../utils/userError.js'
 
 export const playRouter = Router()
 
 function formatPlayError(err) {
-  const msg = err?.message || String(err)
-  if (/104003|"code"\s*:\s*"104003"/.test(msg)) {
-    return '该歌曲暂无播放权限（版权或 VIP 限制）'
-  }
-  if (/104001|104002/.test(msg)) {
-    return '该歌曲暂时无法播放'
-  }
-  if (msg.includes('未获取到URL') || msg.includes('获取URL失败') || msg.includes('获取播放链接失败')) {
-    if (msg.length > 120 || msg.includes('traceid')) {
-      return '无法获取播放链接，该歌曲可能受版权限制或暂不可用'
-    }
-    return msg.replace(/:\s*\{[\s\S]*\}$/, '').trim() || '无法获取播放链接'
-  }
-  if (msg.length > 200 && (msg.includes('{') || msg.includes('traceid'))) {
-    return '无法获取播放链接，请尝试其他歌曲'
-  }
-  return msg
+  return formatUserError(err, '无法获取播放链接，请尝试其他歌曲')
 }
 
 const AUDIO_MIME = {
@@ -192,7 +177,7 @@ playRouter.get('/proxy', (req, res) => {
   })
 
   upstream.on('err', (err) => {
-    if (!res.headersSent) res.status(502).json({ error: err.message || '音频流传输失败' })
+    if (!res.headersSent) res.status(502).json({ error: formatUserError(err, '音频流传输失败') })
   })
 
   upstream.pipe(res)

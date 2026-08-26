@@ -169,10 +169,12 @@ sourceRouter.post('/activate/:id', async (req, res) => {
     clearSourceFault()
     res.json({ ok: true, sources, name: fields.name })
   } catch (e) {
+    const { formatUserError } = await import('../utils/userError.js')
+    const msg = formatUserError(e, '音源激活失败，请稍后重试')
     if (recordSourceFault(req.params.id, e)) {
-      res.status(500).json({ error: e.message, fault: true })
+      res.status(500).json({ error: msg, fault: true })
     } else {
-      res.status(500).json({ error: e.message || '音源请求失败，请稍后重试' })
+      res.status(500).json({ error: msg })
     }
   }
 })
@@ -194,7 +196,8 @@ sourceRouter.post('/request', async (req, res) => {
     const result = await requestSource(source, action, info)
     res.json({ ok: true, data: result })
   } catch (e) {
-    res.status(500).json({ error: e.message })
+    const { formatUserError } = await import('../utils/userError.js')
+    res.status(500).json({ error: formatUserError(e, '音源请求失败，请稍后重试') })
   }
 })
 

@@ -9,11 +9,20 @@ import { buildMusicInfoFromTask } from '../utils/musicInfo.js'
 import { buildEmbedLyrics } from '../utils/lyric.js'
 import { getDownloadSavePath } from '../utils/filePaths.js'
 import { fetchTrackLyric, fetchTrackCover } from '../utils/trackMeta.js'
+import {
+  getNextLowerQuality,
+  isRetryableDownloadError,
+  qualityLabel,
+  sleep,
+} from '../utils/downloadQuality.js'
+import { formatUserError } from '../utils/userError.js'
 
 export const downloadRouter = Router()
 
 const activeDownloads = new Map()
 let runningCount = 0
+const SAME_QUALITY_ATTEMPTS = 3
+const RETRY_DELAY_MS = 1200
 
 downloadRouter.get('/list', (_req, res) => {
   const rows = getDB().prepare('SELECT * FROM download_tasks ORDER BY created_at DESC').all()
@@ -54,6 +63,7 @@ downloadRouter.post('/add', async (req, res) => {
           source: t.source,
           types: t.types || [],
           qualitys: t.qualitys || [],
+          requestedQuality: t.quality || '320k',
         })
         insert.run(id, t.name, t.singer || '', t.source || '', t.album || '', t.interval || '', t.quality || '320k', meta)
         added.push(id)
@@ -77,10 +87,81 @@ downloadRouter.post('/pause/:id', (req, res) => {
 })
 
 downloadRouter.post('/resume/:id', (req, res) => {
-  getDB().prepare("UPDATE download_tasks SET status = 'waiting' WHERE id = ?").run(req.params.id)
-  broadcast('download:status', { id: req.params.id, status: 'waiting' })
+  const row = getDB().prepare('SELECT id, meta, status FROM download_tasks WHERE id = ?').get(req.params.id)
+  if (!row) return res.status(404).json({ error: '任务不存在' })
+  let meta = {}
+  try { meta = JSON.parse(row.meta || '{}') } catch { meta = {} }
+  if (meta.downgradeOffer) {
+    delete meta.downgradeOffer
+    getDB().prepare('UPDATE download_tasks SET meta = ?, error = NULL WHERE id = ?')
+      .run(JSON.stringify(meta), req.params.id)
+  }
+  getDB().prepare("UPDATE download_tasks SET status = 'waiting', error = NULL WHERE id = ?").run(req.params.id)
+  broadcast('download:status', { id: req.params.id, status: 'waiting', error: '' })
   processQueue()
   res.json({ ok: true })
+})
+
+/** 用户确认：以降一档音质重新下载（仅在同音质重试失败后出现） */
+downloadRouter.post('/confirm-downgrade/:id', (req, res) => {
+  try {
+    const row = getDB().prepare('SELECT * FROM download_tasks WHERE id = ?').get(req.params.id)
+    if (!row) return res.status(404).json({ error: '任务不存在' })
+    let meta = {}
+    try { meta = JSON.parse(row.meta || '{}') } catch { meta = {} }
+    const offer = meta.downgradeOffer
+    if (!offer?.toQuality) {
+      return res.status(400).json({ error: '没有待确认的降质选项' })
+    }
+    const toQuality = offer.toQuality
+    delete meta.downgradeOffer
+    meta.lastDowngrade = {
+      from: offer.fromQuality,
+      to: toQuality,
+      at: new Date().toISOString(),
+      reason: offer.reason || '',
+    }
+    getDB().prepare(`
+      UPDATE download_tasks
+      SET quality = ?, meta = ?, status = 'waiting', error = NULL, progress = 0, downloaded_size = 0
+      WHERE id = ?
+    `).run(toQuality, JSON.stringify(meta), req.params.id)
+    broadcast('download:status', {
+      id: req.params.id,
+      status: 'waiting',
+      quality: toQuality,
+      error: '',
+      downgradeOffer: null,
+    })
+    processQueue()
+    res.json({ ok: true, quality: toQuality })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+/** 用户拒绝降质：保留失败状态 */
+downloadRouter.post('/reject-downgrade/:id', (req, res) => {
+  try {
+    const row = getDB().prepare('SELECT * FROM download_tasks WHERE id = ?').get(req.params.id)
+    if (!row) return res.status(404).json({ error: '任务不存在' })
+    let meta = {}
+    try { meta = JSON.parse(row.meta || '{}') } catch { meta = {} }
+    const reason = meta.downgradeOffer?.reason || formatUserError(row.error, '下载失败')
+    delete meta.downgradeOffer
+    getDB().prepare(`
+      UPDATE download_tasks SET status = 'error', error = ?, meta = ? WHERE id = ?
+    `).run(reason, JSON.stringify(meta), req.params.id)
+    broadcast('download:status', {
+      id: req.params.id,
+      status: 'error',
+      error: reason,
+      downgradeOffer: null,
+    })
+    res.json({ ok: true })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
 })
 
 downloadRouter.delete('/:id', (req, res) => {
@@ -110,6 +191,18 @@ function getSettings() {
   return s
 }
 
+function parseTaskMeta(task) {
+  try {
+    return JSON.parse(task.meta || '{}')
+  } catch {
+    return {}
+  }
+}
+
+function saveTaskMeta(taskId, meta) {
+  getDB().prepare('UPDATE download_tasks SET meta = ? WHERE id = ?').run(JSON.stringify(meta), taskId)
+}
+
 async function processQueue() {
   const settings = getSettings()
   const maxDl = parseInt(settings['download.maxDownloadNum']) || 3
@@ -120,7 +213,7 @@ async function processQueue() {
 
     runningCount++
     getDB().prepare("UPDATE download_tasks SET status = 'downloading' WHERE id = ?").run(task.id)
-    broadcast('download:status', { id: task.id, status: 'downloading' })
+    broadcast('download:status', { id: task.id, status: 'downloading', quality: task.quality })
 
     downloadTask(task, settings).finally(() => {
       runningCount--
@@ -130,74 +223,171 @@ async function processQueue() {
   }
 }
 
+async function resolveDownloadUrl(source, quality, musicInfo) {
+  const urlResult = await requestSource(source, 'musicUrl', {
+    type: quality,
+    quality,
+    musicInfo,
+  })
+  const url = typeof urlResult === 'string' ? urlResult : urlResult?.url
+  if (!url) throw new Error(`获取 ${qualityLabel(quality)} 音质下载链接失败，请尝试其他音质`)
+  return url
+}
+
+async function streamToFile(url, filePath, taskId, abort) {
+  const { default: needlePkg } = await import('needle')
+  const stream = needlePkg.get(url, {
+    follow_max: 5,
+    signal: abort.signal,
+    response_timeout: 60000,
+    read_timeout: 120000,
+  })
+  const writer = fs.createWriteStream(filePath)
+  let downloaded = 0
+  let total = 0
+
+  stream.on('header', (code, headers) => {
+    if (code && code >= 400) {
+      stream.emit('err', new Error(`下载响应异常 HTTP ${code}`))
+      return
+    }
+    total = parseInt(headers['content-length']) || 0
+    getDB().prepare('UPDATE download_tasks SET total_size = ? WHERE id = ?').run(total, taskId)
+  })
+
+  await new Promise((resolve, reject) => {
+    stream.on('data', (chunk) => {
+      downloaded += chunk.length
+      writer.write(chunk)
+      const progress = total > 0 ? downloaded / total : 0
+      getDB().prepare('UPDATE download_tasks SET downloaded_size = ?, progress = ? WHERE id = ?')
+        .run(downloaded, progress, taskId)
+      broadcast('download:progress', { id: taskId, progress, downloaded, total })
+    })
+    stream.on('done', (err) => {
+      writer.end()
+      if (err) reject(err)
+      else resolve()
+    })
+    stream.on('err', (err) => {
+      try { writer.destroy() } catch {}
+      reject(err)
+    })
+  })
+}
+
+function markAwaitConfirm(task, meta, fromQuality, toQuality, reason) {
+  const friendlyReason = formatUserError(reason, '音源取链失败，请稍后重试')
+  meta.downgradeOffer = {
+    fromQuality,
+    toQuality,
+    fromLabel: qualityLabel(fromQuality),
+    toLabel: qualityLabel(toQuality),
+    reason: friendlyReason,
+    reasonRaw: String(reason || '').slice(0, 300),
+    at: new Date().toISOString(),
+  }
+  const tip = `${qualityLabel(fromQuality)} 多次失败（${friendlyReason}），可改用 ${qualityLabel(toQuality)}`
+  getDB().prepare(`
+    UPDATE download_tasks SET status = 'await_confirm', error = ?, meta = ?, progress = 0 WHERE id = ?
+  `).run(tip, JSON.stringify(meta), task.id)
+  broadcast('download:status', {
+    id: task.id,
+    status: 'await_confirm',
+    error: tip,
+    quality: fromQuality,
+    name: task.name,
+    singer: task.singer,
+    downgradeOffer: meta.downgradeOffer,
+  })
+}
+
+function markError(taskId, message, meta) {
+  const friendly = formatUserError(message, '下载失败，请稍后重试')
+  if (meta) saveTaskMeta(taskId, meta)
+  getDB().prepare("UPDATE download_tasks SET status = 'error', error = ? WHERE id = ?").run(friendly, taskId)
+  broadcast('download:status', { id: taskId, status: 'error', error: friendly, downgradeOffer: null })
+}
+
 async function downloadTask(task, settings) {
   const abort = new AbortController()
   activeDownloads.set(task.id, { abort })
 
+  const meta = parseTaskMeta(task)
+  const source = meta.source || task.source
+  const quality = task.quality || '320k'
+  const musicInfo = buildMusicInfoFromTask(task, meta)
+  let lastError = null
+
   try {
-    const meta = JSON.parse(task.meta)
-    const source = meta.source || task.source
-    const quality = task.quality || '320k'
-    const musicInfo = buildMusicInfoFromTask(task, meta)
+    for (let attempt = 1; attempt <= SAME_QUALITY_ATTEMPTS; attempt++) {
+      // 任务可能已被暂停
+      const latest = getDB().prepare('SELECT status FROM download_tasks WHERE id = ?').get(task.id)
+      if (!latest || latest.status === 'paused') return
 
-    const urlResult = await requestSource(source, 'musicUrl', {
-      type: quality,
-      quality,
-      musicInfo,
-    })
+      try {
+        if (attempt > 1) {
+          broadcast('download:status', {
+            id: task.id,
+            status: 'downloading',
+            quality,
+            retryAttempt: attempt,
+            retryTotal: SAME_QUALITY_ATTEMPTS,
+          })
+          await sleep(RETRY_DELAY_MS * (attempt - 1))
+        }
 
-    const url = typeof urlResult === 'string' ? urlResult : urlResult?.url
-    if (!url) throw new Error(`获取 ${quality} 音质下载链接失败，请尝试其他音质`)
+        const url = await resolveDownloadUrl(source, quality, musicInfo)
+        const ext = guessExt(url, quality)
+        const fileName = buildFileName(settings['download.fileName'] || '{name} - {singer}', task, ext)
+        const savePath = getDownloadSavePath()
+        const groupDir = settings['download.isSavePathGroupByListName'] === 'true' && task.album
+          ? path.join(savePath, sanitize(task.album))
+          : savePath
+        fs.mkdirSync(groupDir, { recursive: true })
+        const filePath = path.join(groupDir, fileName)
 
-    const ext = guessExt(url, task.quality)
-    const fileName = buildFileName(settings['download.fileName'] || '{name} - {singer}', task, ext)
-    const savePath = getDownloadSavePath()
-    const groupDir = settings['download.isSavePathGroupByListName'] === 'true' && task.album ? path.join(savePath, sanitize(task.album)) : savePath
-    fs.mkdirSync(groupDir, { recursive: true })
+        if (settings['download.skipExistFile'] === 'true' && fs.existsSync(filePath)) {
+          getDB().prepare("UPDATE download_tasks SET status = 'completed', file_path = ?, progress = 1 WHERE id = ?")
+            .run(filePath, task.id)
+          broadcast('download:status', { id: task.id, status: 'completed', progress: 1, quality })
+          await writeMetaIfNeeded(task, meta, filePath, ext, settings)
+          return
+        }
 
-    const filePath = path.join(groupDir, fileName)
+        // 重试前清掉半截文件
+        try { if (fs.existsSync(filePath)) fs.unlinkSync(filePath) } catch {}
 
-    if (settings['download.skipExistFile'] === 'true' && fs.existsSync(filePath)) {
-      getDB().prepare("UPDATE download_tasks SET status = 'completed', file_path = ?, progress = 1 WHERE id = ?").run(filePath, task.id)
-      broadcast('download:status', { id: task.id, status: 'completed', progress: 1 })
-      await writeMetaIfNeeded(task, meta, filePath, ext, settings)
-      return
+        await streamToFile(url, filePath, task.id, abort)
+
+        getDB().prepare("UPDATE download_tasks SET status = 'completed', file_path = ?, progress = 1, error = NULL WHERE id = ?")
+          .run(filePath, task.id)
+        broadcast('download:status', { id: task.id, status: 'completed', progress: 1, filePath, quality })
+        await writeMetaIfNeeded(task, meta, filePath, ext, settings)
+        return
+      } catch (e) {
+        if (e.name === 'AbortError') return
+        lastError = e
+        const retryable = isRetryableDownloadError(e)
+        console.warn(`[下载] ${task.name} ${quality} 第 ${attempt}/${SAME_QUALITY_ATTEMPTS} 次失败: ${e.message}`)
+        if (!retryable || attempt >= SAME_QUALITY_ATTEMPTS) break
+      }
     }
 
-    const { default: needlePkg } = await import('needle')
-    const stream = needlePkg.get(url, { follow_max: 5, signal: abort.signal })
-    const writer = fs.createWriteStream(filePath)
-    let downloaded = 0
-    let total = 0
-
-    stream.on('header', (code, headers) => {
-      total = parseInt(headers['content-length']) || 0
-      getDB().prepare('UPDATE download_tasks SET total_size = ? WHERE id = ?').run(total, task.id)
-    })
-
-    await new Promise((resolve, reject) => {
-      stream.on('data', (chunk) => {
-        downloaded += chunk.length
-        writer.write(chunk)
-        const progress = total > 0 ? downloaded / total : 0
-        getDB().prepare('UPDATE download_tasks SET downloaded_size = ?, progress = ? WHERE id = ?').run(downloaded, progress, task.id)
-        broadcast('download:progress', { id: task.id, progress, downloaded, total })
-      })
-      stream.on('done', (err) => {
-        writer.end()
-        if (err) reject(err); else resolve()
-      })
-      stream.on('err', reject)
-    })
-
-    getDB().prepare("UPDATE download_tasks SET status = 'completed', file_path = ?, progress = 1 WHERE id = ?").run(filePath, task.id)
-    broadcast('download:status', { id: task.id, status: 'completed', progress: 1, filePath })
-
-    await writeMetaIfNeeded(task, meta, filePath, ext, settings)
+    const reason = lastError?.message || '下载失败'
+    const available = [
+      ...(Array.isArray(meta.qualitys) ? meta.qualitys : []),
+      ...(Array.isArray(meta.types) ? meta.types.map(t => t?.type || t).filter(Boolean) : []),
+    ]
+    const nextQuality = getNextLowerQuality(quality, available)
+    if (nextQuality) {
+      markAwaitConfirm(task, meta, quality, nextQuality, reason)
+      return
+    }
+    markError(task.id, reason, meta)
   } catch (e) {
     if (e.name === 'AbortError') return
-    getDB().prepare("UPDATE download_tasks SET status = 'error', error = ? WHERE id = ?").run(e.message, task.id)
-    broadcast('download:status', { id: task.id, status: 'error', error: e.message })
+    markError(task.id, e.message || '下载失败', meta)
   }
 }
 

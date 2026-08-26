@@ -6,12 +6,25 @@ is_docker_running() {
   docker_cmd inspect -f '{{.State.Running}}' "${CONTAINER_NAME}" 2>/dev/null | grep -qi true
 }
 
+# 开机后 Docker 可能尚未就绪；status/start 前短暂重试
+ensure_docker_ready() {
+  local i=0
+  while [ "${i}" -lt 12 ]; do
+    if init_docker_access 2>/dev/null; then
+      return 0
+    fi
+    sleep 1
+    i=$((i + 1))
+  done
+  init_docker_access 2>/dev/null
+}
+
 case $1 in
 start)
   save_accessible_paths
 
   # 飞牛「启用」前若 Docker 异常会弹「docker不可用」；此处再检一次并给出可操作提示
-  if ! init_docker_access 2>/dev/null; then
+  if ! ensure_docker_ready; then
     echo "Docker 当前不可用。请到飞牛「Docker」确认服务已启动，或 SSH 执行: systemctl restart docker ；然后重试启用。镜像已在本地时可: docker start lemon-music 或按 paths.conf 路径 docker run。" > "${TRIM_TEMP_LOGFILE}"
     exit 1
   fi
@@ -50,7 +63,7 @@ start)
     export IMAGE_PULL_TIMEOUT="${wizard_pull_timeout:-600}"
   fi
 
-  # 安装阶段已拉起容器时，直接视为启用成功
+  # 安装阶段已拉起 / 开机自启后已在跑：直接视为启用成功（同步应用中心「打开」状态）
   if is_container_running; then
     ensure_mounts_applied || true
     if is_container_running; then
@@ -81,6 +94,10 @@ stop)
   exit 0
   ;;
 status)
+  # 必须先 init_docker_access：否则无 sudo 时 inspect 失败，应用中心误显示「启用」
+  if ! ensure_docker_ready; then
+    exit 3
+  fi
   if ! is_docker_running; then
     exit 3
   fi

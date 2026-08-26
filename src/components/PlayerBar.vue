@@ -48,7 +48,9 @@
       </div>
       <div class="player-info">
         <span class="player-name">{{ currentPlaying ? `${cleanText(currentPlaying.name)} - ${formatArtists(currentPlaying.singer)}` : '未选择歌曲' }}</span>
-        <span class="player-lyric" :class="{ empty: currentPlaying && !currentLyricText }">{{ currentPlaying ? (currentLyricText || '暂无歌词') : '未知艺术家' }}</span>
+        <span class="player-lyric" :class="{ empty: currentPlaying && !currentLyricText && !playerError, error: !!playerError }">
+          {{ playerError || (currentPlaying ? (currentLyricText || '暂无歌词') : '未知艺术家') }}
+        </span>
         <span v-if="currentPlaying" class="player-time-mobile">{{ fmtTime(currentTime) }} / {{ fmtTime(displayDuration) }}</span>
       </div>
     </div>
@@ -72,7 +74,7 @@
       <button class="ctrl-btn ctrl-sub" @click="onPlayPrev" :disabled="!playQueue.length" title="上一曲">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><polygon points="19,20 9,12 19,4"/><line x1="5" y1="4" x2="5" y2="20" stroke="currentColor" stroke-width="2"/></svg>
       </button>
-      <button class="ctrl-btn ctrl-main" @click="currentPlaying ? togglePause() : null" :disabled="!currentPlaying" :title="isPaused ? '播放' : '暂停'">
+      <button class="ctrl-btn ctrl-main" @click="onMainPlayClick" :disabled="!currentPlaying" :title="isPaused ? '播放' : '暂停'">
         <svg v-if="!currentPlaying || isPaused" viewBox="0 0 24 24" width="20" height="20" fill="#fff"><polygon points="7,3 21,12 7,21"/></svg>
         <svg v-else viewBox="0 0 24 24" width="20" height="20" fill="#fff"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
       </button>
@@ -165,6 +167,7 @@
           </div>
           <button
             class="queue-play-btn"
+            :class="{ playing: i === currentQueueIndex && currentPlaying && !isPaused }"
             @click.stop="onQueuePlayClick(i)"
             :title="i === currentQueueIndex && currentPlaying && !isPaused ? '暂停' : '播放'"
           >
@@ -183,9 +186,9 @@
 import {
   currentPlaying, isPaused, currentTime, displayDuration, volume, isMuted,
   coverUrl, coverStyle, currentLyricText, visualizerEnabled, showFullscreenPlayer,
-  playQueue, currentQueueIndex, playMode, playModeLabel, showQueuePanel,
+  playQueue, currentQueueIndex, playMode, playModeLabel, showQueuePanel, playerError,
   togglePause, stopPlay, seekTo, setVolume, toggleMute, fmtTime, initPlayer,
-  playNext, playPrev, togglePlayMode,
+  playNext, playPrev, togglePlayMode, resumeOrTogglePause, unlockAudioFromGesture,
   removeFromQueue, clearQueue, playTrackAt, openFullscreenPlayer,
 } from '../stores/player.js'
 import { onMounted, onUnmounted, ref, computed, watch } from 'vue'
@@ -307,21 +310,35 @@ function onVolumeBtnClick() {
   toggleMute()
 }
 
+async function onMainPlayClick() {
+  if (!currentPlaying.value) return
+  unlockAudioFromGesture()
+  try {
+    await resumeOrTogglePause()
+  } catch (e) {
+    playerError.value = e?.message || '播放失败'
+  }
+}
+
 async function onPlayNext() {
-  try { await playNext() } catch {}
+  unlockAudioFromGesture()
+  try { await playNext() } catch (e) { playerError.value = e?.message || '播放失败' }
 }
 
 async function onPlayPrev() {
-  try { await playPrev() } catch {}
+  unlockAudioFromGesture()
+  try { await playPrev() } catch (e) { playerError.value = e?.message || '播放失败' }
 }
 
 async function onPlayAt(index) {
-  try { await playTrackAt(index) } catch {}
+  unlockAudioFromGesture()
+  try { await playTrackAt(index) } catch (e) { playerError.value = e?.message || '播放失败' }
 }
 
 async function onQueuePlayClick(index) {
+  unlockAudioFromGesture()
   if (index === currentQueueIndex.value && currentPlaying.value) {
-    togglePause()
+    try { await togglePause() } catch (e) { playerError.value = e?.message || '播放失败' }
     return
   }
   await onPlayAt(index)
@@ -468,6 +485,9 @@ async function onQueuePlayClick(index) {
   white-space: nowrap;
   line-height: 1.4;
 }
+.player-lyric.error {
+  color: var(--error, #ef4444);
+}
 
 .player-time-mobile {
   display: none;
@@ -499,6 +519,12 @@ async function onQueuePlayClick(index) {
   background: var(--accent);
   color: #fff;
 }
+.ctrl-main svg {
+  display: block;
+}
+.ctrl-main:has(polygon) svg {
+  margin-left: 2px;
+}
 .ctrl-main:hover:not(:disabled) { background: var(--accent-hover); transform: scale(1.05); }
 .ctrl-main:disabled { opacity: 0.35; cursor: default; transform: none; }
 .ctrl-sub, .ctrl-mode {
@@ -517,6 +543,9 @@ async function onQueuePlayClick(index) {
   background: transparent;
   border: 1px solid var(--border);
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 .ctrl-queue:hover, .ctrl-queue.active {
   color: var(--accent);
@@ -805,6 +834,12 @@ async function onQueuePlayClick(index) {
   justify-content: center;
   flex-shrink: 0;
   transition: all 0.15s;
+}
+.queue-play-btn svg {
+  display: block;
+}
+.queue-play-btn:not(.playing) svg {
+  margin-left: 2px;
 }
 .queue-play-btn:hover {
   color: var(--accent);

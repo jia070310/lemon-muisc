@@ -314,7 +314,7 @@ services:
   lemon-music:
     image: ${image}
     container_name: ${CONTAINER_NAME}
-    restart: unless-stopped
+    restart: always
     ports:
       - "7983:7983"
     volumes:
@@ -565,7 +565,7 @@ recreate_compose_stack() {
 
   if ! docker_cmd run -d \
       --name "${CONTAINER_NAME}" \
-      --restart unless-stopped \
+      --restart always \
       -p 7983:7983 \
       -v "${music}:/music" \
       -v "${downloads}:/downloads" \
@@ -601,7 +601,7 @@ recreate_compose_stack() {
 
   if docker_cmd run -d \
       --name "${CONTAINER_NAME}" \
-      --restart unless-stopped \
+      --restart always \
       -p 7983:7983 \
       -v "${music}:/music" \
       -v "${downloads}:/downloads" \
