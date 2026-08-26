@@ -75,7 +75,7 @@
         <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><polygon points="19,20 9,12 19,4"/><line x1="5" y1="4" x2="5" y2="20" stroke="currentColor" stroke-width="2"/></svg>
       </button>
       <button class="ctrl-btn ctrl-main" @click="onMainPlayClick" :disabled="!currentPlaying" :title="isPaused ? '播放' : '暂停'">
-        <svg v-if="!currentPlaying || isPaused" viewBox="0 0 24 24" width="20" height="20" fill="#fff"><polygon points="7,3 21,12 7,21"/></svg>
+        <svg v-if="!currentPlaying || isPaused" viewBox="0 0 24 24" width="20" height="20" fill="#fff"><polygon points="8,5 19,12 8,19"/></svg>
         <svg v-else viewBox="0 0 24 24" width="20" height="20" fill="#fff"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
       </button>
       <button class="ctrl-btn ctrl-sub" @click="onPlayNext" :disabled="!playQueue.length" title="下一曲">
@@ -521,9 +521,6 @@ async function onQueuePlayClick(index) {
 }
 .ctrl-main svg {
   display: block;
-}
-.ctrl-main:has(polygon) svg {
-  margin-left: 2px;
 }
 .ctrl-main:hover:not(:disabled) { background: var(--accent-hover); transform: scale(1.05); }
 .ctrl-main:disabled { opacity: 0.35; cursor: default; transform: none; }

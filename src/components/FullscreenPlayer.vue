@@ -85,7 +85,7 @@
               <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><polygon points="19,20 9,12 19,4"/><line x1="5" y1="4" x2="5" y2="20" stroke="currentColor" stroke-width="2"/></svg>
             </button>
             <button class="fs-btn fs-btn-main" type="button" :title="isPaused ? '播放' : '暂停'" @click="onMainPlay">
-              <svg v-if="isPaused" viewBox="0 0 24 24" width="28" height="28" fill="#fff"><polygon points="7,3 21,12 7,21"/></svg>
+              <svg v-if="isPaused" viewBox="0 0 24 24" width="28" height="28" fill="#fff"><polygon points="8,5 19,12 8,19"/></svg>
               <svg v-else viewBox="0 0 24 24" width="28" height="28" fill="#fff"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
             </button>
             <button class="fs-btn" type="button" title="下一曲" :disabled="!playQueue.length" @click="onNext">
