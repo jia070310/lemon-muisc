@@ -85,7 +85,7 @@ purge_app_data() {
 
   rm -rf "${TRIM_PKGVAR}/config" "${TRIM_PKGVAR}/log" \
     "${TRIM_PKGVAR}/music" "${TRIM_PKGVAR}/downloads"
-  rm -f "${TRIM_PKGVAR}/accessible_paths" "${TRIM_PKGVAR}/install.status"
+  rm -f "${TRIM_PKGVAR}/accessible_paths" "${TRIM_PKGVAR}/install.status" "${TRIM_PKGVAR}/.enabled"
   rm -rf "${TRIM_PKGETC}"
 
   keep="$(app_keep_dir)"

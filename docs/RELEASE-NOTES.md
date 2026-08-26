@@ -1,3 +1,38 @@
+# 柠檬音乐下载 v1.0.18
+
+## 更新内容
+
+### 飞牛开机自动启用
+
+- 修复开机时 Docker 尚未就绪，自动启用失败并变成「未启用」的问题
+- 启用阶段等待 Docker 就绪最长约 2 分钟（退避重试）
+- 成功启用后写入标记：Docker 短暂不可用时 `status` 不再误报未启用
+- 容器启动失败时短重试，降低 Docker 刚起来时的偶发失败
+
+**本次以 FPK 脚本修复为主**：请手动安装新 FPK；镜像无功能性必更，覆盖安装后选「跳过拉取」即可。
+
+## 安装 / 更新
+
+应用中心：**手动安装** 对应架构的 FPK  
+（勿点卡片「更新」；覆盖安装即可）
+
+- x86 设备：`lemon-music-1.0.18-x86.fpk`
+- ARM 设备：`lemon-music-1.0.18-arm.fpk`
+
+```bash
+# 可选：已有最新镜像可跳过；需要时可拉 latest
+docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest
+docker tag ghcr.1ms.run/jia070310/lemon-muisc:latest lemon-music:latest
+```
+
+## Docker 镜像
+
+- `ghcr.io/jia070310/lemon-muisc:latest`
+- `ghcr.io/jia070310/lemon-muisc:1.0.18`
+- 国内加速：`ghcr.1ms.run/jia070310/lemon-muisc:1.0.18`
+
+---
+
 # 柠檬音乐下载 v1.0.17
 
 ## 更新内容

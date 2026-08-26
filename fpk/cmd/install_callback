@@ -111,6 +111,8 @@ if any_lemon_image_in_docker_list >/dev/null 2>&1 \
   || resolve_local_image_name "$(get_compose_image)" >/dev/null 2>&1; then
   if init_docker_access 2>/dev/null && recreate_compose_stack; then
     log_line "安装阶段已启动容器 ${CONTAINER_NAME}"
+    mkdir -p "${TRIM_PKGVAR}" 2>/dev/null || true
+    date -Iseconds > "${TRIM_PKGVAR}/.enabled" 2>/dev/null || true
     update_install_ui "【安装完成】镜像与容器已就绪。
 可直接访问 http://<NAS_IP>:7983
 若应用中心仍显示未启用，可再点一次「启用」（忽略偶发「docker不可用」亦可）"

@@ -3,8 +3,8 @@
   "title": "柠檬音乐下载",
   "displayName": "柠檬音乐下载",
   "appTitle": "Lemon Music",
-  "description": "音乐搜索、试听、下载与标签管理。安装向导可填目录；卸载时可选择保留或删除应用配置。",
-  "version": "1.0.17",
+  "description": "音乐搜索、试听、下载与标签管理。安装向导可填目录；卸载时可选择保留或删除应用配置�?,
+  "version": "1.0.18",
   "author": "jia070310",
   "icon": "icon.png",
   "type": "docker",
@@ -16,7 +16,7 @@
       { "container": 7983, "host": 7983, "protocol": "tcp", "description": "Web UI" }
     ],
     "volumes": [
-      { "container": "/music", "host": "/vol1/music", "description": "音乐库目录（扫描/管理）" },
+      { "container": "/music", "host": "/vol1/music", "description": "音乐库目录（扫描/管理�? },
       { "container": "/downloads", "host": "/vol1/music-downloads", "description": "下载保存目录" },
       { "container": "/config", "host": "/vol1/.apps/lemon-music/config", "description": "配置目录" }
     ],
