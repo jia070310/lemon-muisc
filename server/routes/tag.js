@@ -131,7 +131,7 @@ tagRouter.post('/scan', async (req, res) => {
     const probe = probeDir(dirPath)
     if (!probe.readable) {
       return res.status(400).json({
-        error: `目录不可读：${dirPath}（${probe.error || '权限不足'}）。请检查飞牛访问权限与 Docker 挂载。`,
+        error: `目录不可读：${dirPath}（${probe.error || '权限不足'}）。请检查飞牛访问权限与路径设置。`,
         probe,
       })
     }
@@ -162,9 +162,9 @@ tagRouter.post('/scan', async (req, res) => {
     if (!results.length) {
       if (probe.entryCount === 0) {
         if (dirPath === '/downloads') {
-          tip = `容器内 /downloads 是空目录。若这是下载保存位置属正常；请改点左侧 /music 扫描音乐库。若 /music 也为空，请到「运行设置」重新保存并启用/重启应用。`
+          tip = `下载目录是空的。若这是下载保存位置属正常；请改点左侧音乐库目录扫描。若音乐库也为空，请到「运行设置」重新保存路径。`
         } else {
-          tip = `容器内 ${dirPath} 是空目录，挂载可能未生效。请：1) 应用设置→运行设置→重新保存；2) 停用再启用应用；3) SSH：docker inspect lemon-music --format "{{range .Mounts}}{{.Destination}}={{.Source}}{{\"\\n\"}}{{end}}"`
+          tip = `目录 ${dirPath} 是空的。请确认路径正确，或到应用设置 → 运行设置 / 访问权限重新授权后保存。`
         }
       } else {
         tip = `目录可读（共 ${probe.entryCount} 项），但未发现支持的音频（mp3/flac/wav/m4a 等）。样例：${probe.sampleNames.join(', ') || '无'}`

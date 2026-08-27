@@ -149,12 +149,6 @@ npm run fpk:build
 
 ---
 
-## 可选：Docker 自托管
-
-非飞牛环境仍可用 Compose 自行部署，见 [docs/docker-compose.md](docs/docker-compose.md)。飞牛商店版本请使用原生 FPK，不要再依赖 Docker。
-
----
-
 ## 常用脚本
 
 | 命令 | 说明 |

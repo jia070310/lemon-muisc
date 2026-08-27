@@ -57,12 +57,15 @@ restore_app_data() {
 }
 
 remove_app_images() {
-  init_docker_access 2>/dev/null || true
-  docker_cmd images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null \
+  # 原生版不再使用 Docker 镜像；升级用户若残留旧镜像，尽量清理
+  if ! command -v docker >/dev/null 2>&1; then
+    return 0
+  fi
+  docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null \
     | grep -E '(^|/)lemon-muisc:|(^|/)lemon-music:' \
     | while read -r img; do
         [ -z "${img}" ] && continue
-        docker_cmd rmi -f "${img}" >/dev/null 2>&1 || true
+        docker rmi -f "${img}" >/dev/null 2>&1 || true
       done
 }
 

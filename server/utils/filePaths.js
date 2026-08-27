@@ -354,7 +354,7 @@ export function addFilePath(dirPath, { fromPicker = false } = {}) {
     throw new Error(
       isNativeHostMode()
         ? `目录不存在：${p}。请填写 NAS 绝对路径，例如 ${musicRoot || '/vol1/1000/Music'}。`
-        : `目录不存在：${p}。Docker/FPK 环境下只能添加“容器内可见”的路径。建议添加 ${musicRoot} 或其子目录。`
+        : `目录不存在：${p}。请填写 NAS 绝对路径，例如 ${musicRoot || '/vol1/1000/Music'}。`
     )
   }
   if (fromPicker && !fs.existsSync(p) && !isAuthorizedPath(p) && !isAuthorizedPath(raw)) {

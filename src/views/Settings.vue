@@ -22,11 +22,11 @@
         <div v-else class="config-summary card-inner">
           <div class="block-label">已配置的数据目录</div>
           <div class="summary-row">
-            <span class="summary-key">{{ isNativeMode ? '音乐库' : '音乐库 → /music' }}</span>
+            <span class="summary-key">音乐库</span>
             <code class="summary-val">{{ mountInfo?.music?.host || '未设置' }}</code>
           </div>
           <div class="summary-row">
-            <span class="summary-key">{{ isNativeMode ? '下载' : '下载 → /downloads' }}</span>
+            <span class="summary-key">下载</span>
             <code class="summary-val">{{ mountInfo?.downloads?.host || '未设置' }}</code>
           </div>
           <div class="summary-row" v-if="mountProbeText">
@@ -39,9 +39,7 @@
           <div class="setting-item-info">
             <div class="setting-item-label">音乐文件夹</div>
             <div class="setting-item-desc">
-              扫描音乐时使用的目录。
-              <template v-if="isNativeMode">请使用 NAS 绝对路径（如 <code>/vol1/1000/Music</code>），同一物理目录只会保留一条。</template>
-              <template v-else>Docker 环境下请使用 <code>/music</code> 或其子目录。</template>
+              扫描音乐时使用的目录。请使用 NAS 绝对路径（如 <code>/vol1/1000/Music</code>），同一物理目录只会保留一条。
               {{ fnosAvailable ? '点击「选择文件夹」会调用系统文件管理器。' : '' }}
             </div>
           </div>
@@ -75,7 +73,7 @@
         <div v-else class="empty-hint">暂无文件夹，请添加或选择路径</div>
 
         <div v-if="!fnosAvailable" class="path-manual">
-          <input v-model="newPath" placeholder="手动输入容器内路径，如 /music 或 /music/子目录" class="path-input" @keydown.enter="addPath" />
+          <input v-model="newPath" placeholder="手动输入绝对路径，如 /vol1/1000/Music" class="path-input" @keydown.enter="addPath" />
           <button class="btn-primary btn-sm" @click="addPath">添加</button>
         </div>
       </div>
@@ -247,7 +245,7 @@ const importUrl = ref('')
 const importingUrl = ref(false)
 const filePaths = ref([])
 const downloadPath = ref('')
-const newPath = ref('/music')
+const newPath = ref('')
 const editingPath = ref('')
 const editPathValue = ref('')
 const fnosAvailable = ref(false)
@@ -297,7 +295,6 @@ const lrcToggleItems = [
 ]
 
 const currentTab = computed(() => tabs.find(t => t.id === activeTab.value) || tabs[0])
-const isNativeMode = computed(() => Boolean(mountInfo.value?.native))
 
 watch(currentTheme, (v) => {
   settings[THEME_KEY] = v
@@ -332,11 +329,9 @@ async function loadPaths() {
     needsPathSetup.value = Boolean(res.setup?.needsPathConfig)
     mountInfo.value = res.setup?.mountInfo || null
     const mp = res.setup?.musicProbe
-    const musicLabel = res.setup?.native ? '音乐库' : '/music'
+    const musicLabel = '音乐库'
     if (res.setup?.mountLooksEmpty) {
-      mountProbeText.value = res.setup?.native
-        ? '警告：音乐库目录是空的。请到「运行设置」确认路径并停用后重新启用。'
-        : '警告：容器内 /music 是空的，挂载可能未生效。请到「运行设置」重新保存并重启应用。'
+      mountProbeText.value = '警告：音乐库目录是空的。请到「运行设置」确认路径并停用后重新启用。'
     } else if (mp?.readable) {
       mountProbeText.value = `探测 ${musicLabel}：共 ${mp.entryCount} 项，音频 ${mp.audioCount} 个`
     } else if (mp?.error) {

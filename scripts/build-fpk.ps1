@@ -1,5 +1,5 @@
-# Feiniu FPK build — native (no Docker runtime)
-# Small package: dist + server + package.json only (npm on device / store Node.js v22)
+# Feiniu FPK build — native app (store Node.js v22)
+# Small package: dist + server + package.json only
 # Set -BundleNodeModules to also pack linux node_modules (much larger)
 
 param(
@@ -11,9 +11,6 @@ $Root = Split-Path -Parent $PSScriptRoot
 $FpkDir = Join-Path $Root "fpk"
 $AppBundle = Join-Path $FpkDir "app\bundle"
 $ManifestPath = Join-Path $FpkDir "manifest"
-$TarPath = Join-Path $Root "fpk\app\docker\images\lemon-music.tar"
-
-if (Test-Path $TarPath) { Remove-Item -Force $TarPath -ErrorAction SilentlyContinue }
 
 $fnpackPath = $null
 if (Get-Command fnpack -ErrorAction SilentlyContinue) {
