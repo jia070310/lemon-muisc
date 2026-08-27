@@ -63,8 +63,12 @@ aboutRouter.get('/', async (_req, res) => {
   res.json({
     name: 'Lemon Music',
     displayName: '柠檬音乐下载',
-    description: '音乐搜索、试听、下载与标签管理工具，适用于飞牛 NAS。兼容落雪音乐音源，支持同时激活多个音源。',
-    features: ['音乐搜索、试听、下载与标签管理', '支持同时激活多个落雪兼容音源', '适用于飞牛 NAS 部署'],
+    description: '音乐搜索、试听、下载与标签管理工具，适用于飞牛 NAS。兼容落雪音乐音源，支持同时激活多个音源与多选批量下载（某首没有所选音质时自动降到可用档位再入队）。',
+    features: [
+      '音乐搜索、试听、下载与标签管理',
+      '支持同时激活多个落雪兼容音源；多选批量下载（无对应音质时自动降档入队）',
+      '适用于飞牛 NAS 部署',
+    ],
     repoUrl: REPO_URL,
     currentVersion,
     latestVersion,

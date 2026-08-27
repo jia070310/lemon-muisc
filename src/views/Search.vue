@@ -1,7 +1,7 @@
 <template>
   <div class="search-page">
     <div class="page-title">搜索</div>
-    <div class="page-subtitle">搜索歌曲并试听、下载</div>
+    <div class="page-subtitle">搜索歌曲并试听、下载；可多选后批量下载（所选音质若某首不支持，将自动降到该曲可用档位）</div>
 
     <div class="search-header card">
       <div class="search-row">
@@ -30,13 +30,37 @@
 
     <div class="results card" v-if="searchState.results.length">
       <div class="results-toolbar">
-        <span class="results-count">共 {{ searchState.results.length }} 首</span>
+        <span class="results-count">
+          共 {{ searchState.results.length }} 首
+          <template v-if="selectedCount"> · 已选 {{ selectedCount }}</template>
+        </span>
         <div class="results-actions">
+          <div class="dl-wrap batch-dl-wrap">
+            <button
+              class="btn-primary btn-sm"
+              :disabled="!selectedCount || batchDownloading"
+              @click.stop="toggleBatchQualityMenu"
+            >
+              {{ batchDownloading ? '添加中...' : `批量下载${selectedCount ? ` (${selectedCount})` : ''}` }}
+            </button>
+            <div class="quality-menu" v-if="showBatchQualityMenu" @click.stop>
+              <div class="quality-menu-title">批量音质：某首没有该音质时，自动降到其可用档位后再入队</div>
+              <button
+                v-for="q in batchQualities"
+                :key="q"
+                class="quality-option"
+                @click="downloadSelected(q)"
+              >{{ getQualityLabel(q) }}</button>
+            </div>
+          </div>
           <button class="btn-ghost btn-sm" @click="addAllToQueue">全部加入列表</button>
           <button class="btn-primary btn-sm" @click="playAll">播放全部</button>
         </div>
       </div>
       <div class="result-header">
+        <span class="col-check">
+          <input type="checkbox" :checked="allSelected" :indeterminate.prop="someSelected && !allSelected" @change="toggleSelectAll" title="全选" />
+        </span>
         <span class="col-index">#</span>
         <span class="col-name">歌曲</span>
         <span class="col-singer">歌手</span>
@@ -47,10 +71,13 @@
         <span class="col-action">操作</span>
       </div>
       <div
-        v-for="(item, i) in searchState.results" :key="item.id || i"
+        v-for="(item, i) in searchState.results" :key="trackSelectKey(item, i)"
         class="result-row"
-        :class="{ playing: isPlayingItem(item) }"
+        :class="{ playing: isPlayingItem(item), selected: isSelected(item, i) }"
       >
+        <span class="col-check" @click.stop>
+          <input type="checkbox" :checked="isSelected(item, i)" @change="toggleSelect(item, i)" />
+        </span>
         <span class="col-index">{{ i + 1 }}</span>
         <span class="col-name" :title="cleanText(item.name)">{{ cleanText(item.name) }}</span>
         <span class="col-singer" :title="formatArtists(item.singer)">{{ formatArtists(item.singer) }}</span>
@@ -76,10 +103,10 @@
         </span>
         <span class="col-action">
           <div class="dl-wrap">
-            <button class="dl-btn" @click.stop="toggleQualityMenu(item)" title="下载">
+            <button class="dl-btn" @click.stop="toggleQualityMenu(item, i)" title="下载">
               <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             </button>
-            <div class="quality-menu" v-if="qualityMenuId === item.id" @click.stop>
+            <div class="quality-menu" v-if="qualityMenuId === trackSelectKey(item, i)" @click.stop>
               <div class="quality-menu-title">选择音质</div>
               <template v-if="getItemQualities(item).length">
                 <button
@@ -109,36 +136,83 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { api } from '../api.js'
 import { searchState, loadSearchSources } from '../stores/search.js'
 import { loadingPlay, isPaused, isPlayingItem, playItem, addToQueue, isInQueue } from '../stores/player.js'
-import { sortQualities, getQualityLabel, getQualityDisplay } from '../utils/quality.js'
+import { getQualityLabel, getQualityDisplay } from '../utils/quality.js'
 import { cleanText, formatArtists, cleanTrackItem } from '../utils/text.js'
+import {
+  getItemQualities,
+  getBatchQualities,
+  trackSelectKey,
+  buildDownloadTask,
+} from '../utils/musicPayload.js'
 
 const toast = ref(null)
 const qualityMenuId = ref(null)
+const showBatchQualityMenu = ref(false)
+const batchDownloading = ref(false)
+const selectedKeys = ref(new Set())
+
+const selectedCount = computed(() => selectedKeys.value.size)
+const allSelected = computed(() =>
+  searchState.results.length > 0 && searchState.results.every((item, i) => selectedKeys.value.has(trackSelectKey(item, i)))
+)
+const someSelected = computed(() => selectedCount.value > 0)
+const selectedItems = computed(() =>
+  searchState.results.filter((item, i) => selectedKeys.value.has(trackSelectKey(item, i)))
+)
+const batchQualities = computed(() => getBatchQualities(selectedItems.value))
 
 onMounted(async () => {
   await loadSearchSources(api)
-  document.addEventListener('click', closeQualityMenu)
+  document.addEventListener('click', closeMenus)
 })
 
 onUnmounted(() => {
-  document.removeEventListener('click', closeQualityMenu)
+  document.removeEventListener('click', closeMenus)
 })
 
-function getItemQualities(item) {
-  const list = item.qualitys || item.types?.map(t => t.type) || item.meta?.qualitys || []
-  return sortQualities(list)
+function isSelected(item, i) {
+  return selectedKeys.value.has(trackSelectKey(item, i))
 }
 
-function toggleQualityMenu(item) {
-  qualityMenuId.value = qualityMenuId.value === item.id ? null : item.id
+function toggleSelect(item, i) {
+  const key = trackSelectKey(item, i)
+  const next = new Set(selectedKeys.value)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  selectedKeys.value = next
 }
 
-function closeQualityMenu() {
+function toggleSelectAll() {
+  if (allSelected.value) {
+    selectedKeys.value = new Set()
+    return
+  }
+  selectedKeys.value = new Set(searchState.results.map((item, i) => trackSelectKey(item, i)))
+}
+
+function clearSelection() {
+  selectedKeys.value = new Set()
+}
+
+function toggleQualityMenu(item, i) {
+  showBatchQualityMenu.value = false
+  const key = trackSelectKey(item, i)
+  qualityMenuId.value = qualityMenuId.value === key ? null : key
+}
+
+function toggleBatchQualityMenu() {
+  if (!selectedCount.value) return
   qualityMenuId.value = null
+  showBatchQualityMenu.value = !showBatchQualityMenu.value
+}
+
+function closeMenus() {
+  qualityMenuId.value = null
+  showBatchQualityMenu.value = false
 }
 
 async function togglePlay(item) {
@@ -186,6 +260,8 @@ async function doSearch() {
   if (!searchState.keyword.trim() || !searchState.activeSource) return
   searchState.loading = true
   searchState.searched = true
+  clearSelection()
+  closeMenus()
   try {
     const res = await api.search.search(searchState.keyword, searchState.activeSource, searchState.page)
     const data = res.data
@@ -207,37 +283,29 @@ async function doSearch() {
 }
 
 async function downloadOne(item, quality) {
-  closeQualityMenu()
+  closeMenus()
   try {
-    await api.download.add([{
-      name: item.name,
-      singer: item.singer,
-      source: item.source || searchState.activeSource,
-      album: item.album || item.albumName || '',
-      interval: item.interval || '',
-      quality,
-      songId: item.songId ?? item.songmid ?? item.hash ?? item.copyrightId ?? item.id,
-      hash: item.hash || '',
-      songmid: item.songmid || '',
-      strMediaMid: item.strMediaMid || '',
-      copyrightId: item.copyrightId || '',
-      albumAudioId: item.albumAudioId || '',
-      duration: item.duration || '',
-      musicId: item.musicId || '',
-      rid: item.rid || '',
-      dcTargetId: item.dcTargetId || '',
-      albumId: item.albumId || item.albumMid || item.albummid || '',
-      albumMid: item.albumMid || item.albummid || '',
-      albummid: item.albummid || item.albumMid || item.albumId || '',
-      id: item.id,
-      img: item.img || item.picUrl || item.meta?.picUrl || '',
-      picUrl: item.picUrl || item.img || item.meta?.picUrl || '',
-      types: item.types || [],
-      qualitys: item.qualitys || item.types?.map(t => t.type) || item.meta?.qualitys || [],
-    }])
+    await api.download.add([buildDownloadTask(item, searchState.activeSource, quality)])
     showToast(`已添加下载: ${item.name} (${getQualityLabel(quality, item.types)})`, 'success')
   } catch (e) {
     showToast(e.message, 'error')
+  }
+}
+
+async function downloadSelected(quality) {
+  const items = selectedItems.value
+  if (!items.length) return
+  closeMenus()
+  batchDownloading.value = true
+  try {
+    const tasks = items.map(item => buildDownloadTask(item, searchState.activeSource, quality))
+    await api.download.add(tasks)
+    showToast(`已添加 ${tasks.length} 首到下载队列（${getQualityLabel(quality)}）`, 'success')
+    clearSelection()
+  } catch (e) {
+    showToast(e.message, 'error')
+  } finally {
+    batchDownloading.value = false
   }
 }
 
@@ -322,11 +390,12 @@ function showToast(text, type = 'info') {
   background: var(--bg-elevated);
 }
 .results-count { font-size: 13px; color: var(--text-muted); }
-.results-actions { display: flex; gap: 8px; }
+.results-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.batch-dl-wrap { display: inline-block; }
 
 .result-header, .result-row {
   display: grid;
-  grid-template-columns: 48px minmax(180px, 2.2fr) minmax(120px, 1fr) minmax(120px, 1fr) 64px 44px 44px 44px;
+  grid-template-columns: 36px 48px minmax(180px, 2.2fr) minmax(120px, 1fr) minmax(120px, 1fr) 64px 44px 44px 44px;
   align-items: center;
   padding: 10px 16px;
   gap: 10px;
@@ -345,6 +414,19 @@ function showToast(text, type = 'info') {
 .result-row:last-child { border-bottom: none; }
 .result-row:hover { background: var(--bg-hover); }
 .result-row.playing { background: var(--accent-muted); }
+.result-row.selected { background: rgba(60, 110, 247, 0.08); }
+
+.col-check {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.col-check input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
 
 .col-name, .col-singer, .col-album {
   overflow: hidden;
@@ -411,7 +493,7 @@ function showToast(text, type = 'info') {
   position: absolute;
   right: 0;
   top: calc(100% + 6px);
-  min-width: 140px;
+  min-width: 160px;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -419,6 +501,7 @@ function showToast(text, type = 'info') {
   z-index: 20;
   overflow: hidden;
 }
+.batch-dl-wrap .quality-menu { left: 0; right: auto; }
 .quality-menu-title {
   padding: 8px 12px;
   font-size: 11px;
@@ -482,7 +565,7 @@ function showToast(text, type = 'info') {
     padding: 0 12px;
   }
   .search-input {
-    font-size: 16px; /* avoid iOS zoom on focus */
+    font-size: 16px;
   }
   .search-btn {
     height: 44px;
@@ -494,15 +577,16 @@ function showToast(text, type = 'info') {
   .result-header { display: none; }
 
   .result-row {
-    grid-template-columns: 1fr 36px 36px 36px;
+    grid-template-columns: 28px 1fr 36px 36px 36px;
     grid-template-areas:
-      "name play queue action"
-      "meta play queue action";
+      "check name play queue action"
+      "check meta play queue action";
     gap: 2px 8px;
     padding: 12px 14px;
     align-items: center;
   }
   .col-index, .col-album, .col-duration { display: none; }
+  .col-check { grid-area: check; }
   .col-name {
     grid-area: name;
     white-space: normal;
@@ -526,6 +610,8 @@ function showToast(text, type = 'info') {
     gap: 8px;
   }
   .results-actions .btn-sm { flex: 1; }
+  .batch-dl-wrap { flex: 1 1 100%; }
+  .batch-dl-wrap .btn-sm { width: 100%; }
 
   .toast {
     left: 12px;
