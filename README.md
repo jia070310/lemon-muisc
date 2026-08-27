@@ -6,7 +6,7 @@
 飞牛应用中心显示名：**柠檬音乐**（浏览器标题仍为「柠檬音乐下载」）  
 仓库：[https://github.com/jia070310/lemon-muisc](https://github.com/jia070310/lemon-muisc)
 
-飞牛 FPK 为**独立原生应用**，不依赖 Docker。运行时使用应用中心 **Node.js v22**。
+飞牛 FPK 为**独立原生应用**，不再依赖 Docker。运行时使用应用中心 **Node.js v22**。
 
 ---
 
