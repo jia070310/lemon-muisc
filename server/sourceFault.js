@@ -1,5 +1,6 @@
 import { getDB } from './db.js'
-import { unloadSource, getActiveSource } from './sourceManager.js'
+import { unloadSource, getActiveSources } from './sourceManager.js'
+import { removeActiveSourceId } from './utils/activeSources.js'
 import { broadcast } from './ws.js'
 import { formatUserError } from './utils/userError.js'
 
@@ -47,11 +48,9 @@ export function recordSourceFault(sourceId, error) {
   const message = formatUserError(error, error?.message || String(error) || '音源运行出错')
   const row = getDB().prepare('SELECT id, name, homepage FROM user_apis WHERE id = ?').get(sourceId)
 
-  unloadSource()
-  getDB().prepare(`
-    INSERT INTO settings (key, value) VALUES ('source.active', '')
-    ON CONFLICT(key) DO UPDATE SET value = excluded.value
-  `).run()
+  // 仅停用故障音源，保留其他已激活音源
+  unloadSource(sourceId)
+  removeActiveSourceId(sourceId)
 
   const fault = {
     id: sourceId,
@@ -66,20 +65,25 @@ export function recordSourceFault(sourceId, error) {
     ON CONFLICT(key) DO UPDATE SET value = excluded.value
   `).run(FAULT_KEY, JSON.stringify(fault))
 
-  console.error(`[音源故障] ${fault.name}: ${message}（已自动停用，应用继续运行）`)
+  console.error(`[音源故障] ${fault.name}: ${message}（已自动停用该音源，其他音源继续可用）`)
   broadcast('source.fault', fault)
   return fault
 }
 
 /** 音源运行时未捕获错误：隔离音源，避免拖垮主进程 */
 export function handleRuntimeSourceFault(error) {
-  const active = getActiveSource()
-  if (!active?.id) return false
+  const actives = getActiveSources()
+  if (!actives.length) return false
   if (!shouldRecordSourceFault(error)) {
     console.warn(`[音源] 未捕获的临时网络错误（不停用音源）: ${error?.message || error}`)
     return true
   }
-  recordSourceFault(active.id, error)
+  if (actives.length === 1) {
+    recordSourceFault(actives[0].id, error)
+    return true
+  }
+  // 多个音源同时激活时无法判定来源，不停用全部
+  console.error(`[音源] 未捕获错误（多音源已激活，未自动停用）:`, error?.message || error)
   return true
 }
 

@@ -1,7 +1,21 @@
 import { Router } from 'express'
 import multer from 'multer'
 import { getDB } from '../db.js'
-import { loadSource, unloadSource, getActiveSource, requestSource } from '../sourceManager.js'
+import {
+  loadSource,
+  unloadSource,
+  getActiveSource,
+  getActiveSources,
+  getActiveSourceIds,
+  getMergedSources,
+  requestSource,
+} from '../sourceManager.js'
+import {
+  getStoredActiveSourceIds,
+  addActiveSourceId,
+  removeActiveSourceId,
+  saveActiveSourceIds,
+} from '../utils/activeSources.js'
 import { getSourceFault, clearSourceFault, recordSourceFault } from '../sourceFault.js'
 import { parseScriptMeta, metaToDbFields } from '../utils/parseScriptMeta.js'
 
@@ -30,8 +44,13 @@ async function fetchScriptFromUrl(url) {
 
 sourceRouter.get('/list', (_req, res) => {
   refreshStoredSourceMeta()
+  const activeIds = new Set(getActiveSourceIds().length ? getActiveSourceIds() : getStoredActiveSourceIds())
   const rows = getDB().prepare('SELECT id, name, description, author, version, homepage, sources FROM user_apis').all()
-  res.json(rows.map(r => ({ ...r, sources: JSON.parse(r.sources) })))
+  res.json(rows.map(r => ({
+    ...r,
+    sources: JSON.parse(r.sources),
+    active: activeIds.has(r.id),
+  })))
 })
 
 sourceRouter.post('/import', upload.single('file'), (req, res) => {
@@ -60,8 +79,8 @@ sourceRouter.post('/import-url', async (req, res) => {
 })
 
 sourceRouter.delete('/:id', (req, res) => {
-  const active = getDB().prepare("SELECT value FROM settings WHERE key = 'source.active'").get()
-  if (active?.value === req.params.id) unloadSource()
+  unloadSource(req.params.id)
+  removeActiveSourceId(req.params.id)
   getDB().prepare('DELETE FROM user_apis WHERE id = ?').run(req.params.id)
   const fault = getSourceFault()
   if (fault?.id === req.params.id) clearSourceFault()
@@ -84,12 +103,9 @@ sourceRouter.post('/fault/delete', (_req, res) => {
       clearSourceFault()
       return res.json({ ok: true })
     }
-    if (getActiveSource()?.id === fault.id) unloadSource()
+    unloadSource(fault.id)
+    removeActiveSourceId(fault.id)
     getDB().prepare('DELETE FROM user_apis WHERE id = ?').run(fault.id)
-    getDB().prepare(`
-      INSERT INTO settings (key, value) VALUES ('source.active', '')
-      ON CONFLICT(key) DO UPDATE SET value = excluded.value
-    `).run()
     clearSourceFault()
     res.json({ ok: true, deletedId: fault.id })
   } catch (e) {
@@ -106,12 +122,9 @@ sourceRouter.post('/fault/reimport', async (_req, res) => {
     const script = row?.script
     const homepage = row?.homepage || fault.homepage
 
-    if (getActiveSource()?.id === fault.id) unloadSource()
+    unloadSource(fault.id)
+    removeActiveSourceId(fault.id)
     getDB().prepare('DELETE FROM user_apis WHERE id = ?').run(fault.id)
-    getDB().prepare(`
-      INSERT INTO settings (key, value) VALUES ('source.active', '')
-      ON CONFLICT(key) DO UPDATE SET value = excluded.value
-    `).run()
     clearSourceFault()
 
     if (homepage && /^https?:\/\//i.test(homepage)) {
@@ -161,13 +174,21 @@ sourceRouter.post('/activate/:id', async (req, res) => {
     })
 
     const sources = await loadSource(row.id, row.script)
-    getDB().prepare("INSERT INTO settings (key, value) VALUES ('source.active', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(row.id)
+    const ids = addActiveSourceId(row.id)
     getDB().prepare(`
       UPDATE user_apis SET name = ?, description = ?, author = ?, version = ?, homepage = ?, sources = ? WHERE id = ?
     `).run(fields.name, fields.description, fields.author, fields.version, fields.homepage, JSON.stringify(sources), row.id)
 
-    clearSourceFault()
-    res.json({ ok: true, sources, name: fields.name })
+    const fault = getSourceFault()
+    if (fault?.id === row.id) clearSourceFault()
+
+    res.json({
+      ok: true,
+      sources,
+      name: fields.name,
+      activeIds: ids,
+      mergedSources: getMergedSources(),
+    })
   } catch (e) {
     const { formatUserError } = await import('../utils/userError.js')
     const msg = formatUserError(e, '音源激活失败，请稍后重试')
@@ -179,15 +200,32 @@ sourceRouter.post('/activate/:id', async (req, res) => {
   }
 })
 
+sourceRouter.post('/deactivate/:id', (req, res) => {
+  unloadSource(req.params.id)
+  const ids = removeActiveSourceId(req.params.id)
+  res.json({ ok: true, activeIds: ids })
+})
+
 sourceRouter.post('/deactivate', (_req, res) => {
   unloadSource()
-  getDB().prepare("INSERT INTO settings (key, value) VALUES ('source.active', '') ON CONFLICT(key) DO UPDATE SET value = ''").run()
-  res.json({ ok: true })
+  saveActiveSourceIds([])
+  res.json({ ok: true, activeIds: [] })
 })
 
 sourceRouter.get('/active', (_req, res) => {
-  const active = getActiveSource()
-  res.json(active ? { id: active.id, sources: active.sources } : null)
+  const list = getActiveSources().map(s => ({ id: s.id, sources: s.sources }))
+  const ids = getActiveSourceIds()
+  if (!list.length) {
+    return res.json({ id: null, ids: [], sources: {}, list: [] })
+  }
+  // 兼容旧前端：保留 id / sources 字段（取最近激活）
+  const latest = getActiveSource()
+  res.json({
+    id: latest?.id || ids[ids.length - 1] || null,
+    ids,
+    sources: getMergedSources(),
+    list,
+  })
 })
 
 sourceRouter.post('/request', async (req, res) => {
@@ -224,8 +262,13 @@ export function refreshStoredSourceMeta() {
 sourceRouter.post('/refresh-meta', (_req, res) => {
   try {
     refreshStoredSourceMeta()
+    const activeIds = new Set(getActiveSourceIds().length ? getActiveSourceIds() : getStoredActiveSourceIds())
     const rows = getDB().prepare('SELECT id, name, description, author, version, homepage, sources FROM user_apis').all()
-    res.json(rows.map(r => ({ ...r, sources: JSON.parse(r.sources) })))
+    res.json(rows.map(r => ({
+      ...r,
+      sources: JSON.parse(r.sources),
+      active: activeIds.has(r.id),
+    })))
   } catch (e) {
     res.status(500).json({ error: e.message })
   }

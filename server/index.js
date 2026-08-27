@@ -10,6 +10,7 @@ import { migrateFilePaths } from './utils/filePaths.js'
 import { apiRouter } from './routes/index.js'
 import { setupWebSocket } from './ws.js'
 import { loadSource } from './sourceManager.js'
+import { getStoredActiveSourceIds, saveActiveSourceIds } from './utils/activeSources.js'
 import { refreshStoredSourceMeta } from './routes/source.js'
 import { installSourceFaultHandlers, recordSourceFault, getSourceFault } from './sourceFault.js'
 
@@ -47,30 +48,38 @@ if (fs.existsSync(publicIndex)) {
 const wss = new WebSocketServer({ server, path: '/ws' })
 setupWebSocket(wss)
 
-server.listen(PORT, '0.0.0.0', async () => {
-  console.log(`Lemon Music running at http://0.0.0.0:${PORT}`)
+server.listen(PORT, '::', async () => {
+  console.log(`Lemon Music running at http://[::]:${PORT} (IPv4+IPv6)`)
   console.log(`Download path: ${DATA_PATH}`)
   console.log(`Config path: ${CONFIG_PATH}`)
 
-  // 自动恢复上次激活的音源（若该音源已记录故障则跳过，避免反复崩溃）
+  // 自动恢复上次激活的音源（可多个；故障音源跳过）
   try {
     const fault = getSourceFault()
-    const row = getDB().prepare("SELECT value FROM settings WHERE key = 'source.active'").get()
-    if (row?.value && row.value !== fault?.id) {
-      const api = getDB().prepare('SELECT id, script FROM user_apis WHERE id = ?').get(row.value)
-      if (api) {
-        const sources = await loadSource(api.id, api.script)
-        console.log(`已自动激活音源: ${api.id}`, Object.keys(sources))
+    let ids = getStoredActiveSourceIds().filter(Boolean)
+    if (fault?.id) {
+      if (ids.includes(fault.id)) {
+        console.warn(`跳过自动激活故障音源: ${fault.name} (${fault.id})`)
       }
-    } else if (fault) {
-      console.warn(`跳过自动激活故障音源: ${fault.name} (${fault.id})`)
+      ids = ids.filter(id => id !== fault.id)
     }
+    // 规范化为 JSON 数组（兼容旧版单个 id），并去掉故障音源
+    saveActiveSourceIds(ids)
+
+    const okIds = []
+    for (const id of ids) {
+      try {
+        const api = getDB().prepare('SELECT id, script FROM user_apis WHERE id = ?').get(id)
+        if (!api) continue
+        const sources = await loadSource(api.id, api.script)
+        okIds.push(api.id)
+        console.log(`已自动激活音源: ${api.id}`, Object.keys(sources))
+      } catch (e) {
+        recordSourceFault(id, e)
+      }
+    }
+    saveActiveSourceIds(okIds)
   } catch (e) {
-    const row = getDB().prepare("SELECT value FROM settings WHERE key = 'source.active'").get()
-    if (row?.value) {
-      recordSourceFault(row.value, e)
-    } else {
-      console.error('自动激活音源失败:', e.message)
-    }
+    console.error('自动激活音源失败:', e.message)
   }
 })

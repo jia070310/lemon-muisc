@@ -4,19 +4,19 @@
     "items": [
       {
         "type": "tips",
-        "helpText": "<b>推荐：</b>到「访问权限」用系统文件夹选择器添加音乐库、下载目录（会自动授权）。<br>也可在下方填写本机绝对路径后保存（文件管理 → 右键 → 详细信息 → 复制原始路径）。<br>保存后会重建容器挂载。卸载时可选择保留或删除应用配置，不会删除这里指定的音乐文件。"
+        "helpText": "可填写本机绝对路径（文件管理 → 右键 → 详细信息 → 复制原始路径），或到「访问权限」用系统文件夹选择器添加目录。<br>保存后新路径即可生效。卸载时可选择保留或删除应用配置，不会删除这里指定的音乐文件。"
       },
       {
         "type": "text",
         "field": "wizard_music_path",
-        "label": "音乐库目录（挂载到 /music）",
+        "label": "音乐库目录",
         "initValue": "",
         "placeholder": "例如 /vol1/1000/Music，可留空改用访问权限"
       },
       {
         "type": "text",
         "field": "wizard_downloads_path",
-        "label": "下载目录（挂载到 /downloads）",
+        "label": "下载目录",
         "initValue": "",
         "placeholder": "例如 /vol1/1000/Downloads，可留空改用访问权限"
       }

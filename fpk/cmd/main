@@ -1,187 +1,205 @@
 #!/bin/bash
+# 原生进程生命周期（不依赖 Docker）
 
 . "$(dirname "$0")/paths.sh"
+. "$(dirname "$0")/runtime.sh"
+. "$(dirname "$0")/desktop_fix.sh"
 
-ENABLED_FLAG="${TRIM_PKGVAR}/.enabled"
+PID_FILE="${TRIM_PKGVAR}/lemon-music.pid"
+APP_LOG="${TRIM_PKGVAR}/log/app.log"
+ENV_FILE="${TRIM_PKGETC}/app.env"
 
-is_docker_running() {
-  docker_cmd inspect -f '{{.State.Running}}' "${CONTAINER_NAME}" 2>/dev/null | grep -qi true
+write_app_env() {
+  local music downloads config
+  load_paths
+  if apply_saved_paths 2>/dev/null; then
+    music="${RESOLVED_MUSIC}"
+    downloads="${RESOLVED_DOWNLOADS}"
+    config="$(resolve_config_path)"
+  elif resolve_paths 2>/dev/null; then
+    music="${RESOLVED_MUSIC}"
+    downloads="${RESOLVED_DOWNLOADS}"
+    config="$(resolve_config_path)"
+  else
+    music="${wizard_music_path:-$(default_music_path)}"
+    downloads="${wizard_downloads_path:-$(default_downloads_path)}"
+    config="$(resolve_config_path 2>/dev/null || default_config_path)"
+  fi
+
+  mkdir -p "${music}" "${downloads}" "${config}" "${TRIM_PKGETC}" 2>/dev/null || true
+  cat > "${ENV_FILE}" <<EOF
+PORT=7983
+LEMON_NATIVE=1
+DOWNLOAD_PATH=${music}
+CONFIG_PATH=${config}
+MUSIC_HOST_PATH=${music}
+DOWNLOADS_HOST_PATH=${downloads}
+EOF
+  save_paths "${music}" "${downloads}" "${config}" 2>/dev/null || true
 }
 
-mark_app_enabled() {
-  mkdir -p "${TRIM_PKGVAR}" 2>/dev/null || true
-  date -Iseconds > "${ENABLED_FLAG}" 2>/dev/null || true
+load_app_env() {
+  if [ -f "${ENV_FILE}" ]; then
+    # shellcheck disable=SC1090
+    set -a
+    . "${ENV_FILE}"
+    set +a
+  else
+    write_app_env
+    # shellcheck disable=SC1090
+    set -a
+    . "${ENV_FILE}"
+    set +a
+  fi
 }
 
-clear_app_enabled() {
-  rm -f "${ENABLED_FLAG}" 2>/dev/null || true
+is_pid_running() {
+  local pid
+  [ -f "${PID_FILE}" ] || return 1
+  pid="$(tr -d ' \n\r' < "${PID_FILE}" 2>/dev/null)"
+  [ -n "${pid}" ] || return 1
+  kill -0 "${pid}" 2>/dev/null
 }
 
-is_app_marked_enabled() {
-  [ -f "${ENABLED_FLAG}" ]
+is_port_up() {
+  local port="${1:-7983}"
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltn 2>/dev/null | grep -qE "[:.]${port}\\s"
+    return $?
+  fi
+  if command -v curl >/dev/null 2>&1; then
+    curl -sf --max-time 1 "http://127.0.0.1:${port}/" >/dev/null 2>&1
+    return $?
+  fi
+  (echo >/dev/tcp/127.0.0.1/"${port}") >/dev/null 2>&1
 }
 
-# 开机后 Docker 常晚于应用自动启用；默认等满 max_wait 秒（退避 sleep）
-# 用法: ensure_docker_ready [max_wait_seconds]
-ensure_docker_ready() {
-  local max_wait="${1:-120}"
-  local waited=0
-  local sleep_for=1
+is_service_running() {
+  is_pid_running && return 0
+  is_port_up 7983
+}
 
-  if init_docker_access 2>/dev/null; then
+stop_service() {
+  local pid
+  if [ -f "${PID_FILE}" ]; then
+    pid="$(tr -d ' \n\r' < "${PID_FILE}" 2>/dev/null)"
+    if [ -n "${pid}" ]; then
+      kill "${pid}" 2>/dev/null || true
+      sleep 1
+      kill -9 "${pid}" 2>/dev/null || true
+    fi
+    rm -f "${PID_FILE}" 2>/dev/null || true
+  fi
+  # 兜底：按端口杀残留
+  if command -v fuser >/dev/null 2>&1; then
+    fuser -k 7983/tcp >/dev/null 2>&1 || true
+  fi
+}
+
+start_service() {
+  local root node_bin
+  save_accessible_paths 2>/dev/null || true
+  write_app_env
+  load_app_env
+
+  root="$(app_root)"
+  if [ ! -f "${root}/server/index.js" ]; then
+    echo "应用文件缺失：${root}/server/index.js。请重新安装 FPK。" > "${TRIM_TEMP_LOGFILE}"
+    return 1
+  fi
+
+  node_bin="$(resolve_node_bin)" || true
+  if [ -z "${node_bin}" ]; then
+    echo "未找到 Node.js v22。请在应用中心安装「Node.js v22」（本应用已声明依赖 install_dep_apps=nodejs_v22），然后重试启用。" > "${TRIM_TEMP_LOGFILE}"
+    return 1
+  fi
+
+  if [ ! -d "${root}/node_modules/express" ]; then
+    install_node_modules || true
+  fi
+  if [ ! -d "${root}/node_modules/express" ]; then
+    echo "依赖未安装成功。请查看 ${TRIM_PKGVAR}/log/npm-install.log ；或确认 NAS 可访问 registry.npmmirror.com。" > "${TRIM_TEMP_LOGFILE}"
+    return 1
+  fi
+
+  if ! ensure_better_sqlite3_native; then
+    echo "better-sqlite3 原生模块不可用。请查看 ${TRIM_PKGVAR}/log/npm-install.log" > "${TRIM_TEMP_LOGFILE}"
+    return 1
+  fi
+
+  open_service_port 7983 || true
+
+  if is_service_running; then
+    ensure_desktop_entry || true
     return 0
   fi
 
-  log_config "waiting for Docker (up to ${max_wait}s)..."
-  while [ "${waited}" -lt "${max_wait}" ]; do
-    sleep "${sleep_for}"
-    waited=$((waited + sleep_for))
-    if init_docker_access 2>/dev/null; then
-      log_config "Docker ready after ${waited}s"
+  mkdir -p "${TRIM_PKGVAR}/log" 2>/dev/null || true
+  stop_service
+
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] start root=${root} node=${node_bin}" >> "${APP_LOG}" 2>/dev/null || true
+
+  (
+    cd "${root}" || exit 1
+    # shellcheck disable=SC1090
+    set -a
+    [ -f "${ENV_FILE}" ] && . "${ENV_FILE}"
+    set +a
+    export PORT="${PORT:-7983}"
+    export LEMON_NATIVE=1
+    export DOWNLOAD_PATH="${DOWNLOAD_PATH}"
+    export CONFIG_PATH="${CONFIG_PATH}"
+    export MUSIC_HOST_PATH="${MUSIC_HOST_PATH:-$DOWNLOAD_PATH}"
+    export DOWNLOADS_HOST_PATH="${DOWNLOADS_HOST_PATH:-$DOWNLOAD_PATH}"
+    nohup "${node_bin}" server/index.js >> "${APP_LOG}" 2>&1 &
+    echo $! > "${PID_FILE}"
+  )
+
+  # 短暂等待端口
+  local i=0
+  while [ "${i}" -lt 20 ]; do
+    if is_port_up 7983; then
+      ensure_desktop_entry || true
       return 0
     fi
-    if [ "${sleep_for}" -lt 5 ]; then
-      sleep_for=$((sleep_for + 1))
+    # 进程已死：立刻失败并带上日志尾部
+    if [ -f "${PID_FILE}" ]; then
+      local pid
+      pid="$(tr -d ' \n\r' < "${PID_FILE}" 2>/dev/null)"
+      if [ -n "${pid}" ] && ! kill -0 "${pid}" 2>/dev/null; then
+        tip="进程启动后退出。请查看日志 ${APP_LOG}"
+        if [ -f "${APP_LOG}" ]; then
+          tip="${tip} | $(tail -n 8 "${APP_LOG}" 2>/dev/null | tr '\n' ' ')"
+        fi
+        echo "${tip}" > "${TRIM_TEMP_LOGFILE}"
+        return 1
+      fi
     fi
+    sleep 1
+    i=$((i + 1))
   done
-  log_config "Docker still unavailable after ${max_wait}s"
-  init_docker_access 2>/dev/null
-}
 
-prepare_compose_paths() {
-  # 优先：运行设置 / 访问权限；不要沿用飞牛 docker-project 冻住的 @appdata
-  if apply_saved_paths; then
-    :
-  elif resolve_paths; then
-    config="$(resolve_config_path)"
-    write_compose_file "${RESOLVED_MUSIC}" "${RESOLVED_DOWNLOADS}" "${config}"
-    write_mounts_meta "${RESOLVED_MUSIC}" "${RESOLVED_DOWNLOADS}" "${config}"
-  elif [ -f "${COMPOSE_ENV}" ]; then
-    # shellcheck disable=SC1090
-    . "${COMPOSE_ENV}"
-    write_compose_file "${wizard_music_path}" "${wizard_downloads_path}" "${wizard_config_path:-$(default_config_path)}"
-  else
-    load_paths
-    if paths_ready; then
-      config="$(resolve_config_path)"
-      write_compose_file "${wizard_music_path}" "${wizard_downloads_path}" "${config}"
-    else
-      music="$(default_music_path)"
-      downloads="$(default_downloads_path)"
-      config="$(default_config_path)"
-      save_paths "${music}" "${downloads}" "${config}"
-      write_compose_file "${music}" "${downloads}" "${config}"
-    fi
+  tip="端口 7983 未就绪。请 SSH 查看：tail -n 50 ${APP_LOG}"
+  if [ -f "${APP_LOG}" ]; then
+    tip="${tip} | $(tail -n 5 "${APP_LOG}" 2>/dev/null | tr '\n' ' ')"
   fi
+  echo "${tip}" > "${TRIM_TEMP_LOGFILE}"
+  return 1
 }
 
 case $1 in
 start)
-  save_accessible_paths
-
-  # 开机自动启用：Docker 可能尚未起来，最多等约 2 分钟
-  if ! ensure_docker_ready 120; then
-    echo "Docker 当前不可用。请到飞牛「Docker」确认服务已启动，或 SSH 执行: systemctl restart docker ；然后重试启用。镜像已在本地时可: docker start lemon-music 或按 paths.conf 路径 docker run。" > "${TRIM_TEMP_LOGFILE}"
-    exit 1
+  if start_service; then
+    exit 0
   fi
-
-  prepare_compose_paths
-
-  # 启用：有本地镜像则直接用；没有则在线拉取
-  if resolve_local_image_name "$(get_compose_image)" >/dev/null 2>&1 \
-    || prefer_local_image_alias >/dev/null 2>&1; then
-    export SKIP_REMOTE_PULL=1
-  else
-    unset SKIP_REMOTE_PULL
-    export IMAGE_PULL_TIMEOUT="${wizard_pull_timeout:-600}"
-  fi
-
-  # 安装阶段已拉起 / restart:always 已拉起：直接视为启用成功
-  if is_container_running; then
-    ensure_mounts_applied || true
-    if is_container_running; then
-      mark_app_enabled
-      exit 0
-    fi
-  fi
-
-  # Docker 刚就绪时 recreate 偶发失败，短重试几次
-  try=0
-  while [ "${try}" -lt 4 ]; do
-    if recreate_compose_stack; then
-      mark_app_enabled
-      exit 0
-    fi
-    try=$((try + 1))
-    if ! docker_cmd info >/dev/null 2>&1; then
-      log_config "start: docker flapped during recreate, waiting..."
-      ensure_docker_ready 30 || true
-    else
-      sleep 2
-    fi
-  done
-
-  tip="容器启动失败。"
-  if ! docker_cmd info >/dev/null 2>&1; then
-    tip="Docker 不可用。请先在飞牛 Docker 中确认服务正常，或 SSH: systemctl restart docker 后重试启用。"
-  elif ! docker_cmd image inspect "${LOCAL_IMAGE_ALIAS}" >/dev/null 2>&1 \
-    && ! docker_cmd images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -qE 'lemon-muisc|lemon-music'; then
-    tip="${tip} 本地无 Docker 镜像，请重新安装应用（安装时会拉取），或 SSH: docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest && docker tag ghcr.1ms.run/jia070310/lemon-muisc:latest lemon-music:latest"
-  else
-    tip="${tip} 请检查 7983 端口是否占用，或查看日志 ${TRIM_PKGVAR}/log/compose.recreate.log"
-    tip="${tip} | $(tail -n 3 "${TRIM_PKGVAR}/log/compose.recreate.log" 2>/dev/null | tr '\n' ' ')"
-  fi
-  echo "${tip}" > "${TRIM_TEMP_LOGFILE}"
   exit 1
   ;;
 stop)
-  init_docker_access 2>/dev/null || true
-  docker_cmd stop "${CONTAINER_NAME}" >/dev/null 2>&1 || true
-  docker_cmd rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
-  clear_app_enabled
+  stop_service
   exit 0
   ;;
 status)
-  # status 不宜长时间阻塞 UI；Docker 未就绪时若曾成功启用过，勿误报「未启用」
-  if ! ensure_docker_ready 20; then
-    if is_app_marked_enabled; then
-      log_config "status: Docker warming up, keep enabled state"
-      exit 0
-    fi
-    exit 3
-  fi
-  if ! is_docker_running; then
-    # restart:always 可能尚未拉起：短暂再等容器
-    if is_app_marked_enabled; then
-      wait_c=0
-      while [ "${wait_c}" -lt 20 ]; do
-        if is_docker_running; then
-          break
-        fi
-        sleep 1
-        wait_c=$((wait_c + 1))
-      done
-      if is_docker_running; then
-        exit 0
-      fi
-      log_config "status: marked enabled but container still down"
-    fi
-    exit 3
-  fi
-  # 运行中但挂载被改回 @appdata 时，尝试纠偏（不拖垮 status）
-  if resolve_paths; then
-    case "${RESOLVED_MUSIC}" in
-      "${TRIM_PKGVAR}"/*) ;;
-      *)
-        if ! mount_matches_expected "${RESOLVED_MUSIC}" "${RESOLVED_DOWNLOADS}"; then
-          log_config "status: mounts stale, fixing..."
-          ensure_mounts_applied || true
-        fi
-        ;;
-    esac
-  fi
-  if is_docker_running; then
-    mark_app_enabled
+  if is_service_running; then
     exit 0
   fi
   exit 3

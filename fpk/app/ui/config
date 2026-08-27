@@ -1,8 +1,8 @@
 {
   ".url": {
     "lemon-music.Application": {
-      "title": "柠檬音乐下载",
-      "desc": "柠檬音乐下载",
+      "title": "柠檬音乐",
+      "desc": "柠檬音乐",
       "icon": "images/icon_{0}.png",
       "type": "url",
       "protocol": "http",

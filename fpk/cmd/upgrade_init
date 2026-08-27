@@ -1,19 +1,9 @@
 #!/bin/bash
+# 升级前：快速停止
 
-. "$(dirname "$0")/pull-image.sh"
-. "$(dirname "$0")/paths.sh"
-
-init_log
-log_line "升级前检查..."
-
-if ! command -v docker >/dev/null 2>&1; then
-  fail_install "未检测到 Docker，请先在飞牛系统中启用 Docker 后再升级。"
+PID_FILE="${TRIM_PKGVAR}/lemon-music.pid"
+if [ -f "${PID_FILE}" ]; then
+  kill "$(tr -d ' \n\r' < "${PID_FILE}" 2>/dev/null)" 2>/dev/null || true
+  rm -f "${PID_FILE}" 2>/dev/null || true
 fi
-
-docker stop "${CONTAINER_NAME}" >/dev/null 2>&1 || true
-docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
-docker compose -p "${COMPOSE_PROJECT}" -f "${COMPOSE_FILE}" down --remove-orphans >/dev/null 2>&1 || true
-docker compose -p "lemon-music" -f "${COMPOSE_FILE}" down --remove-orphans >/dev/null 2>&1 || true
-
-log_line "升级检查通过。"
 exit 0

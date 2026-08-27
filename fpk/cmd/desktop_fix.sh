@@ -19,8 +19,8 @@ fix_desktop_db() {
       || psql -U postgres -d appcenter -v ON_ERROR_STOP=1 -c "$1" >/dev/null 2>&1
   }
 
-  run_sql "UPDATE app SET is_docker = false, micro_app = true WHERE app_name = '${appname}';" || true
-  # type=url：新标签打开网页（iframe 在飞牛内嵌常白屏）；is_admin=true：便于上桌面
+  run_sql "UPDATE app SET is_docker = false, micro_app = false WHERE app_name = '${appname}';" || true
+  # type=url：新标签打开网页；is_admin=true：便于上桌面
   run_sql "UPDATE app_service SET no_display = false, is_admin = true, type = 'url' WHERE app_id IN (SELECT id FROM app WHERE app_name = '${appname}');" || true
 }
 

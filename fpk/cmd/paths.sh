@@ -279,8 +279,9 @@ write_mounts_meta() {
   em="$(json_escape "${music}")"
   ed="$(json_escape "${downloads}")"
   mkdir -p "${config}" 2>/dev/null || true
+  # 原生进程：container 字段写入本机路径（不再伪造 /music）
   cat > "${config}/mounts.json" <<EOF
-{"music":{"host":"${em}","container":"/music"},"downloads":{"host":"${ed}","container":"/downloads"}}
+{"music":{"host":"${em}","container":"${em}"},"downloads":{"host":"${ed}","container":"${ed}"},"native":true}
 EOF
 }
 

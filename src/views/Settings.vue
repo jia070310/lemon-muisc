@@ -22,11 +22,11 @@
         <div v-else class="config-summary card-inner">
           <div class="block-label">已配置的数据目录</div>
           <div class="summary-row">
-            <span class="summary-key">音乐库 → /music</span>
+            <span class="summary-key">{{ isNativeMode ? '音乐库' : '音乐库 → /music' }}</span>
             <code class="summary-val">{{ mountInfo?.music?.host || '未设置' }}</code>
           </div>
           <div class="summary-row">
-            <span class="summary-key">下载 → /downloads</span>
+            <span class="summary-key">{{ isNativeMode ? '下载' : '下载 → /downloads' }}</span>
             <code class="summary-val">{{ mountInfo?.downloads?.host || '未设置' }}</code>
           </div>
           <div class="summary-row" v-if="mountProbeText">
@@ -38,7 +38,12 @@
         <div class="setting-item">
           <div class="setting-item-info">
             <div class="setting-item-label">音乐文件夹</div>
-            <div class="setting-item-desc">扫描音乐时使用的目录，Docker 环境下请使用 <code>/music</code> 或其子目录。{{ fnosAvailable ? '点击「选择文件夹」会调用系统文件管理器，NAS 路径会自动转换。' : '' }}</div>
+            <div class="setting-item-desc">
+              扫描音乐时使用的目录。
+              <template v-if="isNativeMode">请使用 NAS 绝对路径（如 <code>/vol1/1000/Music</code>），同一物理目录只会保留一条。</template>
+              <template v-else>Docker 环境下请使用 <code>/music</code> 或其子目录。</template>
+              {{ fnosAvailable ? '点击「选择文件夹」会调用系统文件管理器。' : '' }}
+            </div>
           </div>
           <div class="setting-item-action">
             <button v-if="fnosAvailable" class="btn-primary btn-sm" @click="browseAddPath" :disabled="pickingFolder">
@@ -77,15 +82,16 @@
 
       <!-- 音源管理 -->
       <div v-if="activeTab === 'source'" class="panel-body">
+        <p class="source-tip">支持同时激活多个音源。试听 / 下载时按平台匹配，同一平台有多个音源时优先使用最近激活的，失败会自动尝试其他已激活音源。</p>
         <div class="source-list" v-if="sourceList.length">
-          <div v-for="s in sourceList" :key="s.id" class="source-item" :class="{ active: s.id === activeSourceId }">
+          <div v-for="s in sourceList" :key="s.id" class="source-item" :class="{ active: isSourceActive(s.id) }">
             <div class="source-info">
               <span class="source-name">{{ s.name }}</span>
-              <span class="source-meta">{{ s.author || '未知作者' }} · v{{ s.version || '?' }}</span>
+              <span class="source-meta">{{ s.author || '未知作者' }} · v{{ s.version || '?' }}{{ isSourceActive(s.id) ? ' · 已激活' : '' }}</span>
             </div>
             <div class="source-actions">
-              <button v-if="s.id !== activeSourceId" class="btn-sm btn-primary" @click="activateSource(s.id)">激活</button>
-              <button v-else class="btn-sm btn-ghost" @click="deactivateSource">停用</button>
+              <button v-if="!isSourceActive(s.id)" class="btn-sm btn-primary" @click="activateSource(s.id)">激活</button>
+              <button v-else class="btn-sm btn-ghost" @click="deactivateSource(s.id)">停用</button>
               <button class="btn-sm btn-danger" @click="removeSource(s.id)">删除</button>
             </div>
           </div>
@@ -233,7 +239,7 @@ import { applyTheme, theme as currentTheme, THEME_KEY } from '../utils/theme.js'
 
 const settings = reactive({})
 const sourceList = ref([])
-const activeSourceId = ref('')
+const activeSourceIds = ref([])
 const fileInput = ref(null)
 const toast = ref(null)
 const importMode = ref('file')
@@ -251,6 +257,22 @@ const activeTab = ref('paths')
 const needsPathSetup = ref(false)
 const mountInfo = ref(null)
 const mountProbeText = ref('')
+
+function parseActiveIds(raw) {
+  if (Array.isArray(raw)) return raw.filter(Boolean)
+  if (raw == null || raw === '') return []
+  const s = String(raw).trim()
+  if (!s) return []
+  try {
+    const parsed = JSON.parse(s)
+    if (Array.isArray(parsed)) return parsed.filter(Boolean)
+  } catch {}
+  return [s]
+}
+
+function isSourceActive(id) {
+  return activeSourceIds.value.includes(id)
+}
 
 const tabs = [
   { id: 'paths', label: '文件路径' },
@@ -275,6 +297,7 @@ const lrcToggleItems = [
 ]
 
 const currentTab = computed(() => tabs.find(t => t.id === activeTab.value) || tabs[0])
+const isNativeMode = computed(() => Boolean(mountInfo.value?.native))
 
 watch(currentTheme, (v) => {
   settings[THEME_KEY] = v
@@ -287,7 +310,7 @@ onMounted(async () => {
   try {
     const s = await api.settings.get()
     Object.assign(settings, s)
-    activeSourceId.value = settings['source.active'] || ''
+    activeSourceIds.value = parseActiveIds(settings['source.active'])
     if (!settings['player.coverStyle']) settings['player.coverStyle'] = 'disc'
     if (settings['player.visualizer'] == null) settings['player.visualizer'] = 'true'
     if (!settings[THEME_KEY]) settings[THEME_KEY] = currentTheme.value
@@ -295,6 +318,8 @@ onMounted(async () => {
   } catch {}
   try {
     sourceList.value = await api.source.list()
+    const fromList = sourceList.value.filter(s => s.active).map(s => s.id)
+    if (fromList.length) activeSourceIds.value = fromList
   } catch {}
   await loadPaths()
 })
@@ -307,12 +332,15 @@ async function loadPaths() {
     needsPathSetup.value = Boolean(res.setup?.needsPathConfig)
     mountInfo.value = res.setup?.mountInfo || null
     const mp = res.setup?.musicProbe
+    const musicLabel = res.setup?.native ? '音乐库' : '/music'
     if (res.setup?.mountLooksEmpty) {
-      mountProbeText.value = '警告：容器内 /music 是空的，挂载可能未生效。请到「运行设置」重新保存并重启应用。'
+      mountProbeText.value = res.setup?.native
+        ? '警告：音乐库目录是空的。请到「运行设置」确认路径并停用后重新启用。'
+        : '警告：容器内 /music 是空的，挂载可能未生效。请到「运行设置」重新保存并重启应用。'
     } else if (mp?.readable) {
-      mountProbeText.value = `探测 /music：共 ${mp.entryCount} 项，音频 ${mp.audioCount} 个`
+      mountProbeText.value = `探测 ${musicLabel}：共 ${mp.entryCount} 项，音频 ${mp.audioCount} 个`
     } else if (mp?.error) {
-      mountProbeText.value = `探测 /music 失败：${mp.error}`
+      mountProbeText.value = `探测 ${musicLabel} 失败：${mp.error}`
     } else {
       mountProbeText.value = ''
     }
@@ -478,18 +506,34 @@ async function importFromUrl() {
 
 async function activateSource(id) {
   try {
-    await api.source.activate(id)
-    activeSourceId.value = id
+    const res = await api.source.activate(id)
+    if (Array.isArray(res?.activeIds)) {
+      activeSourceIds.value = res.activeIds
+    } else if (!activeSourceIds.value.includes(id)) {
+      activeSourceIds.value = [...activeSourceIds.value, id]
+    }
+    sourceList.value = sourceList.value.map(s => ({
+      ...s,
+      active: activeSourceIds.value.includes(s.id),
+    }))
     showToast('音源已激活', 'success')
   } catch (e) {
     showToast(e.message, 'error')
   }
 }
 
-async function deactivateSource() {
+async function deactivateSource(id) {
   try {
-    await api.source.deactivate()
-    activeSourceId.value = ''
+    const res = await api.source.deactivate(id)
+    if (Array.isArray(res?.activeIds)) {
+      activeSourceIds.value = res.activeIds
+    } else {
+      activeSourceIds.value = activeSourceIds.value.filter(x => x !== id)
+    }
+    sourceList.value = sourceList.value.map(s => ({
+      ...s,
+      active: activeSourceIds.value.includes(s.id),
+    }))
     showToast('音源已停用', 'success')
   } catch (e) {
     showToast(e.message, 'error')
@@ -500,7 +544,7 @@ async function removeSource(id) {
   try {
     await api.source.remove(id)
     sourceList.value = sourceList.value.filter(s => s.id !== id)
-    if (activeSourceId.value === id) activeSourceId.value = ''
+    activeSourceIds.value = activeSourceIds.value.filter(x => x !== id)
     showToast('已删除', 'success')
   } catch (e) {
     showToast(e.message, 'error')
@@ -649,6 +693,15 @@ function showToast(text, type = 'info') {
 .path-input { flex: 1; min-width: 0; font-size: 13px; }
 .empty-hint { font-size: 13px; color: var(--text-muted); padding: 12px 0; }
 
+.source-tip {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  background: var(--bg-secondary, var(--surface-2, rgba(0,0,0,0.04)));
+  border-radius: 8px;
+}
 .source-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
 .source-item {
   display: flex;

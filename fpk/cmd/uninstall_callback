@@ -9,7 +9,8 @@ log_config "uninstall_callback data_policy=${policy}"
 case "${policy}" in
   delete|purge|remove)
     purge_app_data >/dev/null 2>&1 || true
-    log_config "uninstall purged app data"
+    rm -rf "${TRIM_PKGVAR}/runtime" 2>/dev/null || true
+    log_config "uninstall purged app data + runtime"
     ;;
   *)
     backup_app_data >/dev/null 2>&1 || true

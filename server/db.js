@@ -68,7 +68,7 @@ export function initDB(configPath) {
     'download.lrcFormat': 'utf8',
     'download.isUseOtherSource': 'true',
     'download.isSavePathGroupByListName': 'false',
-    'source.active': '',
+    'source.active': '[]',
     'source.fault': '',
     'player.coverStyle': 'disc',
     'player.visualizer': 'true',

@@ -2,6 +2,6 @@
   "defaults": {
     "run-as": "root"
   },
-  "username": "docker-lemon-music",
-  "groupname": "docker-lemon-music"
+  "username": "lemon-music",
+  "groupname": "lemon-music"
 }

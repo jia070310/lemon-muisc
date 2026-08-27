@@ -3,6 +3,13 @@ dist/
 data/
 *.fpk
 fpk/app/docker/images/*.tar
+fpk/app/server/
+fpk/app/dist/
+fpk/app/bundle/
+fpk/app/node_modules/
+fpk/app/.stage-*/
+fpk/app/package.json
+fpk/app/package-lock.json
 tools/fnpack
 tools/fnpack.exe
 tools/regctl.exe

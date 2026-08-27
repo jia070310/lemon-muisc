@@ -1,4 +1,4 @@
-import { requestSource, getActiveSource } from '../sourceManager.js'
+import { requestSource, hasActiveSource } from '../sourceManager.js'
 import { getLyric, searchMusic } from '../musicSdk.js'
 import { lyricLookupExtra } from './musicInfo.js'
 import { resolveCoverCandidates } from './cover.js'
@@ -55,7 +55,7 @@ export async function fetchTrackLyric({
     }
   }
 
-  if (src && getActiveSource()?.handler) {
+  if (src && hasActiveSource()) {
     try {
       const fromSource = await requestSource(src, 'lyric', { musicInfo: merged })
       if (fromSource?.lyric) {
@@ -125,7 +125,7 @@ export async function fetchTrackCover({
     return candidates[0]
   }
 
-  if (src && getActiveSource()?.handler) {
+  if (src && hasActiveSource()) {
     try {
       const picResult = await requestSource(src, 'pic', { musicInfo: merged })
       const picUrl = typeof picResult === 'string' ? picResult : (picResult?.url || picResult?.picUrl)

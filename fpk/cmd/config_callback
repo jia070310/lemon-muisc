@@ -1,10 +1,10 @@
 #!/bin/bash
 
 . "$(dirname "$0")/paths.sh"
+. "$(dirname "$0")/runtime.sh"
 
 log_config "config_callback start music=${wizard_music_path:-} downloads=${wizard_downloads_path:-} accessible=${TRIM_DATA_ACCESSIBLE_PATHS:-}"
 
-# 访问权限变更时飞牛会走 config 流程并带上 TRIM_DATA_ACCESSIBLE_PATHS
 save_accessible_paths
 
 if ! apply_saved_paths; then
@@ -13,9 +13,21 @@ if ! apply_saved_paths; then
   exit 1
 fi
 
-if ! recreate_compose_stack; then
-  echo "路径已保存，但容器重建失败。请停用再启用应用。日志：${TRIM_PKGVAR}/log/compose.recreate.log" > "${TRIM_TEMP_LOGFILE}"
-  log_config "config_callback recreate failed"
-fi
+music="${RESOLVED_MUSIC}"
+downloads="${RESOLVED_DOWNLOADS}"
+config="$(resolve_config_path)"
+mkdir -p "${music}" "${downloads}" "${config}" "${TRIM_PKGETC}" 2>/dev/null || true
+cat > "${TRIM_PKGETC}/app.env" <<EOF
+PORT=7983
+LEMON_NATIVE=1
+DOWNLOAD_PATH=${music}
+CONFIG_PATH=${config}
+MUSIC_HOST_PATH=${music}
+DOWNLOADS_HOST_PATH=${downloads}
+EOF
+save_paths "${music}" "${downloads}" "${config}"
+log_config "config_callback saved env music=${music}"
 
+# 若正在运行则提示用户停用再启用（避免配置回调里杀进程导致飞牛状态错乱）
+echo "路径已保存。请停用后再启用，使新目录生效。" > "${TRIM_TEMP_LOGFILE}"
 exit 0

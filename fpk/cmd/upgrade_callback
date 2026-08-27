@@ -1,86 +1,44 @@
 #!/bin/bash
+# 升级：保留数据目录与 Node 运行时；更新代码后重装依赖并拉起
 
-. "$(dirname "$0")/pull-image.sh"
 . "$(dirname "$0")/paths.sh"
+. "$(dirname "$0")/runtime.sh"
 . "$(dirname "$0")/desktop_fix.sh"
 
+init_log() { mkdir -p "${TRIM_PKGVAR}/log" 2>/dev/null || true; }
+log_line() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "${TRIM_PKGVAR}/log/install.log" 2>/dev/null || true; }
+update_install_ui() { [ -n "${TRIM_TEMP_LOGFILE:-}" ] && echo "$1" > "${TRIM_TEMP_LOGFILE}" 2>/dev/null || true; }
+fail_install() { update_install_ui "$1"; log_line "FAIL: $1"; exit 1; }
+
 init_log
+log_line "升级回调开始（原生）"
+update_install_ui "升级中：停止旧进程…"
 
-log_line "=========================================="
-log_line "柠檬音乐下载 · 升级回调"
-log_line "=========================================="
-
-if apply_saved_paths; then
-  log_line "已恢复路径: music=${RESOLVED_MUSIC} downloads=${RESOLVED_DOWNLOADS}"
-elif resolve_paths; then
-  config="$(resolve_config_path)"
-  write_compose_file "${RESOLVED_MUSIC}" "${RESOLVED_DOWNLOADS}" "${config}"
-  log_line "已从访问权限/向导恢复路径"
-else
-  load_paths
-  if paths_ready; then
-    config="$(resolve_config_path)"
-    write_compose_file "${wizard_music_path}" "${wizard_downloads_path}" "${config}"
-    log_line "已从 paths.conf 恢复路径"
-  else
-    log_line "警告: 未找到完整路径配置，升级后请检查访问权限"
-  fi
+PID_FILE="${TRIM_PKGVAR}/lemon-music.pid"
+if [ -f "${PID_FILE}" ]; then
+  kill "$(tr -d ' \n\r' < "${PID_FILE}" 2>/dev/null)" 2>/dev/null || true
+  rm -f "${PID_FILE}" 2>/dev/null || true
 fi
 
-init_docker_access 2>/dev/null || true
-docker_cmd stop "${CONTAINER_NAME}" >/dev/null 2>&1 || true
-docker_cmd rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
-
-resolve_image_from_wizard
-REMOTE_IMAGE="${IMAGE}"
-export REMOTE_IMAGE
-save_image_config 2>/dev/null || true
-update_compose_image 2>/dev/null || true
-log_line "向导镜像已写入 compose: ${IMAGE}"
-_pull_timeout="$(get_pull_timeout)"
-SOFT_PULL_FAIL=1
-INSTALL_PULL_SOFT=1
-INSTALL_SCRIPT_PULL_MAX=120
-
-update_install_ui "正在拉取升级镜像…"
-
-if [ "${wizard_pull_source:-mirror_1ms}" = "skip_pull" ]; then
-  pull_image_with_progress "升级" || fail_install "本地无镜像，请先 SSH pull"
-else
-  if ! install_pull_with_docker_project "${_pull_timeout}" "升级"; then
-    fail_install "升级拉取超时。请 SSH pull 或选跳过拉取。"
-  fi
+load_paths
+if [ -z "${wizard_music_path:-}" ]; then
+  :
 fi
 
-if resolved="$(resolve_local_image_name "$(get_compose_image)" 2>/dev/null)"; then
-  IMAGE="${resolved}"
-  mkdir -p "${TRIM_PKGETC}" 2>/dev/null || true
-  remote_for_compose="$(compose_registry_image "${REMOTE_IMAGE:-$(get_compose_image)}")"
-  cat > "${IMAGE_CONF}" <<EOF
-SAVED_IMAGE="${LOCAL_IMAGE_ALIAS}"
-REMOTE_IMAGE="${remote_for_compose}"
-SAVED_PULL_SOURCE="${wizard_pull_source:-mirror_1ms}"
-SAVED_IMAGE_TAG="${wizard_image_tag:-latest}"
-SAVED_AT="$(date -Iseconds)"
-EOF
-  IMAGE="${remote_for_compose}"
-  update_compose_image 2>/dev/null || true
+APP_ROOT="$(app_root)"
+if [ ! -f "${APP_ROOT}/server/index.js" ]; then
+  fail_install "升级包缺少 server/index.js"
 fi
 
-update_install_ui "镜像已就绪，正在重建容器…"
-export SKIP_REMOTE_PULL=1
+update_install_ui "检查 Node.js v22…"
+ensure_store_node || fail_install "未找到 Node.js v22，请先在应用中心安装该依赖。"
 
-if resolve_local_image_name "$(get_compose_image)" >/dev/null 2>&1; then
-  if recreate_compose_stack; then
-    log_line "升级后容器已重建"
-    update_install_ui "升级完成"
-  else
-    log_line "容器暂未启动，请停用再启用"
-  fi
-else
-  fail_install "升级完成但未检测到本地镜像。"
-fi
+# 强制重装依赖（代码可能变了）
+rm -rf "${APP_ROOT}/node_modules" 2>/dev/null || true
+update_install_ui "安装依赖…"
+install_node_modules || fail_install "npm 依赖安装失败：${TRIM_PKGVAR}/log/npm-install.log"
 
 ensure_desktop_entry || true
-mark_install_complete "升级"
+update_install_ui "升级完成，请启用应用"
+log_line "升级完成"
 exit 0

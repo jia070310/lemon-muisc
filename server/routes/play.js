@@ -2,7 +2,7 @@ import { Router } from 'express'
 import fs from 'fs'
 import path from 'path'
 import needle from 'needle'
-import { requestSource, getActiveSource } from '../sourceManager.js'
+import { requestSource, hasActiveSource } from '../sourceManager.js'
 import { buildMusicInfo } from '../utils/musicInfo.js'
 import { fetchTrackLyric, fetchTrackCover } from '../utils/trackMeta.js'
 import { resolveCoverUrl } from '../utils/cover.js'
@@ -79,8 +79,7 @@ playRouter.post('/url', async (req, res) => {
 
     if (!songId || !source) return res.status(400).json({ error: '缺少歌曲信息' })
 
-    const active = getActiveSource()
-    if (!active?.handler) return res.status(400).json({ error: '没有激活的音源，请先在设置中激活音源' })
+    if (!hasActiveSource()) return res.status(400).json({ error: '没有激活的音源，请先在设置中激活音源' })
 
     const type = quality || req.body.quality || '128k'
     const musicInfo = buildMusicInfo({ ...req.body, source, quality: type })

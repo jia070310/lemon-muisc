@@ -1,24 +1,49 @@
 #!/bin/bash
-# 55% 起：写 compose → 飞牛 docker-project 主拉取 + 脚本轮询本地镜像（不长时间独占 docker pull）。
-# 镜像确认就绪后软启动容器，避免仅依赖「启用」时飞牛报「docker不可用」。
+# 原生安装：准备目录 → 下载 Node（国内镜像）→ npm 安装依赖 → 不启动长时间服务（交给启用）
 
-. "$(dirname "$0")/pull-image.sh"
 . "$(dirname "$0")/paths.sh"
+. "$(dirname "$0")/runtime.sh"
 . "$(dirname "$0")/desktop_fix.sh"
 . "$(dirname "$0")/app-data.sh"
 
+init_log() {
+  mkdir -p "${TRIM_PKGVAR}/log" 2>/dev/null || true
+}
+
+log_line() {
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "${TRIM_PKGVAR}/log/install.log" 2>/dev/null || true
+}
+
+update_install_ui() {
+  if [ -n "${TRIM_TEMP_LOGFILE:-}" ]; then
+    echo "$1" > "${TRIM_TEMP_LOGFILE}" 2>/dev/null || true
+  fi
+}
+
+fail_install() {
+  update_install_ui "$1"
+  log_line "FAIL: $1"
+  exit 1
+}
+
+mark_install_complete() {
+  echo "install complete $(date -Iseconds)" > "${TRIM_PKGVAR}/install.status" 2>/dev/null || true
+  log_line "安装完成"
+}
+
 init_log
-
 echo "callback started $(date -Iseconds)" > "${TRIM_PKGVAR}/install.status" 2>/dev/null || true
-update_install_ui "安装脚本已启动，正在写入 compose…"
+update_install_ui "安装脚本已启动（原生模式，不使用 Docker）…"
 
-# 上次卸载选择「保留数据」时，先恢复配置
 restore_app_data >/dev/null 2>&1 || true
 load_paths
 
 music_path="${wizard_music_path:-}"
 downloads_path="${wizard_downloads_path:-}"
-config_path="$(resolve_config_path)"
+config_path="$(default_config_path)"
+if declare -F resolve_config_path >/dev/null 2>&1; then
+  config_path="$(resolve_config_path)"
+fi
 
 if [ -z "${music_path}" ]; then
   music_path="$(default_music_path)"
@@ -29,15 +54,17 @@ fi
 
 mkdir -p "${config_path}" "${music_path}" "${downloads_path}" 2>/dev/null || true
 save_paths "${music_path}" "${downloads_path}" "${config_path}"
-write_mounts_meta "${music_path}" "${downloads_path}" "${config_path}"
-resolve_image_from_wizard
-# 立刻把向导选定的镜像写入 compose，供飞牛 docker-project 按正确 tag 拉取
-REMOTE_IMAGE="${IMAGE}"
-export REMOTE_IMAGE
-save_image_config 2>/dev/null || true
-write_compose_file "${music_path}" "${downloads_path}" "${config_path}"
-update_compose_image 2>/dev/null || true
-log_line "向导镜像已写入 compose: ${IMAGE}"
+
+# 写入运行环境
+mkdir -p "${TRIM_PKGETC}" 2>/dev/null || true
+cat > "${TRIM_PKGETC}/app.env" <<EOF
+PORT=7983
+LEMON_NATIVE=1
+DOWNLOAD_PATH=${music_path}
+CONFIG_PATH=${config_path}
+MUSIC_HOST_PATH=${music_path}
+DOWNLOADS_HOST_PATH=${downloads_path}
+EOF
 
 case "${music_path}" in
   "${TRIM_PKGVAR}"/*) ;;
@@ -46,84 +73,40 @@ case "${music_path}" in
     ;;
 esac
 
-log_config "install paths music=${music_path} downloads=${downloads_path} config=${config_path}"
+log_line "paths music=${music_path} downloads=${downloads_path} config=${config_path}"
 
-init_docker_access 2>/dev/null || true
-docker_cmd stop "${CONTAINER_NAME}" >/dev/null 2>&1 || true
-docker_cmd rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
-docker_cmd compose -p "${COMPOSE_PROJECT}" -f "${COMPOSE_FILE}" down --remove-orphans >/dev/null 2>&1 || true
-docker_cmd compose -p "lemon-music" -f "${COMPOSE_FILE}" down --remove-orphans >/dev/null 2>&1 || true
+# 确保 FPK 内业务代码就位（构建脚本应拷到 TRIM_APPDEST）
+APP_ROOT="$(app_root)"
+if [ ! -f "${APP_ROOT}/server/index.js" ]; then
+  fail_install "安装包缺少应用代码（server/index.js）。请使用完整构建的 FPK。"
+fi
+if [ ! -f "${APP_ROOT}/package.json" ]; then
+  # 兼容：从 cmd 上级仓库拷贝失败时的提示
+  fail_install "安装包缺少 package.json。请重新用 scripts/build-fpk.ps1 打包。"
+fi
 
-_pull_timeout="$(get_pull_timeout)"
-SOFT_PULL_FAIL=1
-INSTALL_PULL_SOFT=1
-INSTALL_SCRIPT_PULL_MAX=120
+update_install_ui "检查 Node.js v22 依赖（应用中心 install_dep_apps）…"
+if ! ensure_store_node; then
+  fail_install "未检测到 Node.js v22。请在应用中心安装「Node.js v22」后再装本应用（或重新安装本 FPK 让系统自动拉取依赖）。"
+fi
 
-if [ "${wizard_pull_source:-mirror_1ms}" = "skip_pull" ]; then
-  if ! pull_image_with_progress "安装"; then
-    if ! wait_for_local_image 60; then
-      fail_install "本地不存在镜像。请先 SSH pull 并 docker tag … lemon-music:latest"
-    fi
-    normalize_pulled_image || true
-  fi
+# 若 FPK 已内置 node_modules，则跳过联网 npm
+if [ -d "${APP_ROOT}/node_modules/express" ]; then
+  update_install_ui "检测到内置依赖，跳过 npm 安装…"
+  log_line "bundled node_modules present, skip npm"
 else
-  update_install_ui "【开始拉取】目标：${IMAGE}
-飞牛系统进度 55→80%，脚本并行检测 Docker 本地镜像…"
-
-  if ! install_pull_with_docker_project "${_pull_timeout}" "安装"; then
-    fail_install "等待镜像超时（${_pull_timeout}s）。请检查网络，或 SSH pull 后选手动安装并选「跳过拉取」。"
+  update_install_ui "正在安装依赖（npm，registry.npmmirror.com）…"
+  if ! install_node_modules; then
+    fail_install "npm 依赖安装失败。请查看 ${TRIM_PKGVAR}/log/npm-install.log"
   fi
 fi
 
-if resolved="$(resolve_local_image_name "$(get_compose_image)" 2>/dev/null)"; then
-  IMAGE="${resolved}"
-elif listed="$(any_lemon_image_in_docker_list "${IMAGE:-}" 2>/dev/null)"; then
-  IMAGE="${listed}"
-  normalize_pulled_image || true
+update_install_ui "检查 better-sqlite3 原生模块…"
+if ! ensure_better_sqlite3_native; then
+  fail_install "better-sqlite3 原生库缺失。请确认 Node.js v22 可用，并查看 ${TRIM_PKGVAR}/log/npm-install.log"
 fi
 
-if [ -n "${IMAGE:-}" ]; then
-  mkdir -p "${TRIM_PKGETC}" 2>/dev/null || true
-  # 保留向导选定的远程完整地址（含版本 tag），不要用短名写回最新
-  remote_for_compose="$(compose_registry_image "${REMOTE_IMAGE:-${IMAGE}}")"
-  case "${remote_for_compose}" in
-    lemon-music|lemon-music:*) remote_for_compose="$(compose_registry_image "${IMAGE}")" ;;
-  esac
-  cat > "${IMAGE_CONF}" <<EOF
-SAVED_IMAGE="${LOCAL_IMAGE_ALIAS}"
-REMOTE_IMAGE="${remote_for_compose}"
-SAVED_IMAGE_TAG="${wizard_image_tag:-latest}"
-SAVED_AT="$(date -Iseconds)"
-EOF
-  IMAGE="${remote_for_compose}"
-  write_compose_file "${music_path}" "${downloads_path}" "${config_path}"
-  update_compose_image
-  log_config "install using image ${remote_for_compose} (compose never uses short name)"
-fi
-
-mark_install_complete "安装"
 ensure_desktop_entry || true
-
-# 镜像已确认本地后再软启动：此时 docker-project 拉取已结束，不会像安装中途 docker run 那样卡 80%。
-# 飞牛点「启用」偶发「docker不可用」时，装完已有容器仍可直接访问 :7983。
-export SKIP_REMOTE_PULL=1
-if any_lemon_image_in_docker_list >/dev/null 2>&1 \
-  || resolve_local_image_name "$(get_compose_image)" >/dev/null 2>&1; then
-  if init_docker_access 2>/dev/null && recreate_compose_stack; then
-    log_line "安装阶段已启动容器 ${CONTAINER_NAME}"
-    mkdir -p "${TRIM_PKGVAR}" 2>/dev/null || true
-    date -Iseconds > "${TRIM_PKGVAR}/.enabled" 2>/dev/null || true
-    update_install_ui "【安装完成】镜像与容器已就绪。
-可直接访问 http://<NAS_IP>:7983
-若应用中心仍显示未启用，可再点一次「启用」（忽略偶发「docker不可用」亦可）"
-  else
-    log_line "镜像已在本地，但安装阶段未能启动容器；请稍后点「启用」，或 SSH 手动 docker run"
-    update_install_ui "【安装完成】镜像已就绪。
-请点应用中心「启用」启动容器。若提示 docker 不可用：先在「Docker」确认服务正常，或 SSH 手动启动后访问 http://<NAS_IP>:7983"
-  fi
-else
-  log_line "安装完成但暂未检测到镜像名，启用时将自动拉取"
-  update_install_ui "【安装完成】请点击「启用」；若无镜像将自动拉取"
-fi
-
+mark_install_complete
+update_install_ui "【安装完成】请点「启用」。若打不开请 SSH：tail -n 80 ${TRIM_PKGVAR}/log/app.log"
 exit 0

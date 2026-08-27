@@ -1,12 +1,21 @@
 #!/bin/bash
-
 . "$(dirname "$0")/paths.sh"
+. "$(dirname "$0")/runtime.sh"
 
-init_docker_access 2>/dev/null || true
-docker_cmd stop "${CONTAINER_NAME}" >/dev/null 2>&1 || true
-docker_cmd rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
-docker_cmd compose -p "${COMPOSE_PROJECT}" -f "${COMPOSE_FILE}" down --remove-orphans >/dev/null 2>&1 || true
-docker_cmd compose -p "lemon-music" down --remove-orphans >/dev/null 2>&1 || true
-docker_cmd network rm "lemon-music_default" >/dev/null 2>&1 || true
+# 停进程
+PID_FILE="${TRIM_PKGVAR}/lemon-music.pid"
+if [ -f "${PID_FILE}" ]; then
+  kill "$(tr -d ' \n\r' < "${PID_FILE}" 2>/dev/null)" 2>/dev/null || true
+  rm -f "${PID_FILE}" 2>/dev/null || true
+fi
+if command -v fuser >/dev/null 2>&1; then
+  fuser -k 7983/tcp >/dev/null 2>&1 || true
+fi
+
+# 兼容：若旧版 Docker 容器还在，尽量清掉（不依赖其成功）
+if command -v docker >/dev/null 2>&1; then
+  docker stop lemon-music >/dev/null 2>&1 || true
+  docker rm -f lemon-music >/dev/null 2>&1 || true
+fi
 
 exit 0

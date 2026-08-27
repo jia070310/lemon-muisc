@@ -16,12 +16,30 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
       - name: Install fnpack
         run: |
           curl -fsSL "https://static2.fnnas.com/fnpack/fnpack-1.2.3-linux-amd64" -o fnpack
           echo "54b97fa7b70968c4d05c79840f5daeff508957d0bb2062fdb0376d00d9615c93  fnpack" | sha256sum -c -
           chmod +x fnpack
           sudo mv fnpack /usr/local/bin/fnpack
+
+      - name: Build frontend and stage native app
+        run: |
+          npm ci
+          npm run build
+          test -d dist
+          rm -rf fpk/app/server fpk/app/dist fpk/app/bundle fpk/app/node_modules
+          mkdir -p fpk/app
+          cp -a dist fpk/app/dist
+          cp -a server fpk/app/server
+          cp package.json fpk/app/package.json
+          if [ -f package-lock.json ]; then cp package-lock.json fpk/app/package-lock.json; fi
 
       - name: Build FPK
         id: build
@@ -62,19 +80,18 @@ PY
           if-no-files-found: error
 
       - name: Attach FPK to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION="${{ steps.build.outputs.version }}"
           TAG="v${VERSION}"
+          NOTES="docs/github-release.md"
+          if [ ! -f "$NOTES" ]; then NOTES="docs/RELEASE-NOTES.md"; fi
           if ! gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            if [ -f docs/RELEASE-NOTES.md ]; then
-              gh release create "$TAG" --title "$TAG" --notes-file docs/RELEASE-NOTES.md --repo "${{ github.repository }}"
-            else
-              gh release create "$TAG" --title "$TAG" --notes "Release ${TAG}" --repo "${{ github.repository }}"
-            fi
-          elif [ -f docs/RELEASE-NOTES.md ]; then
-            gh release edit "$TAG" --notes-file docs/RELEASE-NOTES.md --repo "${{ github.repository }}"
+            gh release create "$TAG" --title "柠檬音乐 $TAG" --notes-file "$NOTES" --repo "${{ github.repository }}"
+          else
+            gh release edit "$TAG" --notes-file "$NOTES" --repo "${{ github.repository }}"
           fi
           gh release upload "$TAG" \
             "lemon-music-${VERSION}-x86.fpk" \

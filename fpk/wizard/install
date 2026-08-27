@@ -4,7 +4,7 @@
     "items": [
       {
         "type": "tips",
-        "helpText": "<b>柠檬音乐下载</b>会通过 Docker 运行，安装包<b>不含镜像</b>（约 500MB，安装时拉取）。<br><br>1. 应用中心 → <b>手动安装</b> → 选择本 FPK<br>2. 填写数据目录（或装完后在「访问权限」选择）<br>3. 选择镜像源；国内默认 1ms 加速。已有镜像可选「跳过拉取」<br>4. 安装窗口 55%～80% 为拉镜像；完成后请<b>启用</b>应用<br>5. 浏览器访问 <code>http://NAS的IP:7983</code><br><br>升级请再次「手动安装」覆盖，<b>不要点卡片上的「更新」</b>。"
+        "helpText": "<b>柠檬音乐</b>支持在飞牛 NAS 上搜索、试听、下载与管理个人音乐，并可<strong>同时激活多个音源</strong>。<br><br>1. 按向导完成安装；若尚未安装 <b>Node.js v22</b>，系统将按依赖自动安装。<br>2. 建议在「数据目录」步骤填写音乐库与下载目录的本机绝对路径。<br>3. 安装完成后即可在应用中心打开使用。<br>4. 后续版本可通过应用中心正常更新。"
       }
     ]
   },
@@ -13,7 +13,7 @@
     "items": [
       {
         "type": "tips",
-        "helpText": "<b>请先阅读：</b><br><br>1. 仅用于管理你<b>个人已合法授权</b>的音乐，请遵守当地法律与平台条款。<br>2. 目录请填<b>本机绝对路径</b>：文件管理 → 右键文件夹 → 详细信息 → <b>复制原始路径</b>。不要照抄别人的 <code>/vol1/1000/...</code>。<br>3. 安装时也可留空，装完后到应用设置 → <b>访问权限</b> 添加音乐库、下载目录并保存，再停用/启用一次。<br>4. 若安装窗口无网速或一直停在 55%～80%：用 SSH 手动 <code>docker pull</code> 后，选「跳过拉取」再装。<br>5. <b>卸载</b>时可选择「保留数据」或「删除数据」。删除的是应用配置（音源、任务记录等），<b>不会删除</b>你自己指定的音乐库/下载文件夹里的音频。"
+        "helpText": "<b>请先阅读：</b><br><br>1. <b>免责声明</b>：本应用仅供个人合法使用。请确保你对所管理、试听、下载的音乐拥有相应权利，并遵守当地法律法规及各音乐平台服务条款。因违规使用产生的一切后果由用户自行承担，开发者与发行方不承担相关责任。<br>2. 目录请填写<b>本机绝对路径</b>（文件管理 → 右键文件夹 → 详细信息 → 复制原始路径）。安装时填好路径后即可直接使用，一般无需再改访问权限或重新启用。<br>3. 若安装时未填写路径，可在应用设置 → <b>访问权限</b> 中补充授权目录。<br>4. 本应用依赖应用中心的 <b>Node.js v22</b>。请勿单独卸载该依赖，否则应用可能无法启动。<br>5. <b>卸载</b>时可选择保留或删除应用配置；不会删除你指定的音乐库 / 下载文件夹中的音频文件。"
       }
     ]
   },
@@ -22,90 +22,23 @@
     "items": [
       {
         "type": "tips",
-        "helpText": "知道绝对路径可在此填写；留空则安装后用「访问权限」选择（带文件夹窗口，并自动授权）。路径示例 <code>/vol1/1000/Music</code>，请改成你自己的目录。"
+        "helpText": "建议填写本机绝对路径，例如 <code>/vol1/1000/Music</code>。填写后安装完成即可使用。若暂时留空，可在安装后到应用设置 → 访问权限中补充。"
       },
       {
         "type": "text",
         "field": "wizard_music_path",
-        "label": "音乐库目录（挂载到 /music）",
+        "label": "音乐库目录",
         "initValue": "",
-        "placeholder": "可留空，安装后用访问权限选择",
+        "placeholder": "例如 /vol1/1000/Music",
         "helpText": "选填。须以 / 开头的 NAS 绝对路径"
       },
       {
         "type": "text",
         "field": "wizard_downloads_path",
-        "label": "下载目录（挂载到 /downloads）",
+        "label": "下载目录",
         "initValue": "",
-        "placeholder": "可留空，安装后用访问权限选择",
+        "placeholder": "例如 /vol1/1000/Downloads",
         "helpText": "选填。可与音乐库相同"
-      }
-    ]
-  },
-  {
-    "stepTitle": "镜像拉取",
-    "items": [
-      {
-        "type": "select",
-        "field": "wizard_pull_source",
-        "label": "拉取方式 / 镜像加速",
-        "initValue": "mirror_1ms",
-        "options": [
-          { "label": "1ms.run 加速 ghcr.1ms.run（默认）", "value": "mirror_1ms" },
-          { "label": "南大加速 ghcr.nju.edu.cn", "value": "mirror_nju" },
-          { "label": "dockerproxy 加速 ghcr.dockerproxy.com", "value": "mirror_dockerproxy" },
-          { "label": "DaoCloud 加速 docker.m.daocloud.io", "value": "mirror_daocloud" },
-          { "label": "官方 ghcr.io（海外/较慢）", "value": "ghcr_io" },
-          { "label": "跳过拉取（已 SSH 手动 pull + tag）", "value": "skip_pull" },
-          { "label": "自定义完整镜像地址", "value": "custom_image" }
-        ],
-        "helpText": "失败时会自动尝试其它加速源。应用中心无网速时请先 SSH pull，再选「跳过拉取」。"
-      },
-      {
-        "type": "select",
-        "field": "wizard_image_tag",
-        "label": "镜像标签",
-        "initValue": "latest",
-        "options": [
-          { "label": "latest（最新）", "value": "latest" },
-          { "label": "1.0.18", "value": "1.0.18" },
-          { "label": "1.0.17", "value": "1.0.17" },
-          { "label": "1.0.16", "value": "1.0.16" },
-          { "label": "1.0.15", "value": "1.0.15" },
-          { "label": "1.0.14", "value": "1.0.14" },
-          { "label": "1.0.13", "value": "1.0.13" },
-          { "label": "1.0.12", "value": "1.0.12" },
-          { "label": "1.0.11", "value": "1.0.11" },
-          { "label": "1.0.10", "value": "1.0.10" }
-        ]
-      },
-      {
-        "type": "text",
-        "field": "wizard_custom_image",
-        "label": "自定义镜像地址（选「自定义」时必填）",
-        "initValue": "ghcr.1ms.run/jia070310/lemon-muisc:latest",
-        "placeholder": "ghcr.nju.edu.cn/jia070310/lemon-muisc:latest"
-      },
-      {
-        "type": "select",
-        "field": "wizard_pull_timeout",
-        "label": "拉取超时",
-        "initValue": "600",
-        "options": [
-          { "label": "5 分钟", "value": "300" },
-          { "label": "10 分钟（推荐）", "value": "600" },
-          { "label": "15 分钟", "value": "900" },
-          { "label": "30 分钟", "value": "1800" }
-        ]
-      }
-    ]
-  },
-  {
-    "stepTitle": "SSH 手动拉取示例",
-    "items": [
-      {
-        "type": "tips",
-        "helpText": "任选其一在 SSH 执行（拉完再选手动安装 +「跳过拉取」）：<br><code>docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest</code><br><code>docker pull ghcr.nju.edu.cn/jia070310/lemon-muisc:latest</code><br>然后：<code>docker tag ghcr.1ms.run/jia070310/lemon-muisc:latest lemon-music:latest</code>"
       }
     ]
   }
