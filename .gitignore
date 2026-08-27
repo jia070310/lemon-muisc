@@ -28,3 +28,4 @@ config/*.db-shm
 config/*.db-wal
 config/*.sqlite
 config/*.sqlite3
+docs/forum-post*.md

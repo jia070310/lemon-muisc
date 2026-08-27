@@ -145,7 +145,7 @@ npm start
 npm run fpk:build
 ```
 
-生成 `fpk/lemon-music-1.2.1-x86.fpk` 与 `fpk/lemon-music-1.2.1-arm.fpk`。说明见 [docs/fpk-install.md](docs/fpk-install.md)。飞牛论坛稿见 [docs/forum-post-v1.2.1.md](docs/forum-post-v1.2.1.md)。
+生成 `fpk/lemon-music-1.2.1-x86.fpk` 与 `fpk/lemon-music-1.2.1-arm.fpk`。说明见 [docs/fpk-install.md](docs/fpk-install.md)。
 
 ---
 
