@@ -1,5 +1,5 @@
 #!/bin/bash
-# 原生进程生命周期（不依赖 Docker）
+# 原生进程生命周期
 
 . "$(dirname "$0")/paths.sh"
 . "$(dirname "$0")/runtime.sh"

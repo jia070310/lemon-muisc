@@ -33,7 +33,7 @@ mark_install_complete() {
 
 init_log
 echo "callback started $(date -Iseconds)" > "${TRIM_PKGVAR}/install.status" 2>/dev/null || true
-update_install_ui "安装脚本已启动（原生模式，不使用 Docker）…"
+update_install_ui "安装脚本已启动…"
 
 restore_app_data >/dev/null 2>&1 || true
 load_paths
