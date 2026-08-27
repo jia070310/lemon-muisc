@@ -1,8 +1,11 @@
 # 柠檬音乐下载 · Lemon Music
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/jia070310/lemon-muisc)](https://github.com/jia070310/lemon-muisc/releases)
+
 面向飞牛 NAS 与自托管环境的 **Web 音乐工具**：多平台搜索、歌单发现、在线试听、批量下载、本地标签管理。兼容落雪音乐（LX Music）自定义音源脚本，在浏览器中即可完成「找歌 → 试听 → 下载 → 整理」全流程。
 
-当前版本：**v1.2.1**  
+当前版本：**v1.2.1** · 开源协议：**[MIT](LICENSE)**  
 飞牛应用中心显示名：**柠檬音乐**（浏览器标题仍为「柠檬音乐下载」）  
 仓库：[https://github.com/jia070310/lemon-muisc](https://github.com/jia070310/lemon-muisc)
 
@@ -176,4 +179,6 @@ npm run fpk:build
 
 ## License
 
-个人使用。若需二次分发，请自行补充许可证并保留本声明。
+本项目采用 [MIT License](LICENSE)。
+
+请仅用于管理你个人已合法授权的音乐资源，并遵守当地法律法规及各音乐平台服务条款。
