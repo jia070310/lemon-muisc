@@ -9,7 +9,7 @@
 
 <script setup>
 import { onMounted, onUnmounted, ref, watch } from 'vue'
-import { getAnalyser, getFrequencyData, isPaused, scheduleAudioAnalyserRefresh } from '../stores/player.js'
+import { getAnalyser, getFrequencyData, getAnalyserMode, isPaused, promoteElementAnalyser, scheduleAudioAnalyserRefresh } from '../stores/player.js'
 
 const props = defineProps({
   /** @type {'full' | 'bar'} */
@@ -84,7 +84,8 @@ function sampleHeights(count) {
     silentAnalyserFrames++
     if (silentAnalyserFrames > 45) {
       silentAnalyserFrames = 0
-      scheduleAudioAnalyserRefresh()
+      if (getAnalyserMode() !== 'element') promoteElementAnalyser()
+      else scheduleAudioAnalyserRefresh()
     }
     return buildIdleHeights(count)
   }

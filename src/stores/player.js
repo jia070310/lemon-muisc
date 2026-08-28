@@ -41,6 +41,12 @@ let audioCtx = null
 let analyser = null
 /** @type {MediaStreamAudioSourceNode | null} */
 let streamSource = null
+/** @type {HTMLAudioElement | null} */
+let analyserAudio = null
+/** @type {MediaElementAudioSourceNode | null} */
+let analyserElementSource = null
+/** @type {'capture' | 'element' | null} */
+let analyserMode = null
 let audioGraphReady = false
 /** @type {number[]} */
 let playHistory = []
@@ -55,8 +61,192 @@ let volumeBeforeMute = 0.8
 function resetAudioGraph() {
   try { streamSource?.disconnect() } catch {}
   streamSource = null
+  if (analyser) {
+    try { analyser.disconnect() } catch {}
+  }
   analyser = null
   audioGraphReady = false
+}
+
+function ensureAnalyserAudio() {
+  if (!analyserAudio) {
+    analyserAudio = new Audio()
+    analyserAudio.crossOrigin = 'anonymous'
+    analyserAudio.setAttribute('playsinline', '')
+    analyserAudio.setAttribute('webkit-playsinline', '')
+    analyserAudio.muted = true
+    analyserAudio.volume = 0
+    analyserAudio.preload = 'auto'
+  }
+  return analyserAudio
+}
+
+function pauseAnalyserAudio() {
+  if (!analyserAudio) return
+  try { analyserAudio.pause() } catch {}
+}
+
+function stopAnalyserPlayback() {
+  resetAudioGraph()
+  analyserMode = null
+  pauseAnalyserAudio()
+  if (analyserAudio) {
+    try {
+      analyserAudio.removeAttribute('src')
+      analyserAudio.load()
+    } catch {}
+  }
+}
+
+function syncAnalyserAudioFromMain() {
+  if (!audio || !hasPlayableAudioSrc() || audio.paused || isPaused.value) {
+    pauseAnalyserAudio()
+    return
+  }
+  if (document.visibilityState === 'hidden') {
+    pauseAnalyserAudio()
+    return
+  }
+  const el = ensureAnalyserAudio()
+  const src = audio.src
+  const time = audio.currentTime
+  const needsSrc = el.src !== src
+  if (needsSrc) el.src = src
+
+  const playSynced = () => {
+    try {
+      if (time > 0 && (needsSrc || Math.abs(el.currentTime - time) > 0.25)) {
+        el.currentTime = time
+      }
+    } catch {}
+    el.play().catch(() => {})
+  }
+
+  if (!needsSrc && el.readyState >= 2) {
+    playSynced()
+    return
+  }
+  if (el.readyState >= 2) playSynced()
+  else el.addEventListener('canplay', playSynced, { once: true })
+}
+
+function bindAudioElementEvents(el) {
+  el.addEventListener('timeupdate', () => {
+    if (audio !== el) return
+    currentTime.value = audio.currentTime
+    updateActiveLyric(audio.currentTime)
+    syncDurationFromAudio()
+    if (analyserMode === 'element' && analyserAudio && !analyserAudio.paused && !audio.paused) {
+      if (Math.abs(analyserAudio.currentTime - audio.currentTime) > 0.35) {
+        try { analyserAudio.currentTime = audio.currentTime } catch {}
+      }
+    }
+    const now = Date.now()
+    if (now - lastSessionSave > 2000) {
+      lastSessionSave = now
+      saveQueueState()
+    }
+  })
+  el.addEventListener('loadedmetadata', () => {
+    if (audio === el) syncDurationFromAudio()
+  })
+  el.addEventListener('durationchange', () => {
+    if (audio === el) syncDurationFromAudio()
+  })
+  el.addEventListener('canplay', () => {
+    if (audio === el) syncDurationFromAudio()
+  })
+  el.addEventListener('ended', () => {
+    if (audio === el) onTrackEnded()
+  })
+  el.addEventListener('error', () => {
+    if (audio !== el) return
+    playerError.value = '音频加载失败，请尝试其他歌曲'
+    loadingPlay.value = null
+  })
+}
+
+function createAudioElement() {
+  const el = new Audio()
+  el.crossOrigin = 'anonymous'
+  el.setAttribute('playsinline', '')
+  el.setAttribute('webkit-playsinline', '')
+  bindAudioElementEvents(el)
+  return el
+}
+
+function canUseCaptureStream() {
+  if (!audio) return false
+  const capture = audio.captureStream || audio.mozCaptureStream
+  return typeof capture === 'function'
+}
+
+function isIOSWebKit() {
+  if (typeof navigator === 'undefined') return false
+  const ua = navigator.userAgent || ''
+  return /iP(hone|ad|od)/.test(ua)
+    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+}
+
+function shouldPreferElementAnalyser() {
+  if (document.visibilityState === 'hidden') return false
+  if (!canUseCaptureStream()) return true
+  // iOS / iPadOS 上 captureStream 常有音轨但频谱全零
+  return isIOSWebKit()
+}
+
+function createAnalyserNode() {
+  if (!audioCtx) return null
+  const node = audioCtx.createAnalyser()
+  node.fftSize = 256
+  node.smoothingTimeConstant = 0.72
+  return node
+}
+
+async function setupCaptureAnalyser() {
+  if (!audio || !visualizerEnabled.value) return null
+  if (audio.paused || !hasPlayableAudioSrc()) return null
+  pauseAnalyserAudio()
+  const capture = audio.captureStream || audio.mozCaptureStream
+  if (typeof capture !== 'function') return null
+  const stream = capture.call(audio)
+  if (!stream.getAudioTracks().length) return null
+
+  try { streamSource?.disconnect() } catch {}
+  streamSource = audioCtx.createMediaStreamSource(stream)
+  analyser = createAnalyserNode()
+  if (!analyser) return null
+  streamSource.connect(analyser)
+  analyserMode = 'capture'
+  audioGraphReady = true
+  return analyser
+}
+
+function setupElementAnalyser() {
+  if (!audio || !audioCtx || !visualizerEnabled.value) return null
+  if (!hasPlayableAudioSrc() || audio.paused) return null
+  try {
+    syncAnalyserAudioFromMain()
+    const el = ensureAnalyserAudio()
+    if (!analyserElementSource) {
+      analyserElementSource = audioCtx.createMediaElementSource(el)
+    }
+    try { streamSource?.disconnect() } catch {}
+    streamSource = null
+    if (analyser) {
+      try { analyser.disconnect() } catch {}
+    }
+    analyser = createAnalyserNode()
+    if (!analyser) return null
+    try { analyserElementSource.disconnect() } catch {}
+    analyserElementSource.connect(analyser)
+    // 不连接 destination：主 audio 保持原生输出，锁屏/后台可继续播放
+    analyserMode = 'element'
+    audioGraphReady = true
+    return analyser
+  } catch {
+    return null
+  }
 }
 
 async function resumeAudioPlayback() {
@@ -67,7 +257,9 @@ async function resumeAudioPlayback() {
   if (audio.paused) {
     try { await audio.play() } catch {}
   }
-  scheduleAudioAnalyserRefresh()
+  if (document.visibilityState === 'visible') {
+    scheduleAudioAnalyserRefresh()
+  }
 }
 
 /** 在用户手势同步调用栈内解锁 AudioContext，避免异步拉链后 mobile 无法 play */
@@ -289,10 +481,7 @@ export function initPlayer() {
   if (inited) return
   inited = true
 
-  audio = new Audio()
-  audio.crossOrigin = 'anonymous'
-  audio.setAttribute('playsinline', '')
-  audio.setAttribute('webkit-playsinline', '')
+  audio = createAudioElement()
   try {
     const savedVolRaw = localStorage.getItem(VOLUME_KEY)
     const savedMute = localStorage.getItem(MUTE_KEY)
@@ -312,24 +501,6 @@ export function initPlayer() {
     else if (savedMute === 'false') isMuted.value = false
   } catch {}
   applyAudioOutput()
-  audio.addEventListener('timeupdate', () => {
-    currentTime.value = audio.currentTime
-    updateActiveLyric(audio.currentTime)
-    syncDurationFromAudio()
-    const now = Date.now()
-    if (now - lastSessionSave > 2000) {
-      lastSessionSave = now
-      saveQueueState()
-    }
-  })
-  audio.addEventListener('loadedmetadata', syncDurationFromAudio)
-  audio.addEventListener('durationchange', syncDurationFromAudio)
-  audio.addEventListener('canplay', syncDurationFromAudio)
-  audio.addEventListener('ended', onTrackEnded)
-  audio.addEventListener('error', () => {
-    playerError.value = '音频加载失败，请尝试其他歌曲'
-    loadingPlay.value = null
-  })
 
   restoreSessionState()
   loadCoverStyle()
@@ -339,7 +510,9 @@ export function initPlayer() {
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') {
       saveQueueState()
+      pauseAnalyserAudio()
       resetAudioGraph()
+      analyserMode = null
       try { audioCtx?.suspend() } catch {}
       return
     }
@@ -406,7 +579,7 @@ export function closeFullscreenPlayer() {
   showFullscreenPlayer.value = false
 }
 
-/** 建立 Web Audio 分析链路，用 captureStream 读取频谱，不劫持 audio 原生输出 */
+/** 建立 Web Audio 分析链路；桌面优先 captureStream，移动端回退 MediaElementSource */
 export async function ensureAudioAnalyser() {
   if (!audio || !visualizerEnabled.value) return null
   if (document.visibilityState === 'hidden') return null
@@ -418,29 +591,40 @@ export async function ensureAudioAnalyser() {
     if (audioCtx.state === 'suspended') await audioCtx.resume()
     if (audioGraphReady && analyser) return analyser
 
-    const capture = audio.captureStream || audio.mozCaptureStream
-    if (typeof capture !== 'function') return null
-    const stream = capture.call(audio)
-    if (!stream.getAudioTracks().length) return null
+    if (analyserMode === 'element' || shouldPreferElementAnalyser()) {
+      return setupElementAnalyser()
+    }
 
-    try { streamSource?.disconnect() } catch {}
-    streamSource = audioCtx.createMediaStreamSource(stream)
-    analyser = audioCtx.createAnalyser()
-    analyser.fftSize = 256
-    analyser.smoothingTimeConstant = 0.72
-    streamSource.connect(analyser)
-    // 不连接 destination，避免音频必须走 AudioContext（后台/锁屏会被挂起）
-    audioGraphReady = true
-    return analyser
+    const captured = await setupCaptureAnalyser()
+    if (captured) return captured
+    return setupElementAnalyser()
   } catch {
     resetAudioGraph()
     return null
   }
 }
 
+/** captureStream 无数据时切换到 MediaElementSource（常见于 Android 等，仅前台） */
+export function promoteElementAnalyser() {
+  if (!audio || !visualizerEnabled.value) return
+  if (document.visibilityState === 'hidden') return
+  if (analyserMode === 'element') {
+    scheduleAudioAnalyserRefresh()
+    return
+  }
+  analyserMode = 'element'
+  resetAudioGraph()
+  scheduleAudioAnalyserRefresh()
+}
+
+export function getAnalyserMode() {
+  return analyserMode
+}
+
 /** 播放开始后重建频谱分析（captureStream 必须在 play 之后才有音频轨） */
 export function scheduleAudioAnalyserRefresh() {
   if (!visualizerEnabled.value || !audio) return
+  if (document.visibilityState === 'hidden') return
   resetAudioGraph()
   const trySetup = () => {
     ensureAudioAnalyser().catch(() => {})
@@ -449,6 +633,8 @@ export function scheduleAudioAnalyserRefresh() {
     trySetup()
     requestAnimationFrame(trySetup)
     setTimeout(trySetup, 80)
+    setTimeout(trySetup, 200)
+    setTimeout(trySetup, 500)
   }
   if (!audio.paused) scheduleRetries()
   else audio.addEventListener('playing', scheduleRetries, { once: true })
@@ -600,7 +786,7 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 }
 
     audio.src = url
     hasMediaSrc = true
-    resetAudioGraph()
+    stopAnalyserPlayback()
     applyAudioOutput()
     await waitForAudioReady()
     if (resumeTime > 0) {
@@ -740,12 +926,16 @@ export async function togglePause() {
     }
   } else {
     audio.pause()
+    pauseAnalyserAudio()
+    resetAudioGraph()
+    analyserMode = null
     isPaused.value = true
     saveQueueState()
   }
 }
 
 export function stopPlay() {
+  stopAnalyserPlayback()
   if (audio) {
     audio.pause()
     audio.removeAttribute('src')
@@ -766,6 +956,9 @@ export function stopPlay() {
 
 export function seekTo(time) {
   if (audio) audio.currentTime = time
+  if (analyserAudio?.src) {
+    try { analyserAudio.currentTime = time } catch {}
+  }
   currentTime.value = time
   saveQueueState()
 }
