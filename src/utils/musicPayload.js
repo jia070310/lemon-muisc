@@ -12,17 +12,56 @@ export function getItemQualities(item) {
   return sortQualities(list)
 }
 
-/** 批量下载：取所选歌曲共同音质；无交集时回退默认列表 */
+/** 批量下载：取所选歌曲可用音质的并集；下载时按单曲自动降档 */
 export function getBatchQualities(items) {
   if (!items?.length) return [...DEFAULT_QUALITIES]
-  let common = null
+  const union = new Set()
   for (const item of items) {
-    const qs = getItemQualities(item)
-    if (!qs.length) continue
-    common = common == null ? new Set(qs) : new Set(qs.filter(q => common.has(q)))
+    for (const q of getItemQualities(item)) union.add(q)
   }
-  if (common?.size) return sortQualities([...common])
+  if (union.size) return sortQualities([...union])
   return [...DEFAULT_QUALITIES]
+}
+
+/** 分析批量下载：区分支持目标音质与需另选音质的歌曲 */
+export function prepareBatchDownload(entries, preferred) {
+  const list = Array.isArray(entries) ? entries : []
+  const matched = []
+  const rows = []
+  for (const entry of list) {
+    const item = entry?.item ?? entry
+    const key = entry?.key ?? trackSelectKey(item)
+    const available = getItemQualities(item)
+    if (preferred && available.includes(preferred)) {
+      matched.push({ key, item, quality: preferred })
+    } else {
+      rows.push({
+        key,
+        item,
+        available,
+        selected: available.length
+          ? resolveItemQuality(item, preferred)
+          : (preferred || '128k'),
+      })
+    }
+  }
+  return {
+    preferred,
+    entries: list.map(e => ({ item: e?.item ?? e, key: e?.key ?? trackSelectKey(e?.item ?? e) })),
+    matched,
+    rows,
+    needsConfirm: rows.length > 0,
+  }
+}
+
+export function buildBatchDownloadTasks(entries, source, qualityMap) {
+  const list = Array.isArray(entries) ? entries : []
+  return list.map((entry) => {
+    const item = entry?.item ?? entry
+    const key = entry?.key ?? trackSelectKey(item)
+    const quality = qualityMap?.[key] ?? '128k'
+    return buildDownloadTask(item, source, quality)
+  })
 }
 
 /** 为单曲解析实际音质：优先指定，否则顺延更低档，再否则取可用最高 */

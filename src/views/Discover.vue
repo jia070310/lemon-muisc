@@ -1,7 +1,7 @@
 <template>
   <div class="discover-page">
     <div class="page-title">发现</div>
-    <div class="page-subtitle">输入各平台歌单链接，浏览并试听、下载；可多选后批量下载（所选音质若某首不支持，将自动降到该曲可用档位）</div>
+    <div class="page-subtitle">输入各平台歌单链接，浏览并试听、下载；可多选后批量下载，不支持所选音质的歌曲会提示确认</div>
 
     <div class="discover-header card">
       <div class="discover-row">
@@ -113,7 +113,7 @@
               {{ batchDownloading ? '添加中...' : `批量下载${selectedCount ? ` (${selectedCount})` : ''}` }}
             </button>
             <div class="quality-menu" v-if="showBatchQualityMenu" :style="batchMenuStyle" @click.stop>
-              <div class="quality-menu-title">批量音质：某首没有该音质时，自动降到其可用档位后再入队</div>
+              <div class="quality-menu-title">批量音质：不支持所选音质的歌曲将弹出确认</div>
               <button
                 v-for="q in batchQualities"
                 :key="q"
@@ -195,11 +195,26 @@
     <div v-else-if="discoverState.viewMode === 'detail' && discoverState.fetched && !discoverState.loading" class="empty">暂无歌曲，请检查歌单链接是否正确</div>
 
     <div v-if="toast" class="toast" :class="toast.type">{{ toast.text }}</div>
+
+    <BatchQualityDialog
+      :plan="batchDialog"
+      :selections="rowSelections"
+      :bulk-quality="bulkQuality"
+      :bulk-options="bulkQualityOptions"
+      :preferred-label="batchPreferredLabel"
+      :busy="batchDownloading"
+      @cancel="closeBatchDialog"
+      @confirm="handleBatchConfirm"
+      @apply-bulk="applyBulkQuality"
+      @update:bulk-quality="bulkQuality = $event"
+    />
   </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import BatchQualityDialog from '../components/BatchQualityDialog.vue'
+import { useBatchDownload } from '../composables/useBatchDownload.js'
 import { api } from '../api.js'
 import { discoverState, loadDiscoverSources, sourcePlaceholders, recommendSortOptions } from '../stores/discover.js'
 import { loadingPlay, isPaused, isPlayingItem, playItem, addToQueue, isInQueue } from '../stores/player.js'
@@ -208,7 +223,6 @@ import { platformLabel } from '../utils/platforms.js'
 import { cleanText, formatArtists, cleanTrackItem } from '../utils/text.js'
 import {
   getItemQualities,
-  getBatchQualities,
   trackSelectKey,
   buildDownloadTask,
 } from '../utils/musicPayload.js'
@@ -217,10 +231,29 @@ import { useQualityMenuPosition } from '../utils/qualityMenu.js'
 const toast = ref(null)
 const qualityMenuId = ref(null)
 const showBatchQualityMenu = ref(false)
-const batchDownloading = ref(false)
 const selectedKeys = ref(new Set())
 const { menuStyle, positionMenu, clearMenuPosition } = useQualityMenuPosition()
 const { menuStyle: batchMenuStyle, positionMenu: positionBatchMenu, clearMenuPosition: clearBatchMenuPosition } = useQualityMenuPosition()
+
+const {
+  batchDialog,
+  rowSelections,
+  bulkQuality,
+  bulkQualityOptions,
+  batchDownloading,
+  startBatchDownload,
+  confirmBatchDialog,
+  closeBatchDialog,
+  applyBulkQuality,
+  getBatchQualities,
+} = useBatchDownload({
+  getSource: () => activeSource.value,
+  onCompleted: (count) => {
+    showToast(`已添加 ${count} 首到下载队列`, 'success')
+    clearSelection()
+  },
+  onError: (e) => showToast(e.message, 'error'),
+})
 
 const activeSource = computed(() => discoverState.activeSource)
 const showRecommend = computed(() => discoverState.viewMode === 'recommend')
@@ -237,6 +270,16 @@ const selectedItems = computed(() =>
   discoverState.results.filter((item, i) => selectedKeys.value.has(trackSelectKey(item, i)))
 )
 const batchQualities = computed(() => getBatchQualities(selectedItems.value))
+const batchPreferredLabel = computed(() => {
+  const q = batchDialog.value?.preferred
+  return q ? getQualityLabel(q) : ''
+})
+
+function getSelectedEntries() {
+  return discoverState.results
+    .map((item, index) => ({ item, key: trackSelectKey(item, index) }))
+    .filter(({ key }) => selectedKeys.value.has(key))
+}
 
 onMounted(async () => {
   await loadDiscoverSources(api)
@@ -481,20 +524,14 @@ async function downloadOne(item, quality) {
 }
 
 async function downloadSelected(quality) {
-  const items = selectedItems.value
-  if (!items.length) return
+  const entries = getSelectedEntries()
+  if (!entries.length) return
   closeMenus()
-  batchDownloading.value = true
-  try {
-    const tasks = items.map(item => buildDownloadTask(item, activeSource.value, quality))
-    await api.download.add(tasks)
-    showToast(`已添加 ${tasks.length} 首到下载队列（${getQualityLabel(quality)}）`, 'success')
-    clearSelection()
-  } catch (e) {
-    showToast(e.message, 'error')
-  } finally {
-    batchDownloading.value = false
-  }
+  await startBatchDownload(entries, quality)
+}
+
+async function handleBatchConfirm() {
+  await confirmBatchDialog()
 }
 
 function showToast(text, type = 'info') {
