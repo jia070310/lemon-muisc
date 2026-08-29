@@ -1,15 +1,18 @@
 import { Router } from 'express'
-import { searchMusic, AVAILABLE_SOURCES } from '../musicSdk.js'
+import { searchMusic } from '../musicSdk.js'
+import { getDisplaySources } from '../utils/displaySources.js'
 import { formatUserError } from '../utils/userError.js'
 
 export const searchRouter = Router()
+
+const availableSources = () => getDisplaySources()
 
 searchRouter.get('/', async (req, res) => {
   try {
     const { keyword, source = 'kw', page = 1, limit = 30 } = req.query
     if (!keyword) return res.status(400).json({ error: '缺少搜索关键词' })
 
-    if (!AVAILABLE_SOURCES[source]) {
+    if (!availableSources()[source]) {
       return res.status(400).json({ error: `不支持的搜索源: ${source}` })
     }
 
@@ -21,5 +24,5 @@ searchRouter.get('/', async (req, res) => {
 })
 
 searchRouter.get('/sources', (_req, res) => {
-  res.json({ sources: AVAILABLE_SOURCES })
+  res.json({ sources: getDisplaySources() })
 })

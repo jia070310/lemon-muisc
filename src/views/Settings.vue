@@ -232,6 +232,8 @@
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { api } from '../api.js'
 import { loadCoverStyle, loadVisualizerSetting } from '../stores/player.js'
+import { reloadSearchSources } from '../stores/search.js'
+import { reloadDiscoverSources } from '../stores/discover.js'
 import { canPickFolder, pickFolder } from '../utils/fnos.js'
 import { applyTheme, theme as currentTheme, THEME_KEY } from '../utils/theme.js'
 
@@ -499,6 +501,13 @@ async function importFromUrl() {
   }
 }
 
+async function refreshPlatformTabs() {
+  await Promise.all([
+    reloadSearchSources(api),
+    reloadDiscoverSources(api),
+  ])
+}
+
 async function activateSource(id) {
   try {
     const res = await api.source.activate(id)
@@ -512,6 +521,7 @@ async function activateSource(id) {
       active: activeSourceIds.value.includes(s.id),
     }))
     showToast('音源已激活', 'success')
+    await refreshPlatformTabs()
   } catch (e) {
     showToast(e.message, 'error')
   }
@@ -530,6 +540,7 @@ async function deactivateSource(id) {
       active: activeSourceIds.value.includes(s.id),
     }))
     showToast('音源已停用', 'success')
+    await refreshPlatformTabs()
   } catch (e) {
     showToast(e.message, 'error')
   }
@@ -541,6 +552,7 @@ async function removeSource(id) {
     sourceList.value = sourceList.value.filter(s => s.id !== id)
     activeSourceIds.value = activeSourceIds.value.filter(x => x !== id)
     showToast('已删除', 'success')
+    await refreshPlatformTabs()
   } catch (e) {
     showToast(e.message, 'error')
   }
@@ -723,7 +735,7 @@ function showToast(text, type = 'info') {
   border: 1px solid var(--border);
 }
 .pill-tab:hover { background: var(--bg-hover); }
-.pill-tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.pill-tab.active { color: #fff; }
 
 .import-area { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .url-input { flex: 1; min-width: 200px; }

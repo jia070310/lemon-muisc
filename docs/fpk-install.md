@@ -1,4 +1,4 @@
-# 飞牛 FPK 安装说明（v1.2.2 原生独立应用）
+# 飞牛 FPK 安装说明（v1.2.3 原生独立应用）
 
 本应用为飞牛**原生进程**，**不依赖 Docker**，不拉取镜像。安装包约 0.5 MB，运行时使用应用中心 **Node.js v22**（`install_dep_apps=nodejs_v22`，未安装时随本应用安装）。
 
@@ -15,8 +15,8 @@
 ## 安装流程
 
 1. 应用中心安装对应架构 FPK：
-   - x86：`lemon-music-1.2.2-x86.fpk`
-   - ARM：`lemon-music-1.2.2-arm.fpk`
+   - x86：`lemon-music-1.2.3-x86.fpk`
+   - ARM：`lemon-music-1.2.3-arm.fpk`
 2. 阅读安装说明与注意事项
 3. 填写音乐库、下载目录（建议填写）
 4. 完成后即可在应用中心打开使用
@@ -46,4 +46,4 @@
 npm run fpk:build
 ```
 
-输出：`fpk/lemon-music-1.2.2-x86.fpk` 与 `fpk/lemon-music-1.2.2-arm.fpk`（不要提交到 git）。
+输出：`fpk/lemon-music-1.2.3-x86.fpk` 与 `fpk/lemon-music-1.2.3-arm.fpk`（不要提交到 git）。

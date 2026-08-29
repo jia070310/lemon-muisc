@@ -2,6 +2,7 @@ import { ref, computed } from 'vue'
 import { api } from '../api.js'
 import { cleanTrackItem } from '../utils/text.js'
 import { buildPlayPayload } from '../utils/musicPayload.js'
+import { getCachedPlayUrl, setCachedPlayUrl, rememberLoadedPlayUrl } from '../utils/playUrlCache.js'
 import { formatUserError } from '../utils/userError.js'
 
 export const currentPlaying = ref(null)
@@ -45,6 +46,8 @@ let streamSource = null
 let analyserAudio = null
 /** @type {MediaElementAudioSourceNode | null} */
 let analyserElementSource = null
+/** @type {GainNode | null} */
+let analyserSinkGain = null
 /** @type {'capture' | 'element' | null} */
 let analyserMode = null
 let audioGraphReady = false
@@ -57,6 +60,13 @@ const SESSION_STORAGE_KEY = 'lx-music-nas:play-session'
 const VOLUME_KEY = 'lx-music-nas:volume'
 const MUTE_KEY = 'lx-music-nas:muted'
 let volumeBeforeMute = 0.8
+let lyricFetchToken = 0
+let analyserBoundSrc = ''
+let analyserSetupToken = 0
+/** @type {ReturnType<typeof setTimeout> | 0} */
+let analyserHealthTimer = 0
+const ANALYSER_RETRY_DELAYS = [0, 50, 120, 250, 500, 1000, 2000, 4000, 6000]
+const DEFAULT_PLAY_QUALITY = '128k'
 
 function resetAudioGraph() {
   try { streamSource?.disconnect() } catch {}
@@ -86,10 +96,17 @@ function pauseAnalyserAudio() {
   try { analyserAudio.pause() } catch {}
 }
 
-function stopAnalyserPlayback() {
+function pauseAndResetAnalyserGraph() {
+  analyserSetupToken++
   resetAudioGraph()
   analyserMode = null
+  analyserBoundSrc = ''
+  stopAnalyserHealthCheck()
   pauseAnalyserAudio()
+}
+
+function stopAnalyserPlayback() {
+  pauseAndResetAnalyserGraph()
   if (analyserAudio) {
     try {
       analyserAudio.removeAttribute('src')
@@ -101,33 +118,66 @@ function stopAnalyserPlayback() {
 function syncAnalyserAudioFromMain() {
   if (!audio || !hasPlayableAudioSrc() || audio.paused || isPaused.value) {
     pauseAnalyserAudio()
-    return
+    return Promise.resolve(false)
   }
   if (document.visibilityState === 'hidden') {
     pauseAnalyserAudio()
-    return
+    return Promise.resolve(false)
   }
+
   const el = ensureAnalyserAudio()
   const src = audio.src
   const time = audio.currentTime
   const needsSrc = el.src !== src
-  if (needsSrc) el.src = src
-
-  const playSynced = () => {
+  if (needsSrc) {
     try {
-      if (time > 0 && (needsSrc || Math.abs(el.currentTime - time) > 0.25)) {
-        el.currentTime = time
-      }
+      el.pause()
+      el.src = src
+      el.load()
     } catch {}
-    el.play().catch(() => {})
   }
 
-  if (!needsSrc && el.readyState >= 2) {
-    playSynced()
-    return
-  }
-  if (el.readyState >= 2) playSynced()
-  else el.addEventListener('canplay', playSynced, { once: true })
+  return new Promise((resolve) => {
+    let settled = false
+    const finish = (ok) => {
+      if (settled) return
+      settled = true
+      resolve(ok)
+    }
+
+    const playSynced = () => {
+      try {
+        if (time > 0 && (needsSrc || Math.abs(el.currentTime - time) > 0.25)) {
+          el.currentTime = time
+        }
+      } catch {}
+      const playPromise = el.play()
+      if (playPromise?.then) {
+        playPromise.then(() => finish(true)).catch(() => finish(false))
+      } else {
+        finish(!el.paused)
+      }
+    }
+
+    const timer = setTimeout(() => finish(!el.paused), 1500)
+
+    if (!needsSrc && !el.paused && el.readyState >= 2) {
+      clearTimeout(timer)
+      finish(true)
+      return
+    }
+
+    if (el.readyState >= 2) {
+      playSynced()
+    } else {
+      el.addEventListener('playing', () => {
+        clearTimeout(timer)
+        finish(true)
+      }, { once: true })
+      el.addEventListener('canplay', playSynced, { once: true })
+      if (!needsSrc) playSynced()
+    }
+  })
 }
 
 function bindAudioElementEvents(el) {
@@ -156,6 +206,10 @@ function bindAudioElementEvents(el) {
   el.addEventListener('canplay', () => {
     if (audio === el) syncDurationFromAudio()
   })
+  el.addEventListener('playing', () => {
+    if (audio !== el) return
+    scheduleAudioAnalyserRefresh()
+  })
   el.addEventListener('ended', () => {
     if (audio === el) onTrackEnded()
   })
@@ -181,18 +235,9 @@ function canUseCaptureStream() {
   return typeof capture === 'function'
 }
 
-function isIOSWebKit() {
-  if (typeof navigator === 'undefined') return false
-  const ua = navigator.userAgent || ''
-  return /iP(hone|ad|od)/.test(ua)
-    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
-}
-
 function shouldPreferElementAnalyser() {
-  if (document.visibilityState === 'hidden') return false
-  if (!canUseCaptureStream()) return true
-  // iOS / iPadOS 上 captureStream 常有音轨但频谱全零
-  return isIOSWebKit()
+  // 统一走静音副本 + MediaElementSource，切歌比 captureStream 稳定
+  return document.visibilityState !== 'hidden'
 }
 
 function createAnalyserNode() {
@@ -201,6 +246,23 @@ function createAnalyserNode() {
   node.fftSize = 256
   node.smoothingTimeConstant = 0.72
   return node
+}
+
+function ensureAnalyserSink() {
+  if (!audioCtx) return null
+  if (!analyserSinkGain) {
+    analyserSinkGain = audioCtx.createGain()
+    analyserSinkGain.gain.value = 0
+    analyserSinkGain.connect(audioCtx.destination)
+  }
+  return analyserSinkGain
+}
+
+function connectAnalyserOutput(node) {
+  const sink = ensureAnalyserSink()
+  if (!sink) return false
+  try { node.connect(sink) } catch { return false }
+  return true
 }
 
 async function setupCaptureAnalyser() {
@@ -217,16 +279,27 @@ async function setupCaptureAnalyser() {
   analyser = createAnalyserNode()
   if (!analyser) return null
   streamSource.connect(analyser)
+  if (!connectAnalyserOutput(analyser)) return null
   analyserMode = 'capture'
   audioGraphReady = true
   return analyser
 }
 
-function setupElementAnalyser() {
+async function waitAnalyserSignal(maxWaitMs = 400, stepMs = 80) {
+  const deadline = Date.now() + maxWaitMs
+  while (Date.now() < deadline) {
+    if (analyserHasSignal()) return true
+    await new Promise(resolve => setTimeout(resolve, stepMs))
+  }
+  return analyserHasSignal()
+}
+
+async function setupElementAnalyser() {
   if (!audio || !audioCtx || !visualizerEnabled.value) return null
   if (!hasPlayableAudioSrc() || audio.paused) return null
   try {
-    syncAnalyserAudioFromMain()
+    const synced = await syncAnalyserAudioFromMain()
+    if (!synced) return null
     const el = ensureAnalyserAudio()
     if (!analyserElementSource) {
       analyserElementSource = audioCtx.createMediaElementSource(el)
@@ -240,7 +313,7 @@ function setupElementAnalyser() {
     if (!analyser) return null
     try { analyserElementSource.disconnect() } catch {}
     analyserElementSource.connect(analyser)
-    // 不连接 destination：主 audio 保持原生输出，锁屏/后台可继续播放
+    if (!connectAnalyserOutput(analyser)) return null
     analyserMode = 'element'
     audioGraphReady = true
     return analyser
@@ -257,9 +330,17 @@ async function resumeAudioPlayback() {
   if (audio.paused) {
     try { await audio.play() } catch {}
   }
-  if (document.visibilityState === 'visible') {
-    scheduleAudioAnalyserRefresh()
+  if (document.visibilityState !== 'visible' || !visualizerEnabled.value) return
+
+  const src = audio.src || ''
+  if (analyser && analyserBoundSrc === src && analyserMode === 'element') {
+    await syncAnalyserAudioFromMain()
+    if (analyserHasSignal()) {
+      startAnalyserHealthCheck()
+      return
+    }
   }
+  scheduleAudioAnalyserRefresh()
 }
 
 /** 在用户手势同步调用栈内解锁 AudioContext，避免异步拉链后 mobile 无法 play */
@@ -370,6 +451,9 @@ function restoreSessionState() {
         activeLyricIdx.value = -1
         currentTime.value = Number(data.currentTime) || 0
         applyDurationFallback(currentPlaying.value)
+        if (!lyricLines.value.length && currentPlaying.value.source !== 'local' && !currentPlaying.value.localPath) {
+          fetchLyric(currentPlaying.value, currentPlaying.value.source)
+        }
         // 刷新后默认暂停，用户可点播放继续
         isPaused.value = true
         // 同步队列下标，避免 currentPlaying 有值但 index=-1 导致按钮无效
@@ -412,8 +496,10 @@ function loadQueueState() {
 loadQueueState()
 
 export const currentLyricText = computed(() => {
-  if (activeLyricIdx.value < 0 || !lyricLines.value.length) return ''
-  return lyricLines.value[activeLyricIdx.value]?.text || ''
+  if (!lyricLines.value.length) return ''
+  const idx = activeLyricIdx.value
+  if (idx >= 0) return lyricLines.value[idx]?.text || ''
+  return lyricLines.value[0]?.text || ''
 })
 
 export const displayDuration = computed(() => {
@@ -472,7 +558,7 @@ function resolveNextIndex(fromAuto = false) {
 
 export function getTrackKey(item, source) {
   if (item?.localPath) return `local:${item.localPath}`
-  const id = item?.songmid || item?.hash || item?.songId || item?.copyrightId || item?.id
+  const id = item?.songmid || item?.hash || item?.songId || item?.musicId || item?.copyrightId || item?.id
   const src = item?.source || source || ''
   return `${src}:${id}`
 }
@@ -511,8 +597,6 @@ export function initPlayer() {
     if (document.visibilityState === 'hidden') {
       saveQueueState()
       pauseAnalyserAudio()
-      resetAudioGraph()
-      analyserMode = null
       try { audioCtx?.suspend() } catch {}
       return
     }
@@ -579,41 +663,110 @@ export function closeFullscreenPlayer() {
   showFullscreenPlayer.value = false
 }
 
-/** 建立 Web Audio 分析链路；桌面优先 captureStream，移动端回退 MediaElementSource */
+function analyserHasSignal() {
+  if (!analyser) return false
+  const buf = new Uint8Array(analyser.frequencyBinCount)
+  analyser.getByteFrequencyData(buf)
+  for (let i = 0; i < buf.length; i++) {
+    if (buf[i] > 0) return true
+  }
+  return false
+}
+
+function stopAnalyserHealthCheck() {
+  if (analyserHealthTimer) {
+    clearInterval(analyserHealthTimer)
+    analyserHealthTimer = 0
+  }
+}
+
+function startAnalyserHealthCheck() {
+  stopAnalyserHealthCheck()
+  if (!visualizerEnabled.value || !audio || audio.paused) return
+  analyserHealthTimer = setInterval(() => {
+    if (!visualizerEnabled.value || !audio || audio.paused || document.visibilityState === 'hidden') return
+    if (analyser && analyserBoundSrc === (audio.src || '') && analyserHasSignal()) return
+    scheduleAudioAnalyserRefresh()
+  }, 2000)
+}
+
+/** 建立 Web Audio 分析链路；使用静音副本音频，主播放器保持原生输出 */
 export async function ensureAudioAnalyser() {
   if (!audio || !visualizerEnabled.value) return null
   if (document.visibilityState === 'hidden') return null
   if (audio.paused || !hasPlayableAudioSrc()) return null
+
+  const src = audio.src || ''
+  const token = analyserSetupToken
+
   try {
     const AC = window.AudioContext || window.webkitAudioContext
     if (!AC) return null
     if (!audioCtx) audioCtx = new AC()
     if (audioCtx.state === 'suspended') await audioCtx.resume()
-    if (audioGraphReady && analyser) return analyser
+    if (token !== analyserSetupToken) return null
 
-    if (analyserMode === 'element' || shouldPreferElementAnalyser()) {
-      return setupElementAnalyser()
+    if (audioGraphReady && analyser && analyserBoundSrc === src) {
+      if (analyserHasSignal()) return analyser
+      if (analyserMode === 'element') {
+        const synced = await syncAnalyserAudioFromMain()
+        if (token !== analyserSetupToken) return null
+        if (synced && await waitAnalyserSignal(350, 40)) {
+          startAnalyserHealthCheck()
+          return analyser
+        }
+      }
     }
 
+    resetAudioGraph()
+    analyserMode = null
+
+    if (shouldPreferElementAnalyser()) {
+      const node = await setupElementAnalyser()
+      if (token !== analyserSetupToken) return null
+      if (node && await waitAnalyserSignal(500, 60)) {
+        analyserBoundSrc = src
+        startAnalyserHealthCheck()
+        return node
+      }
+      resetAudioGraph()
+      analyserMode = null
+    }
+
+    if (!canUseCaptureStream()) return null
     const captured = await setupCaptureAnalyser()
-    if (captured) return captured
-    return setupElementAnalyser()
+    if (token !== analyserSetupToken) return null
+    if (captured && await waitAnalyserSignal(400, 60)) {
+      analyserBoundSrc = src
+      startAnalyserHealthCheck()
+      return captured
+    }
+
+    resetAudioGraph()
+    analyserMode = null
+    const fallback = await setupElementAnalyser()
+    if (token !== analyserSetupToken) return null
+    if (fallback && await waitAnalyserSignal(800, 80)) {
+      analyserBoundSrc = src
+      startAnalyserHealthCheck()
+      return fallback
+    }
+
+    resetAudioGraph()
+    analyserMode = null
+    return null
   } catch {
     resetAudioGraph()
+    analyserMode = null
     return null
   }
 }
 
-/** captureStream 无数据时切换到 MediaElementSource（常见于 Android 等，仅前台） */
+/** captureStream 无数据时切换到 MediaElementSource */
 export function promoteElementAnalyser() {
   if (!audio || !visualizerEnabled.value) return
   if (document.visibilityState === 'hidden') return
-  if (analyserMode === 'element') {
-    scheduleAudioAnalyserRefresh()
-    return
-  }
-  analyserMode = 'element'
-  resetAudioGraph()
+  pauseAndResetAnalyserGraph()
   scheduleAudioAnalyserRefresh()
 }
 
@@ -621,23 +774,30 @@ export function getAnalyserMode() {
   return analyserMode
 }
 
-/** 播放开始后重建频谱分析（captureStream 必须在 play 之后才有音频轨） */
+/** 播放开始后重建频谱分析 */
 export function scheduleAudioAnalyserRefresh() {
   if (!visualizerEnabled.value || !audio) return
   if (document.visibilityState === 'hidden') return
-  resetAudioGraph()
+
   const trySetup = () => {
     ensureAudioAnalyser().catch(() => {})
   }
   const scheduleRetries = () => {
     trySetup()
     requestAnimationFrame(trySetup)
-    setTimeout(trySetup, 80)
-    setTimeout(trySetup, 200)
-    setTimeout(trySetup, 500)
+    for (const delay of ANALYSER_RETRY_DELAYS) {
+      setTimeout(trySetup, delay)
+    }
   }
   if (!audio.paused) scheduleRetries()
   else audio.addEventListener('playing', scheduleRetries, { once: true })
+}
+
+/** 切歌后强制重建频谱（供可视化组件调用） */
+export function resetAudioAnalyserForTrack() {
+  if (!visualizerEnabled.value) return
+  pauseAndResetAnalyserGraph()
+  scheduleAudioAnalyserRefresh()
 }
 
 export function getAnalyser() {
@@ -668,6 +828,69 @@ export function isActiveTrack(item, source) {
 export function isInQueue(item, source) {
   const key = getTrackKey(item, source)
   return playQueue.value.some(q => q.key === key)
+}
+
+async function resolvePlayUrl(item, source, quality = DEFAULT_PLAY_QUALITY) {
+  const isLocal = Boolean(item.localPath) || source === 'local'
+  if (isLocal) {
+    const res = await api.play.getUrl(buildPlayPayload(item, 'local', quality, { localPath: item.localPath }))
+    return res.url || ''
+  }
+
+  const cached = getCachedPlayUrl(item, source, quality)
+  if (cached) return cached
+
+  const res = await api.play.getUrl(buildPlayPayload(item, source, quality))
+  const url = res.url || ''
+  if (url) setCachedPlayUrl(item, source, quality, url)
+  return url
+}
+
+function canReuseLoadedAudio(url, item, source) {
+  if (!audio || !hasMediaSrc || !url) return false
+  if (audio.src !== url) return false
+  if (!currentPlaying.value) return false
+  return getTrackKey(currentPlaying.value, currentPlaying.value.source)
+    === getTrackKey(item, source)
+}
+
+async function startPlaybackFromUrl(url, { resumeTime = 0, item, source } = {}) {
+  if (!audio) initPlayer()
+
+  const sameSrc = audio.src === url && hasMediaSrc
+  if (!sameSrc) {
+    if (!resumeTime) currentTime.value = 0
+    duration.value = 0
+    if (item) applyDurationFallback(item)
+    audio.src = url
+    hasMediaSrc = true
+    pauseAndResetAnalyserGraph()
+    await waitForAudioReady()
+  } else if (audio.readyState < 2) {
+    await waitForAudioReady()
+  }
+
+  applyAudioOutput()
+  if (resumeTime > 0) {
+    try {
+      audio.currentTime = resumeTime
+      currentTime.value = resumeTime
+    } catch {}
+  } else if (!sameSrc) {
+    currentTime.value = 0
+  }
+
+  try {
+    await audio.play()
+  } catch (playErr) {
+    if (playErr?.name === 'NotAllowedError') {
+      throw new Error('浏览器拦截了自动播放，请再点一次播放')
+    }
+    throw playErr
+  }
+
+  applyAudioOutput()
+  rememberLoadedPlayUrl(item, source, url, DEFAULT_PLAY_QUALITY)
 }
 
 export function addToQueue(item, source, { play = false, replace = false } = {}) {
@@ -728,10 +951,14 @@ export async function playItem(item, activeSource) {
     return
   }
 
-  // 刷新后 currentPlaying 已恢复但 audio 未加载，继续播放同一首
+  // 同一首已暂停且媒体已加载：直接续播，不重新拉链接
   if (idx >= 0 && currentPlaying.value && getTrackKey(currentPlaying.value, currentPlaying.value.source) === key) {
     currentQueueIndex.value = idx
-    await playTrackAt(idx, { resumeTime: currentTime.value })
+    if (hasPlayableAudioSrc() && isPaused.value) {
+      await resumeOrTogglePause()
+      return
+    }
+    await playTrackAt(idx, { resumeTime: hasPlayableAudioSrc() ? currentTime.value : 0 })
     return
   }
 
@@ -768,60 +995,44 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 }
   loadingPlay.value = item.id
   playerError.value = ''
   try {
-    const isLocal = Boolean(item.localPath) || source === 'local'
-    let url = ''
-    if (isLocal) {
-      const res = await api.play.getUrl(buildPlayPayload(item, 'local', '128k', { localPath: item.localPath }))
-      url = res.url
+    const quality = DEFAULT_PLAY_QUALITY
+    const cachedUrl = getCachedPlayUrl(item, source, quality)
+    if (canReuseLoadedAudio(cachedUrl, item, source)) {
+      await startPlaybackFromUrl(cachedUrl, { resumeTime, item, source })
     } else {
-      const res = await api.play.getUrl(buildPlayPayload(item, source, '128k'))
-      url = res.url
+      const url = cachedUrl || await resolvePlayUrl(item, source, quality)
+      if (!url) throw new Error('获取播放链接失败')
+      await startPlaybackFromUrl(url, { resumeTime, item, source })
     }
-    if (!url) throw new Error('获取播放链接失败')
-
-    if (!audio) initPlayer()
-    if (!resumeTime) currentTime.value = 0
-    duration.value = 0
-    applyDurationFallback(item)
-
-    audio.src = url
-    hasMediaSrc = true
-    stopAnalyserPlayback()
-    applyAudioOutput()
-    await waitForAudioReady()
-    if (resumeTime > 0) {
-      try {
-        audio.currentTime = resumeTime
-        currentTime.value = resumeTime
-      } catch {}
-    }
-    try {
-      await audio.play()
-    } catch (playErr) {
-      if (playErr?.name === 'NotAllowedError') {
-        throw new Error('浏览器拦截了自动播放，请再点一次播放')
-      }
-      throw playErr
-    }
-    applyAudioOutput()
-    scheduleAudioAnalyserRefresh()
 
     syncDurationFromAudio()
     applyDurationFallback(item)
 
+    const trackKey = getTrackKey(item, source)
+    const keepLyrics = lyricLines.value.length > 0
+      && currentPlaying.value
+      && getTrackKey(currentPlaying.value, currentPlaying.value.source) === trackKey
+
     currentPlaying.value = cleanTrackItem(item)
     isPaused.value = false
     coverUrl.value = item.picUrl || item.img || ''
-    lyricLines.value = []
-    activeLyricIdx.value = -1
+    if (!keepLyrics) {
+      lyricLines.value = []
+      activeLyricIdx.value = -1
+    }
 
+    const isLocal = Boolean(item.localPath) || source === 'local'
     if (isLocal && item.lyric) {
       lyricLines.value = parseLrc(item.lyric)
     } else if (!isLocal) {
+      if (!lyricLines.value.length) fetchLyric(item, source)
+      if (!(item.picUrl || item.img) && !coverUrl.value) fetchCover(item, source)
+    } else if (!lyricLines.value.length) {
       fetchLyric(item, source)
-      if (!(item.picUrl || item.img)) fetchCover(item, source)
     }
+    updateActiveLyric(audio?.currentTime || 0)
     saveQueueState()
+    scheduleAudioAnalyserRefresh()
   } catch (e) {
     const message = formatPlayClientError(e)
     playerError.value = message
@@ -927,6 +1138,7 @@ export async function togglePause() {
   } else {
     audio.pause()
     pauseAnalyserAudio()
+    stopAnalyserHealthCheck()
     resetAudioGraph()
     analyserMode = null
     isPaused.value = true
@@ -1008,13 +1220,38 @@ export function toggleQueuePanel() {
 
 async function fetchLyric(item, activeSource) {
   const source = item.source || activeSource
-  try {
-    const res = await api.play.getLyric({
-      ...buildPlayPayload(item, source, '128k'),
-      lyric: item.lyric,
-    })
-    if (res.lyric) lyricLines.value = parseLrc(res.lyric)
-  } catch {}
+  const trackKey = getTrackKey(item, source)
+  const token = ++lyricFetchToken
+
+  const applyLyric = (lyric) => {
+    if (!lyric || token !== lyricFetchToken) return
+    if (!currentPlaying.value) return
+    if (getTrackKey(currentPlaying.value, currentPlaying.value.source) !== trackKey) return
+    const lines = parseLrc(lyric)
+    lyricLines.value = lines
+    activeLyricIdx.value = -1
+    if (audio && !audio.paused) updateActiveLyric(audio.currentTime)
+  }
+
+  const payload = buildPlayPayload(item, source, '128k')
+  const nameForSearch = normalizeLyricSearchName(item.name)
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (token !== lyricFetchToken) return
+    try {
+      const res = await api.play.getLyric({
+        ...payload,
+        name: attempt > 0 && nameForSearch ? nameForSearch : payload.name,
+        lyric: item.lyric,
+      })
+      if (res.lyric) {
+        applyLyric(res.lyric)
+        return
+      }
+    } catch {}
+    if (attempt < 2) {
+      await new Promise(resolve => setTimeout(resolve, 700 * (attempt + 1)))
+    }
+  }
 }
 
 async function fetchCover(item, activeSource) {
@@ -1032,18 +1269,32 @@ async function fetchCover(item, activeSource) {
   } catch {}
 }
 
+function normalizeLyricSearchName(name) {
+  if (!name) return ''
+  return String(name)
+    .replace(/[《》「」『』【】[\]()（）]/g, ' ')
+    .replace(/\s*(国语|粤语|英语|伴奏|纯音乐|DJ|Live|live|版|合唱版|低频公益版|3D环绕版)\s*/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 function parseLrc(lrc) {
   if (!lrc) return []
+  const normalized = String(lrc).replace(/\uFEFF/g, '').replace(/\r/g, '')
   const lines = []
-  for (const line of lrc.split('\n')) {
-    const match = line.match(/^\[(\d{2}):(\d{2})(?:\.(\d{2,3}))?\](.*)$/)
+  for (const rawLine of normalized.split('\n')) {
+    const line = rawLine.trim()
+    if (!line) continue
+    if (/^\[(?:ti|ar|al|by|offset|id):/i.test(line)) continue
+    const match = line.match(/^\[(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?\](.*)$/)
     if (match) {
-      const min = parseInt(match[1])
-      const sec = parseInt(match[2])
-      const ms = match[3] ? parseInt(match[3].padEnd(3, '0')) : 0
+      const min = parseInt(match[1], 10)
+      const sec = parseInt(match[2], 10)
+      const msRaw = match[3] || ''
+      const ms = msRaw ? parseInt(msRaw.padEnd(3, '0').slice(0, 3), 10) : 0
       const time = min * 60 + sec + ms / 1000
       const text = match[4].trim()
-      lines.push({ time, text })
+      if (text) lines.push({ time, text })
     }
   }
   lines.sort((a, b) => a.time - b.time)

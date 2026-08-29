@@ -1,11 +1,13 @@
 <template>
   <div class="about-page">
-    <div class="about-header">
-      <img src="/icon.png" alt="" class="about-icon" />
-      <div>
-        <div class="page-title">关于</div>
-        <div class="page-subtitle">{{ APP_DISPLAY_NAME }} · {{ APP_NAME }}</div>
+    <div class="about-hero card">
+      <div class="about-icon-wrap">
+        <img src="/icon.png" alt="" class="about-icon" />
       </div>
+      <h1 class="about-title">{{ APP_DISPLAY_NAME }}</h1>
+      <p class="about-version">版本 {{ info?.currentVersion || '—' }}</p>
+      <p class="about-desc">{{ APP_FEATURES[0] }}</p>
+      <a :href="REPO_URL" target="_blank" rel="noopener" class="about-repo">{{ REPO_URL }}</a>
     </div>
 
     <div v-if="info?.updateAvailable" class="update-banner card">
@@ -18,18 +20,10 @@
 
     <div class="about-card card">
       <div class="info-row">
-        <span class="info-label">工具说明</span>
+        <span class="info-label">功能特性</span>
         <ul class="info-features">
           <li v-for="(line, i) in APP_FEATURES" :key="i">{{ line }}</li>
         </ul>
-      </div>
-      <div class="info-row">
-        <span class="info-label">仓库地址</span>
-        <a :href="REPO_URL" target="_blank" rel="noopener" class="info-link">{{ REPO_URL }}</a>
-      </div>
-      <div class="info-row">
-        <span class="info-label">当前版本</span>
-        <span class="info-value"><code>v{{ info?.currentVersion || '—' }}</code></span>
       </div>
       <div class="info-row">
         <span class="info-label">仓库最新版</span>
@@ -62,14 +56,15 @@
       <button class="btn-ghost btn-sm" @click="loadInfo" :disabled="loading">
         {{ loading ? '检测中...' : '重新检测更新' }}
       </button>
-      <a :href="REPO_URL" target="_blank" rel="noopener" class="btn-primary btn-sm">打开 GitHub 仓库</a>
+      <a :href="REPO_URL" target="_blank" rel="noopener" class="btn-primary btn-sm about-main-btn">打开 GitHub 仓库</a>
     </div>
+
+    <p class="about-footer">© {{ new Date().getFullYear() }} {{ APP_NAME }}</p>
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted } from 'vue'
-import { api } from '../api.js'
 import { checkForUpdate, hasUpdate } from '../composables/useUpdateCheck.js'
 import { APP_NAME, APP_DISPLAY_NAME, APP_FEATURES, REPO_URL } from '../constants/app.js'
 
@@ -107,22 +102,68 @@ function formatDate(iso) {
 </script>
 
 <style scoped>
-.about-page { max-width: 720px; }
+.about-page {
+  max-width: 560px;
+  margin: 0 auto;
+}
 
-.about-header {
+.about-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 36px 28px 32px;
+  margin-bottom: 16px;
+}
+
+.about-icon-wrap {
+  width: 72px;
+  height: 72px;
+  border-radius: 16px;
+  background: var(--lemon-gradient);
   display: flex;
   align-items: center;
-  gap: 16px;
-  margin-bottom: 20px;
+  justify-content: center;
+  box-shadow: var(--lemon-glow);
+  margin-bottom: 16px;
 }
-.about-header .page-subtitle { margin-bottom: 0; }
+
 .about-icon {
-  width: 56px;
-  height: 56px;
-  border-radius: 14px;
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
   object-fit: cover;
-  flex-shrink: 0;
+  filter: brightness(1.05);
 }
+
+.about-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+
+.about-version {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 14px;
+}
+
+.about-desc {
+  font-size: 14px;
+  color: var(--text-secondary);
+  line-height: 1.7;
+  margin-bottom: 12px;
+  max-width: 420px;
+}
+
+.about-repo {
+  font-size: 13px;
+  color: var(--accent);
+  word-break: break-all;
+  transition: color 0.15s;
+}
+.about-repo:hover { color: var(--accent-hover); }
 
 .update-banner {
   display: flex;
@@ -131,8 +172,8 @@ function formatDate(iso) {
   gap: 16px;
   padding: 16px 18px;
   margin-bottom: 16px;
-  background: rgba(60, 110, 247, 0.12);
-  border-color: rgba(60, 110, 247, 0.35);
+  background: var(--accent-muted);
+  border-color: rgba(255, 102, 0, 0.35);
 }
 .update-banner-text {
   display: flex;
@@ -168,7 +209,6 @@ function formatDate(iso) {
   gap: 8px;
   flex-wrap: wrap;
 }
-.info-value.desc { line-height: 1.6; color: var(--text-secondary); }
 .info-features {
   flex: 1;
   margin: 0;
@@ -178,12 +218,6 @@ function formatDate(iso) {
   line-height: 1.8;
 }
 .info-features li { list-style: disc; }
-.info-link {
-  color: var(--accent);
-  word-break: break-all;
-  font-size: 14px;
-}
-.info-link:hover { color: var(--accent-hover); }
 .info-value code {
   background: var(--bg-input);
   padding: 2px 8px;
@@ -196,9 +230,9 @@ function formatDate(iso) {
   font-size: 11px;
   padding: 2px 8px;
   border-radius: var(--radius-pill);
-  background: rgba(255, 159, 10, 0.15);
-  color: var(--warning);
-  border: 1px solid rgba(255, 159, 10, 0.35);
+  background: var(--accent-muted);
+  color: var(--accent);
+  border: 1px solid rgba(255, 102, 0, 0.35);
 }
 .badge-ok {
   font-size: 11px;
@@ -213,11 +247,26 @@ function formatDate(iso) {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
+  justify-content: center;
+  padding: 4px 2px;
+  overflow: visible;
+}
+.about-main-btn {
+  min-width: 160px;
+  text-align: center;
+}
+
+.about-footer {
+  margin-top: 28px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-muted);
 }
 
 @media (max-width: 768px) {
-  .about-header { gap: 12px; }
-  .about-icon { width: 48px; height: 48px; }
+  .about-hero { padding: 28px 20px 24px; }
+  .about-icon-wrap { width: 64px; height: 64px; }
+  .about-icon { width: 46px; height: 46px; }
   .update-banner {
     flex-direction: column;
     align-items: stretch;
@@ -228,9 +277,12 @@ function formatDate(iso) {
     padding: 12px 14px;
   }
   .info-label { width: auto; }
+  .about-actions {
+    flex-direction: column;
+  }
   .about-actions .btn-primary,
   .about-actions .btn-ghost {
-    flex: 1;
+    width: 100%;
     text-align: center;
   }
 }

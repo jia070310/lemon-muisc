@@ -13,8 +13,19 @@ export const searchState = reactive({
 
 export const sourcesLoaded = ref(false)
 
-export async function loadSearchSources(api) {
-  if (sourcesLoaded.value && Object.keys(searchState.sources).length) return
+function syncActiveSourceKey(state) {
+  const keys = Object.keys(state.sources)
+  if (!keys.length) {
+    state.activeSource = ''
+    return
+  }
+  if (!keys.includes(state.activeSource)) {
+    state.activeSource = keys[0]
+  }
+}
+
+export async function loadSearchSources(api, { force = false } = {}) {
+  if (!force && sourcesLoaded.value && Object.keys(searchState.sources).length) return
   try {
     const res = await api.search.sources()
     searchState.sources = res.sources || {}
@@ -24,9 +35,11 @@ export async function loadSearchSources(api) {
       wy: { name: '网易云' }, mg: { name: '咪咕' },
     }
   }
-  const keys = Object.keys(searchState.sources)
-  if (!searchState.activeSource && keys.length) {
-    searchState.activeSource = keys[0]
-  }
+  syncActiveSourceKey(searchState)
   sourcesLoaded.value = true
+}
+
+export function reloadSearchSources(api) {
+  sourcesLoaded.value = false
+  return loadSearchSources(api, { force: true })
 }

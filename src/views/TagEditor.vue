@@ -379,7 +379,11 @@ async function loadMetaInBatches(token) {
       const res = await api.tag.readBatch(batch, true)
       for (const item of res.data || []) {
         const file = files.value.find(f => f.filePath === item.filePath)
-        if (!file || !item.ok) continue
+        if (!file) continue
+        if (!item.ok) {
+          console.warn('[tag] read-batch failed:', item.filePath, item.error)
+          continue
+        }
         Object.assign(file, {
           title: item.title || file.parsedTitle || file.title,
           artist: item.artist || file.parsedArtist || file.artist,
@@ -387,8 +391,8 @@ async function loadMetaInBatches(token) {
           year: item.year || '',
           genre: item.genre || '',
           comment: item.comment || '',
-          hasPicture: item.hasPicture,
-          hasLyrics: item.hasLyrics,
+          hasPicture: Boolean(item.hasPicture),
+          hasLyrics: Boolean(item.hasLyrics),
         })
         file._metaLoaded = true
       }
@@ -991,9 +995,9 @@ thead th {
 tbody td { padding: 8px 8px; border-bottom: 1px solid var(--border-light); }
 tbody tr { cursor: pointer; transition: background 0.15s; }
 tbody tr:hover { background: var(--bg-hover); }
-tbody tr.modified { background: rgba(60, 110, 247, 0.08); }
+tbody tr.modified { background: var(--accent-muted); }
 tbody tr.active { background: var(--accent-muted); }
-tbody tr.selected td:first-child { background: rgba(60, 110, 247, 0.05); }
+tbody tr.selected td:first-child { background: color-mix(in srgb, var(--accent) 8%, transparent); }
 
 tbody tr.playing { background: var(--accent-muted); }
 

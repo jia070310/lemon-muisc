@@ -70,7 +70,11 @@ export const api = {
     sources: () => request('/search/sources'),
   },
   playlist: {
-    fetch: (url, source) => request(`/playlist?url=${encodeURIComponent(url)}&source=${source}`, { timeout: 120000 }),
+    fetch: (url, source, { partial = false } = {}) => {
+      const qs = new URLSearchParams({ url, source })
+      if (partial) qs.set('partial', '1')
+      return request(`/playlist?${qs}`, { timeout: partial ? 30000 : 120000 })
+    },
     recommend: (source, sort = 'hot', page = 1) =>
       request(`/playlist/recommend?source=${source}&sort=${sort}&page=${page}`),
     sources: () => request('/playlist/sources'),
@@ -98,6 +102,7 @@ export const api = {
         body: typeof songIdOrPayload === 'object'
           ? songIdOrPayload
           : { songId: songIdOrPayload, source, lyric },
+        timeout: 45000,
       }),
     getCover: (payload) =>
       request('/play/cover', {

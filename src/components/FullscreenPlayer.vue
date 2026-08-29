@@ -3,6 +3,7 @@
     <Transition name="fs-fade">
       <div
         v-if="showFullscreenPlayer"
+        ref="playerRootRef"
         class="fs-player"
         @click.self="closeFullscreenPlayer"
       >
@@ -14,6 +15,23 @@
             :active="showFullscreenPlayer && visualizerEnabled"
           />
         </div>
+
+        <button
+          v-if="nativeFullscreenSupported"
+          class="fs-screen-full"
+          type="button"
+          :title="isNativeFullscreen ? '退出屏幕全屏' : '屏幕全屏'"
+          @click="toggleNativeFullscreen"
+        >
+          <svg v-if="!isNativeFullscreen" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/>
+            <line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
+          </svg>
+          <svg v-else viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/>
+            <line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/>
+          </svg>
+        </button>
 
         <button class="fs-close" type="button" title="关闭" @click="closeFullscreenPlayer">
           <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2.2">
@@ -192,6 +210,9 @@ import SpectrumVisualizer from './SpectrumVisualizer.vue'
 
 const lyricPanelRef = ref(null)
 const lyricListRef = ref(null)
+const playerRootRef = ref(null)
+const isNativeFullscreen = ref(false)
+const nativeFullscreenSupported = ref(false)
 /** @type {import('vue').Ref<(HTMLElement | null)[]>} */
 const lyricLineEls = ref([])
 
@@ -271,9 +292,50 @@ function scrollActiveLyric() {
   panel.scrollTo({ top: Math.max(0, nextTop), behavior: 'smooth' })
 }
 
+function syncNativeFullscreenState() {
+  const el = playerRootRef.value
+  isNativeFullscreen.value = Boolean(
+    el && (document.fullscreenElement === el || document.webkitFullscreenElement === el),
+  )
+}
+
+async function exitNativeFullscreen() {
+  if (!document.fullscreenElement && !document.webkitFullscreenElement) return
+  try {
+    if (document.exitFullscreen) await document.exitFullscreen()
+    else if (document.webkitExitFullscreen) await document.webkitExitFullscreen()
+  } catch {}
+  syncNativeFullscreenState()
+}
+
+async function enterNativeFullscreen() {
+  const el = playerRootRef.value
+  if (!el) return
+  unlockAudioFromGesture()
+  try {
+    if (el.requestFullscreen) {
+      await el.requestFullscreen({ navigationUI: 'hide' })
+    } else if (el.webkitRequestFullscreen) {
+      await el.webkitRequestFullscreen()
+    } else if (document.documentElement.requestFullscreen) {
+      await document.documentElement.requestFullscreen()
+    }
+  } catch {}
+  syncNativeFullscreenState()
+}
+
+async function toggleNativeFullscreen() {
+  if (isNativeFullscreen.value) await exitNativeFullscreen()
+  else await enterNativeFullscreen()
+}
+
 function onKeydown(e) {
   if (!showFullscreenPlayer.value) return
   if (e.key === 'Escape') {
+    if (isNativeFullscreen.value) {
+      exitNativeFullscreen()
+      return
+    }
     if (showQueuePanel.value) {
       showQueuePanel.value = false
       return
@@ -297,7 +359,9 @@ watch(showFullscreenPlayer, async (open) => {
   if (open) {
     await nextTick()
     scrollActiveLyric()
+    return
   }
+  await exitNativeFullscreen()
 })
 
 watch(lyricLines, () => {
@@ -305,12 +369,23 @@ watch(lyricLines, () => {
 })
 
 onMounted(() => {
+  nativeFullscreenSupported.value = Boolean(
+    document.fullscreenEnabled
+    || document.webkitFullscreenEnabled
+    || typeof document.documentElement.requestFullscreen === 'function'
+    || typeof document.documentElement.webkitRequestFullscreen === 'function',
+  )
+  document.addEventListener('fullscreenchange', syncNativeFullscreenState)
+  document.addEventListener('webkitfullscreenchange', syncNativeFullscreenState)
   document.addEventListener('keydown', onKeydown)
 })
 
 onUnmounted(() => {
+  document.removeEventListener('fullscreenchange', syncNativeFullscreenState)
+  document.removeEventListener('webkitfullscreenchange', syncNativeFullscreenState)
   document.removeEventListener('keydown', onKeydown)
   document.body.style.overflow = ''
+  exitNativeFullscreen()
 })
 </script>
 
@@ -363,6 +438,31 @@ onUnmounted(() => {
   cursor: pointer;
 }
 .fs-close:hover { background: rgba(0, 0, 0, 0.6); }
+
+.fs-screen-full {
+  position: absolute;
+  top: calc(14px + env(safe-area-inset-top, 0px));
+  left: 18px;
+  z-index: 5;
+  width: 46px;
+  height: 46px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.4);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.fs-screen-full:hover { background: rgba(0, 0, 0, 0.6); }
+
+.fs-player:fullscreen,
+.fs-player:-webkit-full-screen {
+  width: 100%;
+  height: 100%;
+  background: #0b0d12;
+}
 
 .fs-body {
   position: relative;
@@ -492,6 +592,7 @@ onUnmounted(() => {
   flex: 1;
   -webkit-appearance: none;
   appearance: none;
+  accent-color: var(--lemon);
   height: 12px;
   margin: 0;
   padding: 0;
@@ -519,9 +620,9 @@ onUnmounted(() => {
   margin-top: -5px;
   border: none;
   border-radius: 50%;
-  background: var(--accent, #3c6ef7);
+  background: var(--lemon-gradient);
+  box-shadow: var(--lemon-glow-sm);
   cursor: pointer;
-  box-shadow: none;
 }
 .fs-slider::-moz-range-track {
   height: 2px;
@@ -534,9 +635,9 @@ onUnmounted(() => {
   height: 12px;
   border: none;
   border-radius: 50%;
-  background: var(--accent, #3c6ef7);
+  background: var(--lemon-gradient);
+  box-shadow: var(--lemon-glow-sm);
   cursor: pointer;
-  box-shadow: none;
 }
 .fs-btns {
   display: flex;
@@ -556,6 +657,7 @@ onUnmounted(() => {
   width: min(120px, 22vw);
   -webkit-appearance: none;
   appearance: none;
+  accent-color: var(--lemon);
   height: 12px;
   margin: 0;
   padding: 0;
@@ -582,7 +684,8 @@ onUnmounted(() => {
   margin-top: -5px;
   border: none;
   border-radius: 50%;
-  background: var(--accent, #3c6ef7);
+  background: var(--lemon-gradient);
+  box-shadow: var(--lemon-glow-sm);
   cursor: pointer;
 }
 .fs-vol-slider::-moz-range-track {
@@ -596,7 +699,8 @@ onUnmounted(() => {
   height: 12px;
   border: none;
   border-radius: 50%;
-  background: var(--accent, #3c6ef7);
+  background: var(--lemon-gradient);
+  box-shadow: var(--lemon-glow-sm);
   cursor: pointer;
 }
 .fs-vol-pct {
@@ -668,7 +772,7 @@ onUnmounted(() => {
 }
 .fs-queue-mode {
   font-size: 11px;
-  color: var(--accent, #6c9eff);
+  color: var(--accent);
 }
 .fs-queue-text {
   border: none;
@@ -700,7 +804,7 @@ onUnmounted(() => {
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 .fs-queue-item.active {
-  background: rgba(60, 110, 247, 0.22);
+  background: var(--accent-muted);
 }
 .fs-queue-index {
   width: 20px;
@@ -758,13 +862,12 @@ onUnmounted(() => {
 .fs-btn-main {
   width: 64px;
   height: 64px;
-  background: var(--accent, #3c6ef7);
 }
 .fs-btn-main svg {
   width: 30px;
   height: 30px;
 }
-.fs-btn-main:hover { filter: brightness(1.08); }
+.fs-btn-main:hover { transform: scale(1.04); }
 
 @keyframes fs-spin {
   from { transform: rotate(0deg); }

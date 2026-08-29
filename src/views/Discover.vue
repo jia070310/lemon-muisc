@@ -25,7 +25,7 @@
           v-for="(info, key) in discoverState.sources" :key="key"
           :class="['tab', { active: discoverState.activeSource === key }]"
           @click="switchSource(key)"
-        >{{ info.name || key }}</button>
+        >{{ platformLabel(key, info) }}</button>
       </div>
       <div v-if="showRecommend" class="sort-tabs">
         <button
@@ -94,19 +94,25 @@
     <div class="results card" v-if="discoverState.viewMode === 'detail' && discoverState.results.length">
       <div class="results-toolbar">
         <span class="results-count">
-          共 {{ discoverState.results.length }} 首
+          共 {{ discoverState.total || discoverState.results.length }} 首
+          <template v-if="discoverState.loadingMore"> · 加载剩余歌曲...</template>
+          <template v-else-if="discoverState.results.length < (discoverState.total || 0)"> · 已显示 {{ discoverState.results.length }} 首</template>
           <template v-if="selectedCount"> · 已选 {{ selectedCount }}</template>
         </span>
+        <label class="mobile-select-all">
+          <input type="checkbox" :checked="allSelected" :indeterminate.prop="someSelected && !allSelected" @change="toggleSelectAll" />
+          全选
+        </label>
         <div class="results-actions">
           <div class="dl-wrap batch-dl-wrap">
             <button
               class="btn-primary btn-sm"
               :disabled="!selectedCount || batchDownloading"
-              @click.stop="toggleBatchQualityMenu"
+              @click.stop="toggleBatchQualityMenu($event)"
             >
               {{ batchDownloading ? '添加中...' : `批量下载${selectedCount ? ` (${selectedCount})` : ''}` }}
             </button>
-            <div class="quality-menu" v-if="showBatchQualityMenu" @click.stop>
+            <div class="quality-menu" v-if="showBatchQualityMenu" :style="batchMenuStyle" @click.stop>
               <div class="quality-menu-title">批量音质：某首没有该音质时，自动降到其可用档位后再入队</div>
               <button
                 v-for="q in batchQualities"
@@ -166,10 +172,10 @@
         </span>
         <span class="col-action">
           <div class="dl-wrap">
-            <button class="dl-btn" @click.stop="toggleQualityMenu(item, i)" title="下载">
+            <button class="dl-btn" @click.stop="toggleQualityMenu(item, i, $event)" title="下载">
               <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             </button>
-            <div class="quality-menu" v-if="qualityMenuId === trackSelectKey(item, i)" @click.stop>
+            <div class="quality-menu" v-if="qualityMenuId === trackSelectKey(item, i)" :style="menuStyle" @click.stop>
               <div class="quality-menu-title">选择音质</div>
               <template v-if="getItemQualities(item).length">
                 <button
@@ -198,6 +204,7 @@ import { api } from '../api.js'
 import { discoverState, loadDiscoverSources, sourcePlaceholders, recommendSortOptions } from '../stores/discover.js'
 import { loadingPlay, isPaused, isPlayingItem, playItem, addToQueue, isInQueue } from '../stores/player.js'
 import { getQualityLabel, getQualityDisplay } from '../utils/quality.js'
+import { platformLabel } from '../utils/platforms.js'
 import { cleanText, formatArtists, cleanTrackItem } from '../utils/text.js'
 import {
   getItemQualities,
@@ -205,12 +212,15 @@ import {
   trackSelectKey,
   buildDownloadTask,
 } from '../utils/musicPayload.js'
+import { useQualityMenuPosition } from '../utils/qualityMenu.js'
 
 const toast = ref(null)
 const qualityMenuId = ref(null)
 const showBatchQualityMenu = ref(false)
 const batchDownloading = ref(false)
 const selectedKeys = ref(new Set())
+const { menuStyle, positionMenu, clearMenuPosition } = useQualityMenuPosition()
+const { menuStyle: batchMenuStyle, positionMenu: positionBatchMenu, clearMenuPosition: clearBatchMenuPosition } = useQualityMenuPosition()
 
 const activeSource = computed(() => discoverState.activeSource)
 const showRecommend = computed(() => discoverState.viewMode === 'recommend')
@@ -330,21 +340,36 @@ function clearSelection() {
   selectedKeys.value = new Set()
 }
 
-function toggleQualityMenu(item, i) {
+function toggleQualityMenu(item, i, event) {
   showBatchQualityMenu.value = false
+  clearBatchMenuPosition()
   const key = trackSelectKey(item, i)
-  qualityMenuId.value = qualityMenuId.value === key ? null : key
+  if (qualityMenuId.value === key) {
+    qualityMenuId.value = null
+    clearMenuPosition()
+    return
+  }
+  qualityMenuId.value = key
+  positionMenu(event?.currentTarget, { align: 'right' })
 }
 
-function toggleBatchQualityMenu() {
+function toggleBatchQualityMenu(event) {
   if (!selectedCount.value) return
   qualityMenuId.value = null
+  clearMenuPosition()
   showBatchQualityMenu.value = !showBatchQualityMenu.value
+  if (showBatchQualityMenu.value) {
+    positionBatchMenu(event?.currentTarget, { align: 'left' })
+  } else {
+    clearBatchMenuPosition()
+  }
 }
 
 function closeMenus() {
   qualityMenuId.value = null
   showBatchQualityMenu.value = false
+  clearMenuPosition()
+  clearBatchMenuPosition()
 }
 
 async function togglePlay(item) {
@@ -392,6 +417,7 @@ async function fetchPlaylist() {
   const input = discoverState.url.trim()
   if (!input || !discoverState.activeSource) return
   discoverState.loading = true
+  discoverState.loadingMore = false
   discoverState.fetched = true
   discoverState.viewMode = 'detail'
   discoverState.results = []
@@ -399,12 +425,38 @@ async function fetchPlaylist() {
   discoverState.total = 0
   clearSelection()
   closeMenus()
+  const source = discoverState.activeSource
   try {
-    const res = await api.playlist.fetch(input, discoverState.activeSource)
-    const data = res.data
-    discoverState.results = (data.list || []).map(cleanTrackItem)
-    discoverState.playlistInfo = data.info || null
-    discoverState.total = data.total || discoverState.results.length
+    if (source === 'kg') {
+      const partialRes = await api.playlist.fetch(input, source, { partial: true })
+      const partialData = partialRes.data
+      discoverState.results = (partialData.list || []).map(cleanTrackItem)
+      discoverState.playlistInfo = partialData.info || null
+      discoverState.total = partialData.total || discoverState.results.length
+      discoverState.loading = false
+
+      if (partialData.hasMore) {
+        discoverState.loadingMore = true
+        try {
+          const fullRes = await api.playlist.fetch(input, source)
+          const fullData = fullRes.data
+          discoverState.results = (fullData.list || []).map(cleanTrackItem)
+          discoverState.playlistInfo = fullData.info || discoverState.playlistInfo
+          discoverState.total = fullData.total || discoverState.results.length
+        } catch (e) {
+          showToast(e.message || '剩余歌曲加载失败', 'error')
+        } finally {
+          discoverState.loadingMore = false
+        }
+      }
+    } else {
+      const res = await api.playlist.fetch(input, source)
+      const data = res.data
+      discoverState.results = (data.list || []).map(cleanTrackItem)
+      discoverState.playlistInfo = data.info || null
+      discoverState.total = data.total || discoverState.results.length
+    }
+
     if (!discoverState.results.length) {
       showToast('歌单为空或解析失败', 'error')
     }
@@ -414,6 +466,7 @@ async function fetchPlaylist() {
     showToast(e.message, 'error')
   } finally {
     discoverState.loading = false
+    discoverState.loadingMore = false
   }
 }
 
@@ -456,7 +509,7 @@ function showToast(text, type = 'info') {
   max-width: none;
 }
 
-.discover-header { padding: 20px; margin-bottom: 16px; }
+.discover-header { padding: 20px 20px 18px; margin-bottom: 16px; overflow: visible; }
 
 .discover-row {
   display: flex;
@@ -512,7 +565,7 @@ function showToast(text, type = 'info') {
   border: 1px solid var(--border);
 }
 .tab:hover { background: var(--bg-hover); color: var(--text); }
-.tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.tab.active { color: #fff; }
 
 .sort-tabs {
   display: flex;
@@ -679,17 +732,34 @@ function showToast(text, type = 'info') {
   overflow: hidden;
 }
 
-.results { overflow: hidden; }
+.results { overflow: visible; }
 
 .results-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 16px;
+  padding: 14px 16px 12px;
   border-bottom: 1px solid var(--border-light);
   background: var(--bg-elevated);
+  flex-wrap: wrap;
+  gap: 8px;
 }
 .results-count { font-size: 13px; color: var(--text-muted); }
+.mobile-select-all {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+.mobile-select-all input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
 .results-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .batch-dl-wrap { display: inline-block; }
 
@@ -714,7 +784,7 @@ function showToast(text, type = 'info') {
 .result-row:last-child { border-bottom: none; }
 .result-row:hover { background: var(--bg-hover); }
 .result-row.playing { background: var(--accent-muted); }
-.result-row.selected { background: rgba(60, 110, 247, 0.08); }
+.result-row.selected { background: var(--accent-muted); }
 
 .col-check {
   display: flex;
@@ -790,18 +860,14 @@ function showToast(text, type = 'info') {
 
 .dl-wrap { position: relative; display: inline-block; }
 .quality-menu {
-  position: absolute;
-  right: 0;
-  top: calc(100% + 6px);
   min-width: 160px;
+  max-height: min(280px, 50vh);
+  overflow-y: auto;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
-  z-index: 20;
-  overflow: hidden;
 }
-.batch-dl-wrap .quality-menu { left: 0; right: auto; }
 .quality-menu-title {
   padding: 8px 12px;
   font-size: 11px;
@@ -885,6 +951,7 @@ function showToast(text, type = 'info') {
   .col-action { grid-area: action; }
 
   .results-toolbar { flex-wrap: wrap; gap: 8px; }
+  .mobile-select-all { display: inline-flex; }
   .results-actions { width: 100%; display: flex; gap: 8px; }
   .results-actions .btn-sm { flex: 1; }
   .batch-dl-wrap { flex: 1 1 100%; }

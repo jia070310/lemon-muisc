@@ -188,6 +188,119 @@ function extractLyricText(metadata, filePath) {
   return lyric
 }
 
+function syncsafeSize(buf, start) {
+  return ((buf[start] & 0x7f) << 21)
+    | ((buf[start + 1] & 0x7f) << 14)
+    | ((buf[start + 2] & 0x7f) << 7)
+    | (buf[start + 3] & 0x7f)
+}
+
+/** 一次扫描 MP3 ID3 标签，检测 APIC / USLT / SYLT 等帧 */
+function scanMp3Id3Frames(filePath) {
+  const result = { hasApic: false, hasUslt: false }
+  const fd = fs.openSync(filePath, 'r')
+  try {
+    const header = Buffer.alloc(10)
+    if (fs.readSync(fd, header, 0, 10, 0) < 10) return result
+    if (header.toString('ascii', 0, 3) !== 'ID3') return result
+    const versionMajor = header[3]
+    const tagSize = syncsafeSize(header, 6)
+    const toRead = Math.min(tagSize, 2 * 1024 * 1024)
+    const tagData = Buffer.alloc(toRead)
+    const read = fs.readSync(fd, tagData, 0, toRead, 10)
+    let offset = 0
+    while (offset + 10 <= read) {
+      const frameId = tagData.toString('ascii', offset, offset + 4)
+      if (!/^[A-Z0-9]{4}$/.test(frameId)) break
+      const frameSize = versionMajor === 4
+        ? syncsafeSize(tagData, offset + 4)
+        : tagData.readUInt32BE(offset + 4)
+      if (frameId === 'APIC' && frameSize > 0) result.hasApic = true
+      if ((frameId === 'USLT' || frameId === 'SYLT') && frameSize > 0) result.hasUslt = true
+      if (result.hasApic && result.hasUslt) break
+      const next = offset + 10 + frameSize
+      if (frameSize <= 0 || next > read) break
+      offset = next
+    }
+    return result
+  } catch {
+    return result
+  } finally {
+    fs.closeSync(fd)
+  }
+}
+
+/** @deprecated 使用 scanMp3Id3Frames */
+function mp3HasPictureFrame(filePath) {
+  return scanMp3Id3Frames(filePath).hasApic
+}
+
+/** 轻量检测 FLAC 是否含 PICTURE 元数据块 */
+function flacHasPictureBlock(filePath) {
+  try {
+    const stat = fs.statSync(filePath)
+    const readLen = Math.min(stat.size, 512 * 1024)
+    const data = Buffer.alloc(readLen)
+    const fd = fs.openSync(filePath, 'r')
+    try {
+      fs.readSync(fd, data, 0, readLen, 0)
+    } finally {
+      fs.closeSync(fd)
+    }
+    if (data.slice(0, 4).toString() !== 'fLaC') return false
+    const parsed = parseFlacBlocks(data)
+    return parsed.blocks.some((b) => b.type === 6 && b.data.length > 0)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 同步检测是否含内嵌封面；返回 null 表示需走 music-metadata 回退
+ * @returns {boolean | null}
+ */
+function hasEmbeddedPictureSync(filePath) {
+  const ext = filePath.match(/\.[^.]+$/)?.[0]?.toLowerCase() || ''
+  if (ext === '.mp3') return mp3HasPictureFrame(filePath)
+  if (ext === '.flac') return flacHasPictureBlock(filePath)
+  return null
+}
+
+async function hasEmbeddedPicture(filePath) {
+  const quick = hasEmbeddedPictureSync(filePath)
+  if (quick !== null) return quick
+  const { parseFile } = await import('music-metadata')
+  const metadata = await parseFile(filePath, { duration: false })
+  return Boolean(metadata.common.picture?.[0]?.data?.length)
+}
+
+function hasExternalLrc(filePath) {
+  const lrcPath = filePath.replace(/\.[^.]+$/, '.lrc')
+  if (lrcPath === filePath) return false
+  try {
+    return fs.existsSync(lrcPath) && fs.statSync(lrcPath).size > 0
+  } catch {
+    return false
+  }
+}
+
+function detectEmbeddedFlagsLite(metadata, filePath) {
+  const ext = filePath.match(/\.[^.]+$/)?.[0]?.toLowerCase() || ''
+  let hasPicture = Boolean(metadata.common.picture?.length)
+  let hasLyrics = Boolean(metadata.common.lyrics?.length)
+
+  if (ext === '.mp3') {
+    const frames = scanMp3Id3Frames(filePath)
+    hasPicture = hasPicture || frames.hasApic
+    hasLyrics = hasLyrics || frames.hasUslt
+  } else if (ext === '.flac') {
+    hasPicture = hasPicture || flacHasPictureBlock(filePath)
+  }
+
+  if (!hasLyrics) hasLyrics = hasExternalLrc(filePath)
+  return { hasPicture, hasLyrics }
+}
+
 function extractPicture(metadata) {
   const pic = metadata.common.picture?.[0]
   if (!pic?.data?.length) return { pictureBase64: '', pictureMime: '' }
@@ -199,10 +312,18 @@ function extractPicture(metadata) {
   }
 }
 
-/** 列表视图用的轻量读取：跳过封面/歌词内容，显著加快大目录扫描 */
+/** 列表视图用的轻量读取：跳过封面/歌词内容，但会检测是否含内嵌封面与歌词 */
 export async function readMetaLite(filePath) {
   const { parseFile } = await import('music-metadata')
   const metadata = await parseFile(filePath, { skipCovers: true, duration: true })
+  const flags = detectEmbeddedFlagsLite(metadata, filePath)
+  let hasPicture = flags.hasPicture
+  if (!hasPicture) {
+    const ext = filePath.match(/\.[^.]+$/)?.[0]?.toLowerCase() || ''
+    if (ext !== '.mp3' && ext !== '.flac') {
+      try { hasPicture = await hasEmbeddedPicture(filePath) } catch {}
+    }
+  }
 
   return {
     title: metadata.common.title || '',
@@ -216,8 +337,8 @@ export async function readMetaLite(filePath) {
     bitrate: metadata.format.bitrate || 0,
     sampleRate: metadata.format.sampleRate || 0,
     format: metadata.format.container || '',
-    hasPicture: Boolean(metadata.common.picture?.length),
-    hasLyrics: Boolean(metadata.common.lyrics?.length),
+    hasPicture,
+    hasLyrics: flags.hasLyrics,
     lyric: '',
     pictureBase64: '',
     pictureMime: '',

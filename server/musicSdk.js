@@ -44,34 +44,73 @@ async function kwSearch(keyword, page = 1, limit = 30) {
 }
 
 // --- 酷狗 kg ---
-async function kgSearch(keyword, page = 1, limit = 30) {
-  const url = `https://songsearch.kugou.com/song_search_v2?keyword=${encodeURIComponent(keyword)}&page=${page}&pagesize=${limit}&userid=0&clientver=&platform=WebFilter&filter=2&iscorrection=1&privilege_filter=0&area_code=1`
-  const buf = await req('get', url)
-  const data = parseJSON(buf)
-  if (!data?.data?.lists) return { list: [], allPage: 0, total: 0 }
-  const total = data.data.total || 0
+function mapKgWebSearchItem(item) {
+  const types = parseKgTypes(item)
+  return withTypes({
+    id: item.FileHash || '',
+    name: cleanHtml(item.SongName),
+    singer: formatArtists(item.SingerName),
+    album: cleanHtml(item.AlbumName),
+    interval: formatTime(item.Duration || 0),
+    source: 'kg',
+    songId: item.FileHash || '',
+    hash: item.FileHash || '',
+    albumId: item.AlbumID || '',
+    albumAudioId: String(item.ID || item.AlbumAudioID || item.MixSongID || ''),
+    duration: item.Duration || 0,
+    picUrl: kgPicUrl(item),
+    img: kgPicUrl(item),
+  }, types)
+}
+
+function buildKgSearchResult(list, total, limit) {
+  const safeTotal = total || list.length
   return {
-    list: data.data.lists.map(item => {
-      const types = parseKgTypes(item)
-      return withTypes({
-        id: item.FileHash || '',
-        name: cleanHtml(item.SongName),
-        singer: formatArtists(item.SingerName),
-        album: cleanHtml(item.AlbumName),
-        interval: formatTime(item.Duration || 0),
-        source: 'kg',
-        songId: item.FileHash || '',
-        hash: item.FileHash || '',
-        albumId: item.AlbumID || '',
-        albumAudioId: String(item.ID || item.AlbumAudioID || item.MixSongID || ''),
-        duration: item.Duration || 0,
-        picUrl: kgPicUrl(item),
-        img: kgPicUrl(item),
-      }, types)
-    }),
-    allPage: Math.ceil(total / limit),
-    total,
+    list,
+    allPage: Math.max(1, Math.ceil(safeTotal / limit)),
+    total: safeTotal,
   }
+}
+
+async function kgSearchWeb(keyword, page = 1, limit = 30) {
+  const url = `https://songsearch.kugou.com/song_search_v2?keyword=${encodeURIComponent(keyword)}&page=${page}&pagesize=${limit}&userid=-1&clientver=2000&platform=WebFilter&filter=2&iscorrection=1&privilege_filter=0&area_code=1`
+  const data = parseJSON(await req('get', url, null, KG_HEADERS))
+  const lists = data?.data?.lists
+  if (!Array.isArray(lists) || !lists.length) return null
+  return buildKgSearchResult(lists.map(mapKgWebSearchItem), data.data.total || 0, limit)
+}
+
+async function kgSearchMobile(keyword, page = 1, limit = 30) {
+  const url = `http://mobilecdn.kugou.com/api/v3/search/song?format=json&keyword=${encodeURIComponent(keyword)}&page=${page}&pagesize=${limit}&showtype=1`
+  const data = await kgFetchMobileJson(url, 2)
+  const lists = data?.data?.lists || data?.data?.info
+  if (data?.status !== 1 || !Array.isArray(lists) || !lists.length) return null
+  const list = lists.map(mapKgSongItem).filter(s => s.hash || s.name)
+  if (!list.length) return null
+  return buildKgSearchResult(list, data.data.total || list.length, limit)
+}
+
+async function kgSearchComplex(keyword, page = 1, limit = 30) {
+  const url = `https://complexsearch.kugou.com/v2/search/song?keyword=${encodeURIComponent(keyword)}&page=${page}&pagesize=${limit}&bitrate=0&isfuzzy=0&tag=em&inputtype=0&platform=WebFilter&userid=-1&clientver=2000&iscorrection=1&privilege_filter=0&filter=2&token=&appid=1014`
+  const data = parseJSON(await req('get', url, null, KG_HEADERS))
+  const lists = data?.data?.lists
+  if (!Array.isArray(lists) || !lists.length) return null
+  return buildKgSearchResult(lists.map(mapKgWebSearchItem), data.data.total || 0, limit)
+}
+
+async function kgSearch(keyword, page = 1, limit = 30) {
+  const attempts = [
+    () => kgSearchMobile(keyword, page, limit),
+    () => kgSearchWeb(keyword, page, limit),
+    () => kgSearchComplex(keyword, page, limit),
+  ]
+  for (const attempt of attempts) {
+    try {
+      const result = await attempt()
+      if (result?.list?.length) return result
+    } catch {}
+  }
+  return { list: [], allPage: 0, total: 0 }
 }
 
 // --- QQ音乐 tx ---
@@ -450,9 +489,11 @@ export function parsePlaylistInput(source, raw) {
       return { id }
     }
     case 'kg': {
-      const gid = body.match(/global_collection_id=([a-zA-Z0-9_]+)/)?.[1]
-        || body.match(/gcid_([a-zA-Z0-9_]+)/)?.[1]
-      if (gid) return { globalCollectionId: gid }
+      const collectionId = body.match(/global_collection_id=([a-zA-Z0-9_]+)/)?.[1]
+        || body.match(/(collection_[a-zA-Z0-9_]+)/)?.[1]
+      if (collectionId) return { globalCollectionId: collectionId }
+      const gcid = body.match(/(gcid_[a-zA-Z0-9_]+)/)?.[1]
+      if (gcid) return { encodeGcid: gcid }
       if (/^id_\d+$/.test(body)) return { id: body.replace(/^id_/, '') }
       const id = idFromUrl([/\/special\/single\/(\d+)/, /\/songlist\/(\d+)/, /^(\d+)$/])
       if (id) return { id }
@@ -625,7 +666,9 @@ async function kwPlaylist({ id, digestId }) {
 
     const batch = (data.musiclist || []).map(item => {
       const types = parseKwTypes(item)
-      const songId = String(item.id || item.musicrid?.replace('MUSIC_', '') || '')
+      const musicRid = String(item.musicrid || item.MUSICRID || '').replace(/^MUSIC_/i, '')
+      const dcTargetId = String(item.dcTargetId || item.DC_TARGETID || item.audiosourceid || '')
+      const songId = String(item.id || musicRid || dcTargetId || '')
       return withTypes({
         id: songId,
         name: cleanHtml(item.name),
@@ -637,6 +680,8 @@ async function kwPlaylist({ id, digestId }) {
         songId,
         songmid: songId,
         musicId: songId,
+        rid: musicRid || songId,
+        dcTargetId,
         albumId: item.albumid || '',
         picUrl: kwPicUrl(item),
         img: kwPicUrl(item),
@@ -712,50 +757,204 @@ async function mgPlaylist({ id }) {
 
 function mapKgSongItem(item) {
   const audio = item.audio_info || item
-  const hash = audio.hash || item.hash || item.FileHash || ''
+  let hash = audio.hash || item.hash || item.FileHash || ''
+  let name = item.songname || item.SongName || item.name || item.audio_name || item.remark || ''
+  let singer = item.author_name || item.SingerName || item.singer || ''
+  if (!singer && Array.isArray(item.authors) && item.authors.length) {
+    singer = item.authors.map(a => a.author_name).filter(Boolean).join('、')
+  }
+  if (item.filename && (!name || !singer)) {
+    const idx = String(item.filename).indexOf(' - ')
+    if (idx >= 0) {
+      if (!singer) singer = item.filename.slice(0, idx)
+      if (!name) name = item.filename.slice(idx + 3)
+    } else if (!name) {
+      name = item.filename
+    }
+  }
+
   const types = parseKgTypes({
-    FileSize: audio.filesize || item.FileSize,
-    HQFileSize: audio.filesize_320 || item.HQFileSize,
-    SQFileSize: audio.filesize_flac || item.SQFileSize,
-    ResFileSize: audio.filesize_high || item.ResFileSize,
+    FileSize: audio.filesize || item.filesize || item.FileSize,
+    HQFileSize: audio.filesize_320 || item.filesize_320 || item['320filesize'] || item.HQFileSize,
+    SQFileSize: audio.filesize_flac || item.filesize_flac || item.sqfilesize || item.SQFileSize,
+    ResFileSize: audio.filesize_high || item.filesize_high || item.ResFileSize,
   })
   if (hash && types.length) types[0].hash = hash
+
+  const rawDuration = audio.timelength || item.Duration || item.duration || 0
+  const durationSec = rawDuration > 1000 && (audio.timelength || item.filesize)
+    ? Math.floor(rawDuration / 1000)
+    : Math.floor(rawDuration)
 
   const albumAudioId = String(audio.audio_id || item.album_audio_id || item.ID || item.albumAudioId || '')
   return withTypes({
     id: hash || albumAudioId,
-    name: cleanHtml(item.songname || item.SongName || item.name),
-    singer: formatArtists(item.author_name || item.SingerName || item.singer),
-    album: cleanHtml(item.album_info?.album_name || item.AlbumName || item.album),
-    albumName: cleanHtml(item.album_info?.album_name || item.AlbumName || item.album),
-    interval: formatTime(Math.floor((audio.timelength || item.Duration || item.duration || 0) / (audio.timelength ? 1000 : 1))),
+    name: cleanHtml(name),
+    singer: formatArtists(singer),
+    album: cleanHtml(item.album_info?.album_name || item.AlbumName || item.album || item.album_name || ''),
+    albumName: cleanHtml(item.album_info?.album_name || item.AlbumName || item.album || item.album_name || ''),
+    interval: formatTime(durationSec),
     source: 'kg',
     songId: hash || albumAudioId,
     hash,
     albumAudioId,
-    duration: Math.floor((audio.timelength || item.Duration || 0) / (audio.timelength ? 1000 : 1)),
+    duration: durationSec,
     picUrl: kgPicUrl(item),
     img: kgPicUrl(item),
   }, types)
 }
 
-async function kgPlaylistFromSpecial(id) {
-  const html = (await req('get', `https://www.kugou.com/yy/special/single/${id}.html`, null, {
-    Referer: 'https://www.kugou.com/',
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-  })).toString()
+const KG_HEADERS = {
+  Referer: 'https://www.kugou.com/',
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+}
 
-  let listRaw = []
-  const dataMatch = html.match(/global\.data\s*=\s*(\[[\s\S]*?\])\s*;/)
-  if (dataMatch) {
-    try { listRaw = JSON.parse(dataMatch[1]) } catch {}
+function parseKgTagResponse(buf) {
+  const text = Buffer.isBuffer(buf) ? buf.toString() : String(buf || '')
+  const match = text.match(/<!--KG_TAG_RES_START-->([\s\S]*?)<!--KG_TAG_RES_END-->/)
+  try {
+    return JSON.parse(match ? match[1] : text.trim())
+  } catch {
+    return null
+  }
+}
+
+function extractJsonAfterMarker(html, marker) {
+  const idx = html.indexOf(marker)
+  if (idx < 0) return null
+  let i = idx + marker.length
+  while (i < html.length && /\s/.test(html[i])) i++
+  const start = i
+  const open = html[i]
+  if (open !== '[' && open !== '{') return null
+  const close = open === '[' ? ']' : '}'
+  let depth = 0
+  let inStr = false
+  let esc = false
+  for (; i < html.length; i++) {
+    const ch = html[i]
+    if (inStr) {
+      if (esc) esc = false
+      else if (ch === '\\') esc = true
+      else if (ch === '"') inStr = false
+      continue
+    }
+    if (ch === '"') { inStr = true; continue }
+    if (ch === open) depth++
+    else if (ch === close) {
+      depth--
+      if (depth === 0) return html.slice(start, i + 1)
+    }
+  }
+  return null
+}
+
+async function kgFetchMobileJson(url, retries = 1) {
+  let lastErr = null
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const data = parseKgTagResponse(await req('get', url, null, KG_HEADERS))
+      if (data) return data
+      lastErr = new Error('酷狗接口返回异常')
+    } catch (e) {
+      lastErr = e
+    }
+    if (attempt < retries) await new Promise(r => setTimeout(r, 120 * (attempt + 1)))
+  }
+  throw lastErr || new Error('酷狗接口请求失败')
+}
+
+function kgMobileSongPageUrl(specialId, page, pageSize) {
+  return `http://mobilecdn.kugou.com/api/v3/special/song?plat=0&specialid=${specialId}&page=${page}&pagesize=${pageSize}&version=8352&with_res_tag=1`
+}
+
+function kgMapMobilePlaylistInfo(infoPayload = {}) {
+  return {
+    name: cleanHtml(infoPayload.specialname || infoPayload.name || ''),
+    img: String(infoPayload.imgurl || infoPayload.img || '').replace(/\{size\}/g, '400'),
+    desc: cleanHtml(infoPayload.intro || infoPayload.description || ''),
+    author: cleanHtml(infoPayload.nickname || infoPayload.singername || infoPayload.username || ''),
+    play_count: formatPlayCount(infoPayload.playcount || infoPayload.play_count || infoPayload.total_play_count),
+  }
+}
+
+function kgMapMobileSongPage(data) {
+  const batch = (data?.data?.info || []).map(mapKgSongItem).filter(s => s.hash || s.name)
+  const total = parseInt(data?.data?.total, 10) || batch.length
+  return { batch, total }
+}
+
+async function kgFetchMobilePlaylistPages(specialId, { pageSize = 300, partial = false } = {}) {
+  const infoUrl = `http://mobilecdn.kugou.com/api/v3/special/info?specialid=${specialId}`
+  const [infoData, firstData] = await Promise.all([
+    kgFetchMobileJson(infoUrl).catch(() => null),
+    kgFetchMobileJson(kgMobileSongPageUrl(specialId, 1, pageSize)),
+  ])
+  if (firstData?.status !== 1 || !firstData.data) throw new Error('无法获取酷狗歌单')
+
+  const { batch: firstBatch, total } = kgMapMobileSongPage(firstData)
+  if (!firstBatch.length) throw new Error('无法获取酷狗歌单')
+  const info = kgMapMobilePlaylistInfo(infoData?.data || {})
+
+  if (partial) {
+    return {
+      list: firstBatch,
+      total,
+      source: 'kg',
+      info,
+      hasMore: total > firstBatch.length,
+      partial: true,
+    }
   }
 
-  const infoMatch = html.match(/var\s+global\s*=\s*(\{[\s\S]*?\})\s*;/)
+  const totalPages = Math.ceil(total / pageSize)
+  const pageResults = [firstBatch]
+  if (totalPages > 1) {
+    const rest = await Promise.all(
+      Array.from({ length: totalPages - 1 }, (_, i) => kgFetchMobileJson(kgMobileSongPageUrl(specialId, i + 2, pageSize))),
+    )
+    for (const data of rest) {
+      if (data?.status === 1 && data.data) {
+        pageResults.push(kgMapMobileSongPage(data).batch)
+      }
+    }
+  }
+
+  const list = pageResults.flat()
+  return {
+    list,
+    total: total || list.length,
+    source: 'kg',
+    info,
+    hasMore: false,
+    partial: false,
+  }
+}
+
+async function kgPlaylistFromMobileApi(specialId, options = {}) {
+  return kgFetchMobilePlaylistPages(specialId, options)
+}
+
+async function kgPlaylistFromHtml(id) {
+  const html = (await req('get', `https://www.kugou.com/yy/special/single/${id}.html`, null, KG_HEADERS)).toString()
+
+  let listRaw = []
+  const legacyMatch = html.match(/global\.data\s*=\s*(\[[\s\S]*?\])\s*;/)
+  if (legacyMatch) {
+    try { listRaw = JSON.parse(legacyMatch[1]) } catch {}
+  }
+  if (!listRaw.length) {
+    const dataJson = extractJsonAfterMarker(html, 'var data=')
+    if (dataJson) {
+      try { listRaw = JSON.parse(dataJson) } catch {}
+    }
+  }
+
   let info = { name: '', img: '', desc: '', author: '', play_count: '' }
-  if (infoMatch) {
+  const legacyInfo = html.match(/var\s+global\s*=\s*(\{[\s\S]*?\})\s*;/)
+  if (legacyInfo) {
     try {
-      const g = JSON.parse(infoMatch[1])
+      const g = JSON.parse(legacyInfo[1])
       info = {
         name: cleanHtml(g.name || g.specialname || ''),
         img: g.pic || g.img || '',
@@ -764,6 +963,20 @@ async function kgPlaylistFromSpecial(id) {
         play_count: formatPlayCount(g.play_count || g.playcount),
       }
     } catch {}
+  } else {
+    const infoJson = extractJsonAfterMarker(html, 'var specialInfo =')
+    if (infoJson) {
+      try {
+        const g = JSON.parse(infoJson)
+        info = {
+          name: cleanHtml(g.name || g.class_name || ''),
+          img: g.image || g.pic || '',
+          desc: cleanHtml(g.intro || ''),
+          author: cleanHtml(g.nickname || ''),
+          play_count: formatPlayCount(g.play_count || g.playcount),
+        }
+      } catch {}
+    }
   }
 
   if (!listRaw.length) {
@@ -780,54 +993,102 @@ async function kgPlaylistFromSpecial(id) {
   return { list, total: list.length, source: 'kg', info }
 }
 
-async function kgPlaylistFromGid(globalCollectionId) {
-  const all = []
-  let page = 1
-  let total = 0
-  let info = { name: '', img: '', desc: '', author: '', play_count: '' }
-
-  while (true) {
-    const buf = await req('get',
-      `https://pubsongscdn.kugou.com/v2/get_other_list_file?specialid=0&global_specialid=${encodeURIComponent(globalCollectionId)}&page=${page}&pagesize=300&userid=0&clientver=12345`,
-      null, LYRIC_HEADERS.kg)
-    const data = parseJSON(buf)
-    if (data?.status !== 1 && data?.errcode !== 0) {
-      throw new Error('无法获取酷狗分享歌单，可尝试在浏览器打开后复制官方歌单 ID')
-    }
-
-    if (!info.name && data.data?.info) {
-      const pi = data.data.info
-      info = {
-        name: cleanHtml(pi.specialname || pi.name || ''),
-        img: pi.img || pi.pic || '',
-        desc: cleanHtml(pi.intro || ''),
-        author: cleanHtml(pi.nickname || pi.username || ''),
-        play_count: formatPlayCount(pi.play_count),
-      }
-    }
-
-    total = parseInt(data.data?.count || data.data?.total, 10) || total
-    const batch = (data.data?.info?.songs || data.data?.songs || data.data?.lists || []).map(mapKgSongItem)
-    all.push(...batch)
-    if (!batch.length || all.length >= total) break
-    page += 1
+async function kgPlaylistFromSpecial(id, options = {}) {
+  try {
+    return await kgPlaylistFromMobileApi(id, options)
+  } catch {
+    if (options.partial) throw new Error('无法获取酷狗歌单')
+    return kgPlaylistFromHtml(id)
   }
-
-  return { list: all, total: total || all.length, source: 'kg', info }
 }
 
-async function kgPlaylist(parsed) {
-  if (parsed.globalCollectionId) return kgPlaylistFromGid(parsed.globalCollectionId)
-  return kgPlaylistFromSpecial(parsed.id)
+async function kgPlaylistFromGid(globalCollectionId, options = {}) {
+  const pageSize = 300
+  const fetchPage = async (page) => {
+    const buf = await req('get',
+      `https://pubsongscdn.kugou.com/v2/get_other_list_file?specialid=0&global_specialid=${encodeURIComponent(globalCollectionId)}&page=${page}&pagesize=${pageSize}&userid=0&clientver=12345&appid=1005&area_code=1`,
+      null, KG_HEADERS)
+    return parseJSON(buf)
+  }
+
+  const firstData = await fetchPage(1)
+  if (firstData?.status !== 1 && firstData?.errcode !== 0) {
+    throw new Error('无法获取酷狗分享歌单，请改用官网歌单链接或数字 ID（如 id_636158）')
+  }
+
+  let info = { name: '', img: '', desc: '', author: '', play_count: '' }
+  if (firstData.data?.info) {
+    const pi = firstData.data.info
+    info = {
+      name: cleanHtml(pi.specialname || pi.name || ''),
+      img: pi.img || pi.pic || '',
+      desc: cleanHtml(pi.intro || ''),
+      author: cleanHtml(pi.nickname || pi.username || ''),
+      play_count: formatPlayCount(pi.play_count),
+    }
+  }
+
+  const mapPageSongs = (data) => (data.data?.info?.songs || data.data?.songs || data.data?.lists || []).map(mapKgSongItem)
+  const firstBatch = mapPageSongs(firstData)
+  const total = parseInt(firstData.data?.count || firstData.data?.total, 10) || firstBatch.length
+
+  if (options.partial) {
+    return {
+      list: firstBatch,
+      total: total || firstBatch.length,
+      source: 'kg',
+      info,
+      hasMore: total > firstBatch.length,
+      partial: true,
+    }
+  }
+
+  const totalPages = Math.ceil((total || firstBatch.length) / pageSize)
+  const batches = [firstBatch]
+  if (totalPages > 1) {
+    const rest = await Promise.all(Array.from({ length: totalPages - 1 }, (_, i) => fetchPage(i + 2)))
+    for (const data of rest) {
+      if (data?.status === 1 || data?.errcode === 0) batches.push(mapPageSongs(data))
+    }
+  }
+
+  const list = batches.flat()
+  return { list, total: total || list.length, source: 'kg', info, hasMore: false, partial: false }
+}
+
+async function kgResolveShareInput(raw) {
+  const input = String(raw || '').trim()
+  if (!/^https?:\/\/t\d*\.kugou\.com\//i.test(input)) return input
+  try {
+    const resp = await needle('get', input, {
+      headers: KG_HEADERS,
+      follow_max: 5,
+      parse_response: false,
+      timeout: 15000,
+    })
+    return resp.request?.uri?.href || input
+  } catch {
+    return input
+  }
+}
+
+async function kgPlaylist(parsed, options = {}) {
+  if (parsed.id) return kgPlaylistFromSpecial(parsed.id, options)
+  if (parsed.encodeGcid) {
+    throw new Error('酷狗 gcid 分享链接暂不稳定，请在浏览器打开歌单后复制数字 ID 或官网链接')
+  }
+  if (parsed.globalCollectionId) return kgPlaylistFromGid(parsed.globalCollectionId, options)
+  throw new Error('无法解析酷狗歌单')
 }
 
 const playlistMap = { wy: wyPlaylist, tx: txPlaylist, kw: kwPlaylist, mg: mgPlaylist, kg: kgPlaylist }
 
-export async function fetchPlaylist(source, input) {
+export async function fetchPlaylist(source, input, options = {}) {
   if (!AVAILABLE_SOURCES[source]) throw new Error(`不支持的平台: ${source}`)
-  const parsed = parsePlaylistInput(source, input)
+  const resolvedInput = source === 'kg' ? await kgResolveShareInput(input) : input
+  const parsed = parsePlaylistInput(source, resolvedInput)
   const fn = playlistMap[source]
-  return fn(parsed)
+  return fn(parsed, options)
 }
 
 function mapRecommendItem(item) {
@@ -1015,38 +1276,62 @@ const LYRIC_HEADERS = {
 }
 
 function normalizeLyricResult(result) {
+  const lyric = String(result?.lyric || '').replace(/\r/g, '').trim()
   return {
-    lyric: result?.lyric || '',
-    tlyric: result?.tlyric || '',
-    rlyric: result?.rlyric || '',
+    lyric,
+    tlyric: String(result?.tlyric || '').replace(/\r/g, '').trim(),
+    rlyric: String(result?.rlyric || '').replace(/\r/g, '').trim(),
   }
 }
 
 function parseKwLrcPayload(data) {
+  if (!data) return null
   const list = data?.data?.lrclist || data?.data?.lrcList || data?.lrclist
-  if (!Array.isArray(list) || !list.length) return null
-  const lines = list
-    .filter(l => l?.lineLyric != null && l?.time != null)
-    .map(l => `[${fmtLrcTime(parseFloat(l.time))}]${l.lineLyric}`)
-    .join('\n')
-  return lines.trim() ? normalizeLyricResult({ lyric: lines }) : null
+  if (Array.isArray(list) && list.length) {
+    const lines = list
+      .filter(l => l?.lineLyric != null && l?.time != null)
+      .map(l => `[${fmtLrcTime(parseFloat(l.time))}]${l.lineLyric}`)
+      .join('\n')
+    if (lines.trim()) return normalizeLyricResult({ lyric: lines })
+  }
+  for (const key of ['lrctxt', 'lyric', 'songLrc', 'lrc', 'content']) {
+    const raw = data?.data?.[key] || data?.[key]
+    if (typeof raw === 'string' && raw.trim()) {
+      return normalizeLyricResult({ lyric: raw.trim() })
+    }
+  }
+  return null
+}
+
+function kwLyricIdVariants(musicId) {
+  const raw = String(musicId || '').trim()
+  if (!raw) return []
+  const bare = raw.replace(/^MUSIC_/i, '')
+  return [...new Set([
+    raw,
+    bare,
+    /^\d+$/.test(bare) ? `MUSIC_${bare}` : '',
+  ].filter(Boolean))]
 }
 
 async function fetchKwLyricById(musicId) {
-  if (!musicId) return null
-  const urls = [
-    `https://www.kuwo.cn/openapi/v1/www/lyric/getlyric?musicId=${musicId}`,
-    `https://www.kuwo.cn/newh5/singles/songinfoandlrc?musicId=${musicId}`,
-    `https://m.kuwo.cn/newh5/singles/songinfoandlrc?musicId=${musicId}&httpsStatus=1`,
-  ]
-  for (const url of urls) {
-    try {
-      const buf = await req('get', url, null, LYRIC_HEADERS.kw)
-      const text = Buffer.isBuffer(buf) ? buf.toString() : String(buf || '')
-      const data = parseJSON(text.trim()) || parseJSON(text.replace(/^[^{\[]+/, ''))
-      const parsed = parseKwLrcPayload(data)
-      if (parsed?.lyric) return parsed
-    } catch {}
+  const ids = kwLyricIdVariants(musicId)
+  for (const id of ids) {
+    const urls = [
+      `https://www.kuwo.cn/openapi/v1/www/lyric/getlyric?musicId=${id}`,
+      `https://www.kuwo.cn/newh5/singles/songinfoandlrc?musicId=${id}`,
+      `https://m.kuwo.cn/newh5/singles/songinfoandlrc?musicId=${id}&httpsStatus=1`,
+      `https://wbxapi.kuwo.cn/api/www/lyric/lyric?httpsStatus=1&musicId=${id}`,
+    ]
+    for (const url of urls) {
+      try {
+        const buf = await req('get', url, null, LYRIC_HEADERS.kw)
+        const text = Buffer.isBuffer(buf) ? buf.toString() : String(buf || '')
+        const data = parseJSON(text.trim()) || parseJSON(text.replace(/^[^{\[]+/, ''))
+        const parsed = parseKwLrcPayload(data)
+        if (parsed?.lyric) return parsed
+      } catch {}
+    }
   }
   return null
 }

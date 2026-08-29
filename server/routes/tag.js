@@ -56,19 +56,17 @@ tagRouter.post('/read-batch', async (req, res) => {
     }
 
     const reader = lite ? readMetaLite : readMeta
-    const results = []
-    for (const filePath of filePaths) {
+    const results = await Promise.all(filePaths.map(async (filePath) => {
       if (!filePath || !fs.existsSync(filePath)) {
-        results.push({ filePath, ok: false, error: '文件不存在' })
-        continue
+        return { filePath, ok: false, error: '文件不存在' }
       }
       try {
         const meta = await reader(filePath)
-        results.push({ filePath, ok: true, ...meta })
+        return { filePath, ok: true, ...meta }
       } catch (e) {
-        results.push({ filePath, ok: false, error: e.message })
+        return { filePath, ok: false, error: e.message }
       }
-    }
+    }))
     res.json({ ok: true, data: results })
   } catch (e) {
     res.status(500).json({ error: e.message })

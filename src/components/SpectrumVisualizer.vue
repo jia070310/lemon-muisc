@@ -65,7 +65,7 @@ function sampleHeights(count) {
   if (!analyser || isPaused.value) {
     if (!isPaused.value) {
       analyserRetryTick++
-      if (analyserRetryTick % 24 === 0) scheduleAudioAnalyserRefresh()
+      if (analyserRetryTick % 12 === 0) scheduleAudioAnalyserRefresh()
     }
     return buildIdleHeights(count)
   }
@@ -82,7 +82,7 @@ function sampleHeights(count) {
   }
   if (peak === 0) {
     silentAnalyserFrames++
-    if (silentAnalyserFrames > 45) {
+    if (silentAnalyserFrames > 18) {
       silentAnalyserFrames = 0
       if (getAnalyserMode() !== 'element') promoteElementAnalyser()
       else scheduleAudioAnalyserRefresh()
@@ -234,6 +234,7 @@ watch(() => props.active, (on) => {
     if (canvas && ctx) ctx.clearRect(0, 0, canvas.width, canvas.height)
   }
 })
+
 </script>
 
 <style scoped>

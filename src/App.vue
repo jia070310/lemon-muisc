@@ -436,7 +436,7 @@ onUnmounted(() => {
   flex-shrink: 0;
 }
 .logo h1 { font-size: 16px; font-weight: 700; line-height: 1.2; }
-.logo-sub { font-size: 11px; color: var(--text-muted); }
+.logo-sub { font-size: 11px; color: var(--lemon); opacity: 0.85; }
 
 .nav-section { padding: 0 12px; margin-bottom: 8px; }
 .nav-label {
@@ -483,7 +483,7 @@ onUnmounted(() => {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: var(--warning);
+  background: var(--lemon);
   margin-left: auto;
   flex-shrink: 0;
   box-shadow: 0 0 0 2px var(--bg-sidebar);
@@ -568,7 +568,7 @@ onUnmounted(() => {
 .setup-banner strong { color: #ffc107; }
 .setup-link {
   margin-left: auto;
-  color: var(--accent, #6c9eff);
+  color: var(--accent);
   text-decoration: none;
   white-space: nowrap;
 }
@@ -722,7 +722,7 @@ onUnmounted(() => {
     width: 6px;
     height: 6px;
     border-radius: 50%;
-    background: var(--warning);
+    background: var(--lemon);
   }
 }
 
@@ -836,8 +836,8 @@ onUnmounted(() => {
   margin: 0 0 16px;
   padding: 10px 12px;
   border-radius: 8px;
-  background: rgba(60, 110, 247, 0.08);
-  border: 1px solid rgba(60, 110, 247, 0.2);
+  background: var(--accent-muted);
+  border: 1px solid rgba(255, 102, 0, 0.28);
   font-size: 12px;
   line-height: 1.55;
   color: var(--text-secondary);

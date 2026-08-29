@@ -8,6 +8,7 @@ import { fetchTrackLyric, fetchTrackCover } from '../utils/trackMeta.js'
 import { resolveCoverUrl } from '../utils/cover.js'
 import { isAllowedMediaPath } from '../utils/filePaths.js'
 import { formatUserError } from '../utils/userError.js'
+import { buildPlayUrlCacheKey, getCachedPlayUrl, setCachedPlayUrl } from '../utils/playUrlCache.js'
 
 export const playRouter = Router()
 
@@ -83,6 +84,11 @@ playRouter.post('/url', async (req, res) => {
 
     const type = quality || req.body.quality || '128k'
     const musicInfo = buildMusicInfo({ ...req.body, source, quality: type })
+    const cacheKey = buildPlayUrlCacheKey(source, musicInfo.songId, type)
+    const cached = getCachedPlayUrl(cacheKey)
+    if (cached) {
+      return res.json({ ok: true, url: cached, cached: true })
+    }
 
     const result = await requestSource(source, 'musicUrl', {
       type,
@@ -93,7 +99,9 @@ playRouter.post('/url', async (req, res) => {
     const url = typeof result === 'string' ? result : result?.url
     if (!url) return res.status(500).json({ error: '获取播放链接失败' })
 
-    res.json({ ok: true, url: wrapPlayUrl(url, source) })
+    const wrapped = wrapPlayUrl(url, source)
+    setCachedPlayUrl(cacheKey, wrapped)
+    res.json({ ok: true, url: wrapped })
   } catch (e) {
     res.status(500).json({ error: formatPlayError(e) })
   }

@@ -8,6 +8,7 @@ export const discoverState = reactive({
   playlistInfo: null,
   total: 0,
   loading: false,
+  loadingMore: false,
   fetched: false,
   viewMode: 'recommend', // recommend | detail
   recommendList: [],
@@ -18,8 +19,19 @@ export const discoverState = reactive({
 
 export const discoverSourcesLoaded = ref(false)
 
-export async function loadDiscoverSources(api) {
-  if (discoverSourcesLoaded.value && Object.keys(discoverState.sources).length) return
+function syncActiveSourceKey(state) {
+  const keys = Object.keys(state.sources)
+  if (!keys.length) {
+    state.activeSource = ''
+    return
+  }
+  if (!keys.includes(state.activeSource)) {
+    state.activeSource = keys[0]
+  }
+}
+
+export async function loadDiscoverSources(api, { force = false } = {}) {
+  if (!force && discoverSourcesLoaded.value && Object.keys(discoverState.sources).length) return
   try {
     const res = await api.playlist.sources()
     discoverState.sources = res.sources || {}
@@ -29,11 +41,13 @@ export async function loadDiscoverSources(api) {
       wy: { name: '网易云' }, mg: { name: '咪咕' },
     }
   }
-  const keys = Object.keys(discoverState.sources)
-  if (!discoverState.activeSource && keys.length) {
-    discoverState.activeSource = keys[0]
-  }
+  syncActiveSourceKey(discoverState)
   discoverSourcesLoaded.value = true
+}
+
+export function reloadDiscoverSources(api) {
+  discoverSourcesLoaded.value = false
+  return loadDiscoverSources(api, { force: true })
 }
 
 export const sourcePlaceholders = {

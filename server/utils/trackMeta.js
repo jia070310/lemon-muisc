@@ -5,6 +5,25 @@ import { resolveCoverCandidates } from './cover.js'
 import { fetchPicBuffer } from './fetchPic.js'
 import { fixKgLyric } from './lyric.js'
 
+function normalizeLyricSearchName(name) {
+  if (!name) return ''
+  return String(name)
+    .replace(/[《》「」『』【】[\]()（）]/g, ' ')
+    .replace(/\s*(国语|粤语|英语|伴奏|纯音乐|DJ|Live|live|版|合唱版|低频公益版|3D环绕版)\s*/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function lyricSearchKeywords(merged = {}, task = {}) {
+  const rawName = merged.name || task?.name || ''
+  const singer = merged.singer || task?.singer || ''
+  const normalized = normalizeLyricSearchName(rawName)
+  const keywords = []
+  if (rawName && singer) keywords.push(`${rawName} ${singer}`)
+  if (normalized && singer) keywords.push(`${normalized} ${singer}`)
+  return [...new Set(keywords.filter(Boolean))]
+}
+
 /** 各平台获取歌词时优先使用的 ID */
 export function pickLyricSongId(source, songId, extra = {}) {
   switch (source) {
@@ -71,22 +90,24 @@ export async function fetchTrackLyric({
   }
 
   try {
-    const keyword = [merged.name || task?.name, merged.singer || task?.singer].filter(Boolean).join(' ')
-    if (!keyword) return null
+    const keywords = lyricSearchKeywords(merged, task)
+    if (!keywords.length) return null
     const allowOther = useOtherSource && settings?.['download.isUseOtherSource'] !== 'false'
     const fallbackSources = allowOther ? ['wy', 'tx', 'kw', 'kg', 'mg'] : [src].filter(Boolean)
     const seen = new Set()
-    for (const trySrc of fallbackSources) {
-      if (!trySrc || seen.has(trySrc)) continue
-      seen.add(trySrc)
-      const result = await searchMusic(keyword, trySrc, 1, 8)
-      for (const hit of result.list || []) {
-        const hitId = pickLyricSongId(hit.source || trySrc, hit.songmid || hit.hash || hit.songId || hit.copyrightId || hit.id, hit)
-        if (!hitId) continue
-        const lrc = await getLyric(hitId, hit.source || trySrc, lyricLookupExtra(hit))
-        if (lrc?.lyric) {
-          if ((hit.source || trySrc) === 'kg') lrc.lyric = fixKgLyric(lrc.lyric)
-          return lrc
+    for (const keyword of keywords) {
+      for (const trySrc of fallbackSources) {
+        if (!trySrc || seen.has(`${keyword}:${trySrc}`)) continue
+        seen.add(`${keyword}:${trySrc}`)
+        const result = await searchMusic(keyword, trySrc, 1, 8)
+        for (const hit of result.list || []) {
+          const hitId = pickLyricSongId(hit.source || trySrc, hit.songmid || hit.hash || hit.songId || hit.copyrightId || hit.id, hit)
+          if (!hitId) continue
+          const lrc = await getLyric(hitId, hit.source || trySrc, lyricLookupExtra(hit))
+          if (lrc?.lyric) {
+            if ((hit.source || trySrc) === 'kg') lrc.lyric = fixKgLyric(lrc.lyric)
+            return lrc
+          }
         }
       }
     }
