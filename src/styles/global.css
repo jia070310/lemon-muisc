@@ -12,11 +12,14 @@
   --lemon-light: #ff9533;
   --lemon-dark: #e05a00;
   --lemon-gradient: linear-gradient(180deg, #ff9533 0%, #e85f00 100%);
+  --lemon-gradient-hover: linear-gradient(180deg, #ff9533 0%, #f07018 100%);
   --lemon-glow: 0 0 18px rgba(255, 102, 0, 0.5), 0 0 36px rgba(255, 120, 20, 0.28);
   --lemon-glow-sm: 0 0 10px rgba(255, 102, 0, 0.42), 0 0 20px rgba(255, 120, 20, 0.2);
   --accent: #f07018;
   --accent-hover: #ff8533;
   --accent-muted: rgba(240, 112, 24, 0.18);
+  --brand-border: rgba(255, 102, 0, 0.35);
+  --brand-border-soft: rgba(255, 102, 0, 0.28);
   --text: #f0f0f0;
   --text-secondary: #a0a0a0;
   --text-muted: #707070;
@@ -50,11 +53,14 @@ html[data-theme="light"] {
   --lemon-light: #ff9533;
   --lemon-dark: #e05a00;
   --lemon-gradient: linear-gradient(180deg, #ff9533 0%, #e85f00 100%);
+  --lemon-gradient-hover: linear-gradient(180deg, #ff9533 0%, #f07018 100%);
   --lemon-glow: 0 0 18px rgba(255, 102, 0, 0.48), 0 0 36px rgba(255, 120, 20, 0.26);
   --lemon-glow-sm: 0 0 10px rgba(255, 102, 0, 0.4), 0 0 20px rgba(255, 120, 20, 0.18);
   --accent: #f07018;
   --accent-hover: #ff8533;
   --accent-muted: rgba(240, 112, 24, 0.16);
+  --brand-border: rgba(240, 112, 24, 0.35);
+  --brand-border-soft: rgba(240, 112, 24, 0.28);
   --text: #1c2333;
   --text-secondary: #5b6475;
   --text-muted: #8a93a4;
@@ -139,7 +145,7 @@ a.btn-primary {
 }
 .btn-primary:hover:not(:disabled),
 a.btn-primary:hover {
-  background: linear-gradient(180deg, #ffa347 0%, #f07018 100%);
+  background: var(--lemon-gradient-hover);
   box-shadow: var(--lemon-glow);
 }
 .btn-primary:disabled,
@@ -160,7 +166,7 @@ a.btn-primary.btn-primary:disabled {
 }
 .ctrl-main:hover:not(:disabled),
 .fs-btn-main:hover:not(:disabled) {
-  background: linear-gradient(180deg, #ffa347 0%, #f07018 100%) !important;
+  background: var(--lemon-gradient-hover) !important;
   box-shadow: var(--lemon-glow) !important;
 }
 

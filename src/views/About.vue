@@ -173,7 +173,7 @@ function formatDate(iso) {
   padding: 16px 18px;
   margin-bottom: 16px;
   background: var(--accent-muted);
-  border-color: rgba(255, 102, 0, 0.35);
+  border-color: var(--brand-border);
 }
 .update-banner-text {
   display: flex;
@@ -232,7 +232,7 @@ function formatDate(iso) {
   border-radius: var(--radius-pill);
   background: var(--accent-muted);
   color: var(--accent);
-  border: 1px solid rgba(255, 102, 0, 0.35);
+  border: 1px solid var(--brand-border);
 }
 .badge-ok {
   font-size: 11px;

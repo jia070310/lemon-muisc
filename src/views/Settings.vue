@@ -113,17 +113,67 @@
         </div>
       </div>
 
-      <!-- 试听设置 -->
-      <div v-if="activeTab === 'player'" class="panel-body">
+      <!-- 风格样式 -->
+      <div v-if="activeTab === 'appearance'" class="panel-body">
         <div class="setting-item">
           <div class="setting-item-info">
-            <div class="setting-item-label">界面主题</div>
+            <div class="setting-item-label">界面明暗</div>
             <div class="setting-item-desc">深色夜间模式或浅色日间模式</div>
           </div>
           <select v-model="settings['ui.theme']" @change="saveTheme" class="setting-select">
             <option value="dark">深色</option>
             <option value="light">浅色</option>
           </select>
+        </div>
+        <div class="setting-item setting-item-stack">
+          <div class="setting-item-info">
+            <div class="setting-item-label">风格配色</div>
+            <div class="setting-item-desc">切换按钮、标签、播放控件等强调色，深浅模式均生效</div>
+          </div>
+          <div class="color-scheme-grid">
+            <button
+              v-for="item in COLOR_SCHEME_OPTIONS"
+              :key="item.id"
+              type="button"
+              class="color-scheme-btn"
+              :class="{ active: settings[COLOR_SCHEME_KEY] === item.id }"
+              @click="selectColorScheme(item.id)"
+            >
+              <span
+                v-if="item.id !== 'custom'"
+                class="color-swatch"
+                :style="{ background: item.preview }"
+              />
+              <span
+                v-else
+                class="color-swatch color-swatch-custom"
+                :style="{ background: customPreview }"
+              />
+              <span class="color-label">{{ item.label }}</span>
+            </button>
+          </div>
+          <div v-if="settings[COLOR_SCHEME_KEY] === 'custom'" class="custom-color-panel">
+            <label class="custom-color-label">
+              <span>主色选择</span>
+              <input
+                type="color"
+                class="custom-color-input"
+                :value="customPreview"
+                @input="onCustomColorInput"
+              />
+            </label>
+            <input
+              type="text"
+              class="custom-color-hex"
+              :value="customPreview"
+              maxlength="7"
+              spellcheck="false"
+              placeholder="#f07018"
+              @change="onCustomColorHex"
+              @keydown.enter="onCustomColorHex"
+            />
+            <p class="custom-color-hint">将自动根据主色生成按钮渐变与光晕效果</p>
+          </div>
         </div>
         <div class="setting-item">
           <div class="setting-item-info">
@@ -235,7 +285,7 @@ import { loadCoverStyle, loadVisualizerSetting } from '../stores/player.js'
 import { reloadSearchSources } from '../stores/search.js'
 import { reloadDiscoverSources } from '../stores/discover.js'
 import { canPickFolder, pickFolder } from '../utils/fnos.js'
-import { applyTheme, theme as currentTheme, THEME_KEY } from '../utils/theme.js'
+import { applyTheme, theme as currentTheme, THEME_KEY, COLOR_SCHEME_KEY, CUSTOM_COLOR_KEY, COLOR_SCHEME_OPTIONS, applyColorScheme, setCustomColor, normalizeHex, colorScheme as currentColorScheme, customColor as currentCustomColor } from '../utils/theme.js'
 
 const settings = reactive({})
 const sourceList = ref([])
@@ -257,6 +307,7 @@ const activeTab = ref('paths')
 const needsPathSetup = ref(false)
 const mountInfo = ref(null)
 const mountProbeText = ref('')
+let customColorSaveTimer = 0
 
 function parseActiveIds(raw) {
   if (Array.isArray(raw)) return raw.filter(Boolean)
@@ -277,7 +328,7 @@ function isSourceActive(id) {
 const tabs = [
   { id: 'paths', label: '文件路径' },
   { id: 'source', label: '音源管理' },
-  { id: 'player', label: '试听设置' },
+  { id: 'appearance', label: '风格样式' },
   { id: 'download', label: '下载设置' },
   { id: 'embed', label: '内嵌数据' },
   { id: 'lrc', label: '歌词文件' },
@@ -297,9 +348,14 @@ const lrcToggleItems = [
 ]
 
 const currentTab = computed(() => tabs.find(t => t.id === activeTab.value) || tabs[0])
+const customPreview = computed(() => normalizeHex(settings[CUSTOM_COLOR_KEY] || currentCustomColor.value))
 
 watch(currentTheme, (v) => {
   settings[THEME_KEY] = v
+})
+
+watch(currentColorScheme, (v) => {
+  settings[COLOR_SCHEME_KEY] = v
 })
 
 onMounted(async () => {
@@ -313,7 +369,12 @@ onMounted(async () => {
     if (!settings['player.coverStyle']) settings['player.coverStyle'] = 'disc'
     if (settings['player.visualizer'] == null) settings['player.visualizer'] = 'true'
     if (!settings[THEME_KEY]) settings[THEME_KEY] = currentTheme.value
-    applyTheme(settings[THEME_KEY])
+    if (!settings[COLOR_SCHEME_KEY]) settings[COLOR_SCHEME_KEY] = currentColorScheme.value
+    if (!settings[CUSTOM_COLOR_KEY]) settings[CUSTOM_COLOR_KEY] = currentCustomColor.value
+    applyTheme(settings[THEME_KEY], {
+      color: settings[COLOR_SCHEME_KEY],
+      customHex: settings[CUSTOM_COLOR_KEY],
+    })
   } catch {}
   try {
     sourceList.value = await api.source.list()
@@ -457,13 +518,80 @@ async function saveSetting(key) {
     await api.settings.update({ [key]: settings[key] })
     if (key === 'player.coverStyle') loadCoverStyle()
     if (key === 'player.visualizer') loadVisualizerSetting()
-    if (key === THEME_KEY) applyTheme(settings[key])
+    if (key === THEME_KEY) {
+      applyTheme(settings[key], {
+        color: settings[COLOR_SCHEME_KEY],
+        customHex: settings[CUSTOM_COLOR_KEY],
+      })
+    }
+    if (key === COLOR_SCHEME_KEY) {
+      applyColorScheme(settings[key], settings[THEME_KEY], { customHex: settings[CUSTOM_COLOR_KEY] })
+    }
   } catch (e) { showToast(e.message, 'error') }
 }
 
 async function saveTheme() {
-  applyTheme(settings[THEME_KEY])
+  applyTheme(settings[THEME_KEY], {
+    color: settings[COLOR_SCHEME_KEY],
+    customHex: settings[CUSTOM_COLOR_KEY],
+  })
   await saveSetting(THEME_KEY)
+}
+
+async function selectColorScheme(id) {
+  if (settings[COLOR_SCHEME_KEY] === id && id !== 'custom') return
+  settings[COLOR_SCHEME_KEY] = id
+  const payload = { [COLOR_SCHEME_KEY]: id }
+  if (id === 'custom') {
+    const hex = normalizeHex(settings[CUSTOM_COLOR_KEY] || currentCustomColor.value)
+    settings[CUSTOM_COLOR_KEY] = hex
+    applyColorScheme('custom', settings[THEME_KEY], { customHex: hex })
+    payload[CUSTOM_COLOR_KEY] = hex
+  } else {
+    applyColorScheme(id, settings[THEME_KEY])
+  }
+  try {
+    await api.settings.update(payload)
+  } catch (e) {
+    showToast(e.message, 'error')
+  }
+}
+
+async function updateCustomColor(hex, { debounceSave = false } = {}) {
+  const normalized = normalizeHex(hex)
+  settings[CUSTOM_COLOR_KEY] = normalized
+  setCustomColor(normalized)
+  if (settings[COLOR_SCHEME_KEY] !== 'custom') {
+    settings[COLOR_SCHEME_KEY] = 'custom'
+  }
+  applyColorScheme('custom', settings[THEME_KEY], { customHex: normalized })
+
+  const save = async () => {
+    try {
+      await api.settings.update({
+        [COLOR_SCHEME_KEY]: 'custom',
+        [CUSTOM_COLOR_KEY]: normalized,
+      })
+    } catch (e) {
+      showToast(e.message, 'error')
+    }
+  }
+
+  if (debounceSave) {
+    clearTimeout(customColorSaveTimer)
+    customColorSaveTimer = setTimeout(save, 400)
+    return
+  }
+  clearTimeout(customColorSaveTimer)
+  await save()
+}
+
+function onCustomColorInput(e) {
+  updateCustomColor(e.target.value, { debounceSave: true })
+}
+
+function onCustomColorHex(e) {
+  updateCustomColor(e.target.value)
 }
 
 function toggleSetting(key) {
@@ -772,6 +900,93 @@ function showToast(text, type = 'info') {
 .toggle input:checked + .slider { background: var(--accent); }
 .toggle input:checked + .slider::before { transform: translateX(20px); }
 
+.setting-item-stack {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 14px;
+}
+.setting-item-stack .setting-item-info { width: 100%; }
+
+.color-scheme-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  width: 100%;
+}
+.color-scheme-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 8px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  transition: border-color 0.2s, background 0.2s, color 0.2s, box-shadow 0.2s;
+}
+.color-scheme-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.color-scheme-btn.active {
+  border-color: var(--accent);
+  background: var(--accent-muted);
+  color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.color-swatch {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
+}
+.color-label {
+  font-size: 12px;
+  line-height: 1.2;
+  text-align: center;
+}
+.color-swatch-custom {
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.35), 0 0 0 1px var(--border);
+}
+.custom-color-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-light);
+  background: var(--bg-input);
+}
+.custom-color-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.custom-color-input {
+  width: 44px;
+  height: 32px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-card);
+  cursor: pointer;
+}
+.custom-color-hex {
+  width: 108px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  text-transform: uppercase;
+}
+.custom-color-hint {
+  width: 100%;
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
 .toast {
   position: fixed;
   bottom: 80px;
@@ -813,6 +1028,7 @@ function showToast(text, type = 'info') {
   }
   .nav-tab.active::before { display: none; }
   .settings-panel { padding: 16px; }
+  .color-scheme-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .panel-title { font-size: 16px; margin-bottom: 14px; padding-bottom: 12px; }
   .setting-item {
     flex-direction: column;

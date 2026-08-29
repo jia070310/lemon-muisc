@@ -179,7 +179,7 @@ import { connectWS, connected as wsConnected, onWS } from './ws.js'
 import { initPlayer } from './stores/player.js'
 import { checkForUpdate, hasUpdate } from './composables/useUpdateCheck.js'
 import { api } from './api.js'
-import { applyTheme, theme, THEME_KEY } from './utils/theme.js'
+import { applyTheme, theme, THEME_KEY, COLOR_SCHEME_KEY, CUSTOM_COLOR_KEY } from './utils/theme.js'
 import { formatUserError } from './utils/userError.js'
 import PlayerBar from './components/PlayerBar.vue'
 import FullscreenPlayer from './components/FullscreenPlayer.vue'
@@ -387,7 +387,12 @@ onMounted(() => {
     setupBanner.value = Boolean(res.setup?.needsPathConfig)
   }).catch(() => {})
   api.settings.get().then((s) => {
-    if (s?.[THEME_KEY]) applyTheme(s[THEME_KEY])
+    if (s?.[THEME_KEY] || s?.[COLOR_SCHEME_KEY] || s?.[CUSTOM_COLOR_KEY]) {
+      applyTheme(s?.[THEME_KEY] || theme.value, {
+        color: s?.[COLOR_SCHEME_KEY],
+        customHex: s?.[CUSTOM_COLOR_KEY],
+      })
+    }
   }).catch(() => {})
 })
 
@@ -837,7 +842,7 @@ onUnmounted(() => {
   padding: 10px 12px;
   border-radius: 8px;
   background: var(--accent-muted);
-  border: 1px solid rgba(255, 102, 0, 0.28);
+  border: 1px solid var(--brand-border-soft);
   font-size: 12px;
   line-height: 1.55;
   color: var(--text-secondary);
