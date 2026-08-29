@@ -25,6 +25,7 @@ const SAME_QUALITY_ATTEMPTS = 3
 const RETRY_DELAY_MS = 1200
 
 downloadRouter.get('/list', (_req, res) => {
+  reconcileStaleDownloads()
   const rows = getDB().prepare('SELECT * FROM download_tasks ORDER BY created_at DESC').all()
   res.json(rows.map(r => ({ ...r, meta: JSON.parse(r.meta) })))
 })
@@ -79,27 +80,25 @@ downloadRouter.post('/add', async (req, res) => {
 })
 
 downloadRouter.post('/pause/:id', (req, res) => {
-  const dl = activeDownloads.get(req.params.id)
-  if (dl?.abort) dl.abort.abort()
-  getDB().prepare("UPDATE download_tasks SET status = 'paused' WHERE id = ?").run(req.params.id)
-  broadcast('download:status', { id: req.params.id, status: 'paused' })
+  pauseTask(req.params.id)
   res.json({ ok: true })
 })
 
 downloadRouter.post('/resume/:id', (req, res) => {
-  const row = getDB().prepare('SELECT id, meta, status FROM download_tasks WHERE id = ?').get(req.params.id)
-  if (!row) return res.status(404).json({ error: '任务不存在' })
-  let meta = {}
-  try { meta = JSON.parse(row.meta || '{}') } catch { meta = {} }
-  if (meta.downgradeOffer) {
-    delete meta.downgradeOffer
-    getDB().prepare('UPDATE download_tasks SET meta = ?, error = NULL WHERE id = ?')
-      .run(JSON.stringify(meta), req.params.id)
-  }
-  getDB().prepare("UPDATE download_tasks SET status = 'waiting', error = NULL WHERE id = ?").run(req.params.id)
-  broadcast('download:status', { id: req.params.id, status: 'waiting', error: '' })
-  processQueue()
+  if (!resumeTask(req.params.id)) return res.status(404).json({ error: '任务不存在' })
   res.json({ ok: true })
+})
+
+downloadRouter.post('/pause-all', (req, res) => {
+  const ids = normalizeTaskIds(req.body?.ids)
+  const count = pauseTasks(ids)
+  res.json({ ok: true, count })
+})
+
+downloadRouter.post('/resume-all', (req, res) => {
+  const ids = normalizeTaskIds(req.body?.ids)
+  const count = resumeTasks(ids)
+  res.json({ ok: true, count })
 })
 
 /** 用户确认：以降一档音质重新下载（仅在同音质重试失败后出现） */
@@ -183,6 +182,73 @@ downloadRouter.post('/clear-completed', (_req, res) => {
   broadcast('download:cleared', {})
   res.json({ ok: true })
 })
+
+function normalizeTaskIds(ids) {
+  if (!Array.isArray(ids) || !ids.length) return null
+  return ids.map(id => String(id)).filter(Boolean)
+}
+
+function reconcileStaleDownloads() {
+  const rows = getDB().prepare("SELECT id FROM download_tasks WHERE status = 'downloading'").all()
+  for (const row of rows) {
+    if (activeDownloads.has(row.id)) continue
+    getDB().prepare("UPDATE download_tasks SET status = 'paused' WHERE id = ?").run(row.id)
+    broadcast('download:status', { id: row.id, status: 'paused' })
+  }
+}
+
+function pauseTask(id) {
+  const dl = activeDownloads.get(id)
+  if (dl?.abort) dl.abort.abort()
+  const row = getDB().prepare("SELECT id FROM download_tasks WHERE id = ? AND status IN ('waiting', 'downloading')").get(id)
+  if (!row) return false
+  getDB().prepare("UPDATE download_tasks SET status = 'paused' WHERE id = ?").run(id)
+  broadcast('download:status', { id, status: 'paused' })
+  return true
+}
+
+function pauseTasks(ids = null) {
+  const rows = ids?.length
+    ? getDB().prepare(`SELECT id FROM download_tasks WHERE id IN (${ids.map(() => '?').join(',')}) AND status IN ('waiting', 'downloading')`).all(...ids)
+    : getDB().prepare("SELECT id FROM download_tasks WHERE status IN ('waiting', 'downloading')").all()
+  let count = 0
+  for (const row of rows) {
+    if (pauseTask(row.id)) count++
+  }
+  return count
+}
+
+function resumeTask(id) {
+  const row = getDB().prepare('SELECT id, meta, status FROM download_tasks WHERE id = ?').get(id)
+  if (!row || row.status !== 'paused') return false
+  let meta = {}
+  try { meta = JSON.parse(row.meta || '{}') } catch { meta = {} }
+  if (meta.downgradeOffer) {
+    delete meta.downgradeOffer
+    getDB().prepare('UPDATE download_tasks SET meta = ?, error = NULL WHERE id = ?')
+      .run(JSON.stringify(meta), id)
+  }
+  getDB().prepare("UPDATE download_tasks SET status = 'waiting', error = NULL WHERE id = ?").run(id)
+  broadcast('download:status', { id, status: 'waiting', error: '' })
+  processQueue()
+  return true
+}
+
+function resumeTasks(ids = null) {
+  const rows = ids?.length
+    ? getDB().prepare(`SELECT id FROM download_tasks WHERE id IN (${ids.map(() => '?').join(',')}) AND status = 'paused'`).all(...ids)
+    : getDB().prepare("SELECT id FROM download_tasks WHERE status = 'paused'").all()
+  let count = 0
+  for (const row of rows) {
+    if (resumeTask(row.id)) count++
+  }
+  return count
+}
+
+export function initDownloadQueue() {
+  reconcileStaleDownloads()
+  processQueue()
+}
 
 function getSettings() {
   const rows = getDB().prepare('SELECT key, value FROM settings').all()

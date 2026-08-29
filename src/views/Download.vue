@@ -5,8 +5,28 @@
 
     <div class="toolbar">
       <button class="btn-ghost btn-sm" @click="loadList">刷新</button>
+      <button class="btn-ghost btn-sm" @click="resumeAll" :disabled="!pausableCount">全部继续</button>
+      <button class="btn-ghost btn-sm" @click="pauseAll" :disabled="!activeCount">全部暂停</button>
+      <button
+        class="btn-ghost btn-sm"
+        :class="{ active: batchMode }"
+        @click="toggleBatchMode"
+      >{{ batchMode ? '退出批量' : '批量' }}</button>
       <button class="btn-ghost btn-sm" @click="clearCompleted">清除已完成</button>
       <button class="btn-primary btn-sm" @click="playAllPlayable" :disabled="!playableTasks.length">试听全部</button>
+    </div>
+
+    <div v-if="batchMode && tasks.length" class="batch-bar card">
+      <label class="batch-select-all">
+        <input type="checkbox" :checked="allSelected" :indeterminate.prop="someSelected && !allSelected" @change="toggleSelectAll" />
+        全选
+      </label>
+      <span class="batch-count" v-if="selectedCount">已选 {{ selectedCount }}</span>
+      <div class="batch-actions">
+        <button class="btn-ghost btn-sm" :disabled="!selectedPausableCount" @click="resumeSelected">继续</button>
+        <button class="btn-ghost btn-sm" :disabled="!selectedActiveCount" @click="pauseSelected">暂停</button>
+        <button class="btn-ghost btn-sm" :disabled="!selectedCount" @click="removeSelected">删除</button>
+      </div>
     </div>
 
     <div class="stats card" v-if="tasks.length">
@@ -17,6 +37,8 @@
       <span class="c-accent">下载中 {{ countByStatus('downloading') }}</span>
       <span class="sep">|</span>
       <span class="c-warning">等待中 {{ countByStatus('waiting') }}</span>
+      <span class="sep" v-if="countByStatus('paused')">|</span>
+      <span class="c-warning" v-if="countByStatus('paused')">已暂停 {{ countByStatus('paused') }}</span>
       <span class="sep" v-if="countByStatus('error') || countByStatus('await_confirm')">|</span>
       <span class="c-error" v-if="countByStatus('error')">失败 {{ countByStatus('error') }}</span>
       <span class="sep" v-if="countByStatus('error') && countByStatus('await_confirm')">|</span>
@@ -28,8 +50,11 @@
         v-for="task in tasks"
         :key="task.id"
         class="task-item"
-        :class="{ playing: isPlayingTask(task) }"
+        :class="{ playing: isPlayingTask(task), selected: isSelected(task.id) }"
       >
+        <label v-if="batchMode" class="task-check">
+          <input type="checkbox" :checked="isSelected(task.id)" @change="toggleSelect(task.id)" />
+        </label>
         <div class="task-info">
           <div class="task-name">{{ task.name }}</div>
           <div class="task-meta">{{ task.singer }} · {{ task.quality }} · {{ statusText(task.status) }}</div>
@@ -39,7 +64,7 @@
             v-if="task.status === 'error' || task.status === 'await_confirm'"
           >{{ formatTaskError(task) }}</div>
         </div>
-        <div class="task-progress" v-if="task.status === 'downloading'">
+        <div class="task-progress" v-if="showTaskProgress(task)">
           <div class="progress-bar">
             <div class="progress-fill" :style="{ width: (task.progress * 100) + '%' }"></div>
           </div>
@@ -69,8 +94,8 @@
             <svg v-if="isTaskInQueue(task)" viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><polyline points="20 6 9 17 4 12" stroke="currentColor" stroke-width="2" fill="none"/></svg>
             <svg v-else viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
           </button>
-          <button v-if="task.status === 'paused'" class="btn-sm btn-ghost" @click="resume(task.id)" title="继续">继续</button>
-          <button v-if="task.status === 'downloading' || task.status === 'waiting'" class="btn-sm btn-ghost" @click="pause(task.id)" title="暂停">暂停</button>
+          <button v-if="canResume(task)" class="btn-sm btn-ghost" @click="resume(task.id)" title="继续">继续</button>
+          <button v-if="canPause(task)" class="btn-sm btn-ghost" @click="pause(task.id)" title="暂停">暂停</button>
           <button
             v-if="task.status === 'await_confirm'"
             class="btn-sm btn-ghost"
@@ -107,8 +132,19 @@ import { formatUserError } from '../utils/userError.js'
 
 const tasks = ref([])
 const toast = ref(null)
+const batchMode = ref(false)
+const selectedIds = ref(new Set())
 
 onMounted(() => loadList())
+
+const selectedCount = computed(() => selectedIds.value.size)
+const allSelected = computed(() => tasks.value.length > 0 && tasks.value.every(t => selectedIds.value.has(t.id)))
+const someSelected = computed(() => selectedCount.value > 0)
+const pausableCount = computed(() => tasks.value.filter(canResume).length)
+const activeCount = computed(() => tasks.value.filter(canPause).length)
+const selectedTasks = computed(() => tasks.value.filter(t => selectedIds.value.has(t.id)))
+const selectedPausableCount = computed(() => selectedTasks.value.filter(canResume).length)
+const selectedActiveCount = computed(() => selectedTasks.value.filter(canPause).length)
 
 const unsubs = []
 unsubs.push(onWS('download:progress', (d) => {
@@ -226,8 +262,48 @@ async function playAllPlayable() {
   }
 }
 
+function canResume(task) {
+  return task.status === 'paused'
+}
+
+function canPause(task) {
+  return task.status === 'downloading' || task.status === 'waiting'
+}
+
+function showTaskProgress(task) {
+  return task.status === 'downloading' || (task.status === 'paused' && (task.progress || 0) > 0)
+}
+
+function isSelected(id) {
+  return selectedIds.value.has(id)
+}
+
+function toggleSelect(id) {
+  const next = new Set(selectedIds.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  selectedIds.value = next
+}
+
+function toggleSelectAll() {
+  if (allSelected.value) {
+    selectedIds.value = new Set()
+    return
+  }
+  selectedIds.value = new Set(tasks.value.map(t => t.id))
+}
+
+function toggleBatchMode() {
+  batchMode.value = !batchMode.value
+  if (!batchMode.value) selectedIds.value = new Set()
+}
+
 async function loadList() {
-  try { tasks.value = await api.download.list() } catch {}
+  try {
+    tasks.value = await api.download.list()
+    const valid = new Set(tasks.value.map(t => t.id))
+    selectedIds.value = new Set([...selectedIds.value].filter(id => valid.has(id)))
+  } catch {}
 }
 
 function countByStatus(s) { return tasks.value.filter(t => t.status === s).length }
@@ -256,8 +332,84 @@ function statusIcon(s) {
   return m[s] || ''
 }
 
-async function pause(id) { try { await api.download.pause(id) } catch {} }
-async function resume(id) { try { await api.download.resume(id) } catch {} }
+async function pause(id) {
+  try {
+    await api.download.pause(id)
+    const t = tasks.value.find(x => x.id === id)
+    if (t) t.status = 'paused'
+  } catch (e) {
+    showToast(e.message || '暂停失败', 'error')
+  }
+}
+
+async function resume(id) {
+  try {
+    await api.download.resume(id)
+    const t = tasks.value.find(x => x.id === id)
+    if (t) t.status = 'waiting'
+  } catch (e) {
+    showToast(e.message || '继续失败', 'error')
+  }
+}
+
+async function pauseAll() {
+  try {
+    const res = await api.download.pauseAll()
+    await loadList()
+    showToast(res.count ? `已暂停 ${res.count} 项` : '没有可暂停的任务', res.count ? 'success' : 'info')
+  } catch (e) {
+    showToast(e.message || '暂停失败', 'error')
+  }
+}
+
+async function resumeAll() {
+  try {
+    const res = await api.download.resumeAll()
+    await loadList()
+    showToast(res.count ? `已继续 ${res.count} 项` : '没有可继续的任务', res.count ? 'success' : 'info')
+  } catch (e) {
+    showToast(e.message || '继续失败', 'error')
+  }
+}
+
+async function pauseSelected() {
+  const ids = selectedTasks.value.filter(canPause).map(t => t.id)
+  if (!ids.length) return
+  try {
+    const res = await api.download.pauseAll(ids)
+    await loadList()
+    showToast(`已暂停 ${res.count || ids.length} 项`, 'success')
+  } catch (e) {
+    showToast(e.message || '暂停失败', 'error')
+  }
+}
+
+async function resumeSelected() {
+  const ids = selectedTasks.value.filter(canResume).map(t => t.id)
+  if (!ids.length) return
+  try {
+    const res = await api.download.resumeAll(ids)
+    await loadList()
+    showToast(`已继续 ${res.count || ids.length} 项`, 'success')
+  } catch (e) {
+    showToast(e.message || '继续失败', 'error')
+  }
+}
+
+async function removeSelected() {
+  const ids = [...selectedIds.value]
+  if (!ids.length) return
+  try {
+    for (const id of ids) {
+      await api.download.remove(id)
+    }
+    selectedIds.value = new Set()
+    await loadList()
+    showToast(`已删除 ${ids.length} 项`, 'success')
+  } catch (e) {
+    showToast(e.message || '删除失败', 'error')
+  }
+}
 async function confirmDowngrade(task) {
   try {
     await api.download.confirmDowngrade(task.id)
@@ -308,6 +460,37 @@ function showToast(text, type = 'info') {
   margin-bottom: 16px;
   flex-wrap: wrap;
 }
+.toolbar .btn-ghost.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-muted);
+}
+
+.batch-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+}
+.batch-select-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+.batch-select-all input { accent-color: var(--accent); }
+.batch-count { font-size: 13px; color: var(--text-muted); }
+.batch-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
 
 .stats {
   font-size: 13px;
@@ -337,6 +520,14 @@ function showToast(text, type = 'info') {
 .task-item:last-child { border-bottom: none; }
 .task-item:hover { background: var(--bg-hover); }
 .task-item.playing { background: var(--accent-muted); }
+.task-item.selected { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+
+.task-check {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.task-check input { accent-color: var(--accent); }
 
 .task-info { flex: 1; min-width: 0; }
 .task-name { font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

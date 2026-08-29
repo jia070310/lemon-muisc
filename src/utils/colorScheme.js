@@ -95,6 +95,11 @@ function buildBrandVars(main, light, dark, rgb, isLight) {
   const glowB = isLight ? 0.26 : 0.28
   const glowSmA = isLight ? 0.4 : 0.42
   const glowSmB = isLight ? 0.18 : 0.2
+  const sliderHoverA = isLight ? 0.58 : 0.62
+  const sliderHoverB = isLight ? 0.32 : 0.36
+  const sliderActiveA = isLight ? 0.78 : 0.82
+  const sliderActiveB = isLight ? 0.48 : 0.52
+  const sliderActiveC = isLight ? 0.9 : 0.95
   return {
     lemon: main,
     'lemon-light': light,
@@ -103,6 +108,8 @@ function buildBrandVars(main, light, dark, rgb, isLight) {
     'lemon-gradient-hover': `linear-gradient(180deg, ${light} 0%, ${main} 100%)`,
     'lemon-glow': `0 0 18px rgba(${r}, ${g}, ${b}, ${glowA}), 0 0 36px rgba(${r}, ${g}, ${b}, ${glowB})`,
     'lemon-glow-sm': `0 0 10px rgba(${r}, ${g}, ${b}, ${glowSmA}), 0 0 20px rgba(${r}, ${g}, ${b}, ${glowSmB})`,
+    'slider-thumb-hover-glow': `0 0 14px rgba(${r}, ${g}, ${b}, ${sliderHoverA}), 0 0 28px rgba(${r}, ${g}, ${b}, ${sliderHoverB})`,
+    'slider-thumb-active-glow': `0 0 22px rgba(${r}, ${g}, ${b}, ${sliderActiveA}), 0 0 44px rgba(${r}, ${g}, ${b}, ${sliderActiveB}), 0 0 8px rgba(${r}, ${g}, ${b}, ${sliderActiveC})`,
     accent: main,
     'accent-hover': light,
     'accent-muted': `rgba(${r}, ${g}, ${b}, ${mutedAlpha})`,

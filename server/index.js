@@ -8,6 +8,7 @@ import { fileURLToPath } from 'url'
 import { initDB, getDB } from './db.js'
 import { migrateFilePaths } from './utils/filePaths.js'
 import { apiRouter } from './routes/index.js'
+import { initDownloadQueue } from './routes/download.js'
 import { setupWebSocket } from './ws.js'
 import { loadSource } from './sourceManager.js'
 import { getStoredActiveSourceIds, saveActiveSourceIds } from './utils/activeSources.js'
@@ -82,4 +83,6 @@ server.listen(PORT, '::', async () => {
   } catch (e) {
     console.error('自动激活音源失败:', e.message)
   }
+
+  initDownloadQueue()
 })

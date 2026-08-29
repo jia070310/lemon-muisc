@@ -603,9 +603,11 @@ onUnmounted(() => {
   cursor: pointer;
   box-shadow: none;
 }
-.fs-slider:focus {
+.fs-slider:focus,
+.fs-slider:focus-visible {
   border: none;
   box-shadow: none;
+  outline: none;
 }
 .fs-slider::-webkit-slider-runnable-track {
   height: 2px;
@@ -621,7 +623,7 @@ onUnmounted(() => {
   border: none;
   border-radius: 50%;
   background: var(--lemon-gradient);
-  box-shadow: var(--lemon-glow-sm);
+  box-shadow: none;
   cursor: pointer;
 }
 .fs-slider::-moz-range-track {
@@ -636,7 +638,7 @@ onUnmounted(() => {
   border: none;
   border-radius: 50%;
   background: var(--lemon-gradient);
-  box-shadow: var(--lemon-glow-sm);
+  box-shadow: none;
   cursor: pointer;
 }
 .fs-btns {
@@ -668,9 +670,11 @@ onUnmounted(() => {
   cursor: pointer;
   box-shadow: none;
 }
-.fs-vol-slider:focus {
+.fs-vol-slider:focus,
+.fs-vol-slider:focus-visible {
   border: none;
   box-shadow: none;
+  outline: none;
 }
 .fs-vol-slider::-webkit-slider-runnable-track {
   height: 2px;
@@ -685,7 +689,7 @@ onUnmounted(() => {
   border: none;
   border-radius: 50%;
   background: var(--lemon-gradient);
-  box-shadow: var(--lemon-glow-sm);
+  box-shadow: none;
   cursor: pointer;
 }
 .fs-vol-slider::-moz-range-track {
@@ -700,7 +704,7 @@ onUnmounted(() => {
   border: none;
   border-radius: 50%;
   background: var(--lemon-gradient);
-  box-shadow: var(--lemon-glow-sm);
+  box-shadow: none;
   cursor: pointer;
 }
 .fs-vol-pct {

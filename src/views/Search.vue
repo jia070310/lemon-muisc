@@ -4,21 +4,20 @@
     <div class="page-subtitle">搜索歌曲并试听、下载；可多选后批量下载，不支持所选音质的歌曲会提示确认</div>
 
     <div class="search-header card">
-      <div class="search-row">
+      <form class="search-row" @submit.prevent="doSearch">
         <div class="search-bar">
           <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
           <input
             v-model="searchState.keyword"
-            @keydown.enter="doSearch"
             placeholder="搜索歌曲、歌手..."
             class="search-input"
             enterkeyhint="search"
           />
         </div>
-        <button class="btn-primary search-btn" @click="doSearch" :disabled="searchState.loading">
+        <button type="submit" class="btn-primary search-btn" :disabled="searchState.loading">
           {{ searchState.loading ? '搜索中...' : '搜索' }}
         </button>
-      </div>
+      </form>
       <div class="source-tabs">
         <button
           v-for="(info, key) in searchState.sources" :key="key"
@@ -323,7 +322,7 @@ async function playAll() {
 }
 
 async function doSearch() {
-  if (!searchState.keyword.trim() || !searchState.activeSource) return
+  if (!searchState.keyword.trim() || !searchState.activeSource || searchState.loading) return
   searchState.loading = true
   searchState.searched = true
   clearSelection()
@@ -387,7 +386,7 @@ function showToast(text, type = 'info') {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 16px;
+  margin: 0 0 16px;
 }
 .search-bar {
   flex: 1;

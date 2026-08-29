@@ -4,22 +4,22 @@
     <div class="page-subtitle">输入各平台歌单链接，浏览并试听、下载；可多选后批量下载，不支持所选音质的歌曲会提示确认</div>
 
     <div class="discover-header card">
-      <div class="discover-row">
+      <form class="discover-row" @submit.prevent="fetchPlaylistByInput">
         <div class="discover-bar">
           <svg class="discover-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>
           </svg>
           <input
             v-model="discoverState.url"
-            @keydown.enter="fetchPlaylist"
             :placeholder="currentPlaceholder"
             class="discover-input"
+            enterkeyhint="go"
           />
         </div>
-        <button class="btn-primary discover-btn" @click="fetchPlaylistByInput" :disabled="discoverState.loading">
+        <button type="submit" class="btn-primary discover-btn" :disabled="discoverState.loading">
           {{ discoverState.loading ? '加载中...' : '确认' }}
         </button>
-      </div>
+      </form>
       <div class="source-tabs">
         <button
           v-for="(info, key) in discoverState.sources" :key="key"
@@ -344,6 +344,7 @@ async function openRecommendPlaylist(item) {
 }
 
 async function fetchPlaylistByInput() {
+  if (discoverState.loading) return
   if (!discoverState.url.trim()) {
     backToRecommend()
     return
@@ -552,7 +553,7 @@ function showToast(text, type = 'info') {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 16px;
+  margin: 0 0 16px;
 }
 .discover-bar {
   flex: 1;

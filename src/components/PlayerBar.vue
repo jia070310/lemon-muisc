@@ -591,6 +591,13 @@ async function onQueuePlayClick(index) {
   cursor: pointer;
   border: none;
   padding: 0;
+  box-shadow: none;
+}
+.progress-slider:focus,
+.progress-slider:focus-visible {
+  border: none;
+  box-shadow: none;
+  outline: none;
 }
 .progress-slider::-webkit-slider-runnable-track {
   height: 4px;
@@ -604,7 +611,7 @@ async function onQueuePlayClick(index) {
   margin-top: -4px;
   border-radius: 50%;
   background: var(--lemon-gradient);
-  box-shadow: var(--lemon-glow-sm);
+  box-shadow: none;
   cursor: pointer;
 }
 .progress-slider::-moz-range-track {
@@ -619,7 +626,7 @@ async function onQueuePlayClick(index) {
   border: none;
   border-radius: 50%;
   background: var(--lemon-gradient);
-  box-shadow: var(--lemon-glow-sm);
+  box-shadow: none;
   cursor: pointer;
 }
 .time-display {
@@ -721,6 +728,13 @@ async function onQueuePlayClick(index) {
   border: none;
   cursor: pointer;
   touch-action: none;
+  box-shadow: none;
+}
+.vol-slider-v:focus,
+.vol-slider-v:focus-visible {
+  border: none;
+  box-shadow: none;
+  outline: none;
 }
 .vol-slider-v::-webkit-slider-runnable-track {
   width: 4px;
@@ -735,7 +749,7 @@ async function onQueuePlayClick(index) {
   border-radius: 50%;
   background: var(--lemon-gradient);
   border: 2px solid var(--bg-card);
-  box-shadow: var(--lemon-glow-sm);
+  box-shadow: none;
   cursor: pointer;
 }
 .vol-slider-v::-moz-range-track {
@@ -750,7 +764,7 @@ async function onQueuePlayClick(index) {
   border: 2px solid var(--bg-card);
   border-radius: 50%;
   background: var(--lemon-gradient);
-  box-shadow: var(--lemon-glow-sm);
+  box-shadow: none;
   cursor: pointer;
 }
 
