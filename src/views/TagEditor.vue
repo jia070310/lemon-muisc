@@ -3,7 +3,7 @@
     <div class="page-header">
       <div>
         <div class="page-title">标签编辑</div>
-        <div class="page-subtitle">批量编辑本地音乐文件的元数据、封面与歌词；修改后请点击右上角「保存全部修改」才会写入磁盘</div>
+        <div class="page-subtitle">批量编辑本地音乐文件的元数据、封面与歌词；修改后请点击「保存到文件」才会写入磁盘</div>
       </div>
       <div class="header-actions">
         <button class="btn-primary btn-sm" @click="saveAll" :disabled="!hasChanges || saving">
@@ -175,7 +175,7 @@
           <button class="btn-primary" @click="saveCurrent" :disabled="saving">
             {{ saving ? '保存中...' : '保存到文件' }}
           </button>
-          <button class="btn-ghost" @click="applyToFiles" :disabled="!editForm" title="仅更新列表显示，不会写入磁盘，需点右上角「保存全部修改」">
+          <button class="btn-ghost" @click="applyToFiles" :disabled="!editForm" title="仅更新列表显示，不会写入磁盘，需点「保存到文件」">
             应用到{{ isBatchMode ? '选中' : '当前' }}
           </button>
         </div>
@@ -527,7 +527,7 @@ function applyToFiles() {
   const targets = isBatchMode.value ? selectedFiles.value : (editingFile.value ? [editingFile.value] : [])
   if (!targets.length) return
   targets.forEach(f => applyMetaToFile(f, meta))
-  showToast(`已更新 ${targets.length} 个文件的列表显示，尚未写入磁盘。请点击右上角「保存全部修改」写入文件`, 'info')
+  showToast(`已更新 ${targets.length} 个文件的列表显示，尚未写入磁盘。请点击「保存到文件」按钮写入磁盘`, 'info')
 }
 
 async function saveCurrent() {
