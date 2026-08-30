@@ -72,6 +72,9 @@ export const api = {
   },
   search: {
     search: (keyword, source, page = 1) => request(`/search?keyword=${encodeURIComponent(keyword)}&source=${source}&page=${page}`),
+    searchAlbums: (keyword, source, page = 1) =>
+      request(`/search/album?keyword=${encodeURIComponent(keyword)}&source=${source}&page=${page}`),
+    fetchAlbum: (source, id) => request(`/search/album/detail?source=${source}&id=${encodeURIComponent(id)}`),
     sources: () => request('/search/sources'),
   },
   playlist: {

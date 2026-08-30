@@ -437,6 +437,425 @@ export async function searchMusic(keyword, source, page = 1, limit = 30) {
   return fn(keyword, page, limit)
 }
 
+const WY_HEADERS = {
+  Referer: 'https://music.163.com',
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+}
+
+const MG_HEADERS = {
+  Referer: 'https://music.migu.cn',
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+  channel: '0146951',
+}
+
+function mapAlbumItem({ id, name, artist, img, publishTime, count, source }) {
+  return {
+    id: String(id),
+    name: cleanHtml(name),
+    artist: formatArtists(artist),
+    img: img || '',
+    publishTime: publishTime || '',
+    count: Number(count) || 0,
+    source,
+  }
+}
+
+function buildAlbumSearchResult(list, total, limit) {
+  const safeTotal = total || list.length
+  return {
+    list,
+    allPage: Math.max(1, Math.ceil(safeTotal / limit)),
+    total: safeTotal,
+  }
+}
+
+async function wyAlbumSearch(keyword, page = 1, limit = 30) {
+  const offset = (page - 1) * limit
+  const buf = await req('get',
+    `https://music.163.com/api/cloudsearch/pc?s=${encodeURIComponent(keyword)}&type=10&offset=${offset}&limit=${limit}`,
+    null, WY_HEADERS)
+  const data = parseJSON(buf)
+  if (!data?.result?.albums) return { list: [], allPage: 0, total: 0 }
+  const total = data.result.albumCount || 0
+  return buildAlbumSearchResult(data.result.albums.map(item => mapAlbumItem({
+    id: item.id,
+    name: item.name,
+    artist: (item.artists || []).map(a => a.name).join('/'),
+    img: item.picUrl,
+    publishTime: item.publishTime ? new Date(item.publishTime).toISOString().slice(0, 10) : '',
+    count: item.size,
+    source: 'wy',
+  })), total, limit)
+}
+
+async function txAlbumSearch(keyword, page = 1, limit = 30) {
+  const buf = await req('get',
+    `https://c.y.qq.com/soso/fcgi-bin/client_search_cp?w=${encodeURIComponent(keyword)}&p=${page}&n=${limit}&format=json&cr=1&t=8`,
+    null, { Referer: 'https://y.qq.com' })
+  const data = parseJSON(buf)
+  if (!data?.data?.album?.list) return { list: [], allPage: 0, total: 0 }
+  const total = data.data.album.totalnum || 0
+  return buildAlbumSearchResult(data.data.album.list.map(item => mapAlbumItem({
+    id: item.albumMID || item.albumid,
+    name: item.albumName,
+    artist: item.singer,
+    img: item.albumPic || (item.albumMID ? `https://y.gtimg.cn/music/photo_new/T002R300x300M000${item.albumMID}.jpg` : ''),
+    publishTime: item.publicTime || '',
+    count: item.song_count || 0,
+    source: 'tx',
+  })), total, limit)
+}
+
+function formatWyAlbumArtists(artist, artists) {
+  if (Array.isArray(artists) && artists.length) {
+    return formatArtists(artists.map(a => a.name).join('/'))
+  }
+  if (Array.isArray(artist) && artist.length) {
+    return formatArtists(artist.map(a => a.name).join('/'))
+  }
+  if (artist && typeof artist === 'object') return formatArtists(artist.name || '')
+  return ''
+}
+
+async function kwAlbumSearch(keyword, page = 1, limit = 30) {
+  const url = `https://search.kuwo.cn/r.s?client=kt&all=${encodeURIComponent(keyword)}&pn=${page - 1}&rn=${limit}&uid=0&ver=kwplayer_ar_9.2.2.1&vipver=1&show_copyright_off=1&newver=1&ft=album&cluster=0&strategy=2012&encoding=utf8&rformat=json&vermerge=1&moession=`
+  const raw = await req('get', url)
+  const data = parseKuwoPlaylistBody(raw)
+  const list = data?.albumlist || data?.abslist
+  if (!list?.length) return { list: [], allPage: 0, total: 0 }
+  const total = parseInt(data.total || data.TOTAL, 10) || 0
+  return buildAlbumSearchResult(list.map(item => {
+    const id = item.albumid || item.ALBUMID || item.id || item.DC_TARGETID || ''
+    const pic = item.img || item.hts_img || (item.pic ? `https://img4.kuwo.cn/star/albumcover/500/${item.pic}` : '')
+    return mapAlbumItem({
+      id,
+      name: item.name || item.NAME || item.ALBUM || item.DISPALBUMNAME,
+      artist: item.artist || item.ARTIST || item.fartist,
+      img: pic,
+      publishTime: item.pub || item.RELEASEDATE || item.releaseDate || '',
+      count: item.musiccnt || item.SONGNUM || item.songnum || 0,
+      source: 'kw',
+    })
+  }), total, limit)
+}
+
+async function kgAlbumSearch(keyword, page = 1, limit = 30) {
+  const url = `http://mobilecdn.kugou.com/api/v3/search/album?format=json&keyword=${encodeURIComponent(keyword)}&page=${page}&pagesize=${limit}&showtype=1`
+  const data = await kgFetchMobileJson(url, 2)
+  const info = data?.data?.info
+  if (data?.status !== 1 || !Array.isArray(info) || !info.length) return { list: [], allPage: 0, total: 0 }
+  const total = data.data.total || info.length
+  return buildAlbumSearchResult(info.map(item => mapAlbumItem({
+    id: item.albumid || item.album_id,
+    name: item.albumname || item.album_name,
+    artist: item.singername || item.author_name,
+    img: (item.imgurl || item.img || '').replace('{size}', '400'),
+    publishTime: item.publish_date || item.publishtime || '',
+    count: item.songcount || item.song_count || 0,
+    source: 'kg',
+  })), total, limit)
+}
+
+function formatTxSingers(singers) {
+  if (!singers) return ''
+  if (Array.isArray(singers)) return formatArtists(singers.map(s => s.name).filter(Boolean).join('/'))
+  if (typeof singers === 'object') return formatArtists(singers.name || '')
+  return formatArtists(String(singers))
+}
+
+async function mgAlbumSearch(keyword, page = 1, limit = 30) {
+  const url = `https://app.c.nf.migu.cn/MIGUM2.0/v1.0/content/search_all.do?text=${encodeURIComponent(keyword)}&pageNo=${page}&pageSize=${limit}&searchSwitch=%7B%22album%22%3A1%7D`
+  const buf = await req('get', url, null, MG_HEADERS)
+  const data = parseJSON(buf)
+  if (!data?.albumResultData?.result) return { list: [], allPage: 0, total: 0 }
+  const total = parseInt(data.albumResultData.totalCount, 10) || 0
+  const mapped = data.albumResultData.result.map(item => mapAlbumItem({
+    id: item.id || item.copyrightId,
+    name: item.name,
+    artist: item.singer || (item.singers || []).map(s => s.name).join('/'),
+    img: item.imgItems?.[0]?.img || item.img || '',
+    publishTime: item.publishDate || item.publishTime || '',
+    count: item.songCount || item.totalCount || 0,
+    source: 'mg',
+  }))
+  const list = mapped
+    .filter(item => String(item.id).length < 14)
+    .slice(0, limit)
+  return buildAlbumSearchResult(list.length ? list : mapped.slice(0, limit), total, limit)
+}
+
+const albumSearchMap = {
+  wy: wyAlbumSearch,
+  tx: txAlbumSearch,
+  kw: kwAlbumSearch,
+  kg: kgAlbumSearch,
+  mg: mgAlbumSearch,
+}
+
+export async function searchAlbums(keyword, source, page = 1, limit = 30) {
+  const fn = albumSearchMap[source]
+  if (!fn) throw new Error(`不支持的搜索源: ${source}`)
+  return fn(keyword, page, limit)
+}
+
+async function wyAlbum(id) {
+  let data = parseJSON(await req('get', `https://music.163.com/api/album/${id}?ext=true`, null, WY_HEADERS))
+  if (data?.code !== 200 || !data.album) {
+    data = parseJSON(await req('get', `https://music.163.com/api/v1/album/${id}`, null, WY_HEADERS))
+  }
+  if (data?.code !== 200 || !data.album) throw new Error('无法获取网易云专辑')
+  const album = data.album
+  if (!album.songs?.length && album.size > 0) {
+    const ext = parseJSON(await req('get', `https://music.163.com/api/album/${id}?ext=true`, null, WY_HEADERS))
+    if (ext?.album?.songs?.length) {
+      album.songs = ext.album.songs
+    }
+  }
+  const privMap = new Map((data.privileges || []).map(p => [p.id, p]))
+  let list = (album.songs || []).map(item => mapWyPlaylistTrack(item, privMap.get(item.id), album))
+  if (!list.length && album.name) {
+    const searched = await wySearch(album.name, 1, 100)
+    const albumName = cleanHtml(album.name)
+    list = searched.list.filter(item => cleanHtml(item.album || item.albumName) === albumName)
+  }
+  if (!list.length) throw new Error('无法获取网易云专辑歌曲')
+  return {
+    list,
+    total: album.size || list.length,
+    source: 'wy',
+    info: {
+      name: cleanHtml(album.name),
+      img: album.picUrl || '',
+      desc: cleanHtml(album.description || ''),
+      author: formatWyAlbumArtists(album.artist, album.artists),
+      publishTime: album.publishTime ? new Date(album.publishTime).toISOString().slice(0, 10) : '',
+    },
+  }
+}
+
+async function txAlbum(id) {
+  const albumMid = String(id)
+  const albumID = /^\d+$/.test(albumMid) ? Number(albumMid) : 0
+  const payload = {
+    comm: { cv: 1602, ct: 20 },
+    detail: {
+      method: 'GetAlbumDetail',
+      param: { albumMid, albumID },
+      module: 'music.musichallAlbum.AlbumInfoServer',
+    },
+    songs: {
+      method: 'GetAlbumSongList',
+      param: { albumMid, begin: 0, num: 100, order: 1 },
+      module: 'music.musichallAlbum.AlbumSongList',
+    },
+  }
+  const buf = await req('get', `https://u.y.qq.com/cgi-bin/musicu.fcg?format=json&data=${encodeURIComponent(JSON.stringify(payload))}`)
+  const data = parseJSON(buf)
+  if (data?.code !== 0) throw new Error('无法获取 QQ 音乐专辑')
+
+  const detail = data?.detail?.data || {}
+  const songData = data?.songs?.data || {}
+  const rawSongs = songData.songList || []
+  const list = rawSongs
+    .map(entry => mapTxSongItem(entry.songInfo || entry))
+    .filter(s => s.name || s.id)
+  if (!list.length) throw new Error('无法获取 QQ 音乐专辑')
+
+  const basic = detail.basicInfo || detail
+  return {
+    list,
+    total: songData.totalNum || list.length,
+    source: 'tx',
+    info: {
+      name: cleanHtml(basic.name || basic.title || list[0]?.album || ''),
+      img: basic.pic || basic.picUrl || list[0]?.img || '',
+      desc: cleanHtml(detail.desc || detail.description || basic.desc || ''),
+      author: formatTxSingers(detail.singer || basic.singer),
+      publishTime: basic.aDate || basic.pubTime || basic.time_public || '',
+    },
+  }
+}
+
+async function kwAlbum(id) {
+  const infoData = parseJSON(await req('get', `http://wapi.kuwo.cn/api/www/album/albumInfo?albumId=${id}`))
+  const meta = infoData?.data || {}
+
+  const attempts = [
+    `http://search.kuwo.cn/r.s?client=kt&pn=0&rn=1000&uid=0&ver=kwplayer_ar_9.2.2.1&vipver=1&ft=music&albumid=${id}&encoding=utf8&rformat=json&show_copyright_off=1&newver=1`,
+    `http://search.kuwo.cn/r.s?client=kt&rformat=json&encoding=utf8&pcmp4=1&vipver=1&newver=1&pn=0&rn=1000&albumid=${id}&ft=album`,
+  ]
+  let musiclist = []
+  for (const url of attempts) {
+    try {
+      const data = parseKuwoPlaylistBody(await req('get', url))
+      musiclist = data.musiclist || data.abslist || []
+      if (musiclist.length) break
+    } catch {}
+  }
+  let list = []
+  if (musiclist.length) {
+    list = musiclist.map(item => {
+      const types = parseKwTypes(item)
+      const musicRid = String(item.musicrid || item.MUSICRID || '').replace(/^MUSIC_/i, '')
+      const dcTargetId = String(item.dcTargetId || item.DC_TARGETID || item.audiosourceid || '')
+      const songId = String(item.id || musicRid || dcTargetId || '')
+      return withTypes({
+        id: songId,
+        name: cleanHtml(item.name || item.SONGNAME),
+        singer: formatArtists(item.artist || item.ARTIST),
+        album: cleanHtml(item.album || item.ALBUM || meta.album || meta.name || ''),
+        albumName: cleanHtml(item.album || item.ALBUM || meta.album || meta.name || ''),
+        interval: formatTime(parseInt(item.duration, 10) || parseInt(item.DURATION, 10) || 0),
+        source: 'kw',
+        songId,
+        songmid: songId,
+        musicId: songId,
+        rid: musicRid || songId,
+        dcTargetId,
+        albumId: String(id),
+        picUrl: kwPicUrl(item) || meta.pic || '',
+        img: kwPicUrl(item) || meta.pic || '',
+      }, types)
+    })
+  } else if (meta.album) {
+    const searched = await kwSearch(meta.album, 1, 100)
+    const albumName = cleanHtml(meta.album)
+    list = searched.list.filter(item => cleanHtml(item.album || item.albumName) === albumName)
+  }
+  if (!list.length) throw new Error('无法获取酷我专辑')
+
+  return {
+    list,
+    total: parseInt(meta.total, 10) || list.length,
+    source: 'kw',
+    info: {
+      name: cleanHtml(meta.album || meta.name || ''),
+      img: meta.pic || '',
+      desc: cleanHtml(meta.albuminfo || meta.info || meta.desc || ''),
+      author: formatArtists(meta.artist || meta.ARTIST || ''),
+      publishTime: meta.releaseDate || meta.pub || meta.RELEASEDATE || '',
+    },
+  }
+}
+
+async function kgAlbum(id) {
+  const infoData = await kgFetchMobileJson(`http://mobilecdn.kugou.com/api/v3/album/info?albumid=${id}`, 2)
+  const albumInfo = infoData?.data || {}
+  const all = []
+  let page = 1
+  let total = 0
+  while (true) {
+    const data = await kgFetchMobileJson(
+      `http://mobilecdn.kugou.com/api/v3/album/song?albumid=${id}&page=${page}&pagesize=300&version=9108`,
+      2,
+    )
+    if (data?.status !== 1) break
+    total = parseInt(data.data?.total, 10) || total
+    const batch = (data.data?.info || []).map(mapKgSongItem).filter(s => s.hash || s.name)
+    all.push(...batch)
+    if (!batch.length || all.length >= total) break
+    page += 1
+  }
+  if (!all.length) throw new Error('无法获取酷狗专辑')
+  return {
+    list: all,
+    total: total || all.length,
+    source: 'kg',
+    info: {
+      name: cleanHtml(albumInfo.albumname || albumInfo.name || ''),
+      img: (albumInfo.imgurl || albumInfo.img || '').replace('{size}', '400'),
+      desc: cleanHtml(albumInfo.intro || albumInfo.description || ''),
+      author: formatArtists(albumInfo.singername || albumInfo.author_name || ''),
+      publishTime: albumInfo.publishtime || albumInfo.publish_date || '',
+    },
+  }
+}
+
+async function mgAlbum(id) {
+  const headers = {
+    Referer: 'https://m.music.migu.cn/',
+    'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15',
+    channel: '0146951',
+  }
+
+  let albumInfo = null
+  const all = []
+  let page = 1
+  let total = 0
+
+  const songEndpoints = [
+    (albumId, pageNo) => `https://app.c.nf.migu.cn/MIGUM3.0/resource/music/album/song/v2.0?albumId=${albumId}&pageNo=${pageNo}&pageSize=50`,
+    (albumId, pageNo) => `https://c.musicapp.migu.cn/MIGUM3.0/resource/music/album/song/v2.0?albumId=${albumId}&pageNo=${pageNo}&pageSize=50`,
+  ]
+
+  for (const buildUrl of songEndpoints) {
+    all.length = 0
+    page = 1
+    total = 0
+    while (true) {
+      const buf = await req('get', buildUrl(id, page), null, headers)
+      const data = parseJSON(buf)
+      if (data?.code !== '000000' && data?.code !== 0) break
+      total = parseInt(data.data?.totalCount, 10) || total
+      const batch = (data.data?.songList || data.data?.songs || []).map(item => {
+        const types = parseMgTypes(item)
+        return withTypes({
+          id: item.copyrightId || item.songId || item.id || '',
+          name: cleanHtml(item.songName || item.name),
+          singer: formatArtists((item.singerList || item.singers || []).map(s => s.name).join('/')),
+          album: cleanHtml(item.album || albumInfo?.name || ''),
+          albumName: cleanHtml(item.album || albumInfo?.name || ''),
+          interval: formatTime(item.duration || 0),
+          source: 'mg',
+          songId: item.copyrightId || item.songId || item.id || '',
+          copyrightId: item.copyrightId || '',
+          picUrl: item.img3 || item.img2 || item.img1 || albumInfo?.img || '',
+          img: item.img3 || item.img2 || item.img1 || albumInfo?.img || '',
+        }, types)
+      })
+      all.push(...batch)
+      if (!batch.length || all.length >= total) break
+      page += 1
+    }
+    if (all.length) break
+  }
+
+  if (!all.length) {
+    const infoBuf = await req('get', `https://c.musicapp.migu.cn/MIGUM3.0/resource/info/albumInfo?albumId=${id}`, null, headers)
+    const infoData = parseJSON(infoBuf)
+    albumInfo = infoData?.data || {}
+    throw new Error('暂无法获取咪咕专辑歌曲，请尝试其他平台')
+  }
+
+  if (!albumInfo) {
+    const infoBuf = await req('get', `https://c.musicapp.migu.cn/MIGUM3.0/resource/info/albumInfo?albumId=${id}`, null, headers)
+    const infoData = parseJSON(infoBuf)
+    albumInfo = infoData?.data || {}
+  }
+
+  return {
+    list: all,
+    total: total || all.length,
+    source: 'mg',
+    info: {
+      name: cleanHtml(albumInfo.name || albumInfo.title || all[0]?.album || ''),
+      img: albumInfo.img || albumInfo.imgItems?.[0]?.img || all[0]?.img || '',
+      desc: cleanHtml(albumInfo.summary || albumInfo.desc || ''),
+      author: formatArtists((albumInfo.singers || []).map(s => s.name).join('/') || albumInfo.singer || ''),
+      publishTime: albumInfo.publishTime || albumInfo.publishDate || '',
+    },
+  }
+}
+
+const albumMap = { wy: wyAlbum, tx: txAlbum, kw: kwAlbum, kg: kgAlbum, mg: mgAlbum }
+
+export async function fetchAlbum(source, id) {
+  if (!AVAILABLE_SOURCES[source]) throw new Error(`不支持的平台: ${source}`)
+  const fn = albumMap[source]
+  if (!fn) throw new Error(`不支持的平台: ${source}`)
+  return fn(String(id))
+}
+
 // --- 歌单解析 ---
 function formatPlayCount(n) {
   const num = Number(n)

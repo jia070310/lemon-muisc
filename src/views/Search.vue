@@ -1,7 +1,7 @@
 <template>
   <div class="search-page">
     <div class="page-title">搜索</div>
-    <div class="page-subtitle">搜索歌曲并试听、下载；可多选后批量下载，不支持所选音质的歌曲会提示确认</div>
+    <div class="page-subtitle">搜索歌曲或专辑，试听、下载；可多选后批量下载，不支持所选音质的歌曲会提示确认</div>
 
     <div v-if="playlistPickTarget" class="pick-hint card">
       点击歌曲右侧「加入歌单」添加到「{{ playlistPickTarget.name }}」
@@ -13,25 +13,99 @@
           <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
           <input
             v-model="searchState.keyword"
-            placeholder="搜索歌曲、歌手..."
+            :placeholder="searchState.searchMode === 'album' ? '搜索专辑名、歌手...' : '搜索歌曲、歌手...'"
             class="search-input"
             enterkeyhint="search"
           />
         </div>
-        <button type="submit" class="btn-primary search-btn" :disabled="searchState.loading">
-          {{ searchState.loading ? '搜索中...' : '搜索' }}
+        <button type="submit" class="btn-primary search-btn" :disabled="isSearching">
+          {{ isSearching ? '搜索中...' : '搜索' }}
         </button>
       </form>
+      <div class="mode-tabs">
+        <button
+          :class="['mode-tab', { active: searchState.searchMode === 'song' }]"
+          @click="switchSearchMode('song')"
+        >歌曲</button>
+        <button
+          :class="['mode-tab', { active: searchState.searchMode === 'album' }]"
+          @click="switchSearchMode('album')"
+        >专辑</button>
+      </div>
       <div class="source-tabs">
         <button
           v-for="(info, key) in searchState.sources" :key="key"
           :class="['tab', { active: searchState.activeSource === key }]"
-          @click="searchState.activeSource = key; searchState.page = 1; doSearch()"
+          @click="switchSource(key)"
         >{{ platformLabel(key, info) }}</button>
       </div>
     </div>
 
-    <div class="results card" v-if="searchState.results.length">
+    <div v-if="searchState.viewMode === 'album-detail' && searchState.albumInfo" class="album-detail-toolbar">
+      <button class="btn-ghost btn-sm" @click="backToAlbumList">← 返回专辑列表</button>
+    </div>
+
+    <div v-if="searchState.viewMode === 'album-detail' && searchState.albumInfo" class="album-info card">
+      <div class="album-cover-wrap">
+        <img
+          v-if="searchState.albumInfo.img"
+          :src="searchState.albumInfo.img"
+          class="album-cover"
+          alt=""
+          @error="onCoverError"
+        />
+        <div v-else class="album-cover placeholder">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>
+        </div>
+      </div>
+      <div class="album-meta">
+        <h2 class="album-name">{{ cleanText(searchState.albumInfo.name) || '未命名专辑' }}</h2>
+        <div class="album-tags">
+          <span v-if="searchState.albumInfo.author">歌手：{{ cleanText(searchState.albumInfo.author) }}</span>
+          <span v-if="searchState.albumInfo.publishTime">发行：{{ searchState.albumInfo.publishTime }}</span>
+          <span>共 {{ searchState.results.length }} 首</span>
+        </div>
+        <p v-if="searchState.albumInfo.desc" class="album-desc">{{ cleanText(searchState.albumInfo.desc) }}</p>
+      </div>
+    </div>
+
+    <div v-if="showAlbumGrid" class="album-results card">
+      <div v-if="searchState.albumLoading" class="album-loading">正在搜索专辑...</div>
+      <template v-else-if="searchState.albumResults.length">
+        <div class="album-grid">
+          <button
+            v-for="item in searchState.albumResults"
+            :key="`${item.source}-${item.id}`"
+            class="album-card"
+            @click="openAlbum(item)"
+          >
+            <div class="album-card-cover-wrap">
+              <img v-if="item.img" :src="item.img" class="album-card-cover" alt="" loading="lazy" @error="onCoverError" />
+              <div v-else class="album-card-cover placeholder">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>
+              </div>
+            </div>
+            <div class="album-card-meta">
+              <div class="album-card-name" :title="cleanText(item.name)">{{ cleanText(item.name) }}</div>
+              <div class="album-card-artist" :title="cleanText(item.artist)">{{ cleanText(item.artist) || '未知歌手' }}</div>
+              <div class="album-card-stats">
+                <span v-if="item.count">{{ item.count }} 首</span>
+                <span v-if="item.publishTime">{{ item.publishTime }}</span>
+              </div>
+            </div>
+          </button>
+        </div>
+        <div class="pagination" v-if="searchState.totalPages > 1">
+          <button class="btn-ghost btn-sm" :disabled="searchState.page <= 1" @click="searchState.page--; doSearch()">上一页</button>
+          <span class="page-info">{{ searchState.page }} / {{ searchState.totalPages }}</span>
+          <button class="btn-ghost btn-sm" :disabled="searchState.page >= searchState.totalPages" @click="searchState.page++; doSearch()">下一页</button>
+        </div>
+      </template>
+        <div v-else-if="searchState.searched" class="empty">暂无专辑结果</div>
+        <div v-else class="empty album-hint">输入专辑名或歌手后搜索</div>
+    </div>
+
+    <div class="results card" v-if="showSongResults">
       <div class="results-toolbar">
         <span class="results-count">
           共 {{ searchState.results.length }} 首
@@ -142,7 +216,7 @@
       </div>
     </div>
 
-    <div v-else-if="searchState.searched && !searchState.loading" class="empty">暂无搜索结果</div>
+    <div v-else-if="showSongEmpty" class="empty">暂无搜索结果</div>
 
     <div v-if="toast" class="toast" :class="toast.type">{{ toast.text }}</div>
 
@@ -219,6 +293,24 @@ const batchPreferredLabel = computed(() => {
   const q = batchDialog.value?.preferred
   return q ? getQualityLabel(q) : ''
 })
+
+const isSearching = computed(() =>
+  searchState.searchMode === 'album' ? searchState.albumLoading : searchState.loading,
+)
+const showAlbumGrid = computed(() =>
+  searchState.searchMode === 'album' && searchState.viewMode !== 'album-detail',
+)
+const showSongResults = computed(() =>
+  searchState.results.length > 0
+  && (searchState.searchMode === 'song' || searchState.viewMode === 'album-detail'),
+)
+const showSongEmpty = computed(() =>
+  searchState.searched
+  && !searchState.loading
+  && !searchState.albumLoading
+  && !showSongResults.value
+  && !showAlbumGrid.value,
+)
 
 function getSelectedEntries() {
   return searchState.results
@@ -332,8 +424,45 @@ async function playAll() {
   }
 }
 
+function switchSearchMode(mode) {
+  if (searchState.searchMode === mode) return
+  searchState.searchMode = mode
+  searchState.viewMode = 'list'
+  searchState.page = 1
+  searchState.results = []
+  searchState.albumResults = []
+  searchState.albumInfo = null
+  searchState.searched = false
+  clearSelection()
+  closeMenus()
+}
+
+function switchSource(key) {
+  if (searchState.activeSource === key) return
+  searchState.activeSource = key
+  searchState.page = 1
+  searchState.viewMode = 'list'
+  searchState.albumInfo = null
+  searchState.results = []
+  searchState.albumResults = []
+  clearSelection()
+  closeMenus()
+  if (searchState.keyword.trim()) doSearch()
+}
+
+function onCoverError(e) {
+  e.target.style.display = 'none'
+}
+
 async function doSearch() {
-  if (!searchState.keyword.trim() || !searchState.activeSource || searchState.loading) return
+  if (!searchState.keyword.trim() || !searchState.activeSource) return
+  if (searchState.searchMode === 'album') {
+    searchState.viewMode = 'list'
+    searchState.albumInfo = null
+    searchState.results = []
+    return doAlbumSearch()
+  }
+  if (searchState.loading) return
   searchState.loading = true
   searchState.searched = true
   clearSelection()
@@ -349,13 +478,68 @@ async function doSearch() {
       searchState.totalPages = data.allPage || data.totalPage || 1
     } else {
       searchState.results = []
+      searchState.totalPages = 1
     }
   } catch (e) {
     searchState.results = []
+    searchState.totalPages = 1
     showToast(e.message, 'error')
   } finally {
     searchState.loading = false
   }
+}
+
+async function doAlbumSearch() {
+  if (!searchState.keyword.trim() || !searchState.activeSource || searchState.albumLoading) return
+  searchState.albumLoading = true
+  searchState.searched = true
+  searchState.viewMode = 'list'
+  searchState.albumInfo = null
+  searchState.results = []
+  closeMenus()
+  try {
+    const res = await api.search.searchAlbums(searchState.keyword, searchState.activeSource, searchState.page)
+    const data = res.data
+    searchState.albumResults = data?.list || []
+    searchState.totalPages = data?.allPage || data?.totalPage || 1
+  } catch (e) {
+    searchState.albumResults = []
+    searchState.totalPages = 1
+    showToast(e.message, 'error')
+  } finally {
+    searchState.albumLoading = false
+  }
+}
+
+async function openAlbum(item) {
+  if (!item?.id || searchState.albumLoading) return
+  searchState.albumLoading = true
+  clearSelection()
+  closeMenus()
+  try {
+    const res = await api.search.fetchAlbum(item.source || searchState.activeSource, item.id)
+    const data = res.data
+    searchState.albumInfo = data?.info || {
+      name: item.name,
+      img: item.img,
+      author: item.artist,
+      publishTime: item.publishTime,
+    }
+    searchState.results = (data?.list || []).map(cleanTrackItem)
+    searchState.viewMode = 'album-detail'
+  } catch (e) {
+    showToast(e.message, 'error')
+  } finally {
+    searchState.albumLoading = false
+  }
+}
+
+function backToAlbumList() {
+  searchState.viewMode = 'list'
+  searchState.albumInfo = null
+  searchState.results = []
+  clearSelection()
+  closeMenus()
 }
 
 async function downloadOne(item, quality) {
@@ -458,6 +642,147 @@ function showToast(text, type = 'info') {
   gap: 6px;
   flex-wrap: wrap;
 }
+.mode-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.mode-tab {
+  padding: 5px 14px;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  border: 1px solid var(--border);
+}
+.mode-tab:hover { background: var(--bg-hover); color: var(--text); }
+.mode-tab.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-muted);
+}
+
+.album-detail-toolbar {
+  margin-bottom: 12px;
+}
+
+.album-info {
+  display: flex;
+  gap: 20px;
+  padding: 20px;
+  margin-bottom: 16px;
+  align-items: flex-start;
+}
+.album-cover-wrap { flex-shrink: 0; }
+.album-cover {
+  width: 140px;
+  height: 140px;
+  border-radius: var(--radius);
+  object-fit: cover;
+  background: var(--bg-input);
+}
+.album-cover.placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+.album-cover.placeholder svg { width: 48px; height: 48px; }
+.album-meta { min-width: 0; flex: 1; }
+.album-name {
+  margin: 0 0 10px;
+  font-size: 22px;
+  line-height: 1.3;
+}
+.album-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 10px;
+}
+.album-desc {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.6;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.album-results { padding: 16px; margin-bottom: 16px; }
+.album-loading {
+  text-align: center;
+  padding: 40px 0;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+.album-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 14px 18px;
+}
+.album-card {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 10px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-light);
+  background: var(--bg-elevated);
+  text-align: left;
+  transition: background 0.15s, border-color 0.15s;
+}
+.album-card:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent);
+}
+.album-card-cover-wrap { flex-shrink: 0; }
+.album-card-cover {
+  width: 72px;
+  height: 72px;
+  border-radius: 8px;
+  object-fit: cover;
+  background: var(--bg-input);
+}
+.album-card-cover.placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+.album-card-cover.placeholder svg { width: 28px; height: 28px; }
+.album-card-meta { min-width: 0; flex: 1; }
+.album-card-name {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.album-card-artist {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.album-card-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
 .tab {
   padding: 5px 14px;
   border-radius: var(--radius-pill);
@@ -659,6 +984,14 @@ function showToast(text, type = 'info') {
 
 @media (max-width: 768px) {
   .search-header { padding: 12px; }
+  .album-info {
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    padding: 16px;
+  }
+  .album-tags { justify-content: center; }
+  .album-grid { grid-template-columns: 1fr; }
   .search-row {
     gap: 8px;
     margin-bottom: 12px;
