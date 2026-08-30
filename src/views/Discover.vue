@@ -3,6 +3,10 @@
     <div class="page-title">发现</div>
     <div class="page-subtitle">输入各平台歌单链接，浏览并试听、下载；可多选后批量下载，不支持所选音质的歌曲会提示确认</div>
 
+    <div v-if="playlistPickTarget" class="pick-hint card">
+      点击歌曲右侧「加入歌单」添加到「{{ playlistPickTarget.name }}」
+    </div>
+
     <div class="discover-header card">
       <form class="discover-row" @submit.prevent="fetchPlaylistByInput">
         <div class="discover-bar">
@@ -37,30 +41,52 @@
     </div>
 
     <div v-if="showRecommend" class="recommend-section">
-      <div v-if="discoverState.recommendLoading" class="recommend-loading">正在加载推荐歌单...</div>
-      <div v-else-if="discoverState.recommendList.length" class="recommend-grid">
-        <button
-          v-for="item in discoverState.recommendList" :key="item.id"
-          class="recommend-card"
-          @click="openRecommendPlaylist(item)"
-        >
-          <div class="recommend-cover-wrap">
-            <img v-if="item.img" :src="item.img" class="recommend-cover" alt="" loading="lazy" @error="onCoverError" />
-            <div v-else class="recommend-cover placeholder">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
-            </div>
-          </div>
-          <div class="recommend-meta">
-            <div class="recommend-name" :title="cleanText(item.name)">{{ cleanText(item.name) }}</div>
-            <div class="recommend-author" :title="cleanText(item.author)">{{ cleanText(item.author) || '未知作者' }}</div>
-            <div class="recommend-stats">
-              <span v-if="item.total"><svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>{{ item.total }}</span>
-              <span v-if="item.play_count"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3z"/><path d="M3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg>{{ item.play_count }}</span>
-            </div>
-          </div>
-        </button>
+      <div v-if="discoverState.recommendLoading && !discoverState.recommendList.length" class="recommend-loading">
+        正在加载推荐歌单...
       </div>
-      <div v-else class="empty">暂无推荐歌单</div>
+      <template v-else>
+        <div v-if="discoverState.recommendList.length" class="recommend-grid">
+          <button
+            v-for="item in discoverState.recommendList" :key="`${item.source}-${item.id}`"
+            class="recommend-card"
+            @click="openRecommendPlaylist(item)"
+          >
+            <div class="recommend-cover-wrap">
+              <img v-if="item.img" :src="item.img" class="recommend-cover" alt="" loading="lazy" @error="onCoverError" />
+              <div v-else class="recommend-cover placeholder">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+              </div>
+            </div>
+            <div class="recommend-meta">
+              <div class="recommend-name" :title="cleanText(item.name)">{{ cleanText(item.name) }}</div>
+              <div class="recommend-author" :title="cleanText(item.author)">{{ cleanText(item.author) || '未知作者' }}</div>
+              <div class="recommend-stats">
+                <span v-if="item.total"><svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>{{ item.total }}</span>
+                <span v-if="item.play_count"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3z"/><path d="M3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg>{{ item.play_count }}</span>
+              </div>
+            </div>
+          </button>
+        </div>
+        <div v-else class="empty">暂无推荐歌单</div>
+        <div v-if="discoverState.recommendList.length" class="recommend-footer">
+          <span v-if="discoverState.recommendTotal" class="recommend-count">
+            已显示 {{ discoverState.recommendList.length }}
+            <template v-if="discoverState.recommendTotal > discoverState.recommendList.length">
+              / {{ discoverState.recommendTotal }}
+            </template>
+            个歌单
+          </span>
+          <button
+            v-if="discoverState.recommendHasMore"
+            type="button"
+            class="btn-ghost recommend-more-btn"
+            :disabled="discoverState.recommendLoadingMore"
+            @click="loadMoreRecommend"
+          >
+            {{ discoverState.recommendLoadingMore ? '加载中...' : '加载更多歌单' }}
+          </button>
+        </div>
+      </template>
     </div>
 
     <div v-if="discoverState.viewMode === 'detail' && discoverState.playlistInfo" class="detail-toolbar">
@@ -171,6 +197,12 @@
           </button>
         </span>
         <span class="col-action">
+          <button
+            v-if="playlistPickTarget"
+            class="btn-sm btn-ghost playlist-add-btn"
+            @click="addToPlaylist(item)"
+            title="加入歌单"
+          >加入歌单</button>
           <div class="dl-wrap">
             <button class="dl-btn" @click.stop="toggleQualityMenu(item, i, $event)" title="下载">
               <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
@@ -216,7 +248,7 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import BatchQualityDialog from '../components/BatchQualityDialog.vue'
 import { useBatchDownload } from '../composables/useBatchDownload.js'
 import { api } from '../api.js'
-import { discoverState, loadDiscoverSources, sourcePlaceholders, recommendSortOptions } from '../stores/discover.js'
+import { discoverState, loadDiscoverSources, reloadDiscoverSources, sourcePlaceholders, recommendSortOptions } from '../stores/discover.js'
 import { loadingPlay, isPaused, isPlayingItem, playItem, addToQueue, isInQueue } from '../stores/player.js'
 import { getQualityLabel, getQualityDisplay } from '../utils/quality.js'
 import { platformLabel } from '../utils/platforms.js'
@@ -227,6 +259,7 @@ import {
   buildDownloadTask,
 } from '../utils/musicPayload.js'
 import { useQualityMenuPosition } from '../utils/qualityMenu.js'
+import { playlistPickTarget, addToPickingPlaylist } from '../stores/library.js'
 
 const toast = ref(null)
 const qualityMenuId = ref(null)
@@ -282,7 +315,7 @@ function getSelectedEntries() {
 }
 
 onMounted(async () => {
-  await loadDiscoverSources(api)
+  await loadDiscoverSources(api, { force: true })
   loadRecommend()
   document.addEventListener('click', closeMenus)
 })
@@ -299,6 +332,7 @@ function switchSource(key) {
   discoverState.fetched = false
   discoverState.results = []
   discoverState.playlistInfo = null
+  discoverState.recommendPage = 1
   clearSelection()
   closeMenus()
   loadRecommend()
@@ -307,24 +341,88 @@ function switchSource(key) {
 function changeRecommendSort(sort) {
   if (discoverState.recommendSort === sort) return
   discoverState.recommendSort = sort
+  discoverState.recommendPage = 1
   loadRecommend()
 }
 
-async function loadRecommend() {
+function applyRecommendPage(data, { append = false } = {}) {
+  const list = data?.list || []
+  const total = Number(data?.total) || 0
+  const limit = Number(data?.limit) || list.length || 30
+
+  if (append) {
+    const seen = new Set(discoverState.recommendList.map((item) => `${item.source}:${item.id}`))
+    for (const item of list) {
+      const key = `${item.source}:${item.id}`
+      if (seen.has(key)) continue
+      discoverState.recommendList.push(item)
+      seen.add(key)
+    }
+  } else {
+    discoverState.recommendList = list
+  }
+
+  const loaded = discoverState.recommendList.length
+  if (!list.length) {
+    discoverState.recommendHasMore = false
+  } else if (total > loaded) {
+    discoverState.recommendHasMore = true
+  } else {
+    discoverState.recommendHasMore = list.length >= limit
+  }
+  discoverState.recommendTotal = total > loaded ? total : loaded
+}
+
+async function loadRecommend(retrying = false) {
   if (!discoverState.activeSource) return
+  discoverState.recommendPage = 1
   discoverState.recommendLoading = true
+  discoverState.recommendHasMore = false
   try {
     const res = await api.playlist.recommend(
       discoverState.activeSource,
       discoverState.recommendSort,
       discoverState.recommendPage,
     )
-    discoverState.recommendList = res.data?.list || []
+    applyRecommendPage(res.data, { append: false })
   } catch (e) {
     discoverState.recommendList = []
+    discoverState.recommendHasMore = false
+    discoverState.recommendTotal = 0
+    if (!retrying && /不支持的平台/.test(e.message)) {
+      const prev = discoverState.activeSource
+      await reloadDiscoverSources(api)
+      if (discoverState.activeSource !== prev && discoverState.activeSource) {
+        discoverState.recommendLoading = false
+        return loadRecommend(true)
+      }
+    }
     showToast(e.message, 'error')
   } finally {
     discoverState.recommendLoading = false
+  }
+}
+
+async function loadMoreRecommend() {
+  if (!discoverState.activeSource || !discoverState.recommendHasMore || discoverState.recommendLoadingMore) return
+  const nextPage = discoverState.recommendPage + 1
+  discoverState.recommendLoadingMore = true
+  try {
+    const res = await api.playlist.recommend(
+      discoverState.activeSource,
+      discoverState.recommendSort,
+      nextPage,
+    )
+    const before = discoverState.recommendList.length
+    discoverState.recommendPage = nextPage
+    applyRecommendPage(res.data, { append: true })
+    if (discoverState.recommendList.length === before) {
+      discoverState.recommendHasMore = false
+    }
+  } catch (e) {
+    showToast(e.message, 'error')
+  } finally {
+    discoverState.recommendLoadingMore = false
   }
 }
 
@@ -535,6 +633,13 @@ async function handleBatchConfirm() {
   await confirmBatchDialog()
 }
 
+function addToPlaylist(item) {
+  const res = addToPickingPlaylist(item, activeSource.value)
+  if (res.ok) showToast(`已加入歌单：${playlistPickTarget.value?.name || ''}`, 'success')
+  else if (res.duplicate) showToast('该歌曲已在歌单中', 'info')
+  else showToast('请先打开歌单并点击添加歌曲', 'info')
+}
+
 function showToast(text, type = 'info') {
   toast.value = { text, type }
   setTimeout(() => { toast.value = null }, 3000)
@@ -545,6 +650,19 @@ function showToast(text, type = 'info') {
 .discover-page {
   width: 100%;
   max-width: none;
+}
+
+.pick-hint {
+  margin-bottom: 16px;
+  padding: 12px 16px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  background: rgba(99, 102, 241, 0.1);
+  border: 1px solid rgba(99, 102, 241, 0.25);
+}
+.playlist-add-btn {
+  margin-right: 6px;
+  white-space: nowrap;
 }
 
 .discover-header { padding: 20px 20px 18px; margin-bottom: 16px; overflow: visible; }
@@ -641,6 +759,25 @@ function showToast(text, type = 'info') {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px 18px;
+}
+
+.recommend-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 16px;
+  padding: 8px 0 4px;
+}
+
+.recommend-count {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.recommend-more-btn {
+  min-width: 140px;
 }
 
 .recommend-card {

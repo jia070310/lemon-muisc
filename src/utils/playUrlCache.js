@@ -5,6 +5,7 @@ const MAX_ENTRIES = 80
 const cache = new Map()
 
 export function playUrlCacheKey(item, source, quality = '128k') {
+  if (item?.localPath) return `local:${item.localPath}:${quality}`
   const songId = item?.songId || item?.songmid || item?.hash || item?.copyrightId || item?.musicId || item?.id || ''
   const src = item?.source || source || ''
   return `${src}:${songId}:${quality}`

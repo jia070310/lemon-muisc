@@ -49,12 +49,8 @@ if (fs.existsSync(publicIndex)) {
 const wss = new WebSocketServer({ server, path: '/ws' })
 setupWebSocket(wss)
 
-server.listen(PORT, '::', async () => {
-  console.log(`Lemon Music running at http://[::]:${PORT} (IPv4+IPv6)`)
-  console.log(`Download path: ${DATA_PATH}`)
-  console.log(`Config path: ${CONFIG_PATH}`)
-
-  // 自动恢复上次激活的音源（可多个；故障音源跳过）
+/** 自动恢复上次激活的音源（可多个；故障音源跳过），须在对外服务前完成 */
+async function restoreActiveSources() {
   try {
     const fault = getSourceFault()
     let ids = getStoredActiveSourceIds().filter(Boolean)
@@ -64,7 +60,6 @@ server.listen(PORT, '::', async () => {
       }
       ids = ids.filter(id => id !== fault.id)
     }
-    // 规范化为 JSON 数组（兼容旧版单个 id），并去掉故障音源
     saveActiveSourceIds(ids)
 
     const okIds = []
@@ -83,6 +78,13 @@ server.listen(PORT, '::', async () => {
   } catch (e) {
     console.error('自动激活音源失败:', e.message)
   }
+}
 
-  initDownloadQueue()
+await restoreActiveSources()
+initDownloadQueue()
+
+server.listen(PORT, '::', () => {
+  console.log(`Lemon Music running at http://[::]:${PORT} (IPv4+IPv6)`)
+  console.log(`Download path: ${DATA_PATH}`)
+  console.log(`Config path: ${CONFIG_PATH}`)
 })

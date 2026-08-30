@@ -13,6 +13,9 @@ export const discoverState = reactive({
   viewMode: 'recommend', // recommend | detail
   recommendList: [],
   recommendLoading: false,
+  recommendLoadingMore: false,
+  recommendHasMore: false,
+  recommendTotal: 0,
   recommendSort: 'hot',
   recommendPage: 1,
 })
@@ -36,10 +39,7 @@ export async function loadDiscoverSources(api, { force = false } = {}) {
     const res = await api.playlist.sources()
     discoverState.sources = res.sources || {}
   } catch {
-    discoverState.sources = {
-      kw: { name: '酷我' }, kg: { name: '酷狗' }, tx: { name: 'QQ音乐' },
-      wy: { name: '网易云' }, mg: { name: '咪咕' },
-    }
+    discoverState.sources = {}
   }
   syncActiveSourceKey(discoverState)
   discoverSourcesLoaded.value = true

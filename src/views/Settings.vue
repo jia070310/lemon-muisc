@@ -37,9 +37,9 @@
         </div>
         <div class="setting-item">
           <div class="setting-item-info">
-            <div class="setting-item-label">音乐文件夹</div>
+            <div class="setting-item-label">音乐库路径</div>
             <div class="setting-item-desc">
-              扫描音乐时使用的目录。请使用 NAS 绝对路径（如 <code>/vol1/1000/Music</code>），同一物理目录只会保留一条。
+              用于音乐库、标签编辑等扫描本地歌曲，可添加一个或多个目录。请使用 NAS 绝对路径（如 <code>/vol1/1000/Music</code>），同一物理目录只会保留一条。
               {{ fnosAvailable ? '点击「选择文件夹」会调用系统文件管理器。' : '' }}
             </div>
           </div>
@@ -51,9 +51,30 @@
           </div>
         </div>
 
-        <div v-if="filePaths.length" class="path-block">
-          <div class="block-label">已添加的文件夹</div>
-          <div v-for="p in filePaths" :key="p" class="path-row">
+        <div v-if="musicPaths.length" class="library-stats card-inner">
+          <div class="library-stats-head">
+            <span class="block-label">音乐库扫描概况</span>
+            <button type="button" class="btn-ghost btn-sm" :disabled="libraryStatsLoading" @click="loadLibraryStats">
+              {{ libraryStatsLoading ? '统计中…' : '刷新统计' }}
+            </button>
+          </div>
+          <p v-if="libraryStatsLoading" class="library-stats-text">正在统计各目录下的音频文件…</p>
+          <template v-else-if="libraryStats">
+            <p class="library-stats-text">
+              共 <strong>{{ libraryStats.musicDirs }}</strong> 个目录，
+              合计 <strong>{{ libraryStats.totalTracks }}</strong> 首歌曲
+              <span v-if="libraryStats.musicDirs > 1">（多目录重复文件已去重）</span>。
+              音乐库与标签编辑会扫描这些目录中的全部音频文件（含子文件夹）。
+            </p>
+            <p v-if="downloadPath && musicPaths.includes(downloadPath)" class="library-stats-warn">
+              提示：下载目录与音乐库目录相同，每次下载的新歌也会出现在音乐库中。
+            </p>
+          </template>
+        </div>
+
+        <div v-if="musicPaths.length" class="path-block">
+          <div class="block-label">已添加的音乐库目录</div>
+          <div v-for="p in musicPaths" :key="p" class="path-row">
             <template v-if="editingPath === p">
               <input v-model="editPathValue" class="path-input" @keydown.enter="saveEditPath(p)" />
               <button v-if="fnosAvailable" class="btn-sm btn-ghost" @click="browseEditPath(p)" :disabled="pickingFolder">浏览</button>
@@ -62,25 +83,79 @@
             </template>
             <template v-else>
               <span class="path-text" :title="p">{{ p }}</span>
+              <span v-if="dirTrackCount(p) != null" class="path-count-badge">{{ dirTrackCountLabel(p) }}</span>
               <div class="path-actions">
                 <button v-if="fnosAvailable" class="btn-sm btn-ghost" @click="browseReplacePath(p)" :disabled="pickingFolder">浏览</button>
                 <button class="btn-sm btn-ghost" @click="startEditPath(p)">修改</button>
-                <button class="btn-sm btn-danger" @click="removePath(p)" :disabled="filePaths.length <= 1">移除</button>
+                <button class="btn-sm btn-danger" @click="removePath(p)">移除</button>
               </div>
             </template>
           </div>
         </div>
-        <div v-else class="empty-hint">暂无文件夹，请添加或选择路径</div>
+        <div v-else class="empty-hint">暂无音乐库目录，请添加或选择路径</div>
 
         <div v-if="!fnosAvailable" class="path-manual">
-          <input v-model="newPath" placeholder="手动输入绝对路径，如 /vol1/1000/Music" class="path-input" @keydown.enter="addPath" />
+          <input v-model="newPath" placeholder="手动输入音乐库绝对路径，如 /vol1/1000/Music" class="path-input" @keydown.enter="addPath" />
           <button class="btn-primary btn-sm" @click="addPath">添加</button>
+        </div>
+
+        <div class="path-section-divider" />
+
+        <div class="setting-item">
+          <div class="setting-item-info">
+            <div class="setting-item-label">下载保存路径</div>
+            <div class="setting-item-desc">
+              下载歌曲的默认保存目录，与音乐库路径相互独立。
+              {{ fnosAvailable ? '可点击下方按钮重新选择。' : '' }}
+            </div>
+          </div>
+          <div class="setting-item-action">
+            <button v-if="fnosAvailable" class="btn-primary btn-sm" @click="browseDownloadPath" :disabled="pickingFolder">
+              {{ pickingFolder ? '选择中...' : '选择文件夹' }}
+            </button>
+          </div>
+        </div>
+
+        <div class="path-block">
+          <div class="block-label">当前下载目录</div>
+          <div class="path-row path-row-static">
+            <template v-if="editingDownload">
+              <input v-model="editDownloadValue" class="path-input" @keydown.enter="saveDownloadPathEdit" />
+              <button class="btn-sm btn-primary" @click="saveDownloadPathEdit">保存</button>
+              <button class="btn-sm btn-ghost" @click="cancelDownloadEdit">取消</button>
+            </template>
+            <template v-else>
+              <span class="path-text" :title="downloadPath">{{ downloadPath || '未设置' }}</span>
+              <div class="path-actions">
+                <button v-if="!fnosAvailable" class="btn-sm btn-ghost" @click="startDownloadEdit">修改</button>
+              </div>
+            </template>
+          </div>
+        </div>
+
+        <div v-if="!fnosAvailable" class="path-manual path-manual-download">
+          <input v-model="newDownloadPath" placeholder="手动输入下载目录绝对路径" class="path-input" @keydown.enter="setDownloadPathManual" />
+          <button class="btn-primary btn-sm" @click="setDownloadPathManual">应用</button>
         </div>
       </div>
 
       <!-- 音源管理 -->
       <div v-if="activeTab === 'source'" class="panel-body">
-        <p class="source-tip">支持同时激活多个音源。试听 / 下载时按平台匹配，同一平台有多个音源时优先使用最近激活的，失败会自动尝试其他已激活音源。</p>
+        <p class="source-tip">支持同时激活多个音源。试听 / 下载时按平台匹配，同一平台有多个音源时优先使用最近激活的；当前音源失败时可自动或询问后切换到其他已激活音源。</p>
+        <div class="setting-item">
+          <div class="setting-item-info">
+            <div class="setting-item-label">音源切换方式</div>
+            <div class="setting-item-desc">当前音源无法播放或下载时的处理方式</div>
+          </div>
+          <div class="setting-item-action">
+            <AppSelect
+              v-model="settings[SOURCE_FALLBACK_MODE_KEY]"
+              :options="sourceFallbackOptions"
+              min-width="180px"
+              @change="saveSourceFallbackMode"
+            />
+          </div>
+        </div>
         <div class="source-list" v-if="sourceList.length">
           <div v-for="s in sourceList" :key="s.id" class="source-item" :class="{ active: isSourceActive(s.id) }">
             <div class="source-info">
@@ -120,10 +195,14 @@
             <div class="setting-item-label">界面明暗</div>
             <div class="setting-item-desc">深色夜间模式或浅色日间模式</div>
           </div>
-          <select v-model="settings['ui.theme']" @change="saveTheme" class="setting-select">
-            <option value="dark">深色</option>
-            <option value="light">浅色</option>
-          </select>
+          <div class="setting-item-action">
+            <AppSelect
+              v-model="settings['ui.theme']"
+              :options="themeOptions"
+              min-width="180px"
+              @change="saveTheme"
+            />
+          </div>
         </div>
         <div class="setting-item setting-item-stack">
           <div class="setting-item-info">
@@ -180,17 +259,24 @@
             <div class="setting-item-label">封面样式</div>
             <div class="setting-item-desc">播放栏封面显示方式</div>
           </div>
-          <select v-model="settings['player.coverStyle']" @change="saveSetting('player.coverStyle')" class="setting-select">
-            <option value="disc">圆形（播放时旋转）</option>
-            <option value="card">圆角方形（固定不转）</option>
-          </select>
+          <div class="setting-item-action">
+            <AppSelect
+              v-model="settings['player.coverStyle']"
+              :options="coverStyleOptions"
+              min-width="180px"
+              @change="saveSetting('player.coverStyle')"
+            />
+          </div>
         </div>
         <div class="setting-item">
           <div class="setting-item-info">
             <div class="setting-item-label">音频可视化</div>
-            <div class="setting-item-desc">播放栏背景与全屏播放页显示频谱动态效果</div>
+            <div class="setting-item-desc">开启后，播放栏与全屏页将显示频谱动效。频谱需通过 Web Audio 分析音频，开启后无法在后台或锁屏时继续播放；关闭本选项后将自动切换为原生播放，支持后台与锁屏续播（部分手机浏览器仍可能受系统限制）</div>
           </div>
-          <label class="toggle"><input type="checkbox" :checked="settings['player.visualizer'] === 'true'" @change="toggleSetting('player.visualizer')" /><span class="slider"></span></label>
+          <label class="toggle">
+            <input type="checkbox" :checked="settings['player.visualizer'] === 'true'" @change="toggleVisualizerSetting" />
+            <span class="slider"></span>
+          </label>
         </div>
       </div>
 
@@ -199,31 +285,42 @@
         <div class="setting-item">
           <div class="setting-item-info">
             <div class="setting-item-label">保存路径</div>
-            <div class="setting-item-desc">下载文件的默认保存目录</div>
+            <div class="setting-item-desc">
+              下载文件的默认保存目录。可在「文件路径」中单独配置，与音乐库目录无关。
+            </div>
           </div>
-          <select v-model="downloadPath" @change="saveDownloadPath" :disabled="!filePaths.length" class="setting-select">
-            <option v-for="p in filePaths" :key="p" :value="p">{{ p }}</option>
-          </select>
+          <div class="setting-item-action path-readonly">
+            <code class="download-path-code">{{ downloadPath || '未设置' }}</code>
+            <button type="button" class="btn-sm btn-ghost" @click="activeTab = 'paths'">去修改</button>
+          </div>
         </div>
         <div class="setting-item">
           <div class="setting-item-info">
             <div class="setting-item-label">文件名格式</div>
             <div class="setting-item-desc">下载文件的命名规则</div>
           </div>
-          <select v-model="settings['download.fileName']" @change="saveSetting('download.fileName')" class="setting-select">
-            <option value="{name} - {singer}">歌名 - 歌手</option>
-            <option value="{singer} - {name}">歌手 - 歌名</option>
-            <option value="{name}">仅歌名</option>
-          </select>
+          <div class="setting-item-action">
+            <AppSelect
+              v-model="settings['download.fileName']"
+              :options="fileNameOptions"
+              min-width="200px"
+              @change="saveSetting('download.fileName')"
+            />
+          </div>
         </div>
         <div class="setting-item">
           <div class="setting-item-info">
             <div class="setting-item-label">最大并发</div>
             <div class="setting-item-desc">同时下载的任务数量</div>
           </div>
-          <select v-model="settings['download.maxDownloadNum']" @change="saveSetting('download.maxDownloadNum')" class="setting-select">
-            <option v-for="n in 6" :key="n" :value="String(n)">{{ n }}</option>
-          </select>
+          <div class="setting-item-action">
+            <AppSelect
+              v-model="settings['download.maxDownloadNum']"
+              :options="maxDownloadOptions"
+              min-width="100px"
+              @change="saveSetting('download.maxDownloadNum')"
+            />
+          </div>
         </div>
         <div class="setting-item">
           <div class="setting-item-info">
@@ -234,10 +331,17 @@
         </div>
         <div class="setting-item">
           <div class="setting-item-info">
-            <div class="setting-item-label">按专辑名分组</div>
-            <div class="setting-item-desc">按歌曲专辑名创建子文件夹保存</div>
+            <div class="setting-item-label">下载分组</div>
+            <div class="setting-item-desc">在下载目录下创建子文件夹；按歌手时多位歌手取第一位</div>
           </div>
-          <label class="toggle"><input type="checkbox" :checked="settings['download.isSavePathGroupByListName'] === 'true'" @change="toggleSetting('download.isSavePathGroupByListName')" /><span class="slider"></span></label>
+          <div class="setting-item-action">
+            <AppSelect
+              v-model="settings[DOWNLOAD_GROUP_BY_KEY]"
+              :options="downloadGroupOptions"
+              min-width="180px"
+              @change="saveDownloadGroupBy"
+            />
+          </div>
         </div>
       </div>
 
@@ -266,10 +370,14 @@
             <div class="setting-item-label">歌词编码</div>
             <div class="setting-item-desc">独立歌词文件的字符编码</div>
           </div>
-          <select v-model="settings['download.lrcFormat']" @change="saveSetting('download.lrcFormat')" class="setting-select">
-            <option value="utf8">UTF-8</option>
-            <option value="gbk">GBK</option>
-          </select>
+          <div class="setting-item-action">
+            <AppSelect
+              v-model="settings['download.lrcFormat']"
+              :options="lrcFormatOptions"
+              min-width="120px"
+              @change="saveSetting('download.lrcFormat')"
+            />
+          </div>
         </div>
       </div>
     </main>
@@ -281,11 +389,45 @@
 <script setup>
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { api } from '../api.js'
-import { loadCoverStyle, loadVisualizerSetting } from '../stores/player.js'
+import { loadCoverStyle, loadPlayerSettings } from '../stores/player.js'
 import { reloadSearchSources } from '../stores/search.js'
 import { reloadDiscoverSources } from '../stores/discover.js'
+import { applySourceFallbackMode, SOURCE_FALLBACK_MODE_KEY } from '../stores/sourceFallback.js'
 import { canPickFolder, pickFolder } from '../utils/fnos.js'
 import { applyTheme, theme as currentTheme, THEME_KEY, COLOR_SCHEME_KEY, CUSTOM_COLOR_KEY, COLOR_SCHEME_OPTIONS, applyColorScheme, setCustomColor, normalizeHex, colorScheme as currentColorScheme, customColor as currentCustomColor } from '../utils/theme.js'
+import AppSelect from '../components/AppSelect.vue'
+
+const themeOptions = [
+  { value: 'dark', label: '深色' },
+  { value: 'light', label: '浅色' },
+]
+const coverStyleOptions = [
+  { value: 'disc', label: '圆形（播放时旋转）' },
+  { value: 'card', label: '圆角方形（固定不转）' },
+]
+const fileNameOptions = [
+  { value: '{name} - {singer}', label: '歌名 - 歌手' },
+  { value: '{singer} - {name}', label: '歌手 - 歌名' },
+  { value: '{name}', label: '仅歌名' },
+]
+const maxDownloadOptions = Array.from({ length: 6 }, (_, i) => ({
+  value: String(i + 1),
+  label: String(i + 1),
+}))
+const downloadGroupOptions = [
+  { value: 'none', label: '不分组' },
+  { value: 'artist', label: '按歌手' },
+  { value: 'album', label: '按专辑' },
+]
+const DOWNLOAD_GROUP_BY_KEY = 'download.savePathGroupBy'
+const lrcFormatOptions = [
+  { value: 'utf8', label: 'UTF-8' },
+  { value: 'gbk', label: 'GBK' },
+]
+const sourceFallbackOptions = [
+  { value: 'auto', label: '自动切换（默认）' },
+  { value: 'ask', label: '切换前询问' },
+]
 
 const settings = reactive({})
 const sourceList = ref([])
@@ -295,11 +437,14 @@ const toast = ref(null)
 const importMode = ref('file')
 const importUrl = ref('')
 const importingUrl = ref(false)
-const filePaths = ref([])
+const musicPaths = ref([])
 const downloadPath = ref('')
 const newPath = ref('')
+const newDownloadPath = ref('')
 const editingPath = ref('')
 const editPathValue = ref('')
+const editingDownload = ref(false)
+const editDownloadValue = ref('')
 const fnosAvailable = ref(false)
 const pickingFolder = ref(false)
 const editFromPicker = ref(false)
@@ -307,6 +452,8 @@ const activeTab = ref('paths')
 const needsPathSetup = ref(false)
 const mountInfo = ref(null)
 const mountProbeText = ref('')
+const libraryStats = ref(null)
+const libraryStatsLoading = ref(false)
 let customColorSaveTimer = 0
 
 function parseActiveIds(raw) {
@@ -358,6 +505,39 @@ watch(currentColorScheme, (v) => {
   settings[COLOR_SCHEME_KEY] = v
 })
 
+watch(activeTab, (tab) => {
+  if (tab === 'paths' && musicPaths.value.length) loadLibraryStats()
+})
+
+function dirTrackCount(p) {
+  const row = libraryStats.value?.dirs?.find(d => d.path === p)
+  if (!row) return null
+  return row.readable ? row.count : null
+}
+
+function dirTrackCountLabel(p) {
+  const row = libraryStats.value?.dirs?.find(d => d.path === p)
+  if (!row) return ''
+  if (!row.readable) return '不可读'
+  return `${row.count} 首`
+}
+
+async function loadLibraryStats() {
+  if (!musicPaths.value.length) {
+    libraryStats.value = null
+    return
+  }
+  libraryStatsLoading.value = true
+  try {
+    const res = await api.paths.stats()
+    libraryStats.value = res.data || null
+  } catch {
+    libraryStats.value = null
+  } finally {
+    libraryStatsLoading.value = false
+  }
+}
+
 onMounted(async () => {
   try {
     fnosAvailable.value = await canPickFolder()
@@ -371,6 +551,11 @@ onMounted(async () => {
     if (!settings[THEME_KEY]) settings[THEME_KEY] = currentTheme.value
     if (!settings[COLOR_SCHEME_KEY]) settings[COLOR_SCHEME_KEY] = currentColorScheme.value
     if (!settings[CUSTOM_COLOR_KEY]) settings[CUSTOM_COLOR_KEY] = currentCustomColor.value
+    if (!settings[SOURCE_FALLBACK_MODE_KEY]) settings[SOURCE_FALLBACK_MODE_KEY] = 'auto'
+    applySourceFallbackMode(settings[SOURCE_FALLBACK_MODE_KEY])
+    if (!settings[DOWNLOAD_GROUP_BY_KEY]) {
+      settings[DOWNLOAD_GROUP_BY_KEY] = settings['download.isSavePathGroupByListName'] === 'true' ? 'album' : 'none'
+    }
     applyTheme(settings[THEME_KEY], {
       color: settings[COLOR_SCHEME_KEY],
       customHex: settings[CUSTOM_COLOR_KEY],
@@ -387,8 +572,8 @@ onMounted(async () => {
 async function loadPaths() {
   try {
     const res = await api.paths.list()
-    filePaths.value = res.data || []
-    downloadPath.value = res.downloadPath || filePaths.value[0] || ''
+    musicPaths.value = res.musicPaths || res.data || []
+    downloadPath.value = res.downloadPath || ''
     needsPathSetup.value = Boolean(res.setup?.needsPathConfig)
     mountInfo.value = res.setup?.mountInfo || null
     const mp = res.setup?.musicProbe
@@ -402,6 +587,7 @@ async function loadPaths() {
     } else {
       mountProbeText.value = ''
     }
+    await loadLibraryStats()
   } catch {}
 }
 
@@ -410,10 +596,11 @@ async function addPath(fromPicker = false) {
   if (!val) return
   try {
     const res = await api.paths.add(val, fromPicker)
-    filePaths.value = res.data || []
+    musicPaths.value = res.musicPaths || res.data || []
     downloadPath.value = res.downloadPath || downloadPath.value
     newPath.value = ''
-    showToast(fromPicker ? '路径已添加（NAS 路径已自动转换为容器路径）' : '路径已添加', 'success')
+    showToast(fromPicker ? '音乐库路径已添加' : '音乐库路径已添加', 'success')
+    await loadLibraryStats()
   } catch (e) {
     showToast(e.message, 'error')
   }
@@ -439,9 +626,10 @@ async function browseReplacePath(oldPath) {
     const path = await pickFolder({ title: '选择新文件夹' })
     if (!path) return
     const res = await api.paths.update(oldPath, path, true)
-    filePaths.value = res.data || []
+    musicPaths.value = res.musicPaths || res.data || []
     downloadPath.value = res.downloadPath || downloadPath.value
     showToast('路径已更新', 'success')
+    await loadLibraryStats()
   } catch (e) {
     if (e.message && !e.message.includes('未选择')) showToast(e.message, 'error')
   } finally {
@@ -483,10 +671,11 @@ async function saveEditPath(oldPath) {
   }
   try {
     const res = await api.paths.update(oldPath, val, editFromPicker.value)
-    filePaths.value = res.data || []
+    musicPaths.value = res.musicPaths || res.data || []
     downloadPath.value = res.downloadPath || downloadPath.value
     cancelEditPath()
     showToast('路径已更新', 'success')
+    await loadLibraryStats()
   } catch (e) {
     showToast(e.message, 'error')
   }
@@ -495,21 +684,82 @@ async function saveEditPath(oldPath) {
 async function removePath(dirPath) {
   try {
     const res = await api.paths.remove(dirPath)
-    filePaths.value = res.data || []
-    downloadPath.value = res.downloadPath || filePaths.value[0] || ''
-    showToast('路径已删除', 'success')
+    musicPaths.value = res.musicPaths || res.data || []
+    downloadPath.value = res.downloadPath || downloadPath.value
+    showToast('音乐库路径已删除', 'success')
+    await loadLibraryStats()
   } catch (e) {
     showToast(e.message, 'error')
   }
 }
 
-async function saveDownloadPath() {
+function startDownloadEdit() {
+  editingDownload.value = true
+  editDownloadValue.value = downloadPath.value
+}
+
+function cancelDownloadEdit() {
+  editingDownload.value = false
+  editDownloadValue.value = ''
+}
+
+async function saveDownloadPathEdit() {
+  const val = editDownloadValue.value.trim()
+  if (!val) return
   try {
-    await api.paths.setDownload(downloadPath.value)
+    const res = await api.paths.setDownload(val, false)
+    downloadPath.value = res.downloadPath || val
+    cancelDownloadEdit()
     showToast('下载路径已更新', 'success')
   } catch (e) {
     showToast(e.message, 'error')
-    await loadPaths()
+  }
+}
+
+async function setDownloadPathManual() {
+  const val = newDownloadPath.value.trim()
+  if (!val) return
+  try {
+    const res = await api.paths.setDownload(val, false)
+    downloadPath.value = res.downloadPath || val
+    newDownloadPath.value = ''
+    showToast('下载路径已更新', 'success')
+  } catch (e) {
+    showToast(e.message, 'error')
+  }
+}
+
+async function browseDownloadPath() {
+  pickingFolder.value = true
+  try {
+    const path = await pickFolder({ title: '选择下载保存目录' })
+    if (!path) return
+    const res = await api.paths.setDownload(path, true)
+    downloadPath.value = res.downloadPath || path
+    showToast('下载路径已更新', 'success')
+  } catch (e) {
+    if (e.message && !e.message.includes('未选择')) showToast(e.message, 'error')
+  } finally {
+    pickingFolder.value = false
+  }
+}
+
+async function saveSourceFallbackMode() {
+  if (!settings[SOURCE_FALLBACK_MODE_KEY]) settings[SOURCE_FALLBACK_MODE_KEY] = 'auto'
+  applySourceFallbackMode(settings[SOURCE_FALLBACK_MODE_KEY])
+  await saveSetting(SOURCE_FALLBACK_MODE_KEY)
+}
+
+async function saveDownloadGroupBy() {
+  const mode = settings[DOWNLOAD_GROUP_BY_KEY] || 'none'
+  settings['download.isSavePathGroupByListName'] = mode === 'album' ? 'true' : 'false'
+  try {
+    await api.settings.update({
+      [DOWNLOAD_GROUP_BY_KEY]: mode,
+      'download.isSavePathGroupByListName': settings['download.isSavePathGroupByListName'],
+    })
+  } catch (e) {
+    showToast(e.message, 'error')
   }
 }
 
@@ -517,7 +767,7 @@ async function saveSetting(key) {
   try {
     await api.settings.update({ [key]: settings[key] })
     if (key === 'player.coverStyle') loadCoverStyle()
-    if (key === 'player.visualizer') loadVisualizerSetting()
+    if (key === 'player.visualizer') loadPlayerSettings()
     if (key === THEME_KEY) {
       applyTheme(settings[key], {
         color: settings[COLOR_SCHEME_KEY],
@@ -597,6 +847,16 @@ function onCustomColorHex(e) {
 function toggleSetting(key) {
   settings[key] = settings[key] === 'true' ? 'false' : 'true'
   saveSetting(key)
+}
+
+async function toggleVisualizerSetting() {
+  settings['player.visualizer'] = settings['player.visualizer'] === 'true' ? 'false' : 'true'
+  try {
+    await api.settings.update({ 'player.visualizer': settings['player.visualizer'] })
+    await loadPlayerSettings()
+  } catch (e) {
+    showToast(e.message, 'error')
+  }
 }
 
 async function importFile(e) {
@@ -809,9 +1069,68 @@ function showToast(text, type = 'info') {
 .setting-item-label { font-size: 14px; font-weight: 500; margin-bottom: 2px; }
 .setting-item-desc { font-size: 12px; color: var(--text-muted); line-height: 1.5; }
 .setting-item-action { flex-shrink: 0; }
-.setting-select { min-width: 180px; font-size: 13px; }
+.setting-item-action .app-select {
+  min-width: 180px;
+  max-width: min(280px, 38vw);
+}
 
 .path-block { margin-top: 8px; }
+.library-stats {
+  margin: 12px 0 16px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(108, 158, 255, 0.06);
+  border: 1px solid rgba(108, 158, 255, 0.2);
+}
+.library-stats-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.library-stats-head .block-label { margin-bottom: 0; }
+.library-stats-text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--text-secondary);
+}
+.library-stats-warn {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: #f59e0b;
+  line-height: 1.5;
+}
+.path-count-badge {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+  border-radius: 999px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+.path-section-divider {
+  margin: 20px 0 8px;
+  border-top: 1px solid var(--border-light);
+}
+.path-row-static { background: var(--bg-elevated); }
+.path-manual-download { margin-top: 8px; padding-top: 0; border-top: none; }
+.path-readonly {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  max-width: 100%;
+}
+.download-path-code {
+  font-size: 12px;
+  word-break: break-all;
+  text-align: right;
+  max-width: 360px;
+}
 .block-label { font-size: 12px; color: var(--text-muted); margin-bottom: 8px; }
 .path-row {
   display: flex;
@@ -1036,7 +1355,11 @@ function showToast(text, type = 'info') {
     gap: 10px;
   }
   .setting-item-action { width: 100%; }
-  .setting-select { width: 100%; min-width: 0; }
+  .setting-item-action .app-select {
+    width: 100%;
+    max-width: none;
+    min-width: 0 !important;
+  }
   .path-row { flex-wrap: wrap; }
   .path-actions { width: 100%; }
   .path-manual { flex-direction: column; }

@@ -3,6 +3,10 @@
     <div class="page-title">搜索</div>
     <div class="page-subtitle">搜索歌曲并试听、下载；可多选后批量下载，不支持所选音质的歌曲会提示确认</div>
 
+    <div v-if="playlistPickTarget" class="pick-hint card">
+      点击歌曲右侧「加入歌单」添加到「{{ playlistPickTarget.name }}」
+    </div>
+
     <div class="search-header card">
       <form class="search-row" @submit.prevent="doSearch">
         <div class="search-bar">
@@ -105,6 +109,12 @@
           </button>
         </span>
         <span class="col-action">
+          <button
+            v-if="playlistPickTarget"
+            class="btn-sm btn-ghost playlist-add-btn"
+            @click="addToPlaylist(item)"
+            title="加入歌单"
+          >加入歌单</button>
           <div class="dl-wrap">
             <button class="dl-btn" @click.stop="toggleQualityMenu(item, i, $event)" title="下载">
               <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
@@ -167,6 +177,7 @@ import {
   buildDownloadTask,
 } from '../utils/musicPayload.js'
 import { useQualityMenuPosition } from '../utils/qualityMenu.js'
+import { playlistPickTarget, addToPickingPlaylist } from '../stores/library.js'
 
 const toast = ref(null)
 const qualityMenuId = ref(null)
@@ -216,7 +227,7 @@ function getSelectedEntries() {
 }
 
 onMounted(async () => {
-  await loadSearchSources(api)
+  await loadSearchSources(api, { force: true })
   document.addEventListener('click', closeMenus)
 })
 
@@ -368,6 +379,13 @@ async function handleBatchConfirm() {
   await confirmBatchDialog()
 }
 
+function addToPlaylist(item) {
+  const res = addToPickingPlaylist(item, searchState.activeSource)
+  if (res.ok) showToast(`已加入歌单：${playlistPickTarget.value?.name || ''}`, 'success')
+  else if (res.duplicate) showToast('该歌曲已在歌单中', 'info')
+  else showToast('请先打开歌单并点击添加歌曲', 'info')
+}
+
 function showToast(text, type = 'info') {
   toast.value = { text, type }
   setTimeout(() => { toast.value = null }, 3000)
@@ -378,6 +396,19 @@ function showToast(text, type = 'info') {
 .search-page {
   width: 100%;
   max-width: none;
+}
+
+.pick-hint {
+  margin-bottom: 16px;
+  padding: 12px 16px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  background: rgba(99, 102, 241, 0.1);
+  border: 1px solid rgba(99, 102, 241, 0.25);
+}
+.playlist-add-btn {
+  margin-right: 6px;
+  white-space: nowrap;
 }
 
 .search-header { padding: 20px 20px 18px; margin-bottom: 16px; overflow: visible; }

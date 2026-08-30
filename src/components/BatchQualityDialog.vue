@@ -10,13 +10,12 @@
 
       <div v-if="bulkOptions.length > 1" class="batch-bulk-bar">
         <span>以下歌曲统一设为</span>
-        <select
-          :value="bulkQuality"
-          class="batch-quality-select"
-          @change="$emit('update:bulkQuality', $event.target.value)"
-        >
-          <option v-for="q in bulkOptions" :key="q" :value="q">{{ formatQuality(q) }}</option>
-        </select>
+        <AppSelect
+          :model-value="bulkQuality"
+          :options="bulkQualitySelectOptions"
+          min-width="132px"
+          @update:model-value="$emit('update:bulkQuality', $event)"
+        />
         <button type="button" class="btn-ghost btn-sm" @click="$emit('apply-bulk')">应用</button>
       </div>
 
@@ -29,15 +28,11 @@
               可用：{{ row.available.map(q => formatQuality(q, row.item.types)).join('、') || '未知' }}
             </div>
           </div>
-          <select
+          <AppSelect
             v-model="selections[row.key]"
-            class="batch-quality-select"
-          >
-            <option v-if="!row.available.length" value="128k">128K · MP3</option>
-            <option v-for="q in row.available" :key="q" :value="q">
-              {{ formatQuality(q, row.item.types) }}
-            </option>
-          </select>
+            :options="qualityOptionsForRow(row)"
+            min-width="132px"
+          />
         </div>
       </div>
 
@@ -55,6 +50,7 @@
 import { computed } from 'vue'
 import { getQualityLabel } from '../utils/quality.js'
 import { cleanText, formatArtists } from '../utils/text.js'
+import AppSelect from './AppSelect.vue'
 
 const props = defineProps({
   plan: { type: Object, default: null },
@@ -69,6 +65,20 @@ defineEmits(['cancel', 'confirm', 'apply-bulk', 'update:bulkQuality'])
 
 const matchedCount = computed(() => props.plan?.matched?.length || 0)
 const totalCount = computed(() => (props.plan?.matched?.length || 0) + (props.plan?.rows?.length || 0))
+
+const bulkQualitySelectOptions = computed(() =>
+  props.bulkOptions.map(q => ({ value: q, label: formatQuality(q) }))
+)
+
+function qualityOptionsForRow(row) {
+  if (!row.available?.length) {
+    return [{ value: '128k', label: formatQuality('128k', row.item?.types) }]
+  }
+  return row.available.map(q => ({
+    value: q,
+    label: formatQuality(q, row.item?.types),
+  }))
+}
 
 function formatQuality(q, types) {
   return getQualityLabel(q, types)
@@ -181,7 +191,8 @@ function formatQuality(q, types) {
   color: var(--text-secondary);
 }
 
-.batch-quality-select {
+.batch-quality-select,
+.batch-quality-row .app-select {
   flex-shrink: 0;
   min-width: 132px;
   max-width: 42%;

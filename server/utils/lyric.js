@@ -1,6 +1,33 @@
 const timeFieldExp = /^(?:\[[\d:.]+\])+/g
 const timeExp = /\d{1,3}(:\d{1,3}){0,2}(?:\.\d{1,3})/g
 
+export function hasLrcTimestamps(text) {
+  return /\[\d{1,2}(?::\d{2}){1,2}(?:\.\d{1,3})?\]/.test(String(text || ''))
+}
+
+export function normalizeLyricText(text) {
+  if (!text) return ''
+  return String(text)
+    .replace(/\uFEFF/g, '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .replace(/\\n/g, '\n')
+    .trim()
+}
+
+/** 优先保留带时间轴的 LRC 文本 */
+export function pickBestLyricText(primary, fallback) {
+  const a = normalizeLyricText(primary)
+  const b = normalizeLyricText(fallback)
+  if (!a) return b
+  if (!b) return a
+  const aHas = hasLrcTimestamps(a)
+  const bHas = hasLrcTimestamps(b)
+  if (bHas && !aHas) return b
+  if (aHas && !bHas) return a
+  return b.length > a.length ? b : a
+}
+
 function formatTimeLabel(label) {
   return label
     .replace(/^0+(\d+)/, '$1')

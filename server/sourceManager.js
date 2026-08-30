@@ -1,7 +1,10 @@
 import vm from 'vm'
 import needle from 'needle'
+import { getDB } from './db.js'
 import { parseScriptMeta } from './utils/parseScriptMeta.js'
 import { createLxUtils, createSandboxRequire } from './utils/lxSourceRuntime.js'
+import { formatUserError } from './utils/userError.js'
+import { assertMusicUrl } from './utils/sourceResult.js'
 
 /** @type {Map<string, { id: string, handler: Function|null, sources: object, pendingRequests: Map }>} */
 const activeSources = new Map()
@@ -315,30 +318,108 @@ function invokeHandler(entry, payload) {
   })
 }
 
-export async function requestSource(source, action, info) {
-  if (!hasActiveSource()) throw new Error('没有激活的音源')
+const sourceNameCache = new Map()
 
-  let candidates = candidatesFor(source, action)
-  // 若脚本未声明 actions，仍允许尝试声明了该平台的脚本
-  if (!candidates.length) {
-    candidates = candidatesFor(source, null)
+export function getSourceEntryName(id) {
+  if (!id) return '未知音源'
+  if (sourceNameCache.has(id)) return sourceNameCache.get(id)
+  try {
+    const row = getDB().prepare('SELECT name FROM user_apis WHERE id = ?').get(id)
+    const name = String(row?.name || id).trim() || id
+    sourceNameCache.set(id, name)
+    return name
+  } catch {
+    return id
   }
-  // 仍无匹配：回退到所有已激活脚本（兼容未声明 sources 的旧脚本）
+}
+
+export function clearSourceNameCache(id) {
+  if (id) sourceNameCache.delete(id)
+  else sourceNameCache.clear()
+}
+
+function resolveCandidates(source, action) {
+  let candidates = candidatesFor(source, action)
+  if (!candidates.length) candidates = candidatesFor(source, null)
   if (!candidates.length) {
     candidates = [...activeSources.values()].filter(s => s?.handler).reverse()
   }
-  if (!candidates.length) throw new Error('没有激活的音源')
+  return candidates
+}
+
+function actionLabel(action) {
+  if (action === 'musicUrl') return '取链'
+  if (action === 'lyric') return '获取歌词'
+  if (action === 'pic') return '获取封面'
+  return '请求'
+}
+
+/**
+ * @returns {Promise<{ data: any, sourceId: string, sourceName: string, switched: boolean, fromSourceId: string|null, fromSourceName: string|null }>}
+ */
+export async function requestSourceWithMeta(source, action, info, options = {}) {
+  if (!hasActiveSource()) throw new Error('没有激活的音源')
+
+  const fallbackMode = options.fallbackMode === 'ask' ? 'ask' : 'auto'
+  const preferredSourceId = options.preferredSourceId || null
+  const skipSourceIds = new Set((options.skipSourceIds || []).filter(Boolean))
+
+  let candidates = resolveCandidates(source, action)
+  if (preferredSourceId) {
+    const preferred = candidates.find((entry) => entry.id === preferredSourceId)
+    if (preferred) candidates = [preferred]
+    else {
+      const entry = activeSources.get(preferredSourceId)
+      candidates = entry?.handler ? [entry] : []
+    }
+  }
+  candidates = candidates.filter((entry) => !skipSourceIds.has(entry.id))
+  if (!candidates.length) throw new Error('没有可用的音源')
+
+  const primaryId = candidates[0].id
+  const tryList = fallbackMode === 'ask' ? [candidates[0]] : candidates
 
   let lastErr = null
-  for (const entry of candidates) {
+  for (const entry of tryList) {
     try {
-      return await invokeHandler(entry, { source, action, info })
+      const data = await invokeHandler(entry, { source, action, info })
+      if (action === 'musicUrl') assertMusicUrl(data)
+      const switched = fallbackMode === 'auto' && entry.id !== primaryId
+      return {
+        data,
+        sourceId: entry.id,
+        sourceName: getSourceEntryName(entry.id),
+        switched,
+        fromSourceId: switched ? primaryId : null,
+        fromSourceName: switched ? getSourceEntryName(primaryId) : null,
+      }
     } catch (e) {
       lastErr = e
       console.warn(`[音源] ${entry.id} ${action}/${source} 失败: ${e?.message || e}`)
     }
   }
+
+  if (fallbackMode === 'ask' && candidates.length > 1) {
+    const reason = formatUserError(lastErr, '音源请求失败')
+    const failedName = getSourceEntryName(primaryId)
+    const err = new Error(`音源「${failedName}」${actionLabel(action)}失败`)
+    err.code = 'SOURCE_FALLBACK_REQUIRED'
+    err.failedSourceId = primaryId
+    err.failedSourceName = failedName
+    err.reason = reason
+    err.alternatives = candidates.slice(1).map((entry) => ({
+      id: entry.id,
+      name: getSourceEntryName(entry.id),
+    }))
+    throw err
+  }
+
   throw lastErr || new Error('音源请求失败')
+}
+
+export async function requestSource(source, action, info, options = {}) {
+  const result = await requestSourceWithMeta(source, action, info, options)
+  return result.data
 }
 
 function validateSources(raw) {

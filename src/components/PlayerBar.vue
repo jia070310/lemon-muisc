@@ -74,8 +74,14 @@
       <button class="ctrl-btn ctrl-sub" @click="onPlayPrev" :disabled="!playQueue.length" title="上一曲">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><polygon points="19,20 9,12 19,4"/><line x1="5" y1="4" x2="5" y2="20" stroke="currentColor" stroke-width="2"/></svg>
       </button>
-      <button class="ctrl-btn ctrl-main" @click="onMainPlayClick" :disabled="!currentPlaying" :title="isPaused ? '播放' : '暂停'">
-        <svg v-if="!currentPlaying || isPaused" viewBox="0 0 24 24" width="20" height="20" fill="#fff"><polygon points="8,5 19,12 8,19"/></svg>
+      <button
+        class="ctrl-btn ctrl-main"
+        :class="{ buffering: isBuffering }"
+        @click="onMainPlayClick"
+        :disabled="!currentPlaying"
+        :title="isBuffering ? '加载中…' : (isPaused ? '播放' : '暂停')"
+      >
+        <svg v-if="!currentPlaying || (isPaused && !isBuffering)" viewBox="0 0 24 24" width="20" height="20" fill="#fff"><polygon points="8,5 19,12 8,19"/></svg>
         <svg v-else viewBox="0 0 24 24" width="20" height="20" fill="#fff"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
       </button>
       <button class="ctrl-btn ctrl-sub" @click="onPlayNext" :disabled="!playQueue.length" title="下一曲">
@@ -91,6 +97,16 @@
         <input type="range" min="0" :max="displayDuration || 1" :value="currentTime" @input="onSeek" class="progress-slider" />
         <span class="time-display">{{ fmtTime(currentTime) }} / {{ fmtTime(displayDuration) }}</span>
       </div>
+      <button
+        v-if="currentPlaying"
+        class="ctrl-btn ctrl-fav"
+        :class="{ active: isCurrentFavorite }"
+        type="button"
+        :title="isCurrentFavorite ? '取消收藏' : '收藏'"
+        @click="onToggleFavorite"
+      >
+        <svg viewBox="0 0 24 24" width="16" height="16" :fill="isCurrentFavorite ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8z"/></svg>
+      </button>
       <button ref="queueBtnRef" class="ctrl-btn ctrl-queue" @click="onToggleQueuePanel" :title="`试听列表 (${playQueue.length})`" :class="{ active: showQueuePanel }">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
           <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/>
@@ -166,6 +182,14 @@
             <div class="queue-meta">{{ formatArtists(entry.item.singer) }}</div>
           </div>
           <button
+            class="queue-fav-btn"
+            :class="{ active: isQueueFavorite(entry.item, entry.source) }"
+            @click.stop="onToggleQueueFavorite(entry.item, entry.source)"
+            :title="isQueueFavorite(entry.item, entry.source) ? '取消收藏' : '收藏'"
+          >
+            <svg viewBox="0 0 24 24" width="14" height="14" :fill="isQueueFavorite(entry.item, entry.source) ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8z"/></svg>
+          </button>
+          <button
             class="queue-play-btn"
             :class="{ playing: i === currentQueueIndex && currentPlaying && !isPaused }"
             @click.stop="onQueuePlayClick(i)"
@@ -184,7 +208,7 @@
 
 <script setup>
 import {
-  currentPlaying, isPaused, currentTime, displayDuration, volume, isMuted,
+  currentPlaying, isPaused, isBuffering, currentTime, displayDuration, volume, isMuted,
   coverUrl, coverStyle, currentLyricText, visualizerEnabled, showFullscreenPlayer,
   playQueue, currentQueueIndex, playMode, playModeLabel, showQueuePanel, playerError,
   togglePause, stopPlay, seekTo, setVolume, toggleMute, fmtTime, initPlayer,
@@ -194,6 +218,7 @@ import {
 import { onMounted, onUnmounted, ref, computed, watch } from 'vue'
 import { cleanText, formatArtists } from '../utils/text.js'
 import SpectrumVisualizer from './SpectrumVisualizer.vue'
+import { isFavorite, toggleFavorite } from '../stores/library.js'
 
 const queuePanelRef = ref(null)
 const queueBtnRef = ref(null)
@@ -210,6 +235,29 @@ let volumeLeaveTimer = null
 
 const volumePercent = computed(() => Math.round((volume.value || 0) * 100))
 const volumeTip = computed(() => (isMuted.value ? '取消静音' : `音量 ${volumePercent.value}%（点击静音）`))
+
+const isCurrentFavorite = computed(() => currentPlaying.value ? isFavorite({
+  ...currentPlaying.value,
+  source: currentPlaying.value.source,
+  localPath: currentPlaying.value.localPath,
+}) : false)
+
+function isQueueFavorite(item, source) {
+  return isFavorite({ ...item, source, localPath: item.localPath })
+}
+
+function onToggleFavorite() {
+  if (!currentPlaying.value) return
+  toggleFavorite({
+    ...currentPlaying.value,
+    source: currentPlaying.value.source,
+    localPath: currentPlaying.value.localPath,
+  })
+}
+
+function onToggleQueueFavorite(item, source) {
+  toggleFavorite({ ...item, source, localPath: item.localPath })
+}
 
 function applyCompact(width) {
   if (isCompact.value) {
@@ -548,6 +596,33 @@ async function onQueuePlayClick(index) {
   border-color: var(--accent);
   background: var(--accent-muted);
 }
+.ctrl-fav {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+.ctrl-fav svg {
+  display: block;
+  flex-shrink: 0;
+}
+.ctrl-fav:hover {
+  color: #ef4444;
+  border-color: rgba(239, 68, 68, 0.45);
+  background: rgba(239, 68, 68, 0.1);
+}
+.ctrl-fav.active {
+  color: #ef4444;
+  border-color: rgba(239, 68, 68, 0.45);
+  background: rgba(239, 68, 68, 0.1);
+}
 .queue-badge {
   position: absolute;
   top: -4px;
@@ -858,6 +933,35 @@ async function onQueuePlayClick(index) {
 .queue-item:hover .queue-remove { opacity: 1; }
 .queue-remove:hover { color: var(--error); }
 
+.queue-fav-btn {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.queue-fav-btn svg {
+  display: block;
+  flex-shrink: 0;
+}
+.queue-fav-btn:hover {
+  color: #ef4444;
+  border-color: rgba(239, 68, 68, 0.45);
+  background: rgba(239, 68, 68, 0.1);
+}
+.queue-fav-btn.active {
+  color: #ef4444;
+  border-color: rgba(239, 68, 68, 0.45);
+  background: rgba(239, 68, 68, 0.1);
+}
+
 .queue-play-btn {
   width: 28px;
   height: 28px;
@@ -1022,6 +1126,10 @@ async function onQueuePlayClick(index) {
   .player-bar {
     left: 0;
     bottom: calc(var(--mobile-nav-height) + env(safe-area-inset-bottom, 0px));
+  }
+
+  .bar-spectrum {
+    opacity: 0.62;
   }
 }
 </style>

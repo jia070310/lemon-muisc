@@ -22,7 +22,12 @@ async function request(url, options = {}) {
       throw new Error('服务器响应异常')
     }
 
-    if (!res.ok) throw new Error(formatUserError(data.error || '请求失败', '请求失败，请稍后重试'))
+    if (!res.ok) {
+      const err = new Error(formatUserError(data.error || '请求失败', '请求失败，请稍后重试'))
+      if (data.code) err.code = data.code
+      if (data.sourceFallbackOffer) err.sourceFallbackOffer = data.sourceFallbackOffer
+      throw err
+    }
     return data
   } catch (e) {
     if (e.name === 'AbortError') throw new Error('请求超时，请检查服务是否正常运行')
@@ -87,8 +92,12 @@ export const api = {
     pauseAll: (ids) => request('/download/pause-all', { method: 'POST', body: ids?.length ? { ids } : {} }),
     resumeAll: (ids) => request('/download/resume-all', { method: 'POST', body: ids?.length ? { ids } : {} }),
     remove: (id) => request(`/download/${id}`, { method: 'DELETE' }),
+    dismiss: (ids) => request('/download/dismiss', { method: 'POST', body: { ids } }),
+    dismissAll: () => request('/download/dismiss-all', { method: 'POST' }),
     confirmDowngrade: (id) => request(`/download/confirm-downgrade/${id}`, { method: 'POST' }),
     rejectDowngrade: (id) => request(`/download/reject-downgrade/${id}`, { method: 'POST' }),
+    confirmSource: (id, sourceApiId) => request(`/download/confirm-source/${id}`, { method: 'POST', body: { sourceApiId } }),
+    rejectSource: (id) => request(`/download/reject-source/${id}`, { method: 'POST' }),
     clearCompleted: () => request('/download/clear-completed', { method: 'POST' }),
   },
   play: {
@@ -114,10 +123,11 @@ export const api = {
   },
   paths: {
     list: () => request('/paths'),
+    stats: () => request('/paths/stats', { timeout: 120000 }),
     add: (dirPath, fromPicker) => request('/paths', { method: 'POST', body: { dirPath, fromPicker } }),
     update: (oldPath, newPath, fromPicker) => request('/paths', { method: 'PUT', body: { oldPath, newPath, fromPicker } }),
     remove: (dirPath) => request('/paths', { method: 'DELETE', body: { dirPath } }),
-    setDownload: (dirPath) => request('/paths/download', { method: 'PUT', body: { dirPath } }),
+    setDownload: (dirPath, fromPicker) => request('/paths/download', { method: 'PUT', body: { dirPath, fromPicker } }),
   },
   tag: {
     dirs: {
@@ -133,7 +143,7 @@ export const api = {
       timeout: 180000,
     }),
     write: (filePath, meta) => request('/tag/write', { method: 'POST', body: { filePath, meta } }),
-    writeBatch: (files) => request('/tag/write-batch', { method: 'POST', body: { files } }),
+    writeBatch: (files) => request('/tag/write-batch', { method: 'POST', body: { files }, timeout: 180000 }),
     match: (params, source) => {
       if (typeof params === 'string') {
         return request('/tag/match', { method: 'POST', body: { fileName: params, source } })
@@ -141,7 +151,7 @@ export const api = {
       return request('/tag/match', { method: 'POST', body: { ...params, source } })
     },
     matchApply: (match, source, fields) => request('/tag/match-apply', { method: 'POST', body: { match, source, fields } }),
-    matchBatch: (files, source) => request('/tag/match-batch', { method: 'POST', body: { files, source } }),
+    matchBatch: (files, source) => request('/tag/match-batch', { method: 'POST', body: { files, source }, timeout: 60000 }),
   },
   about: {
     get: () => request('/about'),

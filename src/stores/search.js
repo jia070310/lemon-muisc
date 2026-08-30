@@ -30,10 +30,7 @@ export async function loadSearchSources(api, { force = false } = {}) {
     const res = await api.search.sources()
     searchState.sources = res.sources || {}
   } catch {
-    searchState.sources = {
-      kw: { name: '酷我' }, kg: { name: '酷狗' }, tx: { name: 'QQ音乐' },
-      wy: { name: '网易云' }, mg: { name: '咪咕' },
-    }
+    searchState.sources = {}
   }
   syncActiveSourceKey(searchState)
   sourcesLoaded.value = true

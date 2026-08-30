@@ -3,7 +3,7 @@
     <div class="page-header">
       <div>
         <div class="page-title">标签编辑</div>
-        <div class="page-subtitle">批量编辑本地音乐文件的元数据、封面与歌词；修改后请点击「保存到文件」才会写入磁盘</div>
+        <div class="page-subtitle">批量编辑本地音乐元数据、封面与歌词；「匹配缺失 / 匹配选中」会自动保存到文件</div>
       </div>
       <div class="header-actions">
         <button class="btn-primary btn-sm" @click="saveAll" :disabled="!hasChanges || saving">
@@ -34,24 +34,47 @@
       <section class="file-panel card">
         <div class="file-toolbar">
           <input v-model="filterText" placeholder="按文件名过滤..." class="filter-input" />
-          <span class="file-count">{{ filteredFiles.length }} / {{ files.length }}</span>
+          <span class="file-count">
+            {{ displayedFiles.length }} / {{ files.length }}
+            <template v-if="missingFilesCount"> · 缺失 {{ missingFilesCount }}</template>
+          </span>
           <span v-if="loadingMeta" class="meta-progress">读取标签 {{ metaProgress.done }}/{{ metaProgress.total }}</span>
+          <span v-if="matching" class="meta-progress match-progress" :title="matchProgress.current">
+            匹配并保存 {{ matchProgress.done }}/{{ matchProgress.total }}<template v-if="matchProgress.current"> · {{ matchProgress.current }}</template>
+          </span>
+          <AppSelect
+            v-model="missingFilter"
+            :options="missingFilterOptions"
+            size="sm"
+            title="缺失筛选"
+          />
           <label class="check-all">
             <input type="checkbox" v-model="selectAll" @change="toggleAll" /> 全选
           </label>
-          <button class="btn-ghost btn-sm" :disabled="!filteredFiles.length" @click="playAllVisible">
+          <button class="btn-ghost btn-sm" :disabled="!displayedFiles.length" @click="playAllVisible">
             试听全部
           </button>
-          <button class="btn-ghost btn-sm" :disabled="!selectedFiles.length || matching" @click="autoMatchSelected">
-            {{ matching ? '匹配中...' : `自动匹配 (${selectedFiles.length})` }}
+          <button class="btn-ghost btn-sm" :disabled="!missingFilesCount || matching" @click="selectMissingFiles">
+            选中缺失
           </button>
-          <select v-model="fetchSource" class="source-select-sm" title="自动匹配音源">
-            <option value="tx">QQ音乐</option>
-            <option value="wy">网易云</option>
-          </select>
+          <button class="btn-ghost btn-sm" :disabled="!missingFilesCount || matching" @click="autoMatchMissing">
+            {{ matching ? '匹配中...' : `匹配缺失 (${missingMatchCount})` }}
+          </button>
+          <button class="btn-ghost btn-sm" :disabled="!selectedFiles.length || matching" @click="autoMatchSelected">
+            {{ matching ? '匹配中...' : `匹配选中 (${selectedFiles.length})` }}
+          </button>
+          <AppSelect
+            v-model="fetchSource"
+            :options="sourceOptions"
+            size="sm"
+            title="自动匹配音源"
+          />
+        </div>
+        <div v-if="matching && matchProgress.total" class="match-progress-bar">
+          <div class="match-progress-fill" :style="{ width: matchPercent + '%' }" />
         </div>
 
-        <div class="table-wrap" v-if="filteredFiles.length">
+        <div class="table-wrap" v-if="displayedFiles.length">
           <table>
             <thead>
               <tr>
@@ -67,8 +90,14 @@
             </thead>
             <tbody>
               <tr
-                v-for="f in filteredFiles" :key="f.filePath"
-                :class="{ modified: f._modified, active: editingFile?.filePath === f.filePath, selected: f._selected, playing: isPlayingFile(f) }"
+                v-for="f in displayedFiles" :key="f.filePath"
+                :class="{
+                  modified: f._modified,
+                  active: editingFile?.filePath === f.filePath,
+                  selected: f._selected,
+                  playing: isPlayingFile(f),
+                  'row-missing': isFileMissing(f, 'any'),
+                }"
                 @click="openEdit(f)"
               >
                 <td @click.stop><input type="checkbox" v-model="f._selected" /></td>
@@ -76,8 +105,8 @@
                 <td class="cell-text">{{ f.title || '-' }}</td>
                 <td class="cell-text">{{ f.artist || '-' }}</td>
                 <td class="cell-text">{{ f.album || '-' }}</td>
-                <td>{{ f.hasPicture ? '✓' : '-' }}</td>
-                <td>{{ f.hasLyrics ? '✓' : '-' }}</td>
+                <td :class="{ 'cell-missing': !f.hasPicture }">{{ f.hasPicture ? '✓' : '-' }}</td>
+                <td :class="{ 'cell-missing': !f.hasLyrics }">{{ f.hasLyrics ? '✓' : '-' }}</td>
                 <td class="col-play" @click.stop>
                   <button
                     class="play-btn"
@@ -103,6 +132,7 @@
           </table>
         </div>
         <div v-else-if="scanning" class="empty">正在扫描目录...</div>
+        <div v-else-if="files.length && missingFilter !== 'all'" class="empty">当前筛选条件下没有缺失文件</div>
         <div v-else class="empty">添加目录并扫描，或选择左侧目录加载文件</div>
       </section>
 
@@ -136,10 +166,13 @@
                 <button class="btn-primary btn-sm" @click="openFetchModal('cover')" :disabled="fetchLoading">
                   {{ fetchLoading ? '获取中...' : '网络获取信息' }}
                 </button>
-                <select v-model="fetchSource" class="source-select" title="选择音源">
-                  <option value="tx">QQ音乐</option>
-                  <option value="wy">网易云</option>
-                </select>
+                <AppSelect
+                  v-model="fetchSource"
+                  :options="sourceOptions"
+                  size="sm"
+                  variant="attached-end"
+                  title="选择音源"
+                />
               </div>
             </div>
             <div class="cover-box">
@@ -157,10 +190,13 @@
                 <button class="btn-primary btn-sm" @click="openFetchModal('lyric')" :disabled="fetchLoading">
                   {{ fetchLoading ? '获取中...' : '网络获取信息' }}
                 </button>
-                <select v-model="fetchSource" class="source-select" title="选择音源">
-                  <option value="tx">QQ音乐</option>
-                  <option value="wy">网易云</option>
-                </select>
+                <AppSelect
+                  v-model="fetchSource"
+                  :options="sourceOptions"
+                  size="sm"
+                  variant="attached-end"
+                  title="选择音源"
+                />
               </div>
             </div>
             <textarea v-model="editForm.lyric" rows="8" @input="markModified" placeholder="LRC 歌词内容"></textarea>
@@ -266,19 +302,50 @@
 </template>
 
 <script setup>
-import { ref, computed, reactive, onMounted } from 'vue'
+import { ref, computed, reactive, onMounted, onBeforeUnmount, watch } from 'vue'
 import { api } from '../api.js'
 import {
+  updateLibraryTracksFromFiles,
+} from '../stores/library.js'
+import {
   loadingPlay, isPaused, isPlayingItem, playItem, addToQueue, isInQueue,
+  refreshPlayingLocalMeta,
 } from '../stores/player.js'
+import {
+  tagMatchRunning,
+  tagMatchProgress,
+  tagMatchPercent,
+  tagMatchPatchVersion,
+  tagMatchResult,
+  startTagMatchBatch,
+  syncFilesFromMatchPatches,
+  saveTagEditorSession,
+  tagEditorSession,
+  clearTagMatchResult,
+} from '../stores/tagMatch.js'
+import AppSelect from '../components/AppSelect.vue'
 
+const sourceOptions = [
+  { value: 'tx', label: 'QQ音乐' },
+  { value: 'wy', label: '网易云' },
+]
+const missingFilterOptions = [
+  { value: 'all', label: '全部文件' },
+  { value: 'any', label: '缺封面或歌词' },
+  { value: 'cover', label: '仅缺封面' },
+  { value: 'lyric', label: '仅缺歌词' },
+]
+
+const matching = tagMatchRunning
+const matchProgress = tagMatchProgress
+const matchPercent = tagMatchPercent
 const dirs = ref([])
 const activeDir = ref('')
 const files = ref([])
 const filterText = ref('')
+const missingFilter = ref('all')
 const selectAll = ref(false)
 const saving = ref(false)
-const matching = ref(false)
 const fetchSource = ref('tx')
 const fetchLoading = ref(false)
 const fetchResults = ref([])
@@ -297,10 +364,34 @@ const loadingDetail = ref(false)
 const metaProgress = ref({ done: 0, total: 0 })
 const metaLoadToken = ref(0)
 
-const filteredFiles = computed(() => {
+function isFileMissing(f, mode = missingFilter.value) {
+  if (!f || mode === 'all') return false
+  const noCover = !f.hasPicture
+  const noLyric = !f.hasLyrics
+  if (mode === 'cover') return noCover
+  if (mode === 'lyric') return noLyric
+  return noCover || noLyric
+}
+
+function getMissingMode() {
+  return missingFilter.value === 'all' ? 'any' : missingFilter.value
+}
+
+const displayedFiles = computed(() => {
+  let list = files.value
+  if (missingFilter.value !== 'all') {
+    list = list.filter(f => isFileMissing(f, missingFilter.value))
+  }
   const q = filterText.value.trim().toLowerCase()
-  if (!q) return files.value
-  return files.value.filter(f => f.fileName.toLowerCase().includes(q))
+  if (q) list = list.filter(f => f.fileName.toLowerCase().includes(q))
+  return list
+})
+
+const missingFilesCount = computed(() => files.value.filter(f => isFileMissing(f, 'any')).length)
+
+const missingMatchCount = computed(() => {
+  const mode = getMissingMode()
+  return files.value.filter(f => isFileMissing(f, mode)).length
 })
 
 const selectedFiles = computed(() => files.value.filter(f => f._selected))
@@ -322,7 +413,57 @@ const editPanelTitle = computed(() => {
   return '标签编辑'
 })
 
-onMounted(loadDirs)
+function refreshEditFormFromFile() {
+  const f = editingFile.value
+  if (!f) return
+  editForm.value = {
+    title: f.title || '',
+    artist: f.artist || '',
+    album: f.album || '',
+    year: f.year || '',
+    genre: f.genre || '',
+    comment: f.comment || '',
+    lyric: f.lyric || '',
+    picUrl: f.picUrl || '',
+    pictureBase64: f.pictureBase64 || '',
+  }
+}
+
+function handleMatchPatchesSync() {
+  syncFilesFromMatchPatches(files.value)
+  refreshEditFormFromFile()
+}
+
+watch(tagMatchPatchVersion, handleMatchPatchesSync)
+watch(tagMatchRunning, (running, wasRunning) => {
+  if (wasRunning && !running) handleMatchPatchesSync()
+})
+
+watch(tagMatchResult, (result) => {
+  if (!result) return
+  showToast(result.text, result.type)
+  clearTagMatchResult()
+})
+
+watch(missingFilter, () => {
+  selectAll.value = false
+})
+
+onMounted(async () => {
+  await loadDirs()
+  const session = tagEditorSession.value
+  if (session.activeDir && session.files?.length) {
+    activeDir.value = session.activeDir
+    files.value = session.files.map(f => ({ ...f }))
+    handleMatchPatchesSync()
+  }
+})
+
+onBeforeUnmount(() => {
+  if (files.value.length) {
+    saveTagEditorSession(activeDir.value, files.value)
+  }
+})
 
 async function loadDirs() {
   try {
@@ -358,6 +499,7 @@ async function scanDir(dir) {
       return
     }
     showToast(`已发现 ${files.value.length} 个文件，正在读取标签...`, 'info')
+    saveTagEditorSession(activeDir.value, files.value)
     loadMetaInBatches(token)
   } catch (e) {
     showToast(e.message, 'error')
@@ -366,12 +508,30 @@ async function scanDir(dir) {
   }
 }
 
+function applyMetaRow(file, item) {
+  if (!file || !item?.ok) return false
+  const hasPicture = Boolean(item.hasPicture || item.pictureBase64)
+  const hasLyrics = Boolean(item.hasLyrics || item.lyric)
+  Object.assign(file, {
+    title: item.title || file.parsedTitle || file.title,
+    artist: item.artist || file.parsedArtist || file.artist,
+    album: item.album || '',
+    year: item.year || '',
+    genre: item.genre || '',
+    comment: item.comment || '',
+    hasPicture,
+    hasLyrics,
+  })
+  file._metaLoaded = true
+  return true
+}
+
 async function loadMetaInBatches(token) {
   if (!files.value.length) return
 
   loadingMeta.value = true
   metaProgress.value = { done: 0, total: files.value.length }
-  const batchSize = 40
+  const batchSize = 8
 
   for (let i = 0; i < files.value.length; i += batchSize) {
     if (token !== metaLoadToken.value) return
@@ -386,17 +546,7 @@ async function loadMetaInBatches(token) {
           console.warn('[tag] read-batch failed:', item.filePath, item.error)
           continue
         }
-        Object.assign(file, {
-          title: item.title || file.parsedTitle || file.title,
-          artist: item.artist || file.parsedArtist || file.artist,
-          album: item.album || '',
-          year: item.year || '',
-          genre: item.genre || '',
-          comment: item.comment || '',
-          hasPicture: Boolean(item.hasPicture),
-          hasLyrics: Boolean(item.hasLyrics),
-        })
-        file._metaLoaded = true
+        applyMetaRow(file, item)
       }
     } catch (e) {
       showToast(`部分标签读取失败：${e.message}`, 'error')
@@ -405,14 +555,67 @@ async function loadMetaInBatches(token) {
     metaProgress.value.done = Math.min(i + batchSize, files.value.length)
   }
 
+  const failed = files.value.filter(f => !f._metaLoaded)
+  if (failed.length && token === metaLoadToken.value) {
+    for (let i = 0; i < failed.length; i += 4) {
+      if (token !== metaLoadToken.value) return
+      const batch = failed.slice(i, i + 4).map(f => f.filePath)
+      try {
+        const res = await api.tag.readBatch(batch, true)
+        for (const item of res.data || []) {
+          const file = files.value.find(f => f.filePath === item.filePath)
+          applyMetaRow(file, item)
+        }
+      } catch {}
+    }
+  }
+
   if (token === metaLoadToken.value) {
     loadingMeta.value = false
+    syncFilesFromMatchPatches(files.value)
+    saveTagEditorSession(activeDir.value, files.value)
     showToast(`标签读取完成 ${metaProgress.value.done}/${metaProgress.value.total}`, 'success')
   }
 }
 
 function toggleAll() {
-  files.value.forEach(f => { f._selected = selectAll.value })
+  displayedFiles.value.forEach(f => { f._selected = selectAll.value })
+}
+
+function selectMissingFiles() {
+  const mode = getMissingMode()
+  const targets = displayedFiles.value.filter(f => isFileMissing(f, mode))
+  if (!targets.length) {
+    showToast('当前范围内没有缺失文件', 'info')
+    return
+  }
+  files.value.forEach(f => { f._selected = false })
+  targets.forEach(f => { f._selected = true })
+  selectAll.value = targets.length === displayedFiles.value.length
+  showToast(`已选中 ${targets.length} 个缺失文件`, 'success')
+}
+
+function runTagMatch(targets) {
+  if (!targets.length) return
+  startTagMatchBatch(
+    targets.map(f => ({ filePath: f.filePath, fileName: f.fileName })),
+    fetchSource.value,
+  ).then((res) => {
+    if (res.reason === 'busy') showToast('已有自动匹配任务进行中', 'info')
+    else if (res.reason === 'empty') showToast('请先选择要匹配的文件', 'info')
+    else handleMatchPatchesSync()
+  })
+}
+
+function autoMatchMissing() {
+  const mode = getMissingMode()
+  const targets = files.value.filter(f => isFileMissing(f, mode))
+  if (!targets.length) {
+    showToast('没有需要匹配的缺失文件', 'info')
+    return
+  }
+  targets.forEach(f => { f._selected = true })
+  runTagMatch(targets)
 }
 
 async function openEdit(f) {
@@ -564,6 +767,7 @@ async function saveCurrent() {
     const res = await api.tag.writeBatch(payload)
     const ok = (res.data || []).filter(r => r.ok).length
     targets.forEach(f => { f._modified = false })
+    await refreshPlayerAfterSave(targets)
     showToast(`已保存 ${ok}/${targets.length} 个文件`, 'success')
   } catch (e) {
     showToast(e.message, 'error')
@@ -593,6 +797,7 @@ async function saveAll() {
     const res = await api.tag.writeBatch(payload)
     const ok = (res.data || []).filter(r => r.ok).length
     modified.forEach(f => { f._modified = false })
+    await refreshPlayerAfterSave(modified)
     showToast(`已保存 ${ok}/${modified.length} 个文件`, 'success')
   } catch (e) {
     showToast(e.message, 'error')
@@ -687,55 +892,40 @@ function confirmFetchApply() {
   showToast(fetchIntent.value === 'cover' ? '已应用封面' : '已应用歌词', 'success')
 }
 
-async function autoMatchSelected() {
+function autoMatchSelected() {
   if (!selectedFiles.value.length) return
-  matching.value = true
-  try {
-    const res = await api.tag.matchBatch(
-      selectedFiles.value.map(f => ({ filePath: f.filePath, fileName: f.fileName })),
-      fetchSource.value,
-    )
-    let ok = 0
-    let fail = 0
-    let withCover = 0
-    let withLyric = 0
-    for (const item of res.data || []) {
-      const f = files.value.find(x => x.filePath === item.filePath)
-      if (f && item.ok && item.meta) {
-        applyMetaToFile(f, item.meta)
-        if (item.meta.pic) f.pictureBase64 = item.meta.pic
-        if (item.meta.picUrl) f.picUrl = item.meta.picUrl
-        if (f.pictureBase64 || f.picUrl) withCover++
-        if (f.lyric) withLyric++
-        ok++
-        if (editingFile.value?.filePath === f.filePath) {
-          editForm.value = {
-            title: f.title || '',
-            artist: f.artist || '',
-            album: f.album || '',
-            year: f.year || '',
-            genre: f.genre || '',
-            comment: f.comment || '',
-            lyric: f.lyric || '',
-            picUrl: f.picUrl || '',
-            pictureBase64: f.pictureBase64 || '',
-          }
-        }
-      } else {
-        fail++
-      }
-    }
-    if (ok && !fail) showToast(`自动匹配完成 ${ok}（封面 ${withCover}，歌词 ${withLyric}）`, 'success')
-    else if (ok) showToast(`成功 ${ok}，失败 ${fail}（封面 ${withCover}，歌词 ${withLyric}）`, 'info')
-    else showToast('自动匹配未找到可用结果，可改用「网络获取信息」手动选择', 'error')
-  } catch (e) {
-    showToast(e.message, 'error')
-  } finally {
-    matching.value = false
+  runTagMatch(selectedFiles.value)
+}
+
+function fileMetaForPlayerRefresh(f) {
+  return {
+    title: f.title,
+    artist: f.artist,
+    album: f.album,
+    lyric: f.lyric,
+    pictureBase64: f.pictureBase64,
+    picUrl: f.picUrl,
+    hasPicture: f.hasPicture,
+    hasLyrics: f.hasLyrics,
+  }
+}
+
+async function refreshPlayerAfterSave(targets) {
+  updateLibraryTracksFromFiles(targets)
+  for (const f of targets) {
+    await refreshPlayingLocalMeta(f.filePath, fileMetaForPlayerRefresh(f))
   }
 }
 
 function fileToTrack(f) {
+  const picFromData = f.pictureBase64
+    ? (String(f.pictureBase64).startsWith('data:')
+      ? f.pictureBase64
+      : `data:${f.pictureMime || 'image/jpeg'};base64,${f.pictureBase64}`)
+    : ''
+  const pic = picFromData || (f.hasPicture && f.filePath
+    ? `/api/tag/cover?path=${encodeURIComponent(f.filePath)}`
+    : (f.picUrl || ''))
   const name = f.title || f.parsedTitle || f.fileName?.replace(/\.[^.]+$/, '') || '未知歌曲'
   const singer = f.artist || f.parsedArtist || '未知歌手'
   return {
@@ -744,9 +934,12 @@ function fileToTrack(f) {
     singer,
     source: 'local',
     album: f.album || '',
-    picUrl: f.pictureBase64 || f.picUrl || '',
+    picUrl: pic,
+    img: pic,
     localPath: f.filePath,
     lyric: f.lyric || '',
+    hasPicture: Boolean(f.hasPicture || pic),
+    hasLyrics: Boolean(f.lyric),
   }
 }
 
@@ -796,7 +989,7 @@ function addFileToQueue(f) {
 }
 
 async function playAllVisible() {
-  const list = filteredFiles.value
+  const list = displayedFiles.value
   if (!list.length) {
     showToast('没有可试听的文件', 'info')
     return
@@ -974,6 +1167,25 @@ function showToast(text, type = 'info') {
 }
 .file-count { font-size: 12px; color: var(--text-muted); }
 .meta-progress { font-size: 12px; color: var(--accent); }
+.match-progress {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.match-progress-bar {
+  height: 3px;
+  margin: 0 0 8px;
+  background: var(--border-light);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.match-progress-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: inherit;
+  transition: width 0.2s ease;
+}
 .check-all { font-size: 13px; display: flex; align-items: center; gap: 4px; }
 
 .table-wrap {
@@ -1002,6 +1214,7 @@ tbody tr.active { background: var(--accent-muted); }
 tbody tr.selected td:first-child { background: color-mix(in srgb, var(--accent) 8%, transparent); }
 
 tbody tr.playing { background: var(--accent-muted); }
+tbody tr.row-missing td.cell-missing { color: #f59e0b; }
 
 .col-check { width: 32px; }
 .col-play {
@@ -1084,24 +1297,7 @@ tr.playing .play-btn {
 .field-toolbar { display: flex; align-items: center; margin-bottom: 4px; }
 .split-btn { display: flex; align-items: stretch; gap: 0; }
 .split-btn .btn-primary { border-radius: var(--radius) 0 0 var(--radius); }
-.source-select {
-  font-size: 12px;
-  padding: 4px 6px;
-  border: 1px solid var(--border);
-  border-left: none;
-  border-radius: 0 var(--radius) var(--radius) 0;
-  background: var(--bg-input);
-  color: var(--text-primary);
-  cursor: pointer;
-}
-.source-select-sm {
-  font-size: 12px;
-  padding: 4px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg-input);
-  color: var(--text-primary);
-}
+.split-btn .app-select { flex-shrink: 0; }
 
 .modal-overlay {
   position: fixed;

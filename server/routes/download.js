@@ -3,7 +3,7 @@ import fs from 'fs'
 import path from 'path'
 import { getDB } from '../db.js'
 import { broadcast } from '../ws.js'
-import { requestSource } from '../sourceManager.js'
+import { requestSourceWithMeta } from '../sourceManager.js'
 import { writeMeta } from '../meta.js'
 import { buildMusicInfoFromTask } from '../utils/musicInfo.js'
 import { buildEmbedLyrics } from '../utils/lyric.js'
@@ -16,6 +16,10 @@ import {
   sleep,
 } from '../utils/downloadQuality.js'
 import { formatUserError } from '../utils/userError.js'
+import { buildSourceFallbackOffer, getSourceFallbackMode } from '../utils/sourceFallback.js'
+import { extractMusicUrl } from '../utils/sourceResult.js'
+import { notifyLibraryChanged } from '../utils/libraryNotify.js'
+import { resolveDownloadGroupDir } from '../utils/downloadPath.js'
 
 export const downloadRouter = Router()
 
@@ -85,7 +89,9 @@ downloadRouter.post('/pause/:id', (req, res) => {
 })
 
 downloadRouter.post('/resume/:id', (req, res) => {
-  if (!resumeTask(req.params.id)) return res.status(404).json({ error: '任务不存在' })
+  if (!resumeTask(req.params.id)) {
+    return res.status(400).json({ error: '该任务当前状态无法继续或重试' })
+  }
   res.json({ ok: true })
 })
 
@@ -163,29 +169,153 @@ downloadRouter.post('/reject-downgrade/:id', (req, res) => {
   }
 })
 
-downloadRouter.delete('/:id', (req, res) => {
-  const dl = activeDownloads.get(req.params.id)
-  if (dl?.abort) dl.abort.abort()
-  activeDownloads.delete(req.params.id)
+/** 用户确认：切换到指定音源继续下载 */
+downloadRouter.post('/confirm-source/:id', (req, res) => {
+  try {
+    const row = getDB().prepare('SELECT * FROM download_tasks WHERE id = ?').get(req.params.id)
+    if (!row) return res.status(404).json({ error: '任务不存在' })
+    const sourceApiId = String(req.body?.sourceApiId || '').trim()
+    if (!sourceApiId) return res.status(400).json({ error: '请选择要切换的音源' })
 
-  const task = getDB().prepare('SELECT file_path FROM download_tasks WHERE id = ?').get(req.params.id)
-  if (task?.file_path) {
-    try { fs.unlinkSync(task.file_path) } catch {}
+    let meta = {}
+    try { meta = JSON.parse(row.meta || '{}') } catch { meta = {} }
+    const offer = meta.sourceFallbackOffer
+    if (!offer?.alternatives?.length) {
+      return res.status(400).json({ error: '没有待确认的音源切换选项' })
+    }
+    if (!offer.alternatives.some((item) => item.id === sourceApiId)) {
+      return res.status(400).json({ error: '所选音源不在可选列表中' })
+    }
+
+    meta.sourceApiId = sourceApiId
+    meta.lastSourceSwitch = {
+      fromId: offer.failedId,
+      fromName: offer.failedName,
+      toId: sourceApiId,
+      toName: offer.alternatives.find((item) => item.id === sourceApiId)?.name || sourceApiId,
+      at: new Date().toISOString(),
+    }
+    delete meta.sourceFallbackOffer
+
+    getDB().prepare(`
+      UPDATE download_tasks
+      SET status = 'waiting', error = NULL, progress = 0, downloaded_size = 0, meta = ?
+      WHERE id = ?
+    `).run(JSON.stringify(meta), req.params.id)
+    broadcast('download:status', {
+      id: req.params.id,
+      status: 'waiting',
+      error: '',
+      sourceFallbackOffer: null,
+    })
+    processQueue()
+    res.json({ ok: true })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
   }
-  getDB().prepare('DELETE FROM download_tasks WHERE id = ?').run(req.params.id)
-  broadcast('download:removed', { id: req.params.id })
-  res.json({ ok: true })
+})
+
+/** 用户拒绝切换音源 */
+downloadRouter.post('/reject-source/:id', (req, res) => {
+  try {
+    const row = getDB().prepare('SELECT * FROM download_tasks WHERE id = ?').get(req.params.id)
+    if (!row) return res.status(404).json({ error: '任务不存在' })
+    let meta = {}
+    try { meta = JSON.parse(row.meta || '{}') } catch { meta = {} }
+    delete meta.sourceFallbackOffer
+    getDB().prepare(`
+      UPDATE download_tasks SET status = 'error', error = ?, meta = ? WHERE id = ?
+    `).run('已取消切换音源', JSON.stringify(meta), req.params.id)
+    broadcast('download:status', {
+      id: req.params.id,
+      status: 'error',
+      error: '已取消切换音源',
+      sourceFallbackOffer: null,
+    })
+    res.json({ ok: true })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+downloadRouter.delete('/:id', (req, res) => {
+  try {
+    removeDownloadTask(req.params.id, { deleteFile: true })
+    res.json({ ok: true })
+  } catch (e) {
+    res.status(404).json({ error: e.message })
+  }
+})
+
+/** 移出下载列表，不删除已下载文件 */
+downloadRouter.post('/dismiss', (req, res) => {
+  try {
+    const ids = normalizeTaskIds(req.body?.ids)
+    if (!ids?.length) return res.status(400).json({ error: '请选择要清理的任务' })
+    const count = dismissDownloadTasks(ids)
+    res.json({ ok: true, count })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+/** 清空下载列表记录，不删除已下载文件 */
+downloadRouter.post('/dismiss-all', (_req, res) => {
+  try {
+    const rows = getDB().prepare('SELECT id FROM download_tasks').all()
+    const ids = rows.map(r => r.id)
+    const count = dismissDownloadTasks(ids)
+    broadcast('download:cleared', { all: true })
+    res.json({ ok: true, count })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
 })
 
 downloadRouter.post('/clear-completed', (_req, res) => {
-  getDB().prepare("DELETE FROM download_tasks WHERE status = 'completed'").run()
+  const rows = getDB().prepare("SELECT id FROM download_tasks WHERE status = 'completed'").all()
+  const count = dismissDownloadTasks(rows.map(r => r.id))
   broadcast('download:cleared', {})
-  res.json({ ok: true })
+  res.json({ ok: true, count })
 })
 
 function normalizeTaskIds(ids) {
   if (!Array.isArray(ids) || !ids.length) return null
   return ids.map(id => String(id)).filter(Boolean)
+}
+
+function dismissDownloadTask(id) {
+  return removeDownloadTask(id, { deleteFile: false })
+}
+
+function dismissDownloadTasks(ids) {
+  let count = 0
+  for (const id of ids) {
+    try {
+      removeDownloadTask(id, { deleteFile: false })
+      count++
+    } catch {}
+  }
+  return count
+}
+
+function removeDownloadTask(id, { deleteFile = false } = {}) {
+  const taskId = String(id || '')
+  if (!taskId) throw new Error('任务不存在')
+
+  const dl = activeDownloads.get(taskId)
+  if (dl?.abort) dl.abort.abort()
+  activeDownloads.delete(taskId)
+
+  const task = getDB().prepare('SELECT file_path FROM download_tasks WHERE id = ?').get(taskId)
+  if (!task) throw new Error('任务不存在')
+
+  if (deleteFile && task.file_path) {
+    try { fs.unlinkSync(task.file_path) } catch {}
+  }
+  getDB().prepare('DELETE FROM download_tasks WHERE id = ?').run(taskId)
+  broadcast('download:removed', { id: taskId })
+  return true
 }
 
 function reconcileStaleDownloads() {
@@ -218,20 +348,26 @@ function pauseTasks(ids = null) {
   return count
 }
 
-function resumeTask(id) {
+function requeueTask(id, { allowedStatuses = ['paused', 'error', 'await_confirm'] } = {}) {
   const row = getDB().prepare('SELECT id, meta, status FROM download_tasks WHERE id = ?').get(id)
-  if (!row || row.status !== 'paused') return false
+  if (!row || !allowedStatuses.includes(row.status)) return false
+
   let meta = {}
   try { meta = JSON.parse(row.meta || '{}') } catch { meta = {} }
-  if (meta.downgradeOffer) {
-    delete meta.downgradeOffer
-    getDB().prepare('UPDATE download_tasks SET meta = ?, error = NULL WHERE id = ?')
-      .run(JSON.stringify(meta), id)
-  }
-  getDB().prepare("UPDATE download_tasks SET status = 'waiting', error = NULL WHERE id = ?").run(id)
-  broadcast('download:status', { id, status: 'waiting', error: '' })
+  if (meta.downgradeOffer) delete meta.downgradeOffer
+
+  getDB().prepare(`
+    UPDATE download_tasks
+    SET status = 'waiting', error = NULL, progress = 0, downloaded_size = 0, meta = ?
+    WHERE id = ?
+  `).run(JSON.stringify(meta), id)
+  broadcast('download:status', { id, status: 'waiting', error: '', progress: 0, downgradeOffer: null })
   processQueue()
   return true
+}
+
+function resumeTask(id) {
+  return requeueTask(id)
 }
 
 function resumeTasks(ids = null) {
@@ -289,15 +425,19 @@ async function processQueue() {
   }
 }
 
-async function resolveDownloadUrl(source, quality, musicInfo) {
-  const urlResult = await requestSource(source, 'musicUrl', {
+async function resolveDownloadUrl(source, quality, musicInfo, settings, meta = {}) {
+  const result = await requestSourceWithMeta(source, 'musicUrl', {
     type: quality,
     quality,
     musicInfo,
+  }, {
+    fallbackMode: getSourceFallbackMode(settings),
+    preferredSourceId: meta.sourceApiId || undefined,
+    skipSourceIds: meta.skipSourceIds || [],
   })
-  const url = typeof urlResult === 'string' ? urlResult : urlResult?.url
+  const url = extractMusicUrl(result.data)
   if (!url) throw new Error(`获取 ${qualityLabel(quality)} 音质下载链接失败，请尝试其他音质`)
-  return url
+  return { url, sourceInfo: result }
 }
 
 async function streamToFile(url, filePath, taskId, abort) {
@@ -340,6 +480,28 @@ async function streamToFile(url, filePath, taskId, abort) {
       reject(err)
     })
   })
+}
+
+function markSourceFallbackOffer(task, meta, error) {
+  const offer = buildSourceFallbackOffer(error)
+  if (!offer) return false
+  meta.sourceFallbackOffer = {
+    ...offer,
+    at: new Date().toISOString(),
+  }
+  const tip = `音源「${offer.failedName}」取链失败，可切换到其他已激活音源`
+  getDB().prepare(`
+    UPDATE download_tasks SET status = 'await_source', error = ?, meta = ?, progress = 0 WHERE id = ?
+  `).run(tip, JSON.stringify(meta), task.id)
+  broadcast('download:status', {
+    id: task.id,
+    status: 'await_source',
+    error: tip,
+    name: task.name,
+    singer: task.singer,
+    sourceFallbackOffer: meta.sourceFallbackOffer,
+  })
+  return true
 }
 
 function markAwaitConfirm(task, meta, fromQuality, toQuality, reason) {
@@ -403,21 +565,40 @@ async function downloadTask(task, settings) {
           await sleep(RETRY_DELAY_MS * (attempt - 1))
         }
 
-        const url = await resolveDownloadUrl(source, quality, musicInfo)
+        const { url, sourceInfo } = await resolveDownloadUrl(source, quality, musicInfo, settings, meta)
+        if (sourceInfo?.sourceId && sourceInfo.sourceId !== meta.sourceApiId) {
+          meta.sourceApiId = sourceInfo.sourceId
+          if (sourceInfo.switched) {
+            meta.lastSourceSwitch = {
+              fromId: sourceInfo.fromSourceId,
+              fromName: sourceInfo.fromSourceName,
+              toId: sourceInfo.sourceId,
+              toName: sourceInfo.sourceName,
+              at: new Date().toISOString(),
+            }
+            saveTaskMeta(task.id, meta)
+            broadcast('download:source-switched', {
+              id: task.id,
+              name: task.name,
+              fromName: sourceInfo.fromSourceName,
+              toName: sourceInfo.sourceName,
+            })
+          }
+        }
+
         const ext = guessExt(url, quality)
         const fileName = buildFileName(settings['download.fileName'] || '{name} - {singer}', task, ext)
         const savePath = getDownloadSavePath()
-        const groupDir = settings['download.isSavePathGroupByListName'] === 'true' && task.album
-          ? path.join(savePath, sanitize(task.album))
-          : savePath
+        const groupDir = resolveDownloadGroupDir(savePath, settings, task)
         fs.mkdirSync(groupDir, { recursive: true })
         const filePath = path.join(groupDir, fileName)
 
         if (settings['download.skipExistFile'] === 'true' && fs.existsSync(filePath)) {
           getDB().prepare("UPDATE download_tasks SET status = 'completed', file_path = ?, progress = 1 WHERE id = ?")
             .run(filePath, task.id)
-          broadcast('download:status', { id: task.id, status: 'completed', progress: 1, quality })
           await writeMetaIfNeeded(task, meta, filePath, ext, settings)
+          broadcast('download:status', { id: task.id, status: 'completed', progress: 1, filePath, quality })
+          notifyLibraryChanged([filePath], { reason: 'download' })
           return
         }
 
@@ -428,11 +609,13 @@ async function downloadTask(task, settings) {
 
         getDB().prepare("UPDATE download_tasks SET status = 'completed', file_path = ?, progress = 1, error = NULL WHERE id = ?")
           .run(filePath, task.id)
-        broadcast('download:status', { id: task.id, status: 'completed', progress: 1, filePath, quality })
         await writeMetaIfNeeded(task, meta, filePath, ext, settings)
+        broadcast('download:status', { id: task.id, status: 'completed', progress: 1, filePath, quality })
+        notifyLibraryChanged([filePath], { reason: 'download' })
         return
       } catch (e) {
         if (e.name === 'AbortError') return
+        if (e.code === 'SOURCE_FALLBACK_REQUIRED' && markSourceFallbackOffer(task, meta, e)) return
         lastError = e
         const retryable = isRetryableDownloadError(e)
         console.warn(`[下载] ${task.name} ${quality} 第 ${attempt}/${SAME_QUALITY_ATTEMPTS} 次失败: ${e.message}`)

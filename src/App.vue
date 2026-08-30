@@ -19,6 +19,10 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
           <span>发现</span>
         </router-link>
+        <router-link to="/library" class="nav-item" active-class="active">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+          <span>音乐库</span>
+        </router-link>
         <router-link to="/download" class="nav-item" active-class="active">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
           <span>下载</span>
@@ -83,6 +87,27 @@
         <span>请到「应用设置 → 访问权限」添加音乐库与下载目录，保存后停用再启用。</span>
         <router-link to="/settings" class="setup-link">打开设置</router-link>
       </div>
+      <div v-if="playlistPickTarget" class="playlist-pick-banner">
+        <span>正在添加歌曲到歌单「{{ playlistPickTarget.name }}」</span>
+        <router-link :to="{ path: '/library/playlists', query: { id: playlistPickTarget.id } }" class="setup-link">返回歌单</router-link>
+        <button type="button" class="btn-ghost btn-sm" @click="stopPlaylistPick">取消</button>
+      </div>
+      <div v-if="tagMatchRunning && !isTagPage" class="tag-match-banner">
+        <span>标签自动匹配并保存中 {{ tagMatchProgress.done }}/{{ tagMatchProgress.total }}<template v-if="tagMatchProgress.current"> · {{ tagMatchProgress.current }}</template></span>
+        <router-link to="/tag" class="setup-link">查看</router-link>
+      </div>
+      <div v-else-if="tagMatchResult && !isTagPage" class="tag-match-banner" :class="tagMatchResult.type">
+        <span>{{ tagMatchResult.text }}</span>
+        <button type="button" class="btn-ghost btn-sm" @click="clearTagMatchResult">知道了</button>
+      </div>
+      <div v-if="sourceSwitchNotice" class="source-switch-banner">
+        <span>{{ sourceSwitchNotice }}</span>
+        <button type="button" class="btn-ghost btn-sm" @click="sourceSwitchNotice = ''">知道了</button>
+      </div>
+      <div v-if="libraryHotNotice" class="library-hot-banner">
+        <span>{{ libraryHotNotice }}</span>
+        <button type="button" class="btn-ghost btn-sm" @click="clearLibraryHotNotice">知道了</button>
+      </div>
       <router-view />
     </main>
 
@@ -142,6 +167,56 @@
       </div>
     </div>
 
+    <div v-if="sourceFallbackPrompt" class="modal-overlay downgrade-overlay" @click.self="cancelSourceFallback">
+      <div class="downgrade-modal">
+        <h3>切换音源继续播放？</h3>
+        <p class="downgrade-desc">
+          音源「<strong>{{ sourceFallbackPrompt.offer?.failedName }}</strong>」无法播放当前歌曲。
+        </p>
+        <div v-if="sourceFallbackPrompt.offer?.reason" class="downgrade-reason">
+          <div class="downgrade-reason-label">失败原因</div>
+          <div>{{ formatPromptReason(sourceFallbackPrompt.offer.reason) }}</div>
+        </div>
+        <p class="downgrade-desc">可切换到以下已激活音源：</p>
+        <div class="source-fallback-options">
+          <button
+            v-for="alt in sourceFallbackPrompt.offer?.alternatives || []"
+            :key="alt.id"
+            class="btn-primary source-fallback-btn"
+            @click="answerSourceFallback(alt.id)"
+          >切换到「{{ alt.name }}」</button>
+        </div>
+        <div class="downgrade-actions">
+          <button class="btn-ghost" @click="cancelSourceFallback">取消</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="downloadSourcePrompt" class="modal-overlay downgrade-overlay" @click.self="dismissDownloadSourcePrompt">
+      <div class="downgrade-modal">
+        <h3>切换音源继续下载？</h3>
+        <p class="downgrade-desc">
+          「{{ downloadSourcePrompt.name }}」在音源「<strong>{{ downloadSourcePrompt.offer?.failedName }}</strong>」下取链失败。
+        </p>
+        <div v-if="downloadSourcePrompt.offer?.reason" class="downgrade-reason">
+          <div class="downgrade-reason-label">失败原因</div>
+          <div>{{ formatPromptReason(downloadSourcePrompt.offer.reason) }}</div>
+        </div>
+        <div class="source-fallback-options">
+          <button
+            v-for="alt in downloadSourcePrompt.offer?.alternatives || []"
+            :key="alt.id"
+            class="btn-primary source-fallback-btn"
+            :disabled="downloadSourceBusy === alt.id"
+            @click="confirmDownloadSource(alt.id)"
+          >切换到「{{ alt.name }}」</button>
+        </div>
+        <div class="downgrade-actions">
+          <button class="btn-ghost" :disabled="Boolean(downloadSourceBusy)" @click="rejectDownloadSourcePrompt">取消下载</button>
+        </div>
+      </div>
+    </div>
+
     <nav class="mobile-tabbar" aria-label="主导航">
       <router-link to="/search" class="tab-item" active-class="active">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
@@ -150,6 +225,10 @@
       <router-link to="/discover" class="tab-item" active-class="active">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
         <span>发现</span>
+      </router-link>
+      <router-link to="/library" class="tab-item" active-class="active">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+        <span>音乐库</span>
       </router-link>
       <router-link to="/download" class="tab-item" active-class="active">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
@@ -181,6 +260,22 @@ import { checkForUpdate, hasUpdate } from './composables/useUpdateCheck.js'
 import { api } from './api.js'
 import { applyTheme, theme, THEME_KEY, COLOR_SCHEME_KEY, CUSTOM_COLOR_KEY } from './utils/theme.js'
 import { formatUserError } from './utils/userError.js'
+import {
+  playlistPickTarget, stopPlaylistPick,
+  initLibraryHotReload, libraryHotNotice,
+} from './stores/library.js'
+import {
+  tagMatchRunning, tagMatchProgress, tagMatchResult, clearTagMatchResult,
+} from './stores/tagMatch.js'
+import {
+  SOURCE_FALLBACK_MODE_KEY,
+  applySourceFallbackMode,
+  sourceFallbackPrompt,
+  sourceSwitchNotice,
+  answerSourceFallback,
+  cancelSourceFallback,
+  notifySourceSwitch,
+} from './stores/sourceFallback.js'
 import PlayerBar from './components/PlayerBar.vue'
 import FullscreenPlayer from './components/FullscreenPlayer.vue'
 
@@ -199,6 +294,90 @@ const downgradeBusy = ref(false)
 let offDowngradeWS = null
 /** @type {Array<{ id: string, name?: string, singer?: string, offer?: object, downgradeOffer?: object }>} */
 const downgradeQueue = []
+
+const downloadSourcePrompt = ref(null)
+const downloadSourceBusy = ref('')
+const downloadSourceQueue = []
+let offDownloadSourceWS = null
+let offLibraryHotReload = null
+
+function enqueueDownloadSourcePrompt(payload) {
+  const offer = payload?.sourceFallbackOffer
+  if (!payload?.id || !offer?.alternatives?.length) return
+  const item = {
+    id: payload.id,
+    name: payload.name || '未知歌曲',
+    singer: payload.singer || '',
+    offer,
+  }
+  if (downloadSourcePrompt.value?.id === item.id) {
+    downloadSourcePrompt.value = item
+    return
+  }
+  if (downloadSourcePrompt.value) {
+    if (!downloadSourceQueue.some(q => q.id === item.id)) downloadSourceQueue.push(item)
+    return
+  }
+  downloadSourcePrompt.value = item
+}
+
+function showNextDownloadSourcePrompt() {
+  downloadSourcePrompt.value = downloadSourceQueue.shift() || null
+}
+
+function dismissDownloadSourcePrompt() {
+  if (downloadSourceBusy.value) return
+  downloadSourcePrompt.value = null
+  showNextDownloadSourcePrompt()
+}
+
+async function confirmDownloadSource(sourceApiId) {
+  const cur = downloadSourcePrompt.value
+  if (!cur?.id || !sourceApiId) return
+  downloadSourceBusy.value = sourceApiId
+  try {
+    await api.download.confirmSource(cur.id, sourceApiId)
+    downloadSourcePrompt.value = null
+    showNextDownloadSourcePrompt()
+  } catch (e) {
+    alert(e.message || '切换音源失败')
+  } finally {
+    downloadSourceBusy.value = ''
+  }
+}
+
+async function rejectDownloadSourcePrompt() {
+  const cur = downloadSourcePrompt.value
+  if (!cur?.id) {
+    downloadSourcePrompt.value = null
+    return
+  }
+  downloadSourceBusy.value = 'reject'
+  try {
+    await api.download.rejectSource(cur.id)
+  } catch {}
+  finally {
+    downloadSourceBusy.value = ''
+    downloadSourcePrompt.value = null
+    showNextDownloadSourcePrompt()
+  }
+}
+
+async function loadPendingDownloadSourcePrompts() {
+  try {
+    const list = await api.download.list()
+    for (const task of list || []) {
+      if (task.status === 'await_source' && task.meta?.sourceFallbackOffer?.alternatives?.length) {
+        enqueueDownloadSourcePrompt({
+          id: task.id,
+          name: task.name,
+          singer: task.singer,
+          sourceFallbackOffer: task.meta.sourceFallbackOffer,
+        })
+      }
+    }
+  } catch {}
+}
 
 function enqueueDowngradePrompt(payload) {
   const offer = payload?.downgradeOffer || payload?.offer
@@ -227,6 +406,10 @@ function showNextDowngradePrompt() {
 
 function formatPromptReason(reason) {
   return formatUserError(reason, '音源取链失败，请稍后重试')
+}
+
+function clearLibraryHotNotice() {
+  libraryHotNotice.value = ''
 }
 
 /** 仅关闭弹窗，任务仍保持「待确认」，可在下载页再操作 */
@@ -367,9 +550,11 @@ function toggleTheme() {
 onMounted(() => {
   connectWS()
   initPlayer()
+  offLibraryHotReload = initLibraryHotReload(api, { onWS })
   checkForUpdate()
   loadSourceFault()
   loadPendingDowngradePrompts()
+  loadPendingDownloadSourcePrompts()
   offSourceFaultWS = onWS('source.fault', (fault) => {
     sourceFault.value = fault?.id ? fault : null
     faultResult.value = null
@@ -377,10 +562,24 @@ onMounted(() => {
   offDowngradeWS = onWS('download:status', (d) => {
     if (d?.status === 'await_confirm' && d.downgradeOffer?.toQuality) {
       enqueueDowngradePrompt(d)
+    } else if (d?.status === 'await_source' && d.sourceFallbackOffer?.alternatives?.length) {
+      enqueueDownloadSourcePrompt(d)
     } else if (d?.id && downgradePrompt.value?.id === d.id && d.status !== 'await_confirm') {
       // 已在下载页点确认/放弃时，关掉对应弹窗
       downgradePrompt.value = null
       showNextDowngradePrompt()
+    } else if (d?.id && downloadSourcePrompt.value?.id === d.id && d.status !== 'await_source') {
+      downloadSourcePrompt.value = null
+      showNextDownloadSourcePrompt()
+    }
+  })
+  offDownloadSourceWS = onWS('download:source-switched', (d) => {
+    if (d?.toName) {
+      notifySourceSwitch({
+        switched: true,
+        fromName: d.fromName,
+        name: d.toName,
+      })
     }
   })
   api.paths.list().then((res) => {
@@ -393,12 +592,15 @@ onMounted(() => {
         customHex: s?.[CUSTOM_COLOR_KEY],
       })
     }
+    applySourceFallbackMode(s?.[SOURCE_FALLBACK_MODE_KEY])
   }).catch(() => {})
 })
 
 onUnmounted(() => {
   offSourceFaultWS?.()
   offDowngradeWS?.()
+  offDownloadSourceWS?.()
+  offLibraryHotReload?.()
 })
 </script>
 
@@ -578,6 +780,46 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 .setup-link:hover { text-decoration: underline; }
+
+.playlist-pick-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgba(99, 102, 241, 0.12);
+  border: 1px solid rgba(99, 102, 241, 0.35);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.4;
+}
+.playlist-pick-banner .setup-link { margin-left: auto; }
+
+.tag-match-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 0 0 12px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: rgba(108, 158, 255, 0.1);
+  border: 1px solid rgba(108, 158, 255, 0.28);
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.tag-match-banner.success {
+  background: rgba(34, 197, 94, 0.1);
+  border-color: rgba(34, 197, 94, 0.28);
+}
+.tag-match-banner.error {
+  background: rgba(239, 68, 68, 0.08);
+  border-color: rgba(239, 68, 68, 0.28);
+}
+.tag-match-banner .setup-link { margin-left: auto; }
+.tag-match-banner .btn-ghost { margin-left: auto; }
 
 .mobile-topbar { display: none; }
 .mobile-tabbar { display: none; }
@@ -867,5 +1109,45 @@ onUnmounted(() => {
   justify-content: flex-end;
   flex-wrap: wrap;
   margin-top: 8px;
+}
+
+.source-switch-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  background: var(--accent-muted);
+  border: 1px solid var(--brand-border-soft);
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.source-fallback-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 12px 0 4px;
+}
+
+.source-fallback-btn {
+  width: 100%;
+  justify-content: center;
+}
+
+.library-hot-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--success) 12%, var(--bg-elevated));
+  border: 1px solid color-mix(in srgb, var(--success) 35%, transparent);
+  color: var(--text-secondary);
+  font-size: 13px;
 }
 </style>

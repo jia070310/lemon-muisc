@@ -1,6 +1,7 @@
 import NodeID3 from 'node-id3'
 import fs from 'fs'
 import { detectImageMime } from './utils/fetchPic.js'
+import { normalizeLyricText, pickBestLyricText } from './utils/lyric.js'
 
 export async function writeMeta(filePath, ext, meta) {
   if (ext === '.mp3') return writeMp3Meta(filePath, meta)
@@ -156,8 +157,47 @@ function rebuildFlacBlocks(parsed, comments, pic) {
 function extractCommentText(comments) {
   if (!comments?.length) return ''
   const c = comments[0]
-  if (typeof c === 'string') return c
-  return c?.text || ''
+  if (typeof c === 'string') return normalizeTagText(c)
+  return normalizeTagText(c?.text || '')
+}
+
+/** 修复 ID3 等标签 UTF-8 被误读为 Latin-1 的乱码 */
+export function normalizeTagText(value) {
+  if (value == null) return ''
+  let s = String(value).trim()
+  if (!s) return ''
+  if (/[\u4e00-\u9fff]/.test(s)) return s
+  if (/[ÃÂÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜàáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýÿ]/.test(s)) {
+    try {
+      const fixed = Buffer.from(s, 'latin1').toString('utf8').trim()
+      if (fixed && !fixed.includes('\uFFFD') && /[\u4e00-\u9fff]/.test(fixed)) return fixed
+    } catch {}
+  }
+  return s
+}
+
+function normalizeMetaFields(meta) {
+  const title = normalizeTagText(meta.title)
+  let album = normalizeTagText(meta.album)
+  const artist = normalizeTagText(meta.artist)
+  const genre = normalizeTagText(meta.genre)
+  const comment = normalizeTagText(meta.comment)
+  if (album && title && album === title) album = ''
+  return {
+    ...meta,
+    title,
+    artist,
+    album,
+    genre,
+    comment,
+  }
+}
+
+function formatFromPath(filePath, container = '') {
+  const ext = (filePath || '').match(/\.([^.]+)$/)?.[1]
+  if (ext) return ext.toUpperCase()
+  const c = String(container || '').trim()
+  return c ? c.toUpperCase() : ''
 }
 
 function extractLyricText(metadata, filePath) {
@@ -165,6 +205,22 @@ function extractLyricText(metadata, filePath) {
   for (const item of metadata.common.lyrics || []) {
     if (typeof item === 'string') parts.push(item)
     else if (item?.text) parts.push(item.text)
+    else if (Array.isArray(item?.syncText) && item.syncText.length) {
+      parts.push(item.syncText.map(s => {
+        if (typeof s === 'string') return s
+        const text = s?.text || ''
+        const time = Number(s?.time)
+        if (!text || !Number.isFinite(time)) return text
+        const total = Math.max(0, time)
+        const min = Math.floor(total / 60)
+        const sec = Math.floor(total % 60)
+        const ms = Math.round((total % 1) * 1000)
+        const stamp = ms
+          ? `[${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}.${String(ms).padStart(3, '0').slice(0, 2)}]`
+          : `[${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}]`
+        return `${stamp}${text}`
+      }).join('\n'))
+    }
   }
   let lyric = parts.join('\n').trim()
 
@@ -174,10 +230,19 @@ function extractLyricText(metadata, filePath) {
       const unsync = tags?.unsynchronisedLyrics
       if (typeof unsync === 'string') lyric = unsync
       else if (unsync?.text) lyric = unsync.text
+      if (!lyric) {
+        const sync = tags?.synchronisedLyrics
+        const syncText = typeof sync === 'string' ? sync : sync?.text
+        if (syncText) lyric = syncText
+      }
     } catch {}
   }
 
-  // 尝试读取同目录下的 .lrc 文件
+  if (filePath.toLowerCase().endsWith('.flac')) {
+    const native = readFlacNativeTags(filePath)
+    lyric = pickBestLyricText(lyric, native?.lyric)
+  }
+
   if (!lyric) {
     const lrcPath = filePath.replace(/\.[^.]+$/, '.lrc')
     if (lrcPath !== filePath && fs.existsSync(lrcPath)) {
@@ -185,7 +250,7 @@ function extractLyricText(metadata, filePath) {
     }
   }
 
-  return lyric
+  return normalizeLyricText(lyric)
 }
 
 function syncsafeSize(buf, start) {
@@ -284,6 +349,249 @@ function hasExternalLrc(filePath) {
   }
 }
 
+function parseVorbisCommentBlock(blockData) {
+  const tags = {}
+  if (!blockData?.length || blockData.length < 8) return tags
+  try {
+    let offset = 0
+    const vendorLen = blockData.readUInt32LE(offset)
+    offset += 4 + vendorLen
+    if (offset + 4 > blockData.length) return tags
+    const count = blockData.readUInt32LE(offset)
+    offset += 4
+    for (let i = 0; i < count && offset + 4 <= blockData.length; i++) {
+      const len = blockData.readUInt32LE(offset)
+      offset += 4
+      if (len <= 0 || offset + len > blockData.length) break
+      const raw = blockData.toString('utf-8', offset, offset + len)
+      offset += len
+      const eq = raw.indexOf('=')
+      if (eq <= 0) continue
+      const key = raw.slice(0, eq).toUpperCase()
+      const val = raw.slice(eq + 1).trim()
+      if (val && !tags[key]) tags[key] = val
+    }
+  } catch {}
+  return tags
+}
+
+function readFlacNativeTags(filePath) {
+  try {
+    const stat = fs.statSync(filePath)
+    const readLen = Math.min(stat.size, 1024 * 1024)
+    const data = Buffer.alloc(readLen)
+    const fd = fs.openSync(filePath, 'r')
+    try {
+      fs.readSync(fd, data, 0, readLen, 0)
+    } finally {
+      fs.closeSync(fd)
+    }
+    if (data.slice(0, 4).toString() !== 'fLaC') return null
+    const parsed = parseFlacBlocks(data)
+    const commentBlock = parsed.blocks.find(b => b.type === 4)
+    const tags = commentBlock ? parseVorbisCommentBlock(commentBlock.data) : {}
+    const lyricKeyOrder = ['SYNCEDLYRICS', 'LYRICS', 'LYRIC', 'LRC', 'UNSYNCEDLYRICS', 'DESCRIPTION']
+    const rawLyric = lyricKeyOrder.map(k => tags[k]).find(Boolean) || ''
+    const lyric = normalizeLyricText(rawLyric)
+    return {
+      title: normalizeTagText(tags.TITLE),
+      artist: normalizeTagText(tags.ARTIST),
+      album: normalizeTagText(tags.ALBUM),
+      year: normalizeTagText(tags.DATE || tags.YEAR),
+      genre: normalizeTagText(tags.GENRE),
+      comment: normalizeTagText(tags.COMMENT || tags.DESCRIPTION),
+      lyric,
+      hasPicture: parsed.blocks.some(b => b.type === 6 && b.data.length > 0),
+      hasLyrics: Boolean(lyric) || hasExternalLrc(filePath),
+    }
+  } catch {
+    return null
+  }
+}
+
+function readMp3NativeTags(filePath) {
+  try {
+    const tags = NodeID3.read(filePath)
+    if (!tags || typeof tags !== 'object') return null
+    const unsync = tags.unsynchronisedLyrics
+    const lyricText = typeof unsync === 'string' ? unsync : (unsync?.text || '')
+    const syncLyric = tags.synchronisedLyrics
+    const syncText = typeof syncLyric === 'string' ? syncLyric : (syncLyric?.text || '')
+    const lyric = (lyricText || syncText || '').trim()
+    const frames = scanMp3Id3Frames(filePath)
+    const hasPicture = Boolean(tags.image?.imageBuffer?.length) || frames.hasApic
+    const hasLyrics = Boolean(lyric) || frames.hasUslt || hasExternalLrc(filePath)
+    return {
+      title: normalizeTagText(tags.title),
+      artist: normalizeTagText(tags.artist),
+      album: normalizeTagText(tags.album),
+      year: tags.year != null ? String(tags.year) : '',
+      genre: normalizeTagText(tags.genre),
+      comment: normalizeTagText(tags.comment?.text || tags.comment),
+      lyric,
+      hasPicture,
+      hasLyrics,
+    }
+  } catch {
+    return null
+  }
+}
+
+function mergeNativeMeta(base, native) {
+  if (!native) return base
+  const pick = (primary, fallback) => (primary || fallback || '')
+  const lyric = base.lyric || native.lyric || ''
+  return {
+    ...base,
+    title: pick(base.title, native.title),
+    artist: pick(base.artist, native.artist),
+    album: pick(base.album, native.album),
+    year: base.year || native.year || '',
+    genre: pick(base.genre, native.genre),
+    comment: pick(base.comment, native.comment),
+    lyric,
+    hasPicture: Boolean(base.hasPicture || native.hasPicture),
+    hasLyrics: Boolean(base.hasLyrics || native.hasLyrics || lyric),
+  }
+}
+
+function probeLyricText(filePath, metadata) {
+  const ext = filePath.match(/\.[^.]+$/)?.[0]?.toLowerCase() || ''
+  let lyric = ''
+  if (metadata) lyric = extractLyricText(metadata, filePath)
+  if (!lyric && ext === '.mp3') {
+    try {
+      const tags = NodeID3.read(filePath)
+      const unsync = tags?.unsynchronisedLyrics
+      const text = typeof unsync === 'string' ? unsync : (unsync?.text || '')
+      if (text?.trim()) lyric = normalizeLyricText(text)
+    } catch {}
+  }
+  if (ext === '.flac') {
+    const native = readFlacNativeTags(filePath)
+    lyric = pickBestLyricText(lyric, native?.lyric)
+  }
+  return lyric
+}
+
+async function resolveEmbeddedAssets(base, filePath, metadata, { lite = false } = {}) {
+  const lyricText = base.lyric?.trim() || probeLyricText(filePath, metadata)
+  base.hasLyrics = Boolean(base.hasLyrics || lyricText || hasExternalLrc(filePath))
+  if (!lite && lyricText) base.lyric = lyricText
+
+  if (!base.hasPicture) {
+    try { base.hasPicture = await hasEmbeddedPicture(filePath) } catch {}
+  }
+  if (!base.hasPicture || (!lite && !base.pictureBase64)) {
+    try {
+      const cover = await readEmbeddedCover(filePath)
+      if (cover?.buffer?.length) {
+        base.hasPicture = true
+        if (!lite) {
+          base.pictureMime = cover.mime
+          base.pictureBase64 = `data:${cover.mime};base64,${cover.buffer.toString('base64')}`
+        }
+      }
+    } catch {}
+  }
+}
+
+function readNativeTags(filePath) {
+  const ext = filePath.match(/\.[^.]+$/)?.[0]?.toLowerCase() || ''
+  if (ext === '.mp3') return readMp3NativeTags(filePath)
+  if (ext === '.flac') return readFlacNativeTags(filePath)
+  return null
+}
+
+async function parseFileWithRetry(filePath, options = {}, retries = 2) {
+  const { parseFile } = await import('music-metadata')
+  let lastErr = null
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await parseFile(filePath, options)
+    } catch (e) {
+      lastErr = e
+      if (attempt < retries) {
+        await new Promise(resolve => setTimeout(resolve, 80 * (attempt + 1)))
+      }
+    }
+  }
+  throw lastErr
+}
+
+function buildMetaFromParsed(metadata, filePath, { includeContent = false } = {}) {
+  const lyric = includeContent ? extractLyricText(metadata, filePath) : ''
+  const { pictureBase64, pictureMime } = includeContent ? extractPicture(metadata) : { pictureBase64: '', pictureMime: '' }
+  const pic = metadata.common.picture?.[0]
+  const flags = detectEmbeddedFlagsLite(metadata, filePath)
+  let hasPicture = flags.hasPicture
+  if (!hasPicture && includeContent) hasPicture = Boolean(pic?.data?.length)
+
+  return {
+    title: metadata.common.title || '',
+    artist: metadata.common.artist || '',
+    album: metadata.common.album || '',
+    year: metadata.common.year || '',
+    genre: metadata.common.genre?.[0] || '',
+    comment: extractCommentText(metadata.common.comment),
+    track: metadata.common.track?.no || '',
+    duration: metadata.format.duration || 0,
+    bitrate: metadata.format.bitrate || 0,
+    sampleRate: metadata.format.sampleRate || 0,
+    format: formatFromPath(filePath, metadata.format.container),
+    hasPicture,
+    hasLyrics: includeContent ? Boolean(lyric) : flags.hasLyrics,
+    lyric,
+    pictureBase64,
+    pictureMime,
+  }
+}
+
+function buildEmptyMeta(filePath) {
+  return {
+    title: '',
+    artist: '',
+    album: '',
+    year: '',
+    genre: '',
+    comment: '',
+    track: '',
+    duration: 0,
+    bitrate: 0,
+    sampleRate: 0,
+    format: formatFromPath(filePath, ''),
+    hasPicture: false,
+    hasLyrics: false,
+    lyric: '',
+    pictureBase64: '',
+    pictureMime: '',
+  }
+}
+
+async function readMetaCore(filePath, { lite = false } = {}) {
+  const ext = filePath.match(/\.[^.]+$/)?.[0]?.toLowerCase() || ''
+  let base = buildEmptyMeta(filePath)
+  let metadata = null
+
+  try {
+    metadata = await parseFileWithRetry(filePath, {
+      skipCovers: lite,
+      duration: true,
+    })
+    base = buildMetaFromParsed(metadata, filePath, { includeContent: !lite })
+  } catch {
+    // music-metadata 失败时走原生解析回退
+  }
+
+  if (ext === '.mp3' || ext === '.flac') {
+    base = mergeNativeMeta(base, readNativeTags(filePath))
+  }
+
+  await resolveEmbeddedAssets(base, filePath, metadata, { lite })
+
+  return normalizeMetaFields(base)
+}
+
 function detectEmbeddedFlagsLite(metadata, filePath) {
   const ext = filePath.match(/\.[^.]+$/)?.[0]?.toLowerCase() || ''
   let hasPicture = Boolean(metadata.common.picture?.length)
@@ -293,8 +601,18 @@ function detectEmbeddedFlagsLite(metadata, filePath) {
     const frames = scanMp3Id3Frames(filePath)
     hasPicture = hasPicture || frames.hasApic
     hasLyrics = hasLyrics || frames.hasUslt
+    const native = readMp3NativeTags(filePath)
+    if (native) {
+      hasPicture = hasPicture || native.hasPicture
+      hasLyrics = hasLyrics || native.hasLyrics
+    }
   } else if (ext === '.flac') {
     hasPicture = hasPicture || flacHasPictureBlock(filePath)
+    const native = readFlacNativeTags(filePath)
+    if (native) {
+      hasPicture = hasPicture || native.hasPicture
+      hasLyrics = hasLyrics || native.hasLyrics
+    }
   }
 
   if (!hasLyrics) hasLyrics = hasExternalLrc(filePath)
@@ -309,68 +627,72 @@ function extractPicture(metadata) {
   return {
     pictureMime,
     pictureBase64: `data:${pictureMime};base64,${picBuffer.toString('base64')}`,
+    buffer: picBuffer,
   }
+}
+
+/** 读取内嵌封面（用于 /api/tag/cover） */
+export async function readEmbeddedCover(filePath) {
+  try {
+    const { parseFile } = await import('music-metadata')
+    const metadata = await parseFileWithRetry(filePath, { duration: false })
+    const extracted = extractPicture(metadata)
+    if (extracted.buffer?.length) {
+      return {
+        buffer: extracted.buffer,
+        mime: extracted.pictureMime || 'image/jpeg',
+      }
+    }
+  } catch {}
+
+  const ext = filePath.match(/\.[^.]+$/)?.[0]?.toLowerCase() || ''
+  if (ext === '.mp3') {
+    try {
+      const tags = NodeID3.read(filePath)
+      const buf = tags?.image?.imageBuffer
+      if (buf?.length) {
+        const buffer = Buffer.isBuffer(buf) ? buf : Buffer.from(buf)
+        return { buffer, mime: detectImageMime(buffer) }
+      }
+    } catch {}
+  }
+
+  if (ext === '.flac') {
+    try {
+      const stat = fs.statSync(filePath)
+      const readLen = Math.min(stat.size, 1024 * 1024)
+      const data = Buffer.alloc(readLen)
+      const fd = fs.openSync(filePath, 'r')
+      try { fs.readSync(fd, data, 0, readLen, 0) } finally { fs.closeSync(fd) }
+      const parsed = parseFlacBlocks(data)
+      const picBlock = parsed.blocks.find(b => b.type === 6 && b.data.length > 32)
+      if (picBlock) {
+        const block = picBlock.data
+        let off = 4
+        const mimeLen = block.readUInt32BE(off); off += 4 + mimeLen
+        const descLen = block.readUInt32BE(off); off += 4 + descLen
+        off += 16
+        if (off + 4 <= block.length) {
+          const picLen = block.readUInt32BE(off); off += 4
+          if (picLen > 0 && off + picLen <= block.length) {
+            const buffer = block.slice(off, off + picLen)
+            if (buffer.length) return { buffer, mime: detectImageMime(buffer) }
+          }
+        }
+      }
+    } catch {}
+  }
+
+  return null
 }
 
 /** 列表视图用的轻量读取：跳过封面/歌词内容，但会检测是否含内嵌封面与歌词 */
 export async function readMetaLite(filePath) {
-  const { parseFile } = await import('music-metadata')
-  const metadata = await parseFile(filePath, { skipCovers: true, duration: true })
-  const flags = detectEmbeddedFlagsLite(metadata, filePath)
-  let hasPicture = flags.hasPicture
-  if (!hasPicture) {
-    const ext = filePath.match(/\.[^.]+$/)?.[0]?.toLowerCase() || ''
-    if (ext !== '.mp3' && ext !== '.flac') {
-      try { hasPicture = await hasEmbeddedPicture(filePath) } catch {}
-    }
-  }
-
-  return {
-    title: metadata.common.title || '',
-    artist: metadata.common.artist || '',
-    album: metadata.common.album || '',
-    year: metadata.common.year || '',
-    genre: metadata.common.genre?.[0] || '',
-    comment: extractCommentText(metadata.common.comment),
-    track: metadata.common.track?.no || '',
-    duration: metadata.format.duration || 0,
-    bitrate: metadata.format.bitrate || 0,
-    sampleRate: metadata.format.sampleRate || 0,
-    format: metadata.format.container || '',
-    hasPicture,
-    hasLyrics: flags.hasLyrics,
-    lyric: '',
-    pictureBase64: '',
-    pictureMime: '',
-  }
+  return readMetaCore(filePath, { lite: true })
 }
 
 export async function readMeta(filePath) {
-  const { parseFile } = await import('music-metadata')
-  const metadata = await parseFile(filePath)
-
-  const lyric = extractLyricText(metadata, filePath)
-  const { pictureBase64, pictureMime } = extractPicture(metadata)
-  const pic = metadata.common.picture?.[0]
-
-  return {
-    title: metadata.common.title || '',
-    artist: metadata.common.artist || '',
-    album: metadata.common.album || '',
-    year: metadata.common.year || '',
-    genre: metadata.common.genre?.[0] || '',
-    comment: extractCommentText(metadata.common.comment),
-    track: metadata.common.track?.no || '',
-    duration: metadata.format.duration || 0,
-    bitrate: metadata.format.bitrate || 0,
-    sampleRate: metadata.format.sampleRate || 0,
-    format: metadata.format.container || '',
-    hasPicture: Boolean(pic?.data?.length),
-    hasLyrics: Boolean(lyric),
-    lyric,
-    pictureBase64,
-    pictureMime,
-  }
+  return readMetaCore(filePath, { lite: false })
 }
 
 export async function batchWriteMeta(files) {

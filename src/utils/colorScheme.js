@@ -108,6 +108,8 @@ function buildBrandVars(main, light, dark, rgb, isLight) {
     'lemon-gradient-hover': `linear-gradient(180deg, ${light} 0%, ${main} 100%)`,
     'lemon-glow': `0 0 18px rgba(${r}, ${g}, ${b}, ${glowA}), 0 0 36px rgba(${r}, ${g}, ${b}, ${glowB})`,
     'lemon-glow-sm': `0 0 10px rgba(${r}, ${g}, ${b}, ${glowSmA}), 0 0 20px rgba(${r}, ${g}, ${b}, ${glowSmB})`,
+    'play-breathe-glow-min': `0 0 4px rgba(${r}, ${g}, ${b}, ${isLight ? 0.2 : 0.22})`,
+    'play-breathe-glow-max': `0 0 14px rgba(${r}, ${g}, ${b}, ${isLight ? 0.88 : 0.95}), 0 0 28px rgba(${r}, ${g}, ${b}, ${isLight ? 0.58 : 0.65}), 0 0 44px rgba(${r}, ${g}, ${b}, ${isLight ? 0.32 : 0.38})`,
     'slider-thumb-hover-glow': `0 0 14px rgba(${r}, ${g}, ${b}, ${sliderHoverA}), 0 0 28px rgba(${r}, ${g}, ${b}, ${sliderHoverB})`,
     'slider-thumb-active-glow': `0 0 22px rgba(${r}, ${g}, ${b}, ${sliderActiveA}), 0 0 44px rgba(${r}, ${g}, ${b}, ${sliderActiveB}), 0 0 8px rgba(${r}, ${g}, ${b}, ${sliderActiveC})`,
     accent: main,

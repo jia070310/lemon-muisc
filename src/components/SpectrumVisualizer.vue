@@ -9,7 +9,7 @@
 
 <script setup>
 import { onMounted, onUnmounted, ref, watch } from 'vue'
-import { getAnalyser, getFrequencyData, getAnalyserMode, isPaused, promoteElementAnalyser, scheduleAudioAnalyserRefresh } from '../stores/player.js'
+import { getAnalyser, getFrequencyData, isPaused, scheduleAudioAnalyserRefresh } from '../stores/player.js'
 
 const props = defineProps({
   /** @type {'full' | 'bar'} */
@@ -22,6 +22,8 @@ let rafId = 0
 let idlePhase = 0
 let analyserRetryTick = 0
 let silentAnalyserFrames = 0
+/** @type {number[] | null} */
+let prevHeights = null
 /** @type {Uint8Array | null} */
 let freqBuf = null
 let resizeObserver = null
@@ -60,12 +62,35 @@ function buildIdleHeights(count) {
   return heights
 }
 
+function smoothHeights(next, count) {
+  if (!prevHeights || prevHeights.length !== count) {
+    prevHeights = next.slice()
+    return next
+  }
+  for (let i = 0; i < count; i++) {
+    prevHeights[i] = prevHeights[i] * 0.22 + next[i] * 0.78
+  }
+  return prevHeights
+}
+
+function decayHeights(count) {
+  if (!prevHeights || prevHeights.length !== count) {
+    return new Array(count).fill(0.06)
+  }
+  for (let i = 0; i < count; i++) {
+    prevHeights[i] *= 0.88
+    if (prevHeights[i] < 0.05) prevHeights[i] = 0.05
+  }
+  return prevHeights
+}
+
 function sampleHeights(count) {
   const analyser = getAnalyser()
   if (!analyser || isPaused.value) {
     if (!isPaused.value) {
       analyserRetryTick++
-      if (analyserRetryTick % 12 === 0) scheduleAudioAnalyserRefresh()
+      if (analyserRetryTick % 24 === 0) scheduleAudioAnalyserRefresh()
+      return decayHeights(count)
     }
     return buildIdleHeights(count)
   }
@@ -82,32 +107,35 @@ function sampleHeights(count) {
   }
   if (peak === 0) {
     silentAnalyserFrames++
-    if (silentAnalyserFrames > 18) {
+    const silentLimit = /iPhone|iPad|iPod/i.test(navigator.userAgent || '') ? 90 : 45
+    if (silentAnalyserFrames > silentLimit) {
       silentAnalyserFrames = 0
-      if (getAnalyserMode() !== 'element') promoteElementAnalyser()
-      else scheduleAudioAnalyserRefresh()
+      scheduleAudioAnalyserRefresh()
     }
-    return buildIdleHeights(count)
+    return decayHeights(count)
   }
   silentAnalyserFrames = 0
 
-  const usable = Math.floor(freqBuf.length * 0.72)
+  const usable = Math.floor(freqBuf.length * 0.82)
   const heights = new Array(count)
   for (let i = 0; i < count; i++) {
     const start = Math.floor((i / count) * usable)
     const end = Math.floor(((i + 1) / count) * usable)
     let sum = 0
+    let max = 0
     let n = 0
     for (let j = start; j < Math.max(end, start + 1); j++) {
       sum += freqBuf[j]
+      if (freqBuf[j] > max) max = freqBuf[j]
       n++
     }
     const avg = (sum / Math.max(n, 1)) / 255
-    // 低频略抬高，视觉更接近参考图的波峰
-    const boost = 0.55 + 0.45 * Math.sin((i / (count - 1)) * Math.PI)
-    heights[i] = Math.max(0.04, Math.min(1, avg * 1.35 * boost))
+    const peakNorm = max / 255
+    const mixed = avg * 0.55 + peakNorm * 0.45
+    const boost = 0.72 + 0.28 * Math.sin((i / (count - 1)) * Math.PI)
+    heights[i] = Math.max(0.04, Math.min(1, mixed * 1.35 * boost))
   }
-  return heights
+  return smoothHeights(heights, count)
 }
 
 function drawFrame() {
@@ -150,7 +178,7 @@ function drawFrame() {
     ctx.fill()
 
     if (mirror && maxDown > 0) {
-      const downH = Math.max(radius, amp * maxDown)
+      const downH = Math.max(radius, upH * (maxDown / maxUp))
       ctx.fillStyle = barColor(t, 0.28)
       roundRect(ctx, x, baseline + 2, barW, downH, radius)
       ctx.fill()

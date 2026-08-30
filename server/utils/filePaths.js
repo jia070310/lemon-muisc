@@ -4,6 +4,7 @@ import { getDB } from '../db.js'
 import { probeDir } from './audioScan.js'
 
 const FILE_PATHS_KEY = 'file.paths'
+const MUSIC_PATHS_KEY = 'music.paths'
 const DOWNLOAD_PATH_KEY = 'download.savePath'
 const TAG_DIRS_KEY = 'tag.dirs'
 const DEFAULT_DOWNLOAD_DIR = '/downloads'
@@ -169,7 +170,7 @@ function setSetting(key, value) {
   `).run(key, value)
 }
 
-export function getFilePaths() {
+function readLegacyFilePaths() {
   try {
     const paths = JSON.parse(getSetting(FILE_PATHS_KEY) || '[]')
     return Array.isArray(paths) ? paths.filter(Boolean) : []
@@ -178,8 +179,41 @@ export function getFilePaths() {
   }
 }
 
+/** 音乐库扫描目录（可多个） */
+export function getMusicPaths() {
+  try {
+    const paths = JSON.parse(getSetting(MUSIC_PATHS_KEY) || '[]')
+    if (Array.isArray(paths) && paths.length) return paths.filter(Boolean)
+  } catch {}
+  return readLegacyFilePaths()
+}
+
+/** @deprecated 请使用 getMusicPaths；保留兼容旧调用 */
+export function getFilePaths() {
+  return getMusicPaths()
+}
+
+function syncLegacyFilePathsUnion() {
+  const music = getMusicPaths()
+  const dl = getSetting(DOWNLOAD_PATH_KEY)
+  const union = dedupePaths(dl ? [...music, dl] : [...music])
+  setSetting(FILE_PATHS_KEY, JSON.stringify(union))
+}
+
 function syncTagDirs(paths) {
   setSetting(TAG_DIRS_KEY, JSON.stringify(paths))
+}
+
+function setMusicPaths(paths) {
+  const unique = dedupePaths(paths.map(p => p.trim()).filter(Boolean))
+  setSetting(MUSIC_PATHS_KEY, JSON.stringify(unique))
+  syncTagDirs(unique)
+  syncLegacyFilePathsUnion()
+  return unique
+}
+
+export function setFilePaths(paths) {
+  return setMusicPaths(paths)
 }
 
 function dedupePaths(paths) {
@@ -196,31 +230,36 @@ function dedupePaths(paths) {
   return out
 }
 
-export function setFilePaths(paths) {
-  const unique = dedupePaths(paths.map(p => p.trim()).filter(Boolean))
-  setSetting(FILE_PATHS_KEY, JSON.stringify(unique))
-  syncTagDirs(unique)
-  return unique
+function validateDirectoryPath(dirPath, { fromPicker = false } = {}) {
+  const raw = (dirPath || '').trim()
+  const p = mapToContainerPath(raw)
+  if (!p) throw new Error('请提供路径')
+  if (!fromPicker && !fs.existsSync(p)) {
+    const musicRoot = getDefaultMusicPath()
+    throw new Error(`目录不存在：${p}。请填写 NAS 绝对路径，例如 ${musicRoot || '/vol1/1000/Music'}。`)
+  }
+  if (fromPicker && !fs.existsSync(p) && !isAuthorizedPath(p) && !isAuthorizedPath(raw)) {
+    throw new Error(`目录不可用：${p}。请确认飞牛已授权该路径。`)
+  }
+  return p
 }
 
 export function getDownloadSavePath() {
-  const paths = getFilePaths()
   const saved = getSetting(DOWNLOAD_PATH_KEY)
-  if (saved && paths.includes(saved)) return saved
+  if (saved) return mapToContainerPath(saved) || saved
   const nativeDownloads = process.env.DOWNLOADS_HOST_PATH || ''
-  if (nativeDownloads && paths.includes(nativeDownloads)) {
-    setSetting(DOWNLOAD_PATH_KEY, nativeDownloads)
-    return nativeDownloads
+  if (nativeDownloads) {
+    const mapped = mapToContainerPath(nativeDownloads)
+    setSetting(DOWNLOAD_PATH_KEY, mapped)
+    return mapped
   }
-  if (paths.includes(DEFAULT_DOWNLOAD_DIR)) {
+  if (!isNativeHostMode() && fs.existsSync(DEFAULT_DOWNLOAD_DIR)) {
     setSetting(DOWNLOAD_PATH_KEY, DEFAULT_DOWNLOAD_DIR)
     return DEFAULT_DOWNLOAD_DIR
   }
-  if (paths.length) {
-    setSetting(DOWNLOAD_PATH_KEY, paths[0])
-    return paths[0]
-  }
-  return process.env.DOWNLOAD_PATH || DEFAULT_MUSIC_DIR
+  const fallback = process.env.DOWNLOAD_PATH || DEFAULT_DOWNLOAD_DIR
+  if (fallback) setSetting(DOWNLOAD_PATH_KEY, mapToContainerPath(fallback) || fallback)
+  return mapToContainerPath(fallback) || fallback
 }
 
 /** 判断路径是否位于已配置的音乐库/下载目录内（防任意文件读取） */
@@ -235,7 +274,7 @@ export function isAllowedMediaPath(filePath) {
   if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) return false
 
   const roots = new Set([
-    ...getFilePaths(),
+    ...getMusicPaths(),
     getDownloadSavePath(),
     process.env.DOWNLOAD_PATH,
     process.env.MUSIC_HOST_PATH,
@@ -254,11 +293,10 @@ export function isAllowedMediaPath(filePath) {
   return false
 }
 
-export function setDownloadSavePath(dirPath) {
-  const p = mapToContainerPath(dirPath.trim())
-  const paths = getFilePaths()
-  if (!paths.includes(p)) throw new Error('路径不在文件路径列表中，请先在设置里添加')
+export function setDownloadSavePath(dirPath, { fromPicker = false } = {}) {
+  const p = validateDirectoryPath(dirPath, { fromPicker })
   setSetting(DOWNLOAD_PATH_KEY, p)
+  syncLegacyFilePathsUnion()
   return p
 }
 
@@ -304,85 +342,81 @@ export function migrateFilePaths(defaultMusicPath = DEFAULT_MUSIC_DIR) {
   migrateLegacyContainerPath(musicRoot)
   migratePathsForRuntime()
 
-  let paths = getFilePaths()
-  if (!paths.length) {
-    const savePath = getSetting(DOWNLOAD_PATH_KEY) || musicRoot
+  // 从旧版 file.paths 迁移到 music.paths
+  let musicStored = []
+  try {
+    musicStored = JSON.parse(getSetting(MUSIC_PATHS_KEY) || '[]')
+  } catch {}
+  if (!Array.isArray(musicStored) || !musicStored.length) {
+    const legacy = readLegacyFilePaths()
     let tagDirs = []
     try {
       tagDirs = JSON.parse(getSetting(TAG_DIRS_KEY) || '[]')
     } catch {}
-    paths = dedupePaths([savePath, ...tagDirs, musicRoot].map(mapToContainerPath).filter(Boolean))
-    setFilePaths(paths)
-  } else {
-    // 再跑一遍去重（同一物理目录的 /music 与本机路径）
-    paths = dedupePaths(paths.map(mapToContainerPath))
-    setFilePaths(paths)
+    const seed = legacy.length
+      ? legacy
+      : dedupePaths([getSetting(DOWNLOAD_PATH_KEY), ...tagDirs, musicRoot].filter(Boolean))
+    musicStored = dedupePaths(seed.map(mapToContainerPath).filter(Boolean))
+    if (musicStored.length) setMusicPaths(musicStored)
   }
 
-  // Docker：自动补齐存在的 /music /downloads；原生：只补齐真实存在的本机默认目录
-  const defaultCandidates = isNativeHostMode()
-    ? [musicRoot, process.env.DOWNLOADS_HOST_PATH].filter(Boolean)
-    : [DEFAULT_MUSIC_DIR, DEFAULT_DOWNLOAD_DIR]
+  let musicPaths = dedupePaths(getMusicPaths().map(mapToContainerPath).filter(Boolean))
+  if (musicPaths.length) setMusicPaths(musicPaths)
+  else musicPaths = getMusicPaths()
 
-  const appendDefaults = defaultCandidates.filter((p) => {
-    if (!p || paths.includes(p)) return false
-    if (!fs.existsSync(p)) return false
+  const musicDefaults = isNativeHostMode()
+    ? [musicRoot].filter(Boolean)
+    : [DEFAULT_MUSIC_DIR]
+  const musicAppend = musicDefaults.filter((p) => {
+    if (!p || !fs.existsSync(p)) return false
     const real = resolveReal(p)
-    return !paths.some(existing => resolveReal(existing) === real)
+    return !musicPaths.some(existing => resolveReal(existing) === real)
   })
-  if (appendDefaults.length) {
-    paths = dedupePaths([...paths, ...appendDefaults])
-    setFilePaths(paths)
+  if (musicAppend.length) {
+    musicPaths = setMusicPaths([...musicPaths, ...musicAppend])
   }
 
-  const saved = getSetting(DOWNLOAD_PATH_KEY)
-  if (!saved || !paths.includes(saved)) {
-    const preferred = paths.find(p => p === process.env.DOWNLOADS_HOST_PATH)
-      || paths.find(p => p === DEFAULT_DOWNLOAD_DIR)
-      || paths[0]
-    if (preferred) setSetting(DOWNLOAD_PATH_KEY, preferred)
+  let downloadPath = getSetting(DOWNLOAD_PATH_KEY)
+  if (downloadPath) downloadPath = mapToContainerPath(downloadPath)
+  const downloadDefaults = isNativeHostMode()
+    ? [process.env.DOWNLOADS_HOST_PATH].filter(Boolean)
+    : [DEFAULT_DOWNLOAD_DIR]
+  if (!downloadPath) {
+    const candidate = downloadDefaults.find(p => p && fs.existsSync(p))
+      || musicPaths.find(p => p === process.env.DOWNLOADS_HOST_PATH)
+      || musicPaths.find(p => p === DEFAULT_DOWNLOAD_DIR)
+    if (candidate) downloadPath = mapToContainerPath(candidate)
   }
-  syncTagDirs(getFilePaths())
+  if (downloadPath) {
+    setSetting(DOWNLOAD_PATH_KEY, downloadPath)
+  } else {
+    getDownloadSavePath()
+  }
+  syncLegacyFilePathsUnion()
 }
 
-export function addFilePath(dirPath, { fromPicker = false } = {}) {
-  const raw = dirPath.trim()
-  const p = mapToContainerPath(raw)
-  if (!p) throw new Error('请提供路径')
-  if (!fromPicker && !fs.existsSync(p)) {
-    const musicRoot = getDefaultMusicPath()
-    throw new Error(
-      isNativeHostMode()
-        ? `目录不存在：${p}。请填写 NAS 绝对路径，例如 ${musicRoot || '/vol1/1000/Music'}。`
-        : `目录不存在：${p}。请填写 NAS 绝对路径，例如 ${musicRoot || '/vol1/1000/Music'}。`
-    )
-  }
-  if (fromPicker && !fs.existsSync(p) && !isAuthorizedPath(p) && !isAuthorizedPath(raw)) {
-    const musicRoot = getDefaultMusicPath()
-    throw new Error(`目录不可用：${p}。请确认飞牛已授权该路径。`)
-  }
-  const paths = getFilePaths()
+export function addMusicPath(dirPath, { fromPicker = false } = {}) {
+  const p = validateDirectoryPath(dirPath, { fromPicker })
+  const paths = getMusicPaths()
   const real = resolveReal(p)
-  if (paths.some(x => resolveReal(x) === real)) throw new Error('路径已存在（与已添加目录指向同一位置）')
+  if (paths.some(x => resolveReal(x) === real)) {
+    throw new Error('路径已存在（与已添加目录指向同一位置）')
+  }
   paths.push(p)
-  setFilePaths(paths)
-  if (paths.length === 1) setSetting(DOWNLOAD_PATH_KEY, p)
-  return getFilePaths()
+  return setMusicPaths(paths)
 }
 
-export function updateFilePath(oldPath, newPath, { fromPicker = false } = {}) {
-  const from = mapToContainerPath(oldPath.trim())
-  const rawTo = newPath.trim()
-  const to = mapToContainerPath(rawTo)
-  if (!from || !to) throw new Error('请提供原路径和新路径')
-  if (!fromPicker && !fs.existsSync(to)) {
-    throw new Error(`新目录不存在：${to}`)
-  }
-  if (fromPicker && !fs.existsSync(to) && !isAuthorizedPath(to) && !isAuthorizedPath(rawTo)) {
-    throw new Error(`目录不可用：${to}。请确认飞牛已授权该路径。`)
-  }
+/** @deprecated 使用 addMusicPath */
+export function addFilePath(dirPath, options = {}) {
+  return addMusicPath(dirPath, options)
+}
 
-  const paths = getFilePaths()
+export function updateMusicPath(oldPath, newPath, { fromPicker = false } = {}) {
+  const from = mapToContainerPath(oldPath.trim())
+  const to = validateDirectoryPath(newPath, { fromPicker })
+  if (!from || !to) throw new Error('请提供原路径和新路径')
+
+  const paths = getMusicPaths()
   const idx = paths.indexOf(from)
   if (idx === -1) throw new Error('原路径不存在')
   const realTo = resolveReal(to)
@@ -391,28 +425,33 @@ export function updateFilePath(oldPath, newPath, { fromPicker = false } = {}) {
   }
 
   paths[idx] = to
-  setFilePaths(paths)
-
-  if (getSetting(DOWNLOAD_PATH_KEY) === from) {
-    setSetting(DOWNLOAD_PATH_KEY, to)
-  }
-  return getFilePaths()
+  return setMusicPaths(paths)
 }
 
-export function removeFilePath(dirPath) {
+/** @deprecated 使用 updateMusicPath */
+export function updateFilePath(oldPath, newPath, options = {}) {
+  return updateMusicPath(oldPath, newPath, options)
+}
+
+export function removeMusicPath(dirPath) {
   const p = mapToContainerPath(dirPath.trim())
-  const paths = getFilePaths()
+  const paths = getMusicPaths()
   if (!paths.includes(p) && !paths.includes(dirPath.trim())) throw new Error('路径不存在')
-  if (paths.length <= 1) throw new Error('至少保留一个文件路径')
 
   const target = paths.includes(p) ? p : dirPath.trim()
-  const next = paths.filter(x => x !== target)
-  setFilePaths(next)
+  return setMusicPaths(paths.filter(x => x !== target))
+}
 
-  if (getSetting(DOWNLOAD_PATH_KEY) === target) {
-    setSetting(DOWNLOAD_PATH_KEY, next[0])
-  }
-  return next
+/** @deprecated 使用 removeMusicPath */
+export function removeFilePath(dirPath) {
+  return removeMusicPath(dirPath)
+}
+
+export function isConfiguredMusicDir(dirPath) {
+  const p = mapToContainerPath((dirPath || '').trim())
+  if (!p) return false
+  const real = resolveReal(p)
+  return getMusicPaths().some(x => resolveReal(x) === real || x === p)
 }
 
 function getAuthorizedPathsFromEnv() {
@@ -435,7 +474,7 @@ function isAuthorizedPath(dirPath) {
 export function getSetupStatus() {
   const configRoot = getConfigRoot()
   const userConfigured = fs.existsSync(path.join(configRoot, '.user-paths-configured'))
-  const paths = getFilePaths()
+  const paths = getMusicPaths()
   const readablePaths = paths.filter((p) => fs.existsSync(p))
   const native = isNativeHostMode()
   const musicPath = native

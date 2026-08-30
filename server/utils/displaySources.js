@@ -17,7 +17,7 @@ export function getDisplaySources() {
   const merged = getMergedSources()
   const keys = Object.keys(merged).filter((key) => AVAILABLE_SOURCES[key])
   if (!keys.length) {
-    return { ...AVAILABLE_SOURCES }
+    return {}
   }
 
   const result = {}

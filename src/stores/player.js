@@ -4,10 +4,21 @@ import { cleanTrackItem } from '../utils/text.js'
 import { buildPlayPayload } from '../utils/musicPayload.js'
 import { getCachedPlayUrl, setCachedPlayUrl, rememberLoadedPlayUrl } from '../utils/playUrlCache.js'
 import { formatUserError } from '../utils/userError.js'
+import {
+  askSourceFallback,
+  getSourceFallbackOffer,
+  isSourceFallbackError,
+  notifySourceSwitch,
+} from './sourceFallback.js'
+import { recordRecentPlay, localCoverUrl, bumpLibraryCoverVersion } from './library.js'
+import { parseLrc } from '../utils/lrc.js'
+import { formatArtists } from '../utils/text.js'
 
 export const currentPlaying = ref(null)
 export const loadingPlay = ref(null)
 export const isPaused = ref(false)
+/** 点击播放后、真正开始出声前的缓冲阶段 */
+export const isBuffering = ref(false)
 export const currentTime = ref(0)
 export const duration = ref(0)
 export const volume = ref(0.8)
@@ -17,6 +28,8 @@ export const lyricLines = ref([])
 export const activeLyricIdx = ref(-1)
 export const coverStyle = ref('disc')
 export const visualizerEnabled = ref(true)
+/** 关闭频谱时自动启用后台播放（与 visualizerEnabled 互斥） */
+export const backgroundPlayEnabled = computed(() => !visualizerEnabled.value)
 export const showFullscreenPlayer = ref(false)
 export const playerError = ref('')
 
@@ -40,20 +53,23 @@ let hasMediaSrc = false
 let audioCtx = null
 /** @type {AnalyserNode | null} */
 let analyser = null
-/** @type {MediaStreamAudioSourceNode | null} */
-let streamSource = null
-/** @type {HTMLAudioElement | null} */
-let analyserAudio = null
 /** @type {MediaElementAudioSourceNode | null} */
-let analyserElementSource = null
+let mainMediaSource = null
 /** @type {GainNode | null} */
-let analyserSinkGain = null
-/** @type {'capture' | 'element' | null} */
-let analyserMode = null
+let mainOutputGain = null
+/** @type {HTMLAudioElement | null} */
+let mainAudioTapElement = null
 let audioGraphReady = false
+let playbackGraphToken = 0
+let playIntentToken = 0
 /** @type {number[]} */
 let playHistory = []
 let lastSessionSave = 0
+let mediaSessionInited = false
+
+function isBackgroundPlayActive() {
+  return !visualizerEnabled.value
+}
 
 const QUEUE_STORAGE_KEY = 'lx-music-nas:play-queue'
 const SESSION_STORAGE_KEY = 'lx-music-nas:play-session'
@@ -61,123 +77,171 @@ const VOLUME_KEY = 'lx-music-nas:volume'
 const MUTE_KEY = 'lx-music-nas:muted'
 let volumeBeforeMute = 0.8
 let lyricFetchToken = 0
+let localMetaFetchToken = 0
 let analyserBoundSrc = ''
-let analyserSetupToken = 0
-/** @type {ReturnType<typeof setTimeout> | 0} */
-let analyserHealthTimer = 0
-const ANALYSER_RETRY_DELAYS = [0, 50, 120, 250, 500, 1000, 2000, 4000, 6000]
-const DEFAULT_PLAY_QUALITY = '128k'
+const PLAYBACK_GRAPH_RETRY_DELAYS = [0, 60, 150, 400]
 
-function resetAudioGraph() {
-  try { streamSource?.disconnect() } catch {}
-  streamSource = null
-  if (analyser) {
-    try { analyser.disconnect() } catch {}
+function normalizeLocalCover(pictureBase64, pictureMime) {
+  if (!pictureBase64) return ''
+  const raw = String(pictureBase64)
+  if (raw.startsWith('data:') || raw.startsWith('http') || raw.startsWith('/')) return raw
+  return `data:${pictureMime || 'image/jpeg'};base64,${raw}`
+}
+
+function patchQueueItem(trackKey, updates) {
+  const idx = playQueue.value.findIndex(q => q.key === trackKey)
+  if (idx < 0) return
+  playQueue.value[idx] = {
+    ...playQueue.value[idx],
+    item: { ...playQueue.value[idx].item, ...updates },
   }
-  analyser = null
+}
+
+function applyLocalMetaToPlaying(data, filePath) {
+  if (!data || !filePath || !currentPlaying.value) return
+  const trackKey = `local:${filePath}`
+  if (getTrackKey(currentPlaying.value, 'local') !== trackKey) return
+
+  const updates = {}
+  if (data.title) updates.name = data.title
+  if (data.artist) updates.singer = data.artist
+  if (data.album) updates.album = data.album
+
+  let pic = ''
+  const coverTouched = Boolean(
+    data.pictureBase64 || data.pic || data.picUrl || data.hasPicture !== undefined,
+  )
+  if (coverTouched) bumpLibraryCoverVersion(filePath)
+  if (data.pictureBase64 || data.pic) {
+    pic = normalizeLocalCover(data.pictureBase64 || data.pic, data.pictureMime)
+  } else if (data.picUrl) {
+    pic = data.picUrl
+  } else if (data.hasPicture !== false) {
+    pic = localCoverUrl(filePath)
+  }
+  if (pic) {
+    coverUrl.value = pic
+    updates.picUrl = pic
+    updates.img = pic
+  } else if (data.hasPicture === false) {
+    coverUrl.value = ''
+    updates.picUrl = ''
+    updates.img = ''
+  }
+
+  const lyric = data.lyric || ''
+  if (lyric) {
+    lyricLines.value = parseLrc(lyric)
+    updates.lyric = lyric
+    activeLyricIdx.value = -1
+    if (audio && !audio.paused) updateActiveLyric(audio.currentTime)
+  } else if (data.hasLyrics === false) {
+    lyricLines.value = []
+    updates.lyric = ''
+    activeLyricIdx.value = -1
+  }
+
+  if (Object.keys(updates).length) {
+    currentPlaying.value = cleanTrackItem({ ...currentPlaying.value, ...updates })
+    patchQueueItem(trackKey, updates)
+    saveQueueState()
+  }
+}
+
+/** 标签保存后刷新正在试听的本地文件信息 */
+export async function refreshPlayingLocalMeta(filePath, meta) {
+  if (!filePath || !currentPlaying.value?.localPath) return
+  if (currentPlaying.value.localPath !== filePath) return
+  if (meta) {
+    applyLocalMetaToPlaying(meta, filePath)
+    return
+  }
+  try {
+    const res = await api.tag.read(filePath)
+    if (res?.error) return
+    applyLocalMetaToPlaying(res, filePath)
+  } catch {}
+}
+
+async function fetchLocalMeta(item) {
+  const filePath = item?.localPath
+  if (!filePath) return
+  const trackKey = getTrackKey(item, 'local')
+  const token = ++localMetaFetchToken
+  try {
+    const res = await api.tag.read(filePath)
+    if (token !== localMetaFetchToken) return
+    if (!currentPlaying.value || getTrackKey(currentPlaying.value, 'local') !== trackKey) return
+    applyLocalMetaToPlaying(res, filePath)
+  } catch {}
+}
+function beginPlaybackBuffer() {
+  isBuffering.value = true
+  isPaused.value = false
+}
+
+function endPlaybackBuffer() {
+  isBuffering.value = false
+}
+
+function cancelPlaybackIntent() {
+  playIntentToken++
+  endPlaybackBuffer()
+  isPaused.value = true
+  loadingPlay.value = null
+  if (audio) {
+    try { audio.pause() } catch {}
+  }
+}
+
+function invalidatePlaybackGraph() {
+  analyserBoundSrc = ''
   audioGraphReady = false
 }
 
-function ensureAnalyserAudio() {
-  if (!analyserAudio) {
-    analyserAudio = new Audio()
-    analyserAudio.crossOrigin = 'anonymous'
-    analyserAudio.setAttribute('playsinline', '')
-    analyserAudio.setAttribute('webkit-playsinline', '')
-    analyserAudio.muted = true
-    analyserAudio.volume = 0
-    analyserAudio.preload = 'auto'
+function isMainAudioTapped() {
+  return Boolean(mainMediaSource && mainAudioTapElement === audio)
+}
+
+function applyMainOutputGain() {
+  if (!mainOutputGain) return
+  const level = Math.min(1, Math.max(0, volume.value))
+  const effective = isMuted.value || level <= 0.001 ? 0 : level
+  mainOutputGain.gain.value = effective
+}
+
+function teardownPlaybackGraph() {
+  playbackGraphToken++
+  if (analyser) {
+    try { analyser.disconnect() } catch {}
+    analyser = null
   }
-  return analyserAudio
+  if (mainMediaSource) {
+    try { mainMediaSource.disconnect() } catch {}
+    mainMediaSource = null
+    mainAudioTapElement = null
+  }
+  audioGraphReady = false
 }
 
-function pauseAnalyserAudio() {
-  if (!analyserAudio) return
-  try { analyserAudio.pause() } catch {}
-}
-
-function pauseAndResetAnalyserGraph() {
-  analyserSetupToken++
-  resetAudioGraph()
-  analyserMode = null
-  analyserBoundSrc = ''
-  stopAnalyserHealthCheck()
-  pauseAnalyserAudio()
-}
-
-function stopAnalyserPlayback() {
-  pauseAndResetAnalyserGraph()
-  if (analyserAudio) {
+function recreateMainAudioElement() {
+  teardownPlaybackGraph()
+  const old = audio
+  audio = createAudioElement()
+  if (old) {
     try {
-      analyserAudio.removeAttribute('src')
-      analyserAudio.load()
+      old.pause()
+      old.removeAttribute('src')
+      old.load()
     } catch {}
   }
 }
 
-function syncAnalyserAudioFromMain() {
-  if (!audio || !hasPlayableAudioSrc() || audio.paused || isPaused.value) {
-    pauseAnalyserAudio()
-    return Promise.resolve(false)
-  }
-  if (document.visibilityState === 'hidden') {
-    pauseAnalyserAudio()
-    return Promise.resolve(false)
-  }
+const DEFAULT_PLAY_QUALITY = '128k'
 
-  const el = ensureAnalyserAudio()
-  const src = audio.src
-  const time = audio.currentTime
-  const needsSrc = el.src !== src
-  if (needsSrc) {
-    try {
-      el.pause()
-      el.src = src
-      el.load()
-    } catch {}
-  }
-
-  return new Promise((resolve) => {
-    let settled = false
-    const finish = (ok) => {
-      if (settled) return
-      settled = true
-      resolve(ok)
-    }
-
-    const playSynced = () => {
-      try {
-        if (time > 0 && (needsSrc || Math.abs(el.currentTime - time) > 0.25)) {
-          el.currentTime = time
-        }
-      } catch {}
-      const playPromise = el.play()
-      if (playPromise?.then) {
-        playPromise.then(() => finish(true)).catch(() => finish(false))
-      } else {
-        finish(!el.paused)
-      }
-    }
-
-    const timer = setTimeout(() => finish(!el.paused), 1500)
-
-    if (!needsSrc && !el.paused && el.readyState >= 2) {
-      clearTimeout(timer)
-      finish(true)
-      return
-    }
-
-    if (el.readyState >= 2) {
-      playSynced()
-    } else {
-      el.addEventListener('playing', () => {
-        clearTimeout(timer)
-        finish(true)
-      }, { once: true })
-      el.addEventListener('canplay', playSynced, { once: true })
-      if (!needsSrc) playSynced()
-    }
-  })
+function stopPlaybackGraph() {
+  teardownPlaybackGraph()
+  recreateMainAudioElement()
 }
 
 function bindAudioElementEvents(el) {
@@ -186,11 +250,6 @@ function bindAudioElementEvents(el) {
     currentTime.value = audio.currentTime
     updateActiveLyric(audio.currentTime)
     syncDurationFromAudio()
-    if (analyserMode === 'element' && analyserAudio && !analyserAudio.paused && !audio.paused) {
-      if (Math.abs(analyserAudio.currentTime - audio.currentTime) > 0.35) {
-        try { analyserAudio.currentTime = audio.currentTime } catch {}
-      }
-    }
     const now = Date.now()
     if (now - lastSessionSave > 2000) {
       lastSessionSave = now
@@ -208,13 +267,25 @@ function bindAudioElementEvents(el) {
   })
   el.addEventListener('playing', () => {
     if (audio !== el) return
-    scheduleAudioAnalyserRefresh()
+    endPlaybackBuffer()
+    syncMediaSessionPlaybackState()
+    if (visualizerEnabled.value) scheduleAudioAnalyserRefresh()
+  })
+  el.addEventListener('waiting', () => {
+    if (audio !== el || isPaused.value) return
+    if (!audio.paused) beginPlaybackBuffer()
+  })
+  el.addEventListener('pause', () => {
+    if (audio !== el) return
+    if (isPaused.value) endPlaybackBuffer()
   })
   el.addEventListener('ended', () => {
     if (audio === el) onTrackEnded()
   })
   el.addEventListener('error', () => {
     if (audio !== el) return
+    endPlaybackBuffer()
+    isPaused.value = true
     playerError.value = '音频加载失败，请尝试其他歌曲'
     loadingPlay.value = null
   })
@@ -229,121 +300,133 @@ function createAudioElement() {
   return el
 }
 
-function canUseCaptureStream() {
-  if (!audio) return false
-  const capture = audio.captureStream || audio.mozCaptureStream
-  return typeof capture === 'function'
-}
-
-function shouldPreferElementAnalyser() {
-  // 统一走静音副本 + MediaElementSource，切歌比 captureStream 稳定
-  return document.visibilityState !== 'hidden'
-}
-
 function createAnalyserNode() {
   if (!audioCtx) return null
   const node = audioCtx.createAnalyser()
-  node.fftSize = 256
+  node.fftSize = 512
   node.smoothingTimeConstant = 0.72
+  node.minDecibels = -90
+  node.maxDecibels = -8
   return node
 }
 
-function ensureAnalyserSink() {
-  if (!audioCtx) return null
-  if (!analyserSinkGain) {
-    analyserSinkGain = audioCtx.createGain()
-    analyserSinkGain.gain.value = 0
-    analyserSinkGain.connect(audioCtx.destination)
-  }
-  return analyserSinkGain
-}
-
-function connectAnalyserOutput(node) {
-  const sink = ensureAnalyserSink()
-  if (!sink) return false
-  try { node.connect(sink) } catch { return false }
-  return true
-}
-
-async function setupCaptureAnalyser() {
-  if (!audio || !visualizerEnabled.value) return null
-  if (audio.paused || !hasPlayableAudioSrc()) return null
-  pauseAnalyserAudio()
-  const capture = audio.captureStream || audio.mozCaptureStream
-  if (typeof capture !== 'function') return null
-  const stream = capture.call(audio)
-  if (!stream.getAudioTracks().length) return null
-
-  try { streamSource?.disconnect() } catch {}
-  streamSource = audioCtx.createMediaStreamSource(stream)
-  analyser = createAnalyserNode()
-  if (!analyser) return null
-  streamSource.connect(analyser)
-  if (!connectAnalyserOutput(analyser)) return null
-  analyserMode = 'capture'
-  audioGraphReady = true
-  return analyser
-}
-
-async function waitAnalyserSignal(maxWaitMs = 400, stepMs = 80) {
-  const deadline = Date.now() + maxWaitMs
-  while (Date.now() < deadline) {
-    if (analyserHasSignal()) return true
-    await new Promise(resolve => setTimeout(resolve, stepMs))
-  }
-  return analyserHasSignal()
-}
-
-async function setupElementAnalyser() {
-  if (!audio || !audioCtx || !visualizerEnabled.value) return null
-  if (!hasPlayableAudioSrc() || audio.paused) return null
+async function ensureAudioContextRunning() {
   try {
-    const synced = await syncAnalyserAudioFromMain()
-    if (!synced) return null
-    const el = ensureAnalyserAudio()
-    if (!analyserElementSource) {
-      analyserElementSource = audioCtx.createMediaElementSource(el)
-    }
-    try { streamSource?.disconnect() } catch {}
-    streamSource = null
-    if (analyser) {
-      try { analyser.disconnect() } catch {}
-    }
-    analyser = createAnalyserNode()
-    if (!analyser) return null
-    try { analyserElementSource.disconnect() } catch {}
-    analyserElementSource.connect(analyser)
-    if (!connectAnalyserOutput(analyser)) return null
-    analyserMode = 'element'
-    audioGraphReady = true
-    return analyser
+    const AC = window.AudioContext || window.webkitAudioContext
+    if (!AC) return false
+    if (!audioCtx) audioCtx = new AC()
+    if (audioCtx.state === 'suspended') await audioCtx.resume()
+    return audioCtx.state === 'running'
   } catch {
+    return false
+  }
+}
+
+async function restoreNativeAudioOutput() {
+  if (!audio || !isMainAudioTapped()) return
+  const src = audio.src
+  const time = audio.currentTime || 0
+  const wasPlaying = !audio.paused && !isPaused.value
+  recreateMainAudioElement()
+  if (!src || !hasMediaSrc) {
+    applyAudioOutput()
+    return
+  }
+  audio.src = src
+  try {
+    await waitForAudioReady()
+    if (time > 0) {
+      audio.currentTime = time
+      currentTime.value = time
+    }
+  } catch {}
+  applyAudioOutput()
+  if (wasPlaying) {
+    try { await audio.play() } catch {}
+  }
+}
+
+/** 主音频 Web Audio 直通：播放与频谱共用同一时钟，同步最佳 */
+async function ensurePlaybackGraph() {
+  if (!visualizerEnabled.value) {
+    if (isMainAudioTapped()) await restoreNativeAudioOutput()
+    return null
+  }
+  if (!audio || !hasPlayableAudioSrc() || audio.paused || isPaused.value) return null
+  if (audio.readyState < 2) return null
+
+  const token = playbackGraphToken
+  const src = audio.src || ''
+
+  try {
+    if (!(await ensureAudioContextRunning()) || !audioCtx) return null
+    if (token !== playbackGraphToken) return null
+
+    if (audioGraphReady && isMainAudioTapped() && analyserBoundSrc === src) {
+      applyMainOutputGain()
+      return visualizerEnabled.value ? analyser : null
+    }
+
+    if (isMainAudioTapped() && mainAudioTapElement !== audio) {
+      teardownPlaybackGraph()
+    }
+
+    if (!mainMediaSource || mainAudioTapElement !== audio) {
+      mainMediaSource = audioCtx.createMediaElementSource(audio)
+      mainAudioTapElement = audio
+    }
+
+    if (!mainOutputGain) {
+      mainOutputGain = audioCtx.createGain()
+      mainOutputGain.connect(audioCtx.destination)
+    }
+    applyMainOutputGain()
+
+    try { mainMediaSource.disconnect() } catch {}
+
+    if (visualizerEnabled.value) {
+      if (!analyser) analyser = createAnalyserNode()
+      if (!analyser) return null
+      mainMediaSource.connect(analyser)
+      analyser.connect(mainOutputGain)
+    } else {
+      if (analyser) {
+        try { analyser.disconnect() } catch {}
+        analyser = null
+      }
+      mainMediaSource.connect(mainOutputGain)
+    }
+
+    if (token !== playbackGraphToken) return null
+    audioGraphReady = true
+    analyserBoundSrc = src
+    applyAudioOutput()
+    return visualizerEnabled.value ? analyser : null
+  } catch {
+    teardownPlaybackGraph()
     return null
   }
 }
 
 async function resumeAudioPlayback() {
-  try {
-    if (audioCtx?.state === 'suspended') await audioCtx.resume()
-  } catch {}
+  if (visualizerEnabled.value) {
+    try {
+      if (audioCtx?.state === 'suspended') await audioCtx.resume()
+    } catch {}
+  }
   if (!audio || isPaused.value || !hasMediaSrc) return
+  if (isBackgroundPlayActive() && !audio.paused) {
+    syncMediaSessionPlaybackState()
+    return
+  }
   if (audio.paused) {
     try { await audio.play() } catch {}
   }
-  if (document.visibilityState !== 'visible' || !visualizerEnabled.value) return
-
-  const src = audio.src || ''
-  if (analyser && analyserBoundSrc === src && analyserMode === 'element') {
-    await syncAnalyserAudioFromMain()
-    if (analyserHasSignal()) {
-      startAnalyserHealthCheck()
-      return
-    }
-  }
-  scheduleAudioAnalyserRefresh()
+  if (visualizerEnabled.value) await ensurePlaybackGraph()
+  syncMediaSessionPlaybackState()
 }
 
-/** 在用户手势同步调用栈内解锁 AudioContext，避免异步拉链后 mobile 无法 play */
+/** 在用户手势同步调用栈内解锁 AudioContext */
 export function unlockAudioFromGesture() {
   if (!audio) initPlayer()
   try {
@@ -353,6 +436,11 @@ export function unlockAudioFromGesture() {
       audioCtx.resume().catch(() => {})
     }
   } catch {}
+}
+
+export async function unlockAudioFromGestureAsync() {
+  unlockAudioFromGesture()
+  return ensureAudioContextRunning()
 }
 
 function hasPlayableAudioSrc() {
@@ -370,9 +458,83 @@ function resolveQueueIndexForCurrent() {
 
 function applyAudioOutput() {
   if (!audio) return
+  if (isMainAudioTapped() && mainOutputGain) {
+    applyMainOutputGain()
+    audio.volume = 1
+    audio.muted = false
+    return
+  }
   const level = Math.min(1, Math.max(0, volume.value))
   audio.volume = level > 0 ? level : 1
   audio.muted = isMuted.value || level <= 0.001
+}
+
+function initMediaSession() {
+  if (mediaSessionInited || !('mediaSession' in navigator)) return
+  mediaSessionInited = true
+  try {
+    navigator.mediaSession.setActionHandler('play', () => { togglePause().catch(() => {}) })
+    navigator.mediaSession.setActionHandler('pause', () => { togglePause().catch(() => {}) })
+    navigator.mediaSession.setActionHandler('previoustrack', () => { playPrev().catch(() => {}) })
+    navigator.mediaSession.setActionHandler('nexttrack', () => { playNext().catch(() => {}) })
+    navigator.mediaSession.setActionHandler('seekto', (details) => {
+      if (details.seekTime != null && Number.isFinite(details.seekTime)) {
+        seekTo(details.seekTime)
+      }
+    })
+  } catch {}
+}
+
+function buildMediaSessionArtwork() {
+  if (!coverUrl.value) return []
+  const url = coverUrl.value
+  return [
+    { src: url, sizes: '96x96', type: 'image/png' },
+    { src: url, sizes: '256x256', type: 'image/png' },
+    { src: url, sizes: '512x512', type: 'image/png' },
+  ]
+}
+
+function updateMediaSession() {
+  if (!isBackgroundPlayActive() || !currentPlaying.value) return
+  if (!('mediaSession' in navigator)) return
+  initMediaSession()
+  const item = currentPlaying.value
+  try {
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: item.name || '未知歌曲',
+      artist: formatArtists(item.singer) || '未知艺术家',
+      album: item.album || item.albumName || '',
+      artwork: buildMediaSessionArtwork(),
+    })
+    syncMediaSessionPlaybackState()
+  } catch {}
+}
+
+function syncMediaSessionPlaybackState() {
+  if (!isBackgroundPlayActive() || !('mediaSession' in navigator)) return
+  try {
+    navigator.mediaSession.playbackState = (isPaused.value || isBuffering.value) ? 'paused' : 'playing'
+  } catch {}
+}
+
+function clearMediaSession() {
+  if (!('mediaSession' in navigator)) return
+  try {
+    navigator.mediaSession.metadata = null
+    navigator.mediaSession.playbackState = 'none'
+  } catch {}
+}
+
+async function applyBackgroundPlayMode() {
+  if (!isBackgroundPlayActive()) {
+    clearMediaSession()
+    return
+  }
+  if (isMainAudioTapped()) {
+    await restoreNativeAudioOutput()
+  }
+  updateMediaSession()
 }
 
 function pickItemFields(item) {
@@ -451,8 +613,13 @@ function restoreSessionState() {
         activeLyricIdx.value = -1
         currentTime.value = Number(data.currentTime) || 0
         applyDurationFallback(currentPlaying.value)
-        if (!lyricLines.value.length && currentPlaying.value.source !== 'local' && !currentPlaying.value.localPath) {
+        if (currentPlaying.value.localPath) {
+          fetchLocalMeta(currentPlaying.value)
+        } else if (!lyricLines.value.length) {
           fetchLyric(currentPlaying.value, currentPlaying.value.source)
+        }
+        if (!currentPlaying.value.localPath && !coverUrl.value) {
+          fetchCover(currentPlaying.value, currentPlaying.value.source)
         }
         // 刷新后默认暂停，用户可点播放继续
         isPaused.value = true
@@ -590,17 +757,22 @@ export function initPlayer() {
 
   restoreSessionState()
   loadCoverStyle()
-  loadVisualizerSetting()
+  loadPlayerSettings()
 
   window.addEventListener('beforeunload', saveQueueState)
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') {
       saveQueueState()
-      pauseAnalyserAudio()
-      try { audioCtx?.suspend() } catch {}
+      if (isBackgroundPlayActive() && audio && !audio.paused && !isPaused.value) {
+        syncMediaSessionPlaybackState()
+      }
       return
     }
-    resumeAudioPlayback()
+    if (audio && !audio.paused && hasMediaSrc && visualizerEnabled.value) {
+      ensureAudioContextRunning().then(() => ensurePlaybackGraph()).catch(() => {})
+    } else if (isBackgroundPlayActive() && audio && !audio.paused) {
+      syncMediaSessionPlaybackState()
+    }
   })
   window.addEventListener('focus', () => { resumeAudioPlayback() })
   window.addEventListener('pageshow', () => { resumeAudioPlayback() })
@@ -610,8 +782,9 @@ async function onTrackEnded() {
   if (playMode.value === 'single' && audio) {
     audio.currentTime = 0
     applyAudioOutput()
+    beginPlaybackBuffer()
     await audio.play()
-    scheduleAudioAnalyserRefresh()
+    if (visualizerEnabled.value) scheduleAudioAnalyserRefresh()
     isPaused.value = false
     return
   }
@@ -645,12 +818,24 @@ export async function loadCoverStyle() {
 }
 
 export async function loadVisualizerSetting() {
+  const prev = visualizerEnabled.value
   try {
     const settings = await api.settings.get()
     visualizerEnabled.value = settings['player.visualizer'] !== 'false'
   } catch {
     visualizerEnabled.value = true
   }
+  if (prev && !visualizerEnabled.value) {
+    await restoreNativeAudioOutput()
+  } else if (visualizerEnabled.value && audio && !audio.paused) {
+    await ensurePlaybackGraph()
+    scheduleAudioAnalyserRefresh()
+  }
+  await applyBackgroundPlayMode()
+}
+
+export async function loadPlayerSettings() {
+  await loadVisualizerSetting()
 }
 
 export function openFullscreenPlayer() {
@@ -663,141 +848,34 @@ export function closeFullscreenPlayer() {
   showFullscreenPlayer.value = false
 }
 
-function analyserHasSignal() {
-  if (!analyser) return false
-  const buf = new Uint8Array(analyser.frequencyBinCount)
-  analyser.getByteFrequencyData(buf)
-  for (let i = 0; i < buf.length; i++) {
-    if (buf[i] > 0) return true
-  }
-  return false
-}
-
-function stopAnalyserHealthCheck() {
-  if (analyserHealthTimer) {
-    clearInterval(analyserHealthTimer)
-    analyserHealthTimer = 0
-  }
-}
-
-function startAnalyserHealthCheck() {
-  stopAnalyserHealthCheck()
-  if (!visualizerEnabled.value || !audio || audio.paused) return
-  analyserHealthTimer = setInterval(() => {
-    if (!visualizerEnabled.value || !audio || audio.paused || document.visibilityState === 'hidden') return
-    if (analyser && analyserBoundSrc === (audio.src || '') && analyserHasSignal()) return
-    scheduleAudioAnalyserRefresh()
-  }, 2000)
-}
-
-/** 建立 Web Audio 分析链路；使用静音副本音频，主播放器保持原生输出 */
+/** 建立 Web Audio 播放/分析链路（主音频直通） */
 export async function ensureAudioAnalyser() {
-  if (!audio || !visualizerEnabled.value) return null
-  if (document.visibilityState === 'hidden') return null
-  if (audio.paused || !hasPlayableAudioSrc()) return null
+  return ensurePlaybackGraph()
+}
 
-  const src = audio.src || ''
-  const token = analyserSetupToken
+export function prepareAnalyserSample() {}
 
-  try {
-    const AC = window.AudioContext || window.webkitAudioContext
-    if (!AC) return null
-    if (!audioCtx) audioCtx = new AC()
-    if (audioCtx.state === 'suspended') await audioCtx.resume()
-    if (token !== analyserSetupToken) return null
-
-    if (audioGraphReady && analyser && analyserBoundSrc === src) {
-      if (analyserHasSignal()) return analyser
-      if (analyserMode === 'element') {
-        const synced = await syncAnalyserAudioFromMain()
-        if (token !== analyserSetupToken) return null
-        if (synced && await waitAnalyserSignal(350, 40)) {
-          startAnalyserHealthCheck()
-          return analyser
-        }
-      }
-    }
-
-    resetAudioGraph()
-    analyserMode = null
-
-    if (shouldPreferElementAnalyser()) {
-      const node = await setupElementAnalyser()
-      if (token !== analyserSetupToken) return null
-      if (node && await waitAnalyserSignal(500, 60)) {
-        analyserBoundSrc = src
-        startAnalyserHealthCheck()
-        return node
-      }
-      resetAudioGraph()
-      analyserMode = null
-    }
-
-    if (!canUseCaptureStream()) return null
-    const captured = await setupCaptureAnalyser()
-    if (token !== analyserSetupToken) return null
-    if (captured && await waitAnalyserSignal(400, 60)) {
-      analyserBoundSrc = src
-      startAnalyserHealthCheck()
-      return captured
-    }
-
-    resetAudioGraph()
-    analyserMode = null
-    const fallback = await setupElementAnalyser()
-    if (token !== analyserSetupToken) return null
-    if (fallback && await waitAnalyserSignal(800, 80)) {
-      analyserBoundSrc = src
-      startAnalyserHealthCheck()
-      return fallback
-    }
-
-    resetAudioGraph()
-    analyserMode = null
-    return null
-  } catch {
-    resetAudioGraph()
-    analyserMode = null
-    return null
+export function scheduleAudioAnalyserRefresh() {
+  if (!visualizerEnabled.value || !audio || audio.paused) return
+  const trySetup = () => { ensurePlaybackGraph().catch(() => {}) }
+  trySetup()
+  requestAnimationFrame(trySetup)
+  for (const delay of PLAYBACK_GRAPH_RETRY_DELAYS) {
+    setTimeout(trySetup, delay)
   }
 }
 
-/** captureStream 无数据时切换到 MediaElementSource */
+export function resetAudioAnalyserForTrack() {
+  invalidatePlaybackGraph()
+  scheduleAudioAnalyserRefresh()
+}
+
 export function promoteElementAnalyser() {
-  if (!audio || !visualizerEnabled.value) return
-  if (document.visibilityState === 'hidden') return
-  pauseAndResetAnalyserGraph()
   scheduleAudioAnalyserRefresh()
 }
 
 export function getAnalyserMode() {
-  return analyserMode
-}
-
-/** 播放开始后重建频谱分析 */
-export function scheduleAudioAnalyserRefresh() {
-  if (!visualizerEnabled.value || !audio) return
-  if (document.visibilityState === 'hidden') return
-
-  const trySetup = () => {
-    ensureAudioAnalyser().catch(() => {})
-  }
-  const scheduleRetries = () => {
-    trySetup()
-    requestAnimationFrame(trySetup)
-    for (const delay of ANALYSER_RETRY_DELAYS) {
-      setTimeout(trySetup, delay)
-    }
-  }
-  if (!audio.paused) scheduleRetries()
-  else audio.addEventListener('playing', scheduleRetries, { once: true })
-}
-
-/** 切歌后强制重建频谱（供可视化组件调用） */
-export function resetAudioAnalyserForTrack() {
-  if (!visualizerEnabled.value) return
-  pauseAndResetAnalyserGraph()
-  scheduleAudioAnalyserRefresh()
+  return visualizerEnabled.value && analyser ? 'direct' : null
 }
 
 export function getAnalyser() {
@@ -830,7 +908,7 @@ export function isInQueue(item, source) {
   return playQueue.value.some(q => q.key === key)
 }
 
-async function resolvePlayUrl(item, source, quality = DEFAULT_PLAY_QUALITY) {
+async function resolvePlayUrl(item, source, quality = DEFAULT_PLAY_QUALITY, options = {}) {
   const isLocal = Boolean(item.localPath) || source === 'local'
   if (isLocal) {
     const res = await api.play.getUrl(buildPlayPayload(item, 'local', quality, { localPath: item.localPath }))
@@ -838,12 +916,31 @@ async function resolvePlayUrl(item, source, quality = DEFAULT_PLAY_QUALITY) {
   }
 
   const cached = getCachedPlayUrl(item, source, quality)
-  if (cached) return cached
+  if (cached && !options.sourceApiId) return cached
 
-  const res = await api.play.getUrl(buildPlayPayload(item, source, quality))
-  const url = res.url || ''
-  if (url) setCachedPlayUrl(item, source, quality, url)
-  return url
+  const payload = buildPlayPayload(item, source, quality)
+  if (options.sourceApiId) payload.sourceApiId = options.sourceApiId
+  if (options.skipSourceIds?.length) payload.skipSourceIds = options.skipSourceIds
+
+  try {
+    const res = await api.play.getUrl(payload)
+    if (res.sourceInfo?.switched) notifySourceSwitch(res.sourceInfo)
+    const url = res.url || ''
+    if (url) setCachedPlayUrl(item, source, quality, url)
+    return url
+  } catch (e) {
+    if (!options._fallbackHandled && isSourceFallbackError(e)) {
+      const offer = getSourceFallbackOffer(e)
+      const picked = await askSourceFallback(offer, { item, source, quality })
+      if (!picked) throw new Error('已取消切换音源')
+      return resolvePlayUrl(item, source, quality, {
+        sourceApiId: picked,
+        skipSourceIds: [...(options.skipSourceIds || []), offer?.failedId].filter(Boolean),
+        _fallbackHandled: true,
+      })
+    }
+    throw e
+  }
 }
 
 function canReuseLoadedAudio(url, item, source) {
@@ -857,18 +954,15 @@ function canReuseLoadedAudio(url, item, source) {
 async function startPlaybackFromUrl(url, { resumeTime = 0, item, source } = {}) {
   if (!audio) initPlayer()
 
-  const sameSrc = audio.src === url && hasMediaSrc
-  if (!sameSrc) {
-    if (!resumeTime) currentTime.value = 0
-    duration.value = 0
-    if (item) applyDurationFallback(item)
-    audio.src = url
-    hasMediaSrc = true
-    pauseAndResetAnalyserGraph()
-    await waitForAudioReady()
-  } else if (audio.readyState < 2) {
-    await waitForAudioReady()
+  if (!resumeTime) currentTime.value = 0
+  duration.value = 0
+  if (item) applyDurationFallback(item)
+  if (audio.src !== url) {
+    invalidatePlaybackGraph()
   }
+  audio.src = url
+  hasMediaSrc = true
+  await waitForAudioReady()
 
   applyAudioOutput()
   if (resumeTime > 0) {
@@ -876,10 +970,11 @@ async function startPlaybackFromUrl(url, { resumeTime = 0, item, source } = {}) 
       audio.currentTime = resumeTime
       currentTime.value = resumeTime
     } catch {}
-  } else if (!sameSrc) {
+  } else {
     currentTime.value = 0
   }
 
+  unlockAudioFromGesture()
   try {
     await audio.play()
   } catch (playErr) {
@@ -891,6 +986,10 @@ async function startPlaybackFromUrl(url, { resumeTime = 0, item, source } = {}) 
 
   applyAudioOutput()
   rememberLoadedPlayUrl(item, source, url, DEFAULT_PLAY_QUALITY)
+  if (visualizerEnabled.value) {
+    await ensurePlaybackGraph()
+    scheduleAudioAnalyserRefresh()
+  }
 }
 
 export function addToQueue(item, source, { play = false, replace = false } = {}) {
@@ -989,7 +1088,16 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 }
   }
 
   const { item, source } = playQueue.value[index]
+  const intent = ++playIntentToken
   currentQueueIndex.value = index
+
+  currentPlaying.value = cleanTrackItem(item)
+  coverUrl.value = item.picUrl || item.img || ''
+  if (!coverUrl.value && item.localPath && item.hasPicture !== false) {
+    coverUrl.value = localCoverUrl(item.localPath)
+  }
+
+  beginPlaybackBuffer()
   saveQueueState()
 
   loadingPlay.value = item.id
@@ -1000,9 +1108,14 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 }
     if (canReuseLoadedAudio(cachedUrl, item, source)) {
       await startPlaybackFromUrl(cachedUrl, { resumeTime, item, source })
     } else {
-      const url = cachedUrl || await resolvePlayUrl(item, source, quality)
+      const url = await resolvePlayUrl(item, source, quality)
       if (!url) throw new Error('获取播放链接失败')
       await startPlaybackFromUrl(url, { resumeTime, item, source })
+    }
+
+    if (intent !== playIntentToken) {
+      try { audio?.pause() } catch {}
+      return
     }
 
     syncDurationFromAudio()
@@ -1010,11 +1123,11 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 }
 
     const trackKey = getTrackKey(item, source)
     const keepLyrics = lyricLines.value.length > 0
-      && currentPlaying.value
       && getTrackKey(currentPlaying.value, currentPlaying.value.source) === trackKey
 
     currentPlaying.value = cleanTrackItem(item)
     isPaused.value = false
+    recordRecentPlay({ ...currentPlaying.value, source })
     coverUrl.value = item.picUrl || item.img || ''
     if (!keepLyrics) {
       lyricLines.value = []
@@ -1022,23 +1135,29 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 }
     }
 
     const isLocal = Boolean(item.localPath) || source === 'local'
-    if (isLocal && item.lyric) {
-      lyricLines.value = parseLrc(item.lyric)
-    } else if (!isLocal) {
-      if (!lyricLines.value.length) fetchLyric(item, source)
-      if (!(item.picUrl || item.img) && !coverUrl.value) fetchCover(item, source)
-    } else if (!lyricLines.value.length) {
-      fetchLyric(item, source)
+    if (isLocal) {
+      if (item.lyric && !keepLyrics) lyricLines.value = parseLrc(item.lyric)
+      if (!coverUrl.value && item.localPath && item.hasPicture !== false) {
+        coverUrl.value = item.picUrl || item.img || localCoverUrl(item.localPath)
+      }
+      fetchLocalMeta(item)
+    } else {
+      if (!keepLyrics) fetchLyric(item, source)
+      if (!coverUrl.value) fetchCover(item, source)
     }
     updateActiveLyric(audio?.currentTime || 0)
     saveQueueState()
-    scheduleAudioAnalyserRefresh()
+    updateMediaSession()
   } catch (e) {
-    const message = formatPlayClientError(e)
-    playerError.value = message
-    throw new Error(message)
+    if (intent === playIntentToken) {
+      endPlaybackBuffer()
+      isPaused.value = true
+      const message = formatPlayClientError(e)
+      playerError.value = message
+      throw new Error(message)
+    }
   } finally {
-    loadingPlay.value = null
+    if (intent === playIntentToken) loadingPlay.value = null
   }
 }
 
@@ -1110,6 +1229,14 @@ export async function playPrev() {
 export async function togglePause() {
   if (!currentPlaying.value) return
   unlockAudioFromGesture()
+
+  if (isBuffering.value) {
+    cancelPlaybackIntent()
+    syncMediaSessionPlaybackState()
+    saveQueueState()
+    return
+  }
+
   if (!hasPlayableAudioSrc()) {
     const idx = resolveQueueIndexForCurrent()
     if (idx >= 0) {
@@ -1122,13 +1249,20 @@ export async function togglePause() {
     return
   }
   if (audio.paused) {
+    beginPlaybackBuffer()
     applyAudioOutput()
     try {
+      unlockAudioFromGesture()
       await audio.play()
-      isPaused.value = false
       saveQueueState()
-      scheduleAudioAnalyserRefresh()
+      if (visualizerEnabled.value) {
+        await ensurePlaybackGraph()
+        scheduleAudioAnalyserRefresh()
+      }
     } catch (e) {
+      endPlaybackBuffer()
+      isPaused.value = true
+      syncMediaSessionPlaybackState()
       if (e?.name === 'NotAllowedError') {
         playerError.value = '浏览器拦截了自动播放，请再点一次播放'
       } else {
@@ -1137,17 +1271,17 @@ export async function togglePause() {
     }
   } else {
     audio.pause()
-    pauseAnalyserAudio()
-    stopAnalyserHealthCheck()
-    resetAudioGraph()
-    analyserMode = null
+    endPlaybackBuffer()
     isPaused.value = true
+    syncMediaSessionPlaybackState()
     saveQueueState()
   }
+  syncMediaSessionPlaybackState()
 }
 
 export function stopPlay() {
-  stopAnalyserPlayback()
+  cancelPlaybackIntent()
+  stopPlaybackGraph()
   if (audio) {
     audio.pause()
     audio.removeAttribute('src')
@@ -1163,14 +1297,12 @@ export function stopPlay() {
   lyricLines.value = []
   activeLyricIdx.value = -1
   playerError.value = ''
+  clearMediaSession()
   saveQueueState()
 }
 
 export function seekTo(time) {
   if (audio) audio.currentTime = time
-  if (analyserAudio?.src) {
-    try { analyserAudio.currentTime = time } catch {}
-  }
   currentTime.value = time
   saveQueueState()
 }
@@ -1230,6 +1362,9 @@ async function fetchLyric(item, activeSource) {
     const lines = parseLrc(lyric)
     lyricLines.value = lines
     activeLyricIdx.value = -1
+    currentPlaying.value = { ...currentPlaying.value, lyric }
+    patchQueueItem(trackKey, { lyric })
+    saveQueueState()
     if (audio && !audio.paused) updateActiveLyric(audio.currentTime)
   }
 
@@ -1241,7 +1376,6 @@ async function fetchLyric(item, activeSource) {
       const res = await api.play.getLyric({
         ...payload,
         name: attempt > 0 && nameForSearch ? nameForSearch : payload.name,
-        lyric: item.lyric,
       })
       if (res.lyric) {
         applyLyric(res.lyric)
@@ -1259,11 +1393,14 @@ async function fetchCover(item, activeSource) {
   try {
     const res = await api.play.getCover(buildPlayPayload(item, source, '128k'))
     if (res.url && currentPlaying.value) {
-      const same = getTrackKey(currentPlaying.value, currentPlaying.value.source)
-        === getTrackKey(item, source)
+      const trackKey = getTrackKey(item, source)
+      const same = getTrackKey(currentPlaying.value, currentPlaying.value.source) === trackKey
       if (same) {
         coverUrl.value = res.url
         currentPlaying.value = { ...currentPlaying.value, picUrl: res.url, img: res.url }
+        patchQueueItem(trackKey, { picUrl: res.url, img: res.url })
+        saveQueueState()
+        updateMediaSession()
       }
     }
   } catch {}
@@ -1276,29 +1413,6 @@ function normalizeLyricSearchName(name) {
     .replace(/\s*(国语|粤语|英语|伴奏|纯音乐|DJ|Live|live|版|合唱版|低频公益版|3D环绕版)\s*/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
-}
-
-function parseLrc(lrc) {
-  if (!lrc) return []
-  const normalized = String(lrc).replace(/\uFEFF/g, '').replace(/\r/g, '')
-  const lines = []
-  for (const rawLine of normalized.split('\n')) {
-    const line = rawLine.trim()
-    if (!line) continue
-    if (/^\[(?:ti|ar|al|by|offset|id):/i.test(line)) continue
-    const match = line.match(/^\[(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?\](.*)$/)
-    if (match) {
-      const min = parseInt(match[1], 10)
-      const sec = parseInt(match[2], 10)
-      const msRaw = match[3] || ''
-      const ms = msRaw ? parseInt(msRaw.padEnd(3, '0').slice(0, 3), 10) : 0
-      const time = min * 60 + sec + ms / 1000
-      const text = match[4].trim()
-      if (text) lines.push({ time, text })
-    }
-  }
-  lines.sort((a, b) => a.time - b.time)
-  return lines
 }
 
 function updateActiveLyric(time) {

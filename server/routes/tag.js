@@ -1,23 +1,42 @@
 import { Router } from 'express'
 import fs from 'fs'
 import path from 'path'
-import { readMeta, readMetaLite, batchWriteMeta, writeMeta } from '../meta.js'
+import { readMeta, readMetaLite, batchWriteMeta, writeMeta, readEmbeddedCover } from '../meta.js'
 import { matchByFilename, matchByArtistTitle, fetchMatchMeta, normalizeTagSource } from '../utils/tagMatch.js'
 import { parseFilename } from '../utils/filenameParse.js'
 import { fetchPicBuffer } from '../utils/fetchPic.js'
-import { getFilePaths, addFilePath, removeFilePath } from '../utils/filePaths.js'
+import { getMusicPaths, addMusicPath, removeMusicPath, isConfiguredMusicDir, isAllowedMediaPath } from '../utils/filePaths.js'
 import { listAudioFiles, probeDir } from '../utils/audioScan.js'
+import { mapWithConcurrency } from '../utils/asyncPool.js'
+import { notifyLibraryChanged } from '../utils/libraryNotify.js'
 
 export const tagRouter = Router()
 
+/** 读取本地音频内嵌封面 */
+tagRouter.get('/cover', async (req, res) => {
+  try {
+    const filePath = String(req.query.path || '').trim()
+    if (!filePath || !isAllowedMediaPath(filePath)) {
+      return res.status(403).json({ error: '无权访问该文件' })
+    }
+    const cover = await readEmbeddedCover(filePath)
+    if (!cover?.buffer?.length) return res.status(404).end()
+    res.set('Cache-Control', 'private, max-age=86400')
+    res.type(cover.mime)
+    res.send(cover.buffer)
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
 /** @deprecated 使用 /api/paths */
 tagRouter.get('/dirs', (_req, res) => {
-  res.json({ ok: true, data: getFilePaths() })
+  res.json({ ok: true, data: getMusicPaths() })
 })
 
 tagRouter.post('/dirs', (req, res) => {
   try {
-    const data = addFilePath(req.body.dirPath)
+    const data = addMusicPath(req.body.dirPath)
     res.json({ ok: true, data })
   } catch (e) {
     res.status(400).json({ error: e.message })
@@ -26,7 +45,7 @@ tagRouter.post('/dirs', (req, res) => {
 
 tagRouter.delete('/dirs', (req, res) => {
   try {
-    const data = removeFilePath(req.body.dirPath)
+    const data = removeMusicPath(req.body.dirPath)
     res.json({ ok: true, data })
   } catch (e) {
     res.status(400).json({ error: e.message })
@@ -56,17 +75,24 @@ tagRouter.post('/read-batch', async (req, res) => {
     }
 
     const reader = lite ? readMetaLite : readMeta
-    const results = await Promise.all(filePaths.map(async (filePath) => {
+    const results = await mapWithConcurrency(filePaths, 4, async (filePath) => {
       if (!filePath || !fs.existsSync(filePath)) {
         return { filePath, ok: false, error: '文件不存在' }
       }
-      try {
-        const meta = await reader(filePath)
-        return { filePath, ok: true, ...meta }
-      } catch (e) {
-        return { filePath, ok: false, error: e.message }
+      let lastErr = null
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const meta = await reader(filePath)
+          return { filePath, ok: true, ...meta }
+        } catch (e) {
+          lastErr = e
+          if (attempt === 0) {
+            await new Promise(resolve => setTimeout(resolve, 120))
+          }
+        }
       }
-    }))
+      return { filePath, ok: false, error: lastErr?.message || '读取失败' }
+    })
     res.json({ ok: true, data: results })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -87,6 +113,7 @@ tagRouter.post('/write', async (req, res) => {
     }
 
     await writeMeta(filePath, ext, writeData)
+    notifyLibraryChanged([filePath], { reason: 'tag-write' })
     res.json({ ok: true })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -109,6 +136,7 @@ tagRouter.post('/write-batch', async (req, res) => {
     }
 
     const results = await batchWriteMeta(prepared)
+    notifyLibraryChanged(prepared.map(f => f.filePath), { reason: 'tag-write-batch' })
     res.json({ ok: true, data: results })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -122,8 +150,8 @@ tagRouter.post('/scan', async (req, res) => {
     if (!dirPath || !fs.existsSync(dirPath)) {
       return res.status(400).json({ error: `目录不存在：${dirPath || ''}` })
     }
-    if (!getFilePaths().includes(dirPath)) {
-      return res.status(400).json({ error: '该目录未在文件路径中配置，请先在设置中添加' })
+    if (!isConfiguredMusicDir(dirPath)) {
+      return res.status(400).json({ error: '该目录未在音乐库路径中配置，请先在设置中添加' })
     }
 
     const probe = probeDir(dirPath)
@@ -138,9 +166,12 @@ tagRouter.post('/scan', async (req, res) => {
     const results = filePaths.map((fp) => {
       const fileName = path.basename(fp)
       const parsed = parseFilename(fileName)
+      let mtime = 0
+      try { mtime = fs.statSync(fp).mtimeMs || 0 } catch {}
       return {
         filePath: fp,
         fileName,
+        mtime,
         parsedTitle: parsed.title,
         parsedArtist: parsed.artist,
         title: parsed.title,

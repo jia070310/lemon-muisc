@@ -13,6 +13,7 @@
         @click="toggleBatchMode"
       >{{ batchMode ? '退出批量' : '批量' }}</button>
       <button class="btn-ghost btn-sm" @click="clearCompleted">清除已完成</button>
+      <button class="btn-ghost btn-sm" @click="dismissAll" :disabled="!tasks.length">清理全部列表</button>
       <button class="btn-primary btn-sm" @click="playAllPlayable" :disabled="!playableTasks.length">试听全部</button>
     </div>
 
@@ -25,7 +26,8 @@
       <div class="batch-actions">
         <button class="btn-ghost btn-sm" :disabled="!selectedPausableCount" @click="resumeSelected">继续</button>
         <button class="btn-ghost btn-sm" :disabled="!selectedActiveCount" @click="pauseSelected">暂停</button>
-        <button class="btn-ghost btn-sm" :disabled="!selectedCount" @click="removeSelected">删除</button>
+        <button class="btn-ghost btn-sm" :disabled="!selectedCount" @click="dismissSelected">移出列表</button>
+        <button class="btn-ghost btn-sm btn-danger-hover" :disabled="!selectedDeletableCount" @click="removeSelected">删除文件</button>
       </div>
     </div>
 
@@ -39,10 +41,12 @@
       <span class="c-warning">等待中 {{ countByStatus('waiting') }}</span>
       <span class="sep" v-if="countByStatus('paused')">|</span>
       <span class="c-warning" v-if="countByStatus('paused')">已暂停 {{ countByStatus('paused') }}</span>
-      <span class="sep" v-if="countByStatus('error') || countByStatus('await_confirm')">|</span>
+      <span class="sep" v-if="countByStatus('error') || countByStatus('await_confirm') || countByStatus('await_source')">|</span>
       <span class="c-error" v-if="countByStatus('error')">失败 {{ countByStatus('error') }}</span>
-      <span class="sep" v-if="countByStatus('error') && countByStatus('await_confirm')">|</span>
-      <span class="c-warning" v-if="countByStatus('await_confirm')">待确认 {{ countByStatus('await_confirm') }}</span>
+      <span class="sep" v-if="countByStatus('error') && (countByStatus('await_confirm') || countByStatus('await_source'))">|</span>
+      <span class="c-warning" v-if="countByStatus('await_confirm')">待确认降质 {{ countByStatus('await_confirm') }}</span>
+      <span class="sep" v-if="countByStatus('await_confirm') && countByStatus('await_source')">|</span>
+      <span class="c-warning" v-if="countByStatus('await_source')">待切换音源 {{ countByStatus('await_source') }}</span>
     </div>
 
     <div class="task-list card" v-if="tasks.length">
@@ -60,8 +64,8 @@
           <div class="task-meta">{{ task.singer }} · {{ task.quality }} · {{ statusText(task.status) }}</div>
           <div
             class="task-error"
-            :class="{ warn: task.status === 'await_confirm' }"
-            v-if="task.status === 'error' || task.status === 'await_confirm'"
+            :class="{ warn: task.status === 'await_confirm' || task.status === 'await_source' }"
+            v-if="task.status === 'error' || task.status === 'await_confirm' || task.status === 'await_source'"
           >{{ formatTaskError(task) }}</div>
         </div>
         <div class="task-progress" v-if="showTaskProgress(task)">
@@ -109,8 +113,23 @@
             :title="downgradeTitle(task)"
           >降质下载</button>
           <button v-if="task.status === 'await_confirm'" class="btn-sm btn-ghost" @click="rejectDowngrade(task)" title="标记为失败，不再自动处理">放弃</button>
+          <template v-if="task.status === 'await_source'">
+            <button
+              v-for="alt in sourceFallbackAlternatives(task)"
+              :key="alt.id"
+              class="btn-sm btn-primary"
+              @click="confirmSourceSwitch(task, alt.id)"
+            >切到「{{ alt.name }}」</button>
+            <button class="btn-sm btn-ghost" @click="rejectSourceSwitch(task)">放弃</button>
+          </template>
           <button v-if="task.status === 'error'" class="btn-sm btn-ghost" @click="resume(task.id)" title="按当前音质重新排队下载">重试</button>
-          <button class="btn-sm btn-ghost" @click="remove(task.id)" title="删除">删除</button>
+          <button class="btn-sm btn-ghost" @click="dismiss(task.id)" title="移出列表，不删除已下载文件">移出</button>
+          <button
+            v-if="task.file_path"
+            class="btn-sm btn-ghost btn-danger-hover"
+            @click="remove(task.id)"
+            title="删除列表记录并删除磁盘文件"
+          >删文件</button>
         </div>
       </div>
     </div>
@@ -145,6 +164,7 @@ const activeCount = computed(() => tasks.value.filter(canPause).length)
 const selectedTasks = computed(() => tasks.value.filter(t => selectedIds.value.has(t.id)))
 const selectedPausableCount = computed(() => selectedTasks.value.filter(canResume).length)
 const selectedActiveCount = computed(() => selectedTasks.value.filter(canPause).length)
+const selectedDeletableCount = computed(() => selectedTasks.value.filter(t => t.file_path).length)
 
 const unsubs = []
 unsubs.push(onWS('download:progress', (d) => {
@@ -166,7 +186,12 @@ unsubs.push(onWS('download:status', (d) => {
 unsubs.push(onWS('download:removed', (d) => {
   tasks.value = tasks.value.filter(x => x.id !== d.id)
 }))
-unsubs.push(onWS('download:cleared', () => {
+unsubs.push(onWS('download:cleared', (d) => {
+  if (d?.all) {
+    tasks.value = []
+    selectedIds.value = new Set()
+    return
+  }
   tasks.value = tasks.value.filter(x => x.status !== 'completed')
 }))
 onUnmounted(() => unsubs.forEach(fn => fn()))
@@ -309,11 +334,36 @@ async function loadList() {
 function countByStatus(s) { return tasks.value.filter(t => t.status === s).length }
 
 function formatTaskError(task) {
-  // 优先完整任务文案（含降质建议）；再回退到 offer.reason
   return formatUserError(
-    task.error || task.meta?.downgradeOffer?.reason,
+    task.error || task.meta?.downgradeOffer?.reason || task.meta?.sourceFallbackOffer?.reason,
     '下载失败，请稍后重试',
   )
+}
+
+function sourceFallbackAlternatives(task) {
+  return task.meta?.sourceFallbackOffer?.alternatives || []
+}
+
+async function confirmSourceSwitch(task, sourceApiId) {
+  try {
+    await api.download.confirmSource(task.id, sourceApiId)
+    const t = tasks.value.find(x => x.id === task.id)
+    if (t) t.status = 'waiting'
+    showToast('已切换音源并重新排队', 'success')
+  } catch (e) {
+    showToast(e.message || '切换音源失败', 'error')
+  }
+}
+
+async function rejectSourceSwitch(task) {
+  try {
+    await api.download.rejectSource(task.id)
+    const t = tasks.value.find(x => x.id === task.id)
+    if (t) t.status = 'error'
+    showToast('已取消切换音源', 'info')
+  } catch (e) {
+    showToast(e.message || '操作失败', 'error')
+  }
 }
 
 function statusText(s) {
@@ -324,11 +374,12 @@ function statusText(s) {
     paused: '已暂停',
     error: '失败',
     await_confirm: '待确认降质',
+    await_source: '待切换音源',
   }
   return m[s] || s
 }
 function statusIcon(s) {
-  const m = { completed: '✓', paused: '⏸', waiting: '⏳', error: '✕', await_confirm: '?' }
+  const m = { completed: '✓', paused: '⏸', waiting: '⏳', error: '✕', await_confirm: '?', await_source: '↪' }
   return m[s] || ''
 }
 
@@ -346,7 +397,11 @@ async function resume(id) {
   try {
     await api.download.resume(id)
     const t = tasks.value.find(x => x.id === id)
-    if (t) t.status = 'waiting'
+    if (t) {
+      t.status = 'waiting'
+      t.error = ''
+      t.progress = 0
+    }
   } catch (e) {
     showToast(e.message || '继续失败', 'error')
   }
@@ -396,16 +451,30 @@ async function resumeSelected() {
   }
 }
 
-async function removeSelected() {
+async function dismissSelected() {
   const ids = [...selectedIds.value]
   if (!ids.length) return
+  try {
+    const res = await api.download.dismiss(ids)
+    selectedIds.value = new Set()
+    await loadList()
+    showToast(`已移出 ${res.count || ids.length} 项（文件保留）`, 'success')
+  } catch (e) {
+    showToast(e.message || '清理失败', 'error')
+  }
+}
+
+async function removeSelected() {
+  const ids = selectedTasks.value.filter(t => t.file_path).map(t => t.id)
+  if (!ids.length) return
+  if (!confirm(`确定删除 ${ids.length} 个任务的磁盘文件吗？此操作不可恢复。`)) return
   try {
     for (const id of ids) {
       await api.download.remove(id)
     }
     selectedIds.value = new Set()
     await loadList()
-    showToast(`已删除 ${ids.length} 项`, 'success')
+    showToast(`已删除 ${ids.length} 个文件`, 'success')
   } catch (e) {
     showToast(e.message || '删除失败', 'error')
   }
@@ -421,6 +490,10 @@ async function confirmDowngrade(task) {
 async function retrySameQuality(task) {
   try {
     await api.download.resume(task.id)
+    task.status = 'waiting'
+    task.error = ''
+    task.progress = 0
+    if (task.meta?.downgradeOffer) delete task.meta.downgradeOffer
     showToast('已按原音质重新排队（适合临时网络抖动后再试）', 'success')
   } catch (e) {
     showToast(e.message || '重试失败', 'error')
@@ -439,8 +512,50 @@ async function rejectDowngrade(task) {
     showToast(e.message || '操作失败', 'error')
   }
 }
-async function remove(id) { try { await api.download.remove(id); tasks.value = tasks.value.filter(t => t.id !== id) } catch {} }
-async function clearCompleted() { try { await api.download.clearCompleted(); tasks.value = tasks.value.filter(t => t.status !== 'completed') } catch {} }
+async function dismiss(id) {
+  try {
+    await api.download.dismiss([id])
+    tasks.value = tasks.value.filter(t => t.id !== id)
+    const next = new Set(selectedIds.value)
+    next.delete(id)
+    selectedIds.value = next
+  } catch (e) {
+    showToast(e.message || '移出失败', 'error')
+  }
+}
+
+async function dismissAll() {
+  if (!tasks.value.length) return
+  if (!confirm(`确定将 ${tasks.value.length} 个任务移出列表吗？已下载的文件不会删除。`)) return
+  try {
+    const res = await api.download.dismissAll()
+    tasks.value = []
+    selectedIds.value = new Set()
+    showToast(`已清理 ${res.count || 0} 项（文件保留）`, 'success')
+  } catch (e) {
+    showToast(e.message || '清理失败', 'error')
+  }
+}
+
+async function remove(id) {
+  if (!confirm('确定删除该任务的磁盘文件吗？此操作不可恢复。')) return
+  try {
+    await api.download.remove(id)
+    tasks.value = tasks.value.filter(t => t.id !== id)
+  } catch (e) {
+    showToast(e.message || '删除失败', 'error')
+  }
+}
+
+async function clearCompleted() {
+  try {
+    const res = await api.download.clearCompleted()
+    tasks.value = tasks.value.filter(t => t.status !== 'completed')
+    showToast(`已清除 ${res.count || 0} 项已完成记录`, 'success')
+  } catch (e) {
+    showToast(e.message || '清除失败', 'error')
+  }
+}
 
 function showToast(text, type = 'info') {
   toast.value = { text, type }
@@ -534,7 +649,8 @@ function showToast(text, type = 'info') {
 .task-meta { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
 .task-error { font-size: 12px; color: var(--error); margin-top: 2px; }
 .task-error.warn { color: var(--warning); }
-.status-await_confirm { color: var(--warning); }
+.status-await_confirm,
+.status-await_source { color: var(--warning); }
 
 .task-progress { width: 140px; display: flex; align-items: center; gap: 8px; }
 .progress-bar { flex: 1; height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; }

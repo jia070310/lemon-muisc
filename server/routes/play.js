@@ -2,15 +2,25 @@ import { Router } from 'express'
 import fs from 'fs'
 import path from 'path'
 import needle from 'needle'
-import { requestSource, hasActiveSource } from '../sourceManager.js'
+import { requestSourceWithMeta, hasActiveSource } from '../sourceManager.js'
 import { buildMusicInfo } from '../utils/musicInfo.js'
 import { fetchTrackLyric, fetchTrackCover } from '../utils/trackMeta.js'
 import { resolveCoverUrl } from '../utils/cover.js'
 import { isAllowedMediaPath } from '../utils/filePaths.js'
 import { formatUserError } from '../utils/userError.js'
 import { buildPlayUrlCacheKey, getCachedPlayUrl, setCachedPlayUrl } from '../utils/playUrlCache.js'
+import { getDB } from '../db.js'
+import { buildSourceFallbackOffer, buildSourceInfoPayload, getSourceFallbackMode } from '../utils/sourceFallback.js'
+import { extractMusicUrl } from '../utils/sourceResult.js'
 
 export const playRouter = Router()
+
+function readSettings() {
+  const rows = getDB().prepare('SELECT key, value FROM settings').all()
+  const settings = {}
+  for (const row of rows) settings[row.key] = row.value
+  return settings
+}
 
 function formatPlayError(err) {
   return formatUserError(err, '无法获取播放链接，请尝试其他歌曲')
@@ -66,7 +76,7 @@ function wrapPlayUrl(url, source) {
 
 playRouter.post('/url', async (req, res) => {
   try {
-    const { songId, source, quality, localPath } = req.body
+    const { songId, source, quality, localPath, sourceApiId, skipSourceIds } = req.body
 
     // 本地文件：返回可流式播放的同源 URL
     if (localPath || source === 'local') {
@@ -90,19 +100,35 @@ playRouter.post('/url', async (req, res) => {
       return res.json({ ok: true, url: cached, cached: true })
     }
 
-    const result = await requestSource(source, 'musicUrl', {
+    const result = await requestSourceWithMeta(source, 'musicUrl', {
       type,
       quality: type,
       musicInfo,
+    }, {
+      fallbackMode: getSourceFallbackMode(readSettings()),
+      preferredSourceId: sourceApiId || undefined,
+      skipSourceIds: skipSourceIds || [],
     })
 
-    const url = typeof result === 'string' ? result : result?.url
+    const url = extractMusicUrl(result.data)
     if (!url) return res.status(500).json({ error: '获取播放链接失败' })
 
     const wrapped = wrapPlayUrl(url, source)
     setCachedPlayUrl(cacheKey, wrapped)
-    res.json({ ok: true, url: wrapped })
+    res.json({
+      ok: true,
+      url: wrapped,
+      sourceInfo: buildSourceInfoPayload(result),
+    })
   } catch (e) {
+    const offer = buildSourceFallbackOffer(e)
+    if (offer) {
+      return res.status(409).json({
+        error: e.message,
+        code: 'SOURCE_FALLBACK_REQUIRED',
+        sourceFallbackOffer: offer,
+      })
+    }
     res.status(500).json({ error: formatPlayError(e) })
   }
 })
