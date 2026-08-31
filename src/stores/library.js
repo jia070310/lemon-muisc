@@ -1,8 +1,10 @@
 import { ref, computed } from 'vue'
+import { findLocalMatchForTrack, isLocalPlaylistTrack } from '../utils/trackMatch.js'
 
 const FAVORITES_KEY = 'lemon-library-favorites'
 const RECENT_KEY = 'lemon-library-recent'
 const PLAYLISTS_KEY = 'lemon-library-playlists'
+const USER_DATA_REV_KEY = 'lemon-library-user-data-rev'
 const RECENT_LIMIT = 200
 const SESSION_TRACKS_KEY = 'lemon-library-tracks-v1'
 const SESSION_TRACKS_LIMIT = 8000
@@ -122,6 +124,92 @@ function writeJson(key, value) {
   try { localStorage.setItem(key, JSON.stringify(value)) } catch {}
 }
 
+function readLocalRevision() {
+  return Number(readJson(USER_DATA_REV_KEY, 0)) || 0
+}
+
+function writeLocalRevision(rev) {
+  writeJson(USER_DATA_REV_KEY, Number(rev) || 0)
+}
+
+function bumpLocalRevision() {
+  const rev = Date.now()
+  writeLocalRevision(rev)
+  return rev
+}
+
+function maxPlaylistStamp(playlists = []) {
+  return Math.max(0, ...playlists.map((p) => p.lastSyncedAt || p.createdAt || 0))
+}
+
+function playlistIdsSignature(playlists = []) {
+  return playlists.map((p) => p.id).sort().join(',')
+}
+
+function pickNewerPlaylists(local, server) {
+  if (!hasItems(local) && hasItems(server)) return server
+  if (hasItems(local) && !hasItems(server)) return local
+  if (!hasItems(local) && !hasItems(server)) return []
+
+  const localIds = new Set(local.map((p) => p.id))
+  const serverIds = new Set(server.map((p) => p.id))
+  const deletedOnLocal = [...serverIds].some((id) => !localIds.has(id))
+  const addedOnLocal = [...localIds].some((id) => !serverIds.has(id))
+
+  if (deletedOnLocal && !addedOnLocal) return local
+  if (addedOnLocal && !deletedOnLocal) return local
+
+  return maxPlaylistStamp(local) >= maxPlaylistStamp(server) ? local : server
+}
+
+function applyLocalUserData({ playlists, favorites: favs, recentPlays: recent, revision } = {}) {
+  if (Array.isArray(playlists)) {
+    customPlaylists.value = playlists.map(normalizePlaylist)
+    writeJson(PLAYLISTS_KEY, customPlaylists.value)
+  }
+  if (Array.isArray(favs)) {
+    favorites.value = favs
+    writeJson(FAVORITES_KEY, favs)
+  }
+  if (Array.isArray(recent)) {
+    recentPlays.value = recent
+    writeJson(RECENT_KEY, recent)
+  }
+  if (revision !== undefined) writeLocalRevision(revision)
+}
+
+async function saveUserDataToServer() {
+  if (!libraryApi) return false
+  const revision = bumpLocalRevision()
+  try {
+    await libraryApi.library.userData.save({
+      playlists: customPlaylists.value,
+      favorites: favorites.value,
+      recentPlays: recentPlays.value,
+      revision,
+    })
+    return true
+  } catch {
+    return false
+  }
+}
+
+function persistUserDataNow() {
+  if (userDataPersistTimer) {
+    clearTimeout(userDataPersistTimer)
+    userDataPersistTimer = null
+  }
+  if (!libraryApi || !userDataSyncReady) {
+    pendingUserDataPersist = true
+    return Promise.resolve(false)
+  }
+  if (skipNextUserDataPersist) {
+    skipNextUserDataPersist = false
+    return Promise.resolve(false)
+  }
+  return saveUserDataToServer()
+}
+
 function persistPlaylists() {
   writeJson(PLAYLISTS_KEY, customPlaylists.value)
   scheduleUserDataPersist()
@@ -147,7 +235,7 @@ function hasItems(list) {
   return Array.isArray(list) && list.length > 0
 }
 
-function applyRemoteUserData({ playlists, favorites: favs, recentPlays: recent } = {}) {
+function applyRemoteUserData({ playlists, favorites: favs, recentPlays: recent, revision } = {}) {
   skipNextUserDataPersist = true
   if (Array.isArray(playlists)) {
     customPlaylists.value = playlists.map(normalizePlaylist)
@@ -161,6 +249,7 @@ function applyRemoteUserData({ playlists, favorites: favs, recentPlays: recent }
     recentPlays.value = recent
     writeJson(RECENT_KEY, recent)
   }
+  if (revision !== undefined) writeLocalRevision(revision)
 }
 
 function scheduleUserDataPersist() {
@@ -173,15 +262,9 @@ function scheduleUserDataPersist() {
     return
   }
   if (userDataPersistTimer) clearTimeout(userDataPersistTimer)
-  userDataPersistTimer = setTimeout(async () => {
+  userDataPersistTimer = setTimeout(() => {
     userDataPersistTimer = null
-    try {
-      await libraryApi.library.userData.save({
-        playlists: customPlaylists.value,
-        favorites: favorites.value,
-        recentPlays: recentPlays.value,
-      })
-    } catch {}
+    void saveUserDataToServer()
   }, 450)
 }
 
@@ -200,44 +283,50 @@ export async function initLibraryUserData(api) {
     const serverPl = (data.playlists || []).map(normalizePlaylist)
     const serverFav = data.favorites || []
     const serverRecent = data.recentPlays || []
+    const serverRev = Number(data.revision) || 0
 
     const localPl = readJson(PLAYLISTS_KEY, []).map(normalizePlaylist)
     const localFav = readJson(FAVORITES_KEY, [])
     const localRecent = readJson(RECENT_KEY, [])
+    const localRev = readLocalRevision()
 
-    if (hasItems(serverPl)) {
-      customPlaylists.value = serverPl
-      writeJson(PLAYLISTS_KEY, serverPl)
-    } else if (hasItems(localPl)) {
-      customPlaylists.value = localPl
+    let needUpload = false
+
+    if (localRev > serverRev) {
+      applyLocalUserData({
+        playlists: localPl,
+        favorites: localFav,
+        recentPlays: localRecent,
+        revision: localRev,
+      })
+      needUpload = true
+    } else if (serverRev > localRev) {
+      applyRemoteUserData({
+        playlists: serverPl,
+        favorites: serverFav,
+        recentPlays: serverRecent,
+        revision: serverRev,
+      })
+    } else {
+      const pickedPl = pickNewerPlaylists(localPl, serverPl)
+      const pickedFav = hasItems(serverFav) ? serverFav : localFav
+      const pickedRecent = hasItems(serverRecent) ? serverRecent : localRecent
+      applyLocalUserData({
+        playlists: pickedPl,
+        favorites: pickedFav,
+        recentPlays: pickedRecent,
+        revision: localRev || serverRev,
+      })
+      needUpload = (
+        playlistIdsSignature(pickedPl) !== playlistIdsSignature(serverPl)
+        || (!hasItems(serverFav) && hasItems(localFav))
+        || (!hasItems(serverRecent) && hasItems(localRecent))
+      )
     }
 
-    if (hasItems(serverFav)) {
-      favorites.value = serverFav
-      writeJson(FAVORITES_KEY, serverFav)
-    } else if (hasItems(localFav)) {
-      favorites.value = localFav
-    }
-
-    if (hasItems(serverRecent)) {
-      recentPlays.value = serverRecent
-      writeJson(RECENT_KEY, serverRecent)
-    } else if (hasItems(localRecent)) {
-      recentPlays.value = localRecent
-    }
-
-    const needUpload = (
-      (!hasItems(serverPl) && hasItems(localPl))
-      || (!hasItems(serverFav) && hasItems(localFav))
-      || (!hasItems(serverRecent) && hasItems(localRecent))
-    )
     if (needUpload) {
       skipNextUserDataPersist = true
-      await api.library.userData.save({
-        playlists: customPlaylists.value,
-        favorites: favorites.value,
-        recentPlays: recentPlays.value,
-      })
+      await saveUserDataToServer()
     }
   } catch {
     customPlaylists.value = readJson(PLAYLISTS_KEY, []).map(normalizePlaylist)
@@ -253,7 +342,14 @@ export async function reloadLibraryUserData() {
   if (!libraryApi) return
   try {
     const res = await libraryApi.library.userData.get()
-    applyRemoteUserData(res.data || {})
+    const data = res.data || {}
+    const serverRev = Number(data.revision) || 0
+    const localRev = readLocalRevision()
+    if (localRev > serverRev) {
+      await saveUserDataToServer()
+      return
+    }
+    applyRemoteUserData(data)
   } catch {}
 }
 
@@ -270,7 +366,15 @@ function normalizePlaylist(pl) {
     trackSnapshots: pl.trackSnapshots && typeof pl.trackSnapshots === 'object' ? pl.trackSnapshots : {},
     coverUrl: pl.coverUrl || '',
     coverMode: pl.coverMode === 'custom' ? 'custom' : 'auto',
+    playlistType: pl.playlistType === 'imported' ? 'imported' : 'custom',
+    importSource: pl.importSource || '',
+    importUrl: pl.importUrl || '',
+    lastSyncedAt: pl.lastSyncedAt || 0,
   }
+}
+
+export function isImportedPlaylist(playlist) {
+  return playlist?.playlistType === 'imported' || Boolean(playlist?.importUrl)
 }
 
 export function getLibraryTrackKey(track) {
@@ -395,16 +499,30 @@ export function resolvePlaylistTracks(playlist, allTracks) {
   const map = new Map(allTracks.map(t => [getLibraryTrackKey(t), t]))
   const snapshots = playlist.trackSnapshots || {}
   return (playlist.trackKeys || []).map((k) => {
-    if (map.has(k)) return enrichLocalCover(map.get(k))
+    if (map.has(k)) {
+      const track = enrichLocalCover(map.get(k))
+      return { ...track, isLocal: true }
+    }
     const snap = snapshots[k]
     if (!snap) return null
-    return enrichLocalCover({
+    const track = enrichLocalCover({
       ...snap,
       key: k,
       singer: snap.singer || '未知艺术家',
       album: snap.album || '未知专辑',
     })
+    return { ...track, isLocal: isLocalPlaylistTrack(track) }
   }).filter(Boolean)
+}
+
+export function countPlaylistTrackOrigins(tracks = []) {
+  let local = 0
+  let online = 0
+  for (const track of tracks) {
+    if (track?.isLocal) local += 1
+    else online += 1
+  }
+  return { local, online, total: tracks.length }
 }
 
 export function buildPlaylistCards(allTracks, { limit } = {}) {
@@ -535,7 +653,14 @@ export function sortLibrarySongs(tracks, sortBy = 'recent') {
   return list.sort((a, b) => (b.mtime || 0) - (a.mtime || 0))
 }
 
-export function createPlaylist(name, { coverUrl = '', coverMode = 'auto' } = {}) {
+export function createPlaylist(name, {
+  coverUrl = '',
+  coverMode = 'auto',
+  playlistType = 'custom',
+  importSource = '',
+  importUrl = '',
+  lastSyncedAt = 0,
+} = {}) {
   const title = String(name || '').trim()
   if (!title) return null
   const item = normalizePlaylist({
@@ -546,6 +671,10 @@ export function createPlaylist(name, { coverUrl = '', coverMode = 'auto' } = {})
     trackSnapshots: {},
     coverUrl: coverUrl || '',
     coverMode: coverMode === 'custom' && coverUrl ? 'custom' : 'auto',
+    playlistType,
+    importSource,
+    importUrl,
+    lastSyncedAt,
   })
   const list = [item, ...customPlaylists.value]
   customPlaylists.value = list
@@ -582,6 +711,7 @@ export function deletePlaylist(id) {
   list.splice(idx, 1)
   customPlaylists.value = list
   persistPlaylists()
+  void persistUserDataNow()
   if (playlistPickTarget.value?.id === id) {
     playlistPickTarget.value = null
   }
@@ -621,6 +751,127 @@ export function removeTrackFromPlaylist(playlistId, trackKey) {
 
 export function getCustomPlaylist(id) {
   return customPlaylists.value.find(p => p.id === id) || null
+}
+
+async function fetchPlatformPlaylistTracks(api, input, source, onProgress) {
+  if (source === 'kg') {
+    onProgress?.('正在加载歌单（首屏）…')
+    const partialRes = await api.playlist.fetch(input, source, { partial: true })
+    const partialData = partialRes.data || {}
+    let list = partialData.list || []
+    let info = partialData.info || null
+    if (partialData.hasMore) {
+      onProgress?.('正在加载完整歌单…')
+      const fullRes = await api.playlist.fetch(input, source)
+      const fullData = fullRes.data || {}
+      list = fullData.list || list
+      info = fullData.info || info
+    }
+    return { list, info, total: partialData.total || list.length }
+  }
+  onProgress?.('正在解析歌单…')
+  const res = await api.playlist.fetch(input, source)
+  const data = res.data || {}
+  return {
+    list: data.list || [],
+    info: data.info || null,
+    total: data.total || (data.list || []).length,
+  }
+}
+
+export function syncPlaylistLocalTracks(playlistId) {
+  const pl = getCustomPlaylist(playlistId)
+  if (!pl) return { matched: 0, playlist: null }
+  const keys = [...(pl.trackKeys || [])]
+  const snapshots = { ...(pl.trackSnapshots || {}) }
+  const library = libraryTracks.value
+  const newKeys = []
+  const seen = new Set()
+  let matched = 0
+
+  for (const k of keys) {
+    if (k.startsWith('local:')) {
+      if (!seen.has(k)) {
+        newKeys.push(k)
+        seen.add(k)
+      }
+      continue
+    }
+
+    const snap = snapshots[k] || {}
+    const onlineTrack = {
+      ...snap,
+      key: k,
+      name: snap.name,
+      singer: snap.singer,
+      source: snap.source,
+    }
+    const local = findLocalMatchForTrack(onlineTrack, library)
+    if (local) {
+      const localKey = getLibraryTrackKey(local)
+      delete snapshots[k]
+      if (!seen.has(localKey)) {
+        newKeys.push(localKey)
+        seen.add(localKey)
+      }
+      matched += 1
+      continue
+    }
+
+    if (!seen.has(k)) {
+      newKeys.push(k)
+      seen.add(k)
+    }
+  }
+
+  const next = updatePlaylist(playlistId, {
+    trackKeys: newKeys,
+    trackSnapshots: snapshots,
+    lastSyncedAt: Date.now(),
+  })
+  return { matched, playlist: next }
+}
+
+export function syncAllImportedPlaylists() {
+  let totalMatched = 0
+  for (const pl of customPlaylists.value) {
+    if (!isImportedPlaylist(pl)) continue
+    const { matched } = syncPlaylistLocalTracks(pl.id)
+    totalMatched += matched
+  }
+  return totalMatched
+}
+
+export async function importPlaylistFromUrl(api, { url, source, name = '', onProgress } = {}) {
+  const input = String(url || '').trim()
+  if (!input) throw new Error('请输入歌单链接')
+  if (!source) throw new Error('请选择音乐平台')
+
+  const { list, info } = await fetchPlatformPlaylistTracks(api, input, source, onProgress)
+  if (!list.length) throw new Error('歌单为空或解析失败')
+
+  const playlistName = String(name || info?.name || '导入的歌单').trim()
+  const coverUrl = info?.img || info?.picUrl || ''
+  const pl = createPlaylist(playlistName, {
+    coverUrl,
+    coverMode: coverUrl ? 'custom' : 'auto',
+    playlistType: 'imported',
+    importSource: source,
+    importUrl: input,
+    lastSyncedAt: Date.now(),
+  })
+  if (!pl) throw new Error('创建歌单失败')
+
+  onProgress?.(`正在写入 ${list.length} 首歌曲…`)
+  addTracksToPlaylist(pl.id, list, source)
+  const { matched, playlist } = syncPlaylistLocalTracks(pl.id)
+  return {
+    playlist,
+    total: list.length,
+    added: list.length,
+    localMatched: matched,
+    onlineCount: list.length - matched,
+  }
 }
 
 export function isCustomPlaylist(id) {
@@ -828,6 +1079,7 @@ export async function scanLibrary(api, { force = false, onError, onComplete } = 
         hadPending: pendingCount > 0,
       }
       saveSessionTracks(libraryTracks.value)
+      syncAllImportedPlaylists()
       onComplete?.(result, { force })
       return result
     } catch (e) {

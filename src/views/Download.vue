@@ -70,9 +70,9 @@
         </div>
         <div class="task-progress" v-if="showTaskProgress(task)">
           <div class="progress-bar">
-            <div class="progress-fill" :style="{ width: (task.progress * 100) + '%' }"></div>
+            <div class="progress-fill" :style="{ width: progressPercent(task) + '%' }"></div>
           </div>
-          <span class="progress-text">{{ Math.round(task.progress * 100) }}%</span>
+          <span class="progress-text">{{ progressPercent(task) }}%</span>
         </div>
         <div class="task-status" v-else>
           <span :class="'status-' + task.status">{{ statusIcon(task.status) }}</span>
@@ -169,7 +169,12 @@ const selectedDeletableCount = computed(() => selectedTasks.value.filter(t => t.
 const unsubs = []
 unsubs.push(onWS('download:progress', (d) => {
   const t = tasks.value.find(x => x.id === d.id)
-  if (t) { t.progress = d.progress; t.status = 'downloading' }
+  if (t) {
+    t.progress = d.total > 0 ? d.downloaded / d.total : (d.progress ?? t.progress)
+    t.downloaded_size = d.downloaded
+    t.total_size = d.total
+    t.status = 'downloading'
+  }
 }))
 unsubs.push(onWS('download:status', (d) => {
   const t = tasks.value.find(x => x.id === d.id)
@@ -296,7 +301,28 @@ function canPause(task) {
 }
 
 function showTaskProgress(task) {
-  return task.status === 'downloading' || (task.status === 'paused' && (task.progress || 0) > 0)
+  return task.status === 'downloading' || (task.status === 'paused' && progressRatio(task) > 0)
+}
+
+function progressRatio(task) {
+  let ratio = Number(task?.progress)
+  if (!Number.isFinite(ratio)) ratio = 0
+  if (ratio > 1) ratio /= 100
+  if (ratio <= 0 && task?.total_size > 0 && task?.downloaded_size >= 0) {
+    ratio = task.downloaded_size / task.total_size
+  }
+  return Math.max(0, Math.min(ratio, 1))
+}
+
+function progressPercent(task) {
+  return Math.round(progressRatio(task) * 100)
+}
+
+function normalizeDownloadTask(task) {
+  return {
+    ...task,
+    progress: progressRatio(task),
+  }
 }
 
 function isSelected(id) {
@@ -325,7 +351,7 @@ function toggleBatchMode() {
 
 async function loadList() {
   try {
-    tasks.value = await api.download.list()
+    tasks.value = (await api.download.list()).map(normalizeDownloadTask)
     const valid = new Set(tasks.value.map(t => t.id))
     selectedIds.value = new Set([...selectedIds.value].filter(id => valid.has(id)))
   } catch {}
@@ -652,10 +678,36 @@ function showToast(text, type = 'info') {
 .status-await_confirm,
 .status-await_source { color: var(--warning); }
 
-.task-progress { width: 140px; display: flex; align-items: center; gap: 8px; }
-.progress-bar { flex: 1; height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; }
-.progress-fill { height: 100%; background: var(--accent); transition: width 0.3s; border-radius: 2px; }
-.progress-text { font-size: 12px; color: var(--text-muted); width: 36px; text-align: right; }
+.task-progress {
+  width: 140px;
+  min-width: 120px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.progress-bar {
+  flex: 1 1 auto;
+  min-width: 72px;
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  min-width: 0;
+  background: var(--accent);
+  transition: width 0.3s;
+  border-radius: 2px;
+}
+.progress-text {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  width: 36px;
+  text-align: right;
+}
 
 .task-status { width: 30px; text-align: center; }
 .status-completed { color: var(--success); }

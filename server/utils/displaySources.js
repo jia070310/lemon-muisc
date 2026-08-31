@@ -33,3 +33,19 @@ export function getDisplaySources() {
   }
   return result
 }
+
+/** 歌单解析使用内置 SDK，始终展示全部支持平台（不受激活音源限制） */
+export function getPlaylistSources() {
+  const merged = hasActiveSource() ? getMergedSources() : {}
+  const result = {}
+  for (const [key, base] of Object.entries(AVAILABLE_SOURCES)) {
+    const info = merged[key] || {}
+    result[key] = {
+      ...base,
+      name: resolveSourceDisplayName(key, info.name),
+      qualitys: info.qualitys || [],
+      actions: info.actions || [],
+    }
+  }
+  return result
+}

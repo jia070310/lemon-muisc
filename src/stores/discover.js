@@ -34,7 +34,8 @@ function syncActiveSourceKey(state) {
 }
 
 export async function loadDiscoverSources(api, { force = false } = {}) {
-  if (!force && discoverSourcesLoaded.value && Object.keys(discoverState.sources).length) return
+  const hasSources = Object.keys(discoverState.sources || {}).length > 0
+  if (!force && discoverSourcesLoaded.value && hasSources) return
   try {
     const res = await api.playlist.sources()
     discoverState.sources = res.sources || {}
@@ -42,7 +43,7 @@ export async function loadDiscoverSources(api, { force = false } = {}) {
     discoverState.sources = {}
   }
   syncActiveSourceKey(discoverState)
-  discoverSourcesLoaded.value = true
+  discoverSourcesLoaded.value = Object.keys(discoverState.sources).length > 0
 }
 
 export function reloadDiscoverSources(api) {

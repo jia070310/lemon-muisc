@@ -264,11 +264,12 @@
 
     <div v-if="toast" class="toast" :class="toast.type">{{ toast.text }}</div>
 
-    <PlaylistEditModal
+    <CreatePlaylistModal
       v-if="showCreateModal"
-      title="创建歌单"
+      :api="api"
       @close="showCreateModal = false"
-      @save="confirmCreatePlaylist"
+      @created="onPlaylistCreated"
+      @imported="onPlaylistImported"
     />
 
     <PickPlaylistModal
@@ -286,7 +287,7 @@ import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../api.js'
 import PlaylistCover from '../components/PlaylistCover.vue'
-import PlaylistEditModal from '../components/PlaylistEditModal.vue'
+import CreatePlaylistModal from '../components/CreatePlaylistModal.vue'
 import PickPlaylistModal from '../components/PickPlaylistModal.vue'
 import AppSelect from '../components/AppSelect.vue'
 import ClearableInput from '../components/ClearableInput.vue'
@@ -295,7 +296,7 @@ import { playItem, addToQueue, isInQueue, isPlayingItem, isPaused } from '../sto
 import {
   libraryTracks, libraryLoading, libraryMetaLoading, libraryLoadProgress,
   libraryScanning, libraryScanPhase, libraryScanCurrent, libraryScanTotal, libraryScanPercent,
-  groupAlbums, groupGenres, getGenreTheme, createPlaylist, buildPlaylistCards, sortPlaylistCards,
+  groupAlbums, groupGenres, getGenreTheme, buildPlaylistCards, sortPlaylistCards,
   sortAlbums, sortLibrarySongs,
   PLAYLIST_SORT_OPTIONS, ALBUM_SORT_OPTIONS, SONG_SORT_OPTIONS,
   scanLibrary, isFavorite, toggleFavorite,
@@ -619,21 +620,23 @@ function openAllPlaylists() {
   router.push({ path: '/library/playlists' })
 }
 
-function openCreatePlaylist() {
-  showCreateModal.value = true
+function onPlaylistCreated({ playlist }) {
+  showCreateModal.value = false
+  showToast(`已创建歌单：${playlist.name}`, 'success')
+  router.push({ path: '/library/playlists', query: { id: playlist.id } })
 }
 
-function confirmCreatePlaylist(payload) {
-  const pl = createPlaylist(payload.name, {
-    coverUrl: payload.coverUrl,
-    coverMode: payload.coverMode,
-  })
-  if (!pl) {
-    showToast('请输入歌单名称', 'info')
-    return
-  }
+function onPlaylistImported({ playlist, total, localMatched }) {
   showCreateModal.value = false
-  showToast(`已创建歌单：${pl.name}`, 'success')
+  const localText = localMatched > 0 ? `，已匹配本地 ${localMatched} 首` : ''
+  showToast(`已导入 ${total} 首歌曲${localText}`, 'success')
+  if (playlist?.id) {
+    router.push({ path: '/library/playlists', query: { id: playlist.id } })
+  }
+}
+
+function openCreatePlaylist() {
+  showCreateModal.value = true
 }
 
 function showToast(text, type = 'info') {

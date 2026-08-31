@@ -40,9 +40,22 @@
         />
         <div class="detail-info">
           <h2>{{ selectedCard.name }}</h2>
-          <p class="detail-meta">{{ selectedCard.count }} 首</p>
+          <p class="detail-meta">
+            {{ selectedCard.count }} 首
+            <template v-if="canEditSelected && isImportedSelected">
+              · 本地 {{ trackOrigins.local }} / 网络 {{ trackOrigins.online }}
+            </template>
+          </p>
           <div class="detail-actions">
             <button class="btn-primary btn-sm" :disabled="!selectedCard.tracks.length" @click="playAll">播放全部</button>
+            <button
+              v-if="canEditSelected && isImportedSelected"
+              class="btn-ghost btn-sm"
+              :disabled="syncingLocal"
+              @click="syncLocal"
+            >
+              {{ syncingLocal ? '同步中…' : '同步本地' }}
+            </button>
             <button v-if="canEditSelected" class="btn-ghost btn-sm" @click="openEdit">编辑歌单</button>
             <button v-if="canEditSelected" class="btn-ghost btn-sm" @click="showAddModal = true">添加歌曲</button>
             <button v-if="canEditSelected" class="btn-ghost btn-sm btn-danger-hover" @click="openDeletePlaylistModal">删除歌单</button>
@@ -80,7 +93,11 @@
               </span>
             </button>
             <div class="track-meta">
-              <div class="track-name">{{ song.name }}</div>
+              <div class="track-name-row">
+                <span class="track-name">{{ song.name }}</span>
+                <span v-if="song.isLocal" class="track-origin-badge local">本地</span>
+                <span v-else class="track-origin-badge online">{{ onlineBadgeLabel(song) }}</span>
+              </div>
               <div class="track-artist">{{ song.singer }}</div>
               <div class="track-tags">{{ formatTrackTags(song) }}</div>
             </div>
@@ -120,11 +137,12 @@
       </template>
     </section>
 
-    <PlaylistEditModal
+    <CreatePlaylistModal
       v-if="showCreateModal"
-      title="创建歌单"
+      :api="api"
       @close="showCreateModal = false"
-      @save="confirmCreate"
+      @created="onPlaylistCreated"
+      @imported="onPlaylistImported"
     />
 
     <PlaylistEditModal
@@ -173,20 +191,24 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import PlaylistCover from '../components/PlaylistCover.vue'
 import PlaylistEditModal from '../components/PlaylistEditModal.vue'
+import CreatePlaylistModal from '../components/CreatePlaylistModal.vue'
 import AddToPlaylistModal from '../components/AddToPlaylistModal.vue'
 import PickPlaylistModal from '../components/PickPlaylistModal.vue'
+import { platformLabel } from '../utils/platforms.js'
 import { playItem, addToQueue, isInQueue, isPlayingItem, isPaused } from '../stores/player.js'
 import { formatTrackTags } from '../utils/format.js'
 import {
   libraryTracks,
   libraryScanned,
   buildPlaylistCards,
-  createPlaylist,
   updatePlaylist,
   removeTrackFromPlaylist,
   deletePlaylist,
   isCustomPlaylist,
+  isImportedPlaylist,
   getCustomPlaylist,
+  syncPlaylistLocalTracks,
+  countPlaylistTrackOrigins,
   snapshotToPlayTrack,
   scanLibrary,
   isFavorite,
@@ -209,6 +231,7 @@ const hoverKey = ref('')
 const pickPlaylistTrack = ref(null)
 const pickPlaylistSource = ref('local')
 const pickPlaylistExcludeId = ref('')
+const syncingLocal = ref(false)
 
 function markCoverBroken(key) {
   if (!key) return
@@ -220,7 +243,9 @@ function markCoverBroken(key) {
 const allCards = computed(() => buildPlaylistCards(libraryTracks.value))
 const selectedCard = computed(() => allCards.value.find(c => c.id === selectedId.value) || null)
 const canEditSelected = computed(() => isCustomPlaylist(selectedId.value))
+const isImportedSelected = computed(() => isImportedPlaylist(editingPlaylist.value))
 const editingPlaylist = computed(() => getCustomPlaylist(selectedId.value))
+const trackOrigins = computed(() => countPlaylistTrackOrigins(selectedCard.value?.tracks || []))
 
 const deleteConfirmMessage = computed(() => {
   if (!selectedCard.value) return ''
@@ -305,19 +330,43 @@ function onAddedToPlaylist({ playlist, duplicate }) {
   else showToast(`已加入歌单：${playlist?.name || ''}`, 'success')
 }
 
-function openCreate() {
-  showCreateModal.value = true
+function onlineBadgeLabel(song) {
+  const label = platformLabel(song.source || '')
+  return label && label !== song.source ? label : '网络'
 }
 
-function confirmCreate(payload) {
-  const pl = createPlaylist(payload.name, {
-    coverUrl: payload.coverUrl,
-    coverMode: payload.coverMode,
-  })
-  if (!pl) return
+function onPlaylistCreated({ playlist }) {
   showCreateModal.value = false
-  selectedId.value = pl.id
-  showToast(`已创建歌单：${pl.name}`, 'success')
+  selectedId.value = playlist.id
+  showToast(`已创建歌单：${playlist.name}`, 'success')
+}
+
+function onPlaylistImported({ playlist, total, localMatched }) {
+  showCreateModal.value = false
+  selectedId.value = playlist?.id || ''
+  const localText = localMatched > 0 ? `，已匹配本地 ${localMatched} 首` : ''
+  showToast(`已导入 ${total} 首歌曲${localText}`, 'success')
+}
+
+async function syncLocal() {
+  if (!canEditSelected.value || syncingLocal.value) return
+  syncingLocal.value = true
+  try {
+    if (!libraryScanned.value) {
+      await scanLibrary(api)
+    }
+    const { matched } = syncPlaylistLocalTracks(selectedId.value)
+    if (matched > 0) showToast(`已匹配本地 ${matched} 首`, 'success')
+    else showToast('未发现新的本地匹配', 'info')
+  } catch (e) {
+    showToast(e.message || '同步失败', 'error')
+  } finally {
+    syncingLocal.value = false
+  }
+}
+
+function openCreate() {
+  showCreateModal.value = true
 }
 
 function openEdit() {
@@ -465,7 +514,29 @@ function showToast(text, type = 'info') {
   color: #fff;
 }
 .track-meta { flex: 1; min-width: 0; }
-.track-name { font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.track-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.track-name { font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+.track-origin-badge {
+  flex-shrink: 0;
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: 999px;
+  font-weight: 600;
+}
+.track-origin-badge.local {
+  color: #15803d;
+  background: rgba(34, 197, 94, 0.14);
+}
+.track-origin-badge.online {
+  color: var(--accent);
+  background: var(--accent-muted);
+}
 .track-artist { font-size: 13px; color: var(--text-muted); }
 .track-tags { font-size: 12px; color: var(--text-muted); margin-top: 3px; }
 .track-row-actions { display: flex; gap: 6px; flex-shrink: 0; }

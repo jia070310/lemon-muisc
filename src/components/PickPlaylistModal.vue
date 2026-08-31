@@ -39,19 +39,21 @@
       </div>
     </div>
 
-    <PlaylistEditModal
+    <CreatePlaylistModal
       v-if="showCreate"
-      title="创建歌单"
+      :api="api"
       @close="showCreate = false"
-      @save="onCreate"
+      @created="onCreate"
+      @imported="onImported"
     />
   </div>
 </template>
 
 <script setup>
 import { ref, computed } from 'vue'
-import PlaylistEditModal from './PlaylistEditModal.vue'
-import { customPlaylists, createPlaylist, addTracksToPlaylist } from '../stores/library.js'
+import CreatePlaylistModal from './CreatePlaylistModal.vue'
+import { customPlaylists, addTracksToPlaylist } from '../stores/library.js'
+import { api } from '../api.js'
 
 const props = defineProps({
   track: { type: Object, required: true },
@@ -79,14 +81,21 @@ function pick(pl) {
   if (res.added > 0) emit('close')
 }
 
-function onCreate(payload) {
-  const pl = createPlaylist(payload.name, {
-    coverUrl: payload.coverUrl,
-    coverMode: payload.coverMode,
-  })
+function onCreate({ playlist }) {
   showCreate.value = false
-  if (!pl) return
-  pick(pl)
+  if (!playlist) return
+  pick(playlist)
+}
+
+function onImported({ playlist }) {
+  showCreate.value = false
+  if (!playlist) return
+  emit('added', {
+    playlist,
+    duplicate: false,
+    added: playlist.trackKeys?.length || 0,
+  })
+  emit('close')
 }
 </script>
 

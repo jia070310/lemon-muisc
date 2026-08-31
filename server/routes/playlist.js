@@ -1,14 +1,14 @@
 import { Router } from 'express'
 import { fetchPlaylist, fetchRecommendPlaylists } from '../musicSdk.js'
-import { getDisplaySources } from '../utils/displaySources.js'
+import { getPlaylistSources } from '../utils/displaySources.js'
 import { formatUserError } from '../utils/userError.js'
 
 export const playlistRouter = Router()
 
-const availableSources = () => getDisplaySources()
+const availableSources = () => getPlaylistSources()
 
 playlistRouter.get('/sources', (_req, res) => {
-  res.json({ sources: getDisplaySources() })
+  res.json({ sources: getPlaylistSources() })
 })
 
 playlistRouter.get('/recommend', async (req, res) => {

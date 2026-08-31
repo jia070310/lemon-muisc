@@ -13,3 +13,9 @@ export function platformLabel(key, info = {}) {
   if (custom && custom !== key) return custom
   return PLATFORM_LABELS[key] || key
 }
+
+/** 歌单导入/发现页平台选项（内置 SDK 支持的全部平台） */
+export const PLAYLIST_PLATFORM_OPTIONS = Object.entries(PLATFORM_LABELS).map(([value, label]) => ({
+  value,
+  label,
+}))
