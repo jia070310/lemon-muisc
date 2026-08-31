@@ -19,6 +19,7 @@ import { formatUserError } from '../utils/userError.js'
 import { buildSourceFallbackOffer, getSourceFallbackMode } from '../utils/sourceFallback.js'
 import { extractMusicUrl } from '../utils/sourceResult.js'
 import { notifyLibraryChanged } from '../utils/libraryNotify.js'
+import { scanBatchAndCache } from '../utils/libraryCache.js'
 import { resolveDownloadGroupDir } from '../utils/downloadPath.js'
 
 export const downloadRouter = Router()
@@ -27,6 +28,7 @@ const activeDownloads = new Map()
 let runningCount = 0
 const SAME_QUALITY_ATTEMPTS = 3
 const RETRY_DELAY_MS = 1200
+const DOWNLOAD_ARTIFACT_EXTS = ['.mp3', '.flac', '.wav', '.ape', '.ogg']
 
 downloadRouter.get('/list', (_req, res) => {
   reconcileStaleDownloads()
@@ -126,9 +128,11 @@ downloadRouter.post('/confirm-downgrade/:id', (req, res) => {
       at: new Date().toISOString(),
       reason: offer.reason || '',
     }
+    cleanupTaskDownloadArtifacts(row, meta, getSettings())
+    clearTaskStoredFilePath(row.id)
     getDB().prepare(`
       UPDATE download_tasks
-      SET quality = ?, meta = ?, status = 'waiting', error = NULL, progress = 0, downloaded_size = 0
+      SET quality = ?, meta = ?, status = 'waiting', error = NULL, progress = 0, downloaded_size = 0, file_path = NULL
       WHERE id = ?
     `).run(toQuality, JSON.stringify(meta), req.params.id)
     broadcast('download:status', {
@@ -197,9 +201,11 @@ downloadRouter.post('/confirm-source/:id', (req, res) => {
     }
     delete meta.sourceFallbackOffer
 
+    cleanupTaskDownloadArtifacts(row, meta, getSettings())
+    clearTaskStoredFilePath(row.id)
     getDB().prepare(`
       UPDATE download_tasks
-      SET status = 'waiting', error = NULL, progress = 0, downloaded_size = 0, meta = ?
+      SET status = 'waiting', error = NULL, progress = 0, downloaded_size = 0, file_path = NULL, meta = ?
       WHERE id = ?
     `).run(JSON.stringify(meta), req.params.id)
     broadcast('download:status', {
@@ -307,11 +313,13 @@ function removeDownloadTask(id, { deleteFile = false } = {}) {
   if (dl?.abort) dl.abort.abort()
   activeDownloads.delete(taskId)
 
-  const task = getDB().prepare('SELECT file_path FROM download_tasks WHERE id = ?').get(taskId)
-  if (!task) throw new Error('任务不存在')
+  const row = getDB().prepare('SELECT * FROM download_tasks WHERE id = ?').get(taskId)
+  if (!row) throw new Error('任务不存在')
 
-  if (deleteFile && task.file_path) {
-    try { fs.unlinkSync(task.file_path) } catch {}
+  if (deleteFile) {
+    const settings = getSettings()
+    const meta = parseTaskMeta(row)
+    cleanupTaskDownloadArtifacts(row, meta, settings)
   }
   getDB().prepare('DELETE FROM download_tasks WHERE id = ?').run(taskId)
   broadcast('download:removed', { id: taskId })
@@ -348,17 +356,15 @@ function pauseTasks(ids = null) {
   return count
 }
 
-function requeueTask(id, { allowedStatuses = ['paused', 'error', 'await_confirm'] } = {}) {
-  const row = getDB().prepare('SELECT id, meta, status FROM download_tasks WHERE id = ?').get(id)
+function requeueTask(id, { allowedStatuses = ['paused', 'error', 'await_confirm'], cleanupFiles = true } = {}) {
+  const row = getDB().prepare('SELECT * FROM download_tasks WHERE id = ?').get(id)
   if (!row || !allowedStatuses.includes(row.status)) return false
 
-  let meta = {}
-  try { meta = JSON.parse(row.meta || '{}') } catch { meta = {} }
-  if (meta.downgradeOffer) delete meta.downgradeOffer
+  const { meta } = prepareTaskForRetry(row, { cleanupFiles })
 
   getDB().prepare(`
     UPDATE download_tasks
-    SET status = 'waiting', error = NULL, progress = 0, downloaded_size = 0, meta = ?
+    SET status = 'waiting', error = NULL, progress = 0, downloaded_size = 0, file_path = NULL, meta = ?
     WHERE id = ?
   `).run(JSON.stringify(meta), id)
   broadcast('download:status', { id, status: 'waiting', error: '', progress: 0, downgradeOffer: null })
@@ -440,7 +446,7 @@ async function resolveDownloadUrl(source, quality, musicInfo, settings, meta = {
   return { url, sourceInfo: result }
 }
 
-async function streamToFile(url, filePath, taskId, abort) {
+async function streamToFile(url, partPath, taskId, abort) {
   const { default: needlePkg } = await import('needle')
   const stream = needlePkg.get(url, {
     follow_max: 5,
@@ -448,7 +454,8 @@ async function streamToFile(url, filePath, taskId, abort) {
     response_timeout: 60000,
     read_timeout: 120000,
   })
-  const writer = fs.createWriteStream(filePath)
+  safeUnlink(partPath)
+  const writer = fs.createWriteStream(partPath)
   let downloaded = 0
   let total = 0
 
@@ -461,30 +468,38 @@ async function streamToFile(url, filePath, taskId, abort) {
     getDB().prepare('UPDATE download_tasks SET total_size = ? WHERE id = ?').run(total, taskId)
   })
 
-  await new Promise((resolve, reject) => {
-    stream.on('data', (chunk) => {
-      downloaded += chunk.length
-      writer.write(chunk)
-      const progress = total > 0 ? downloaded / total : 0
-      getDB().prepare('UPDATE download_tasks SET downloaded_size = ?, progress = ? WHERE id = ?')
-        .run(downloaded, progress, taskId)
-      broadcast('download:progress', { id: taskId, progress, downloaded, total })
+  try {
+    await new Promise((resolve, reject) => {
+      stream.on('data', (chunk) => {
+        downloaded += chunk.length
+        writer.write(chunk)
+        const progress = total > 0 ? downloaded / total : 0
+        getDB().prepare('UPDATE download_tasks SET downloaded_size = ?, progress = ? WHERE id = ?')
+          .run(downloaded, progress, taskId)
+        broadcast('download:progress', { id: taskId, progress, downloaded, total })
+      })
+      stream.on('done', (err) => {
+        writer.end()
+        if (err) reject(err)
+        else resolve()
+      })
+      stream.on('err', (err) => {
+        try { writer.destroy() } catch {}
+        reject(err)
+      })
     })
-    stream.on('done', (err) => {
-      writer.end()
-      if (err) reject(err)
-      else resolve()
-    })
-    stream.on('err', (err) => {
-      try { writer.destroy() } catch {}
-      reject(err)
-    })
-  })
+  } catch (e) {
+    try { writer.destroy() } catch {}
+    safeUnlink(partPath)
+    throw e
+  }
 }
 
 function markSourceFallbackOffer(task, meta, error) {
   const offer = buildSourceFallbackOffer(error)
   if (!offer) return false
+  cleanupTaskDownloadArtifacts(task, meta, getSettings())
+  clearTaskStoredFilePath(task.id)
   meta.sourceFallbackOffer = {
     ...offer,
     at: new Date().toISOString(),
@@ -506,6 +521,9 @@ function markSourceFallbackOffer(task, meta, error) {
 
 function markAwaitConfirm(task, meta, fromQuality, toQuality, reason) {
   const friendlyReason = formatUserError(reason, '音源取链失败，请稍后重试')
+  cleanupTaskDownloadArtifacts(task, meta, getSettings())
+  clearTaskStoredFilePath(task.id)
+  meta.downloadArtifacts = []
   meta.downgradeOffer = {
     fromQuality,
     toQuality,
@@ -532,9 +550,97 @@ function markAwaitConfirm(task, meta, fromQuality, toQuality, reason) {
 
 function markError(taskId, message, meta) {
   const friendly = formatUserError(message, '下载失败，请稍后重试')
-  if (meta) saveTaskMeta(taskId, meta)
-  getDB().prepare("UPDATE download_tasks SET status = 'error', error = ? WHERE id = ?").run(friendly, taskId)
+  const row = getDB().prepare('SELECT * FROM download_tasks WHERE id = ?').get(taskId)
+  const taskMeta = meta || parseTaskMeta(row)
+  if (row) {
+    cleanupTaskDownloadArtifacts(row, taskMeta, getSettings())
+    clearTaskStoredFilePath(taskId)
+  }
+  taskMeta.downloadArtifacts = []
+  saveTaskMeta(taskId, taskMeta)
+  getDB().prepare("UPDATE download_tasks SET status = 'error', error = ?, file_path = NULL WHERE id = ?").run(friendly, taskId)
   broadcast('download:status', { id: taskId, status: 'error', error: friendly, downgradeOffer: null })
+}
+
+function partPathFor(filePath) {
+  return `${filePath}.part`
+}
+
+function lrcPathFor(audioPath) {
+  return audioPath ? audioPath.replace(/\.[^.]+$/, '.lrc') : ''
+}
+
+function safeUnlink(filePath) {
+  if (!filePath) return
+  try {
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath)
+  } catch {}
+}
+
+function cleanupDownloadPath(filePath) {
+  if (!filePath) return
+  safeUnlink(filePath)
+  safeUnlink(partPathFor(filePath))
+  safeUnlink(lrcPathFor(filePath))
+}
+
+function rememberDownloadArtifact(meta, filePath) {
+  if (!filePath) return meta
+  if (!Array.isArray(meta.downloadArtifacts)) meta.downloadArtifacts = []
+  if (!meta.downloadArtifacts.includes(filePath)) meta.downloadArtifacts.push(filePath)
+  return meta
+}
+
+function collectTaskArtifactPaths(task, meta, settings, { includeVariants = true } = {}) {
+  const paths = new Set()
+  if (task?.file_path) paths.add(task.file_path)
+  if (Array.isArray(meta?.downloadArtifacts)) {
+    for (const p of meta.downloadArtifacts) paths.add(p)
+  }
+  if (includeVariants && task && settings) {
+    for (const ext of DOWNLOAD_ARTIFACT_EXTS) {
+      paths.add(resolveTaskFilePath(task, settings, ext))
+    }
+  }
+  return [...paths]
+}
+
+function cleanupTaskDownloadArtifacts(task, meta, settings, { exceptPath } = {}) {
+  const except = new Set([exceptPath].filter(Boolean))
+  for (const filePath of collectTaskArtifactPaths(task, meta, settings)) {
+    if (except.has(filePath)) continue
+    cleanupDownloadPath(filePath)
+  }
+  if (meta?.downloadArtifacts) meta.downloadArtifacts = []
+}
+
+function clearTaskStoredFilePath(taskId) {
+  getDB().prepare('UPDATE download_tasks SET file_path = NULL WHERE id = ?').run(taskId)
+}
+
+function prepareTaskForRetry(taskRow, { cleanupFiles = true } = {}) {
+  const settings = getSettings()
+  let meta = parseTaskMeta(taskRow)
+  if (cleanupFiles) {
+    cleanupTaskDownloadArtifacts(taskRow, meta, settings)
+    clearTaskStoredFilePath(taskRow.id)
+  }
+  if (meta.downgradeOffer) delete meta.downgradeOffer
+  if (meta.sourceFallbackOffer) delete meta.sourceFallbackOffer
+  return { meta, settings }
+}
+
+function resolveTaskFilePath(task, settings, ext) {
+  const fileName = buildFileName(settings['download.fileName'] || '{name} - {singer}', task, ext)
+  const savePath = getDownloadSavePath()
+  const groupDir = resolveDownloadGroupDir(savePath, settings, task)
+  return path.join(groupDir, fileName)
+}
+
+function finalizePartFile(partPath, filePath) {
+  safeUnlink(filePath)
+  if (!fs.existsSync(partPath)) throw new Error('下载文件不完整')
+  fs.renameSync(partPath, filePath)
 }
 
 async function downloadTask(task, settings) {
@@ -546,6 +652,7 @@ async function downloadTask(task, settings) {
   const quality = task.quality || '320k'
   const musicInfo = buildMusicInfoFromTask(task, meta)
   let lastError = null
+  let lastAttemptPath = ''
 
   try {
     for (let attempt = 1; attempt <= SAME_QUALITY_ATTEMPTS; attempt++) {
@@ -553,6 +660,8 @@ async function downloadTask(task, settings) {
       const latest = getDB().prepare('SELECT status FROM download_tasks WHERE id = ?').get(task.id)
       if (!latest || latest.status === 'paused') return
 
+      let filePath = ''
+      let partPath = ''
       try {
         if (attempt > 1) {
           broadcast('download:status', {
@@ -587,33 +696,44 @@ async function downloadTask(task, settings) {
         }
 
         const ext = guessExt(url, quality)
-        const fileName = buildFileName(settings['download.fileName'] || '{name} - {singer}', task, ext)
-        const savePath = getDownloadSavePath()
-        const groupDir = resolveDownloadGroupDir(savePath, settings, task)
-        fs.mkdirSync(groupDir, { recursive: true })
-        const filePath = path.join(groupDir, fileName)
+        filePath = resolveTaskFilePath(task, settings, ext)
+        partPath = partPathFor(filePath)
+        lastAttemptPath = filePath
+        rememberDownloadArtifact(meta, filePath)
+        saveTaskMeta(task.id, meta)
+
+        fs.mkdirSync(path.dirname(filePath), { recursive: true })
 
         if (settings['download.skipExistFile'] === 'true' && fs.existsSync(filePath)) {
+          cleanupTaskDownloadArtifacts(task, meta, settings, { exceptPath: filePath })
           getDB().prepare("UPDATE download_tasks SET status = 'completed', file_path = ?, progress = 1 WHERE id = ?")
             .run(filePath, task.id)
           await writeMetaIfNeeded(task, meta, filePath, ext, settings)
           broadcast('download:status', { id: task.id, status: 'completed', progress: 1, filePath, quality })
+          scanBatchAndCache([{ filePath }]).catch(() => {})
           notifyLibraryChanged([filePath], { reason: 'download' })
           return
         }
 
-        // 重试前清掉半截文件
-        try { if (fs.existsSync(filePath)) fs.unlinkSync(filePath) } catch {}
+        cleanupTaskDownloadArtifacts(task, meta, settings, { exceptPath: filePath })
 
-        await streamToFile(url, filePath, task.id, abort)
+        await streamToFile(url, partPath, task.id, abort)
+        finalizePartFile(partPath, filePath)
+        cleanupTaskDownloadArtifacts(task, meta, settings, { exceptPath: filePath })
+        rememberDownloadArtifact(meta, filePath)
+        meta.downloadArtifacts = [filePath]
+        saveTaskMeta(task.id, meta)
 
         getDB().prepare("UPDATE download_tasks SET status = 'completed', file_path = ?, progress = 1, error = NULL WHERE id = ?")
           .run(filePath, task.id)
         await writeMetaIfNeeded(task, meta, filePath, ext, settings)
         broadcast('download:status', { id: task.id, status: 'completed', progress: 1, filePath, quality })
+        scanBatchAndCache([{ filePath }]).catch(() => {})
         notifyLibraryChanged([filePath], { reason: 'download' })
         return
       } catch (e) {
+        cleanupDownloadPath(partPath || filePath)
+        if (filePath) rememberDownloadArtifact(meta, filePath)
         if (e.name === 'AbortError') return
         if (e.code === 'SOURCE_FALLBACK_REQUIRED' && markSourceFallbackOffer(task, meta, e)) return
         lastError = e
@@ -623,6 +743,10 @@ async function downloadTask(task, settings) {
       }
     }
 
+    if (lastAttemptPath) {
+      cleanupDownloadPath(lastAttemptPath)
+      clearTaskStoredFilePath(task.id)
+    }
     const reason = lastError?.message || '下载失败'
     const available = [
       ...(Array.isArray(meta.qualitys) ? meta.qualitys : []),

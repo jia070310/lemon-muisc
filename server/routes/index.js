@@ -9,6 +9,7 @@ import { tagRouter } from './tag.js'
 import { playRouter } from './play.js'
 import { pathsRouter } from './paths.js'
 import { aboutRouter } from './about.js'
+import { libraryRouter } from './library.js'
 
 export const apiRouter = Router()
 
@@ -22,3 +23,4 @@ apiRouter.use('/tag', tagRouter)
 apiRouter.use('/play', playRouter)
 apiRouter.use('/paths', pathsRouter)
 apiRouter.use('/about', aboutRouter)
+apiRouter.use('/library', libraryRouter)

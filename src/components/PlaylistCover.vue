@@ -6,18 +6,51 @@
       {
         'has-image': !!displayCoverUrl,
         'is-gradient': isGradientStyle,
+        'is-compact': size === 'compact',
       },
     ]"
   >
+    <!-- 小卡片：封面在上、文字在下（横向滑动用） -->
+    <template v-if="size === 'compact'">
+      <div
+        class="playlist-compact-cover"
+        :class="{ 'is-gradient': isGradientStyle }"
+      >
+        <div
+          v-if="isGradientStyle"
+          class="playlist-compact-gradient"
+          :style="{ background: gradient }"
+        >
+          <span class="playlist-compact-icon" v-html="icon"></span>
+        </div>
+        <template v-else>
+          <img
+            v-if="displayCoverUrl && !coverBroken"
+            :src="displayCoverUrl"
+            alt=""
+            loading="lazy"
+            @error="coverBroken = true"
+          />
+          <div v-else class="playlist-compact-fallback" :style="{ background: gradient }">
+            <span v-html="icon"></span>
+          </div>
+        </template>
+      </div>
+      <div class="playlist-compact-meta">
+        <span class="playlist-compact-name" :title="name">{{ name }}</span>
+        <span v-if="count != null" class="playlist-compact-count">{{ count }} 首</span>
+      </div>
+    </template>
+
     <!-- 固定渐变风格：最新添加 / 最近播放 -->
     <div
-      v-if="isGradientStyle"
+      v-else-if="isGradientStyle"
       class="playlist-cover-gradient"
       :style="{ background: gradient }"
     >
       <span class="playlist-cover-icon-side" v-html="icon"></span>
       <div class="playlist-cover-meta-inline">
-        <span class="playlist-cover-name">{{ name }}</span>
+        <span class="playlist-cover-name" :title="name">{{ name }}</span>
         <span v-if="count != null" class="playlist-cover-count">{{ count }} 首</span>
       </div>
     </div>
@@ -36,7 +69,7 @@
       </div>
       <div v-if="displayCoverUrl && showMeta" class="playlist-cover-shade"></div>
       <div v-if="showMeta" class="playlist-cover-meta">
-        <span class="playlist-cover-name">{{ name }}</span>
+        <span class="playlist-cover-name" :title="name">{{ name }}</span>
         <span v-if="count != null" class="playlist-cover-count">{{ count }} 首</span>
       </div>
     </template>
@@ -77,6 +110,62 @@ watch(() => props.coverUrl, () => {
 .size-card { aspect-ratio: 16 / 9; min-height: 112px; }
 .size-lg { width: 200px; height: 200px; border-radius: 14px; flex-shrink: 0; }
 .size-row { width: 100%; aspect-ratio: 16 / 9; min-height: 112px; }
+.size-compact {
+  width: 112px;
+  flex-shrink: 0;
+  aspect-ratio: auto;
+  min-height: 0;
+  border-radius: 12px;
+  background: transparent;
+}
+
+.playlist-compact-cover {
+  aspect-ratio: 1;
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--bg-elevated);
+}
+.playlist-compact-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.playlist-compact-gradient,
+.playlist-compact-fallback {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+}
+.playlist-compact-icon,
+.playlist-compact-fallback span {
+  opacity: 0.42;
+  line-height: 0;
+  transform: scale(0.85);
+}
+.playlist-compact-meta {
+  margin-top: 8px;
+  min-width: 0;
+}
+.playlist-compact-name {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.playlist-compact-count {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
 
 .playlist-cover-gradient {
   position: relative;
@@ -100,9 +189,16 @@ watch(() => props.coverUrl, () => {
   position: relative;
   z-index: 1;
   max-width: calc(100% - 48px);
+  min-width: 0;
+  overflow: hidden;
+}
+.playlist-cover-name {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .is-gradient .playlist-cover-name {
-  display: block;
   font-size: 20px;
   font-weight: 600;
 }
@@ -131,18 +227,23 @@ watch(() => props.coverUrl, () => {
 .playlist-cover-shade {
   position: absolute;
   inset: 0;
-  background: linear-gradient(to top, rgba(0, 0, 0, 0.72) 0%, rgba(0, 0, 0, 0.2) 55%, transparent 100%);
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.72) 0%, rgba(0, 0, 0, 0.2) 55%, transparent 100%);
   pointer-events: none;
 }
 .has-image .playlist-cover-meta {
   position: absolute;
-  inset: auto 0 0 0;
+  top: 0;
+  left: 0;
+  right: 0;
   padding: 16px 18px;
   color: #fff;
   z-index: 1;
+  box-sizing: border-box;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
 }
 .has-image .playlist-cover-name {
-  display: block;
   font-size: 20px;
   font-weight: 600;
   text-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
@@ -156,18 +257,20 @@ watch(() => props.coverUrl, () => {
 }
 :not(.has-image) .playlist-cover-meta {
   position: absolute;
-  inset: auto 0 0 0;
+  top: 0;
+  left: 0;
+  right: 0;
   padding: 14px 16px;
   color: #fff;
   z-index: 1;
+  box-sizing: border-box;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
 }
 :not(.has-image) .playlist-cover-name {
-  display: block;
   font-size: 20px;
   font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 :not(.has-image) .playlist-cover-count {
   display: block;

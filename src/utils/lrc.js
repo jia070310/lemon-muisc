@@ -40,3 +40,20 @@ export function parseLrc(lrc) {
   lines.sort((a, b) => a.time - b.time)
   return lines
 }
+
+/** 无时间轴的纯文本歌词（如 MP3 USLT） */
+export function parsePlainLyric(text) {
+  return String(text).replace(/\uFEFF/g, '').replace(/\r/g, '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && !/^\[(?:ti|ar|al|by|offset|id|length|ve):/i.test(line))
+    .map((line) => ({ time: 0, text: line }))
+}
+
+/** 自动识别 LRC 或纯文本歌词 */
+export function parseLyric(text) {
+  if (!text) return []
+  const lrc = parseLrc(text)
+  if (lrc.length) return lrc
+  return parsePlainLyric(text)
+}

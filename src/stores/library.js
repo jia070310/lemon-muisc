@@ -4,12 +4,78 @@ const FAVORITES_KEY = 'lemon-library-favorites'
 const RECENT_KEY = 'lemon-library-recent'
 const PLAYLISTS_KEY = 'lemon-library-playlists'
 const RECENT_LIMIT = 200
+const SESSION_TRACKS_KEY = 'lemon-library-tracks-v1'
+const SESSION_TRACKS_LIMIT = 8000
 const coverVersions = new Map()
 
 export const libraryTracks = ref([])
 export const libraryLoading = ref(false)
+export const libraryMetaLoading = ref(false)
 export const libraryScanned = ref(false)
 export const libraryLoadProgress = ref('')
+export const libraryScanPhase = ref('')
+export const libraryScanCurrent = ref(0)
+export const libraryScanTotal = ref(0)
+
+export const libraryScanning = computed(() => libraryLoading.value || libraryMetaLoading.value)
+
+export const libraryScanPercent = computed(() => {
+  if (libraryScanPhase.value === 'tags' && libraryScanTotal.value > 0) {
+    return Math.min(100, Math.round((libraryScanCurrent.value / libraryScanTotal.value) * 100))
+  }
+  const phaseWeight = { prepare: 10, cache: 22, sync: 38 }
+  return phaseWeight[libraryScanPhase.value] || (libraryScanning.value ? 8 : 0)
+})
+
+function resetScanProgress() {
+  libraryScanPhase.value = ''
+  libraryScanCurrent.value = 0
+  libraryScanTotal.value = 0
+  libraryLoadProgress.value = ''
+}
+
+function setScanProgress(phase, { current = 0, total = 0, text = '' } = {}) {
+  libraryScanPhase.value = phase
+  libraryScanCurrent.value = current
+  libraryScanTotal.value = total
+  libraryLoadProgress.value = text
+}
+
+function loadSessionTracks() {
+  try {
+    const raw = sessionStorage.getItem(SESSION_TRACKS_KEY)
+    if (!raw) return null
+    const data = JSON.parse(raw)
+    if (!Array.isArray(data) || !data.length) return null
+    return data.map((file) => fileToLibraryTrack({
+      ...file,
+      filePath: file.filePath || file.localPath,
+    }))
+  } catch {
+    return null
+  }
+}
+
+function saveSessionTracks(tracks) {
+  try {
+    const slim = (tracks || []).slice(0, SESSION_TRACKS_LIMIT).map((t) => ({
+      filePath: t.filePath || t.localPath,
+      localPath: t.localPath || t.filePath,
+      title: t.name,
+      artist: t.singer,
+      album: t.album,
+      picUrl: t.picUrl || t.img || '',
+      hasPicture: t.hasPicture,
+      mtime: t.mtime || 0,
+      year: t.year || '',
+      genre: t.genre || '',
+      format: t.format || '',
+      duration: t.duration || 0,
+      track: t.trackNo || '',
+    }))
+    sessionStorage.setItem(SESSION_TRACKS_KEY, JSON.stringify(slim))
+  } catch {}
+}
 
 /** 从搜索/发现页挑选歌曲加入歌单时设置 */
 export const playlistPickTarget = ref(null)
@@ -58,7 +124,144 @@ function writeJson(key, value) {
 
 function persistPlaylists() {
   writeJson(PLAYLISTS_KEY, customPlaylists.value)
+  scheduleUserDataPersist()
 }
+
+function persistFavorites() {
+  writeJson(FAVORITES_KEY, favorites.value)
+  scheduleUserDataPersist()
+}
+
+function persistRecent() {
+  writeJson(RECENT_KEY, recentPlays.value)
+  scheduleUserDataPersist()
+}
+
+let libraryApi = null
+let userDataSyncReady = false
+let skipNextUserDataPersist = false
+let userDataPersistTimer = null
+let pendingUserDataPersist = false
+
+function hasItems(list) {
+  return Array.isArray(list) && list.length > 0
+}
+
+function applyRemoteUserData({ playlists, favorites: favs, recentPlays: recent } = {}) {
+  skipNextUserDataPersist = true
+  if (Array.isArray(playlists)) {
+    customPlaylists.value = playlists.map(normalizePlaylist)
+    writeJson(PLAYLISTS_KEY, customPlaylists.value)
+  }
+  if (Array.isArray(favs)) {
+    favorites.value = favs
+    writeJson(FAVORITES_KEY, favs)
+  }
+  if (Array.isArray(recent)) {
+    recentPlays.value = recent
+    writeJson(RECENT_KEY, recent)
+  }
+}
+
+function scheduleUserDataPersist() {
+  if (!libraryApi || !userDataSyncReady) {
+    pendingUserDataPersist = true
+    return
+  }
+  if (skipNextUserDataPersist) {
+    skipNextUserDataPersist = false
+    return
+  }
+  if (userDataPersistTimer) clearTimeout(userDataPersistTimer)
+  userDataPersistTimer = setTimeout(async () => {
+    userDataPersistTimer = null
+    try {
+      await libraryApi.library.userData.save({
+        playlists: customPlaylists.value,
+        favorites: favorites.value,
+        recentPlays: recentPlays.value,
+      })
+    } catch {}
+  }, 450)
+}
+
+function flushPendingUserDataPersist() {
+  if (!pendingUserDataPersist) return
+  pendingUserDataPersist = false
+  scheduleUserDataPersist()
+}
+
+/** 从服务端加载歌单、收藏、最近播放；本地仅有数据时自动上传迁移 */
+export async function initLibraryUserData(api) {
+  libraryApi = api
+  try {
+    const res = await api.library.userData.get()
+    const data = res.data || {}
+    const serverPl = (data.playlists || []).map(normalizePlaylist)
+    const serverFav = data.favorites || []
+    const serverRecent = data.recentPlays || []
+
+    const localPl = readJson(PLAYLISTS_KEY, []).map(normalizePlaylist)
+    const localFav = readJson(FAVORITES_KEY, [])
+    const localRecent = readJson(RECENT_KEY, [])
+
+    if (hasItems(serverPl)) {
+      customPlaylists.value = serverPl
+      writeJson(PLAYLISTS_KEY, serverPl)
+    } else if (hasItems(localPl)) {
+      customPlaylists.value = localPl
+    }
+
+    if (hasItems(serverFav)) {
+      favorites.value = serverFav
+      writeJson(FAVORITES_KEY, serverFav)
+    } else if (hasItems(localFav)) {
+      favorites.value = localFav
+    }
+
+    if (hasItems(serverRecent)) {
+      recentPlays.value = serverRecent
+      writeJson(RECENT_KEY, serverRecent)
+    } else if (hasItems(localRecent)) {
+      recentPlays.value = localRecent
+    }
+
+    const needUpload = (
+      (!hasItems(serverPl) && hasItems(localPl))
+      || (!hasItems(serverFav) && hasItems(localFav))
+      || (!hasItems(serverRecent) && hasItems(localRecent))
+    )
+    if (needUpload) {
+      skipNextUserDataPersist = true
+      await api.library.userData.save({
+        playlists: customPlaylists.value,
+        favorites: favorites.value,
+        recentPlays: recentPlays.value,
+      })
+    }
+  } catch {
+    customPlaylists.value = readJson(PLAYLISTS_KEY, []).map(normalizePlaylist)
+    favorites.value = readJson(FAVORITES_KEY, [])
+    recentPlays.value = readJson(RECENT_KEY, [])
+  } finally {
+    userDataSyncReady = true
+    flushPendingUserDataPersist()
+  }
+}
+
+export async function reloadLibraryUserData() {
+  if (!libraryApi) return
+  try {
+    const res = await libraryApi.library.userData.get()
+    applyRemoteUserData(res.data || {})
+  } catch {}
+}
+
+/** @deprecated 使用 initLibraryUserData */
+export const initLibraryPlaylists = initLibraryUserData
+
+/** @deprecated 使用 reloadLibraryUserData */
+export const reloadLibraryPlaylists = reloadLibraryUserData
 
 function normalizePlaylist(pl) {
   return {
@@ -150,7 +353,7 @@ export function toggleFavorite(track) {
   if (idx >= 0) list.splice(idx, 1)
   else list.unshift(snapshot)
   favorites.value = list
-  writeJson(FAVORITES_KEY, list)
+  persistFavorites()
   return idx < 0
 }
 
@@ -160,7 +363,7 @@ export function recordRecentPlay(track) {
   snapshot.playedAt = Date.now()
   const list = [snapshot, ...recentPlays.value.filter(r => r.key !== snapshot.key)].slice(0, RECENT_LIMIT)
   recentPlays.value = list
-  writeJson(RECENT_KEY, list)
+  persistRecent()
 }
 
 export function getPlaylistCover(playlist, tracks = []) {
@@ -465,7 +668,7 @@ export function fileToLibraryTrack(file) {
       ? file.pictureBase64
       : `data:${file.pictureMime || 'image/jpeg'};base64,${file.pictureBase64}`)
     : ''
-  const pic = picFromData || (file.hasPicture && file.filePath ? localCoverUrl(file.filePath) : '')
+  const pic = picFromData || (file.filePath && file.hasPicture !== false ? localCoverUrl(file.filePath) : '')
   const ext = (file.filePath || '').match(/\.([^.]+)$/)?.[1] || ''
   const albumRaw = file.album || ''
   const name = file.title || file.parsedTitle || file.fileName
@@ -491,57 +694,154 @@ export function fileToLibraryTrack(file) {
   }
 }
 
-/** 扫描音乐库目录并读取标签（含封面地址、专辑等信息） */
-export async function scanLibrary(api, { force = false, onError } = {}) {
-  if (libraryLoading.value) return
-  if (libraryScanned.value && !force) return
-  libraryLoading.value = true
-  libraryLoadProgress.value = '读取目录'
-  try {
-    const res = await api.paths.list()
-    const dirs = res.musicPaths || res.data || []
-    if (!dirs.length) {
-      libraryTracks.value = []
-      libraryScanned.value = true
-      return
-    }
-    const scanned = []
-    for (let i = 0; i < dirs.length; i++) {
-      libraryLoadProgress.value = `扫描 ${i + 1}/${dirs.length}`
-      const scanRes = await api.tag.scan(dirs[i])
-      scanned.push(...(scanRes.data || []))
-    }
-    const unique = new Map()
-    for (const f of scanned) unique.set(f.filePath, f)
-    const files = [...unique.values()]
-    const enriched = []
-    const chunk = 20
-    for (let i = 0; i < files.length; i += chunk) {
-      libraryLoadProgress.value = `读取标签 ${Math.min(i + chunk, files.length)}/${files.length}`
-      const batch = files.slice(i, i + chunk)
-      try {
-        const metaRes = await api.tag.readBatch(batch.map(f => f.filePath), true)
-        for (const row of metaRes.data || []) {
-          const base = unique.get(row.filePath) || {}
-          if (!row.ok) {
-            enriched.push(fileToLibraryTrack(base))
-            continue
-          }
-          enriched.push(fileToLibraryTrack({ ...base, ...row }))
-        }
-      } catch {
-        batch.forEach(f => enriched.push(fileToLibraryTrack(f)))
-      }
-    }
-    libraryTracks.value = enriched.sort((a, b) => (b.mtime || 0) - (a.mtime || 0))
-    libraryScanned.value = true
-  } catch (e) {
-    onError?.(e.message || '加载音乐库失败')
-    throw e
-  } finally {
-    libraryLoading.value = false
-    libraryLoadProgress.value = ''
+function sortTracksByMtime(tracks) {
+  return [...tracks].sort((a, b) => (b.mtime || 0) - (a.mtime || 0))
+}
+
+function mergeLibraryTracks(newTracks) {
+  if (!newTracks?.length) return
+  const map = new Map(libraryTracks.value.map(t => [t.filePath || t.localPath, t]))
+  for (const t of newTracks) {
+    const key = t.filePath || t.localPath
+    if (key) map.set(key, t)
   }
+  libraryTracks.value = sortTracksByMtime([...map.values()])
+}
+
+export function removeLibraryTracks(filePaths) {
+  const removed = new Set((filePaths || []).filter(Boolean))
+  if (!removed.size) return 0
+  const before = libraryTracks.value.length
+  libraryTracks.value = libraryTracks.value.filter(t => !removed.has(t.filePath) && !removed.has(t.localPath))
+  return before - libraryTracks.value.length
+}
+
+let scanPromise = null
+
+/** 扫描音乐库目录并读取标签（含封面地址、专辑等信息） */
+export async function scanLibrary(api, { force = false, onError, onComplete } = {}) {
+  if (scanPromise && !force) return scanPromise
+
+  const run = async () => {
+    if (libraryLoading.value || libraryMetaLoading.value) {
+      if (!force) return null
+    }
+    if (libraryScanned.value && !force) return null
+
+    libraryLoading.value = true
+    libraryMetaLoading.value = false
+    resetScanProgress()
+    setScanProgress('prepare', { text: '读取目录' })
+
+    let pendingCount = 0
+    let tagScanned = 0
+
+    try {
+      const res = await api.paths.list()
+      const dirs = res.musicPaths || res.data || []
+      if (!dirs.length) {
+        libraryTracks.value = []
+        libraryScanned.value = true
+        const result = { totalTracks: 0, scannedTags: 0, hadPending: false }
+        onComplete?.(result, { force })
+        return result
+      }
+
+      let showedCache = false
+      if (!force) {
+        const sessionTracks = loadSessionTracks()
+        if (sessionTracks?.length) {
+          libraryTracks.value = sortTracksByMtime(sessionTracks)
+          libraryScanned.value = true
+          showedCache = true
+          libraryLoading.value = false
+          libraryMetaLoading.value = true
+          setScanProgress('cache', { text: '同步缓存' })
+        }
+        try {
+          if (!showedCache) setScanProgress('cache', { text: '加载缓存' })
+          const cachedRes = await api.library.tracks()
+          const cachedList = cachedRes.data || []
+          if (cachedList.length) {
+            libraryTracks.value = sortTracksByMtime(cachedList.map(fileToLibraryTrack))
+            libraryScanned.value = true
+            showedCache = true
+            libraryLoading.value = false
+            libraryMetaLoading.value = true
+            saveSessionTracks(libraryTracks.value)
+          }
+        } catch {}
+      }
+
+      setScanProgress('sync', { text: '比对文件' })
+      const syncRes = await api.library.sync()
+      const { cached = [], pending = [], removed = [] } = syncRes.data || {}
+      pendingCount = pending.length
+
+      if (removed.length) removeLibraryTracks(removed)
+
+      if (cached.length) {
+        mergeLibraryTracks(cached.map(fileToLibraryTrack))
+      }
+
+      if (pending.length) {
+        mergeLibraryTracks(pending.map(f => fileToLibraryTrack(f)))
+      } else if (!libraryTracks.value.length && !cached.length) {
+        libraryTracks.value = []
+      }
+
+      libraryScanned.value = true
+      libraryLoading.value = false
+
+      if (pending.length) {
+        libraryMetaLoading.value = true
+        const chunk = 20
+        setScanProgress('tags', { current: 0, total: pending.length, text: `读取标签 0/${pending.length}` })
+        for (let i = 0; i < pending.length; i += chunk) {
+          const done = Math.min(i + chunk, pending.length)
+          tagScanned = done
+          setScanProgress('tags', {
+            current: done,
+            total: pending.length,
+            text: `读取标签 ${done}/${pending.length}`,
+          })
+          const batch = pending.slice(i, i + chunk)
+          try {
+            const batchRes = await api.library.scanBatch(batch)
+            const tracks = (batchRes.data || []).map((row) => {
+              const base = batch.find(f => f.filePath === row.filePath) || {}
+              if (row.ok === false) return fileToLibraryTrack({ ...base, ...row })
+              return fileToLibraryTrack({ ...base, ...row })
+            })
+            mergeLibraryTracks(tracks)
+          } catch {
+            mergeLibraryTracks(batch.map(f => fileToLibraryTrack(f)))
+          }
+        }
+      } else if (!showedCache && !cached.length && !pending.length) {
+        libraryTracks.value = []
+      }
+
+      const result = {
+        totalTracks: libraryTracks.value.length,
+        scannedTags: tagScanned,
+        hadPending: pendingCount > 0,
+      }
+      saveSessionTracks(libraryTracks.value)
+      onComplete?.(result, { force })
+      return result
+    } catch (e) {
+      onError?.(e.message || '加载音乐库失败')
+      throw e
+    } finally {
+      libraryLoading.value = false
+      libraryMetaLoading.value = false
+      resetScanProgress()
+    }
+  }
+
+  scanPromise = run().finally(() => { scanPromise = null })
+  return scanPromise
 }
 
 export function groupAlbums(tracks) {
@@ -590,6 +890,89 @@ export function findAlbumById(tracks, id) {
   return groupAlbums(tracks).find(a => a.id === id) || null
 }
 
+const GENRE_THEME_COLORS = [
+  { border: '#ef4444', bg: 'rgba(239, 68, 68, 0.14)' },
+  { border: '#3b82f6', bg: 'rgba(59, 130, 246, 0.14)' },
+  { border: '#84cc16', bg: 'rgba(132, 204, 22, 0.14)' },
+  { border: '#06b6d4', bg: 'rgba(6, 182, 212, 0.14)' },
+  { border: '#f59e0b', bg: 'rgba(245, 158, 11, 0.14)' },
+  { border: '#a855f7', bg: 'rgba(168, 85, 247, 0.14)' },
+  { border: '#ec4899', bg: 'rgba(236, 72, 153, 0.14)' },
+  { border: '#6366f1', bg: 'rgba(99, 102, 241, 0.14)' },
+]
+
+export function genreToId(name) {
+  return encodeURIComponent(String(name || ''))
+}
+
+export function genreFromId(id) {
+  if (!id) return ''
+  try {
+    return decodeURIComponent(String(id))
+  } catch {
+    return String(id)
+  }
+}
+
+export function getGenreTheme(name) {
+  const text = String(name || '')
+  let hash = 0
+  for (let i = 0; i < text.length; i++) {
+    hash = (hash + text.charCodeAt(i) * (i + 1)) % GENRE_THEME_COLORS.length
+  }
+  return GENRE_THEME_COLORS[hash]
+}
+
+function splitGenreTags(genreRaw) {
+  const raw = String(genreRaw || '').trim()
+  if (!raw) return []
+  const parts = raw.split(/[/;；、,，|]/).map(s => s.trim()).filter(Boolean)
+  return parts.length ? parts : []
+}
+
+/** 按音乐风格分组（一首歌可属于多个风格标签） */
+export function groupGenres(tracks) {
+  const map = new Map()
+  for (const track of tracks) {
+    const tags = splitGenreTags(track.genre)
+    const names = tags.length ? tags : ['未知风格']
+    for (const name of names) {
+      const id = genreToId(name)
+      if (!map.has(id)) {
+        map.set(id, {
+          id,
+          name,
+          cover: track.picUrl || '',
+          tracks: [],
+          latestMtime: track.mtime || 0,
+          artistSet: new Set(),
+        })
+      }
+      const entry = map.get(id)
+      entry.tracks.push(track)
+      if (track.singer) entry.artistSet.add(track.singer)
+      if (!entry.cover && track.picUrl) entry.cover = track.picUrl
+      if ((track.mtime || 0) > entry.latestMtime) entry.latestMtime = track.mtime || 0
+    }
+  }
+  return [...map.values()].map((g) => ({
+    id: g.id,
+    name: g.name,
+    cover: g.cover,
+    tracks: sortLibrarySongs(g.tracks, 'recent'),
+    trackCount: g.tracks.length,
+    artistCount: g.artistSet.size,
+    latestMtime: g.latestMtime,
+    theme: getGenreTheme(g.name),
+  })).sort((a, b) => b.trackCount - a.trackCount || b.latestMtime - a.latestMtime)
+}
+
+export function findGenreById(tracks, id) {
+  if (!id) return null
+  const name = genreFromId(id)
+  return groupGenres(tracks).find(g => g.id === id || g.name === name) || null
+}
+
 function syncStoredSnapshotsForTrack(track) {
   const snap = trackToSnapshot(track)
   if (!snap) return
@@ -607,13 +990,13 @@ function syncStoredSnapshotsForTrack(track) {
   const nextFavs = patch(favorites.value)
   if (nextFavs !== favorites.value) {
     favorites.value = nextFavs
-    writeJson(FAVORITES_KEY, nextFavs)
+    persistFavorites()
   }
 
   const nextRecent = patch(recentPlays.value)
   if (nextRecent !== recentPlays.value) {
     recentPlays.value = nextRecent
-    writeJson(RECENT_KEY, nextRecent)
+    persistRecent()
   }
 
   let playlistsChanged = false
@@ -723,10 +1106,11 @@ export async function ingestLibraryTracks(api, filePaths) {
   const updates = new Map()
   const chunk = 20
   for (let i = 0; i < paths.length; i += chunk) {
-    const batch = paths.slice(i, i + chunk)
+    const batchPaths = paths.slice(i, i + chunk)
+    const files = batchPaths.map(filePath => ({ filePath }))
     try {
-      const metaRes = await api.tag.readBatch(batch, true)
-      for (const row of metaRes.data || []) {
+      const batchRes = await api.library.scanBatch(files)
+      for (const row of batchRes.data || []) {
         const filePath = row.filePath
         if (!filePath) continue
         const existing = libraryTracks.value.find(t => t.localPath === filePath || t.filePath === filePath)
@@ -753,7 +1137,7 @@ export async function ingestLibraryTracks(api, filePaths) {
     updated++
   }
 
-  libraryTracks.value = next.sort((a, b) => (b.mtime || 0) - (a.mtime || 0))
+  libraryTracks.value = sortTracksByMtime(next)
   libraryScanned.value = true
   return { added, updated }
 }
@@ -763,6 +1147,9 @@ let hotReloadApi = null
 let pendingHotPaths = new Set()
 let hotReloadTimer = null
 let offLibraryChanged = null
+let offLibraryRemoved = null
+let offUserDataChanged = null
+let offPlaylistsChanged = null
 let offDownloadComplete = null
 
 async function flushLibraryHotReload() {
@@ -793,12 +1180,32 @@ function queueLibraryHotReload(filePaths) {
 /** 订阅 WebSocket，在下载完成等场景自动增量刷新音乐库 */
 export function initLibraryHotReload(api, { onWS } = {}) {
   hotReloadApi = api
+  libraryApi = api
   offLibraryChanged?.()
+  offLibraryRemoved?.()
+  offUserDataChanged?.()
   offDownloadComplete?.()
   if (!onWS) return () => {}
 
   offLibraryChanged = onWS('library:changed', (payload) => {
     queueLibraryHotReload(payload?.filePaths)
+  })
+  offLibraryRemoved = onWS('library:removed', (payload) => {
+    const removed = removeLibraryTracks(payload?.filePaths)
+    if (removed > 0) {
+      libraryHotNotice.value = removed === 1
+        ? '音乐库已更新：移除 1 首歌曲'
+        : `音乐库已更新：移除 ${removed} 首歌曲`
+      setTimeout(() => {
+        if (libraryHotNotice.value.includes('移除')) libraryHotNotice.value = ''
+      }, 4200)
+    }
+  })
+  offUserDataChanged = onWS('library:user-data-changed', () => {
+    reloadLibraryUserData()
+  })
+  offPlaylistsChanged = onWS('library:playlists-changed', () => {
+    reloadLibraryUserData()
   })
   offDownloadComplete = onWS('download:status', (payload) => {
     if (payload?.status === 'completed' && payload?.filePath) {
@@ -808,8 +1215,14 @@ export function initLibraryHotReload(api, { onWS } = {}) {
 
   return () => {
     offLibraryChanged?.()
+    offLibraryRemoved?.()
+    offUserDataChanged?.()
+    offPlaylistsChanged?.()
     offDownloadComplete?.()
     offLibraryChanged = null
+    offLibraryRemoved = null
+    offUserDataChanged = null
+    offPlaylistsChanged = null
     offDownloadComplete = null
     if (hotReloadTimer) clearTimeout(hotReloadTimer)
     hotReloadTimer = null

@@ -384,6 +384,7 @@ function showToast(text, type = 'info') {
   border-radius: 16px;
   overflow: hidden;
   text-align: left;
+  min-width: 0;
 }
 .playlist-card-btn.active { outline: 2px solid var(--accent); outline-offset: 2px; }
 .detail { padding: 18px; }

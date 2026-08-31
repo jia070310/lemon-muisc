@@ -51,6 +51,16 @@ export function initDB(configPath) {
       created_at INTEGER DEFAULT (unixepoch()),
       updated_at INTEGER DEFAULT (unixepoch())
     );
+
+    CREATE TABLE IF NOT EXISTS library_index (
+      file_path TEXT PRIMARY KEY,
+      mtime REAL NOT NULL DEFAULT 0,
+      size INTEGER NOT NULL DEFAULT 0,
+      meta_json TEXT NOT NULL DEFAULT '{}',
+      scanned_at INTEGER NOT NULL DEFAULT (unixepoch())
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_library_index_mtime ON library_index(mtime DESC);
   `)
 
   const defaultSettings = {
@@ -78,6 +88,9 @@ export function initDB(configPath) {
     'music.paths': '[]',
     'tag.dirs': '[]',
     'tag.matchSource': 'kg',
+    'library.customPlaylists': '[]',
+    'library.favorites': '[]',
+    'library.recentPlays': '[]',
   }
 
   const insert = db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)')

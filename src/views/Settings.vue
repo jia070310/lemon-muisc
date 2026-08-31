@@ -332,7 +332,7 @@
         <div class="setting-item">
           <div class="setting-item-info">
             <div class="setting-item-label">下载分组</div>
-            <div class="setting-item-desc">在下载目录下创建子文件夹；按歌手时多位歌手取第一位</div>
+            <div class="setting-item-desc">在下载目录下创建子文件夹；按歌手时多位歌手取第一位；歌手/专辑为两级目录</div>
           </div>
           <div class="setting-item-action">
             <AppSelect
@@ -418,6 +418,7 @@ const downloadGroupOptions = [
   { value: 'none', label: '不分组' },
   { value: 'artist', label: '按歌手' },
   { value: 'album', label: '按专辑' },
+  { value: 'artist-album', label: '按歌手/专辑' },
 ]
 const DOWNLOAD_GROUP_BY_KEY = 'download.savePathGroupBy'
 const lrcFormatOptions = [

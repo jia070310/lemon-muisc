@@ -262,7 +262,7 @@ import { applyTheme, theme, THEME_KEY, COLOR_SCHEME_KEY, CUSTOM_COLOR_KEY } from
 import { formatUserError } from './utils/userError.js'
 import {
   playlistPickTarget, stopPlaylistPick,
-  initLibraryHotReload, libraryHotNotice,
+  initLibraryHotReload, initLibraryUserData, libraryHotNotice,
 } from './stores/library.js'
 import {
   tagMatchRunning, tagMatchProgress, tagMatchResult, clearTagMatchResult,
@@ -550,6 +550,7 @@ function toggleTheme() {
 onMounted(() => {
   connectWS()
   initPlayer()
+  initLibraryUserData(api).catch(() => {})
   offLibraryHotReload = initLibraryHotReload(api, { onWS })
   checkForUpdate()
   loadSourceFault()
@@ -740,7 +741,8 @@ onUnmounted(() => {
   min-width: 0;
   min-height: 100vh;
   min-height: 100dvh;
-  width: 100%;
+  width: calc(100% - var(--sidebar-width));
+  max-width: calc(100% - var(--sidebar-width));
 }
 .content-fixed {
   height: 100vh;
@@ -836,6 +838,7 @@ onUnmounted(() => {
     padding: calc(52px + env(safe-area-inset-top, 0px)) 14px calc(var(--player-height) + var(--mobile-nav-height) + 20px + env(safe-area-inset-bottom, 0px));
     min-height: auto;
     width: 100%;
+    max-width: 100%;
   }
 
   .mobile-topbar {

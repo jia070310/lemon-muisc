@@ -13,7 +13,12 @@
       </div>
 
       <div v-if="tab === 'library'" class="panel">
-        <input v-model="keyword" class="search-input" placeholder="筛选歌曲 / 歌手 / 专辑" />
+        <ClearableInput
+          v-model="keyword"
+          variant="plain"
+          class="search-input-wrap"
+          placeholder="筛选歌曲 / 歌手 / 专辑"
+        />
         <div class="list-toolbar">
           <label class="select-all">
             <input type="checkbox" :checked="allSelected" :indeterminate.prop="someSelected && !allSelected" @change="toggleAll" />
@@ -57,6 +62,7 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import ClearableInput from './ClearableInput.vue'
 import { libraryTracks, addTracksToPlaylist, startPlaylistPick } from '../stores/library.js'
 import { formatTrackTags } from '../utils/format.js'
 
@@ -165,7 +171,7 @@ function goDiscover() {
 }
 .tab.active { color: #fff; border-color: transparent; background: var(--accent); }
 .panel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.search-input { width: 100%; margin-bottom: 10px; }
+.search-input-wrap { width: 100%; margin-bottom: 10px; }
 .list-toolbar {
   display: flex;
   align-items: center;

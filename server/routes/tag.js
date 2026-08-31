@@ -9,6 +9,7 @@ import { getMusicPaths, addMusicPath, removeMusicPath, isConfiguredMusicDir, isA
 import { listAudioFiles, probeDir } from '../utils/audioScan.js'
 import { mapWithConcurrency } from '../utils/asyncPool.js'
 import { notifyLibraryChanged } from '../utils/libraryNotify.js'
+import { scanBatchAndCache } from '../utils/libraryCache.js'
 
 export const tagRouter = Router()
 
@@ -113,6 +114,7 @@ tagRouter.post('/write', async (req, res) => {
     }
 
     await writeMeta(filePath, ext, writeData)
+    scanBatchAndCache([{ filePath }]).catch(() => {})
     notifyLibraryChanged([filePath], { reason: 'tag-write' })
     res.json({ ok: true })
   } catch (e) {
@@ -136,6 +138,7 @@ tagRouter.post('/write-batch', async (req, res) => {
     }
 
     const results = await batchWriteMeta(prepared)
+    scanBatchAndCache(prepared.map(f => ({ filePath: f.filePath }))).catch(() => {})
     notifyLibraryChanged(prepared.map(f => f.filePath), { reason: 'tag-write-batch' })
     res.json({ ok: true, data: results })
   } catch (e) {

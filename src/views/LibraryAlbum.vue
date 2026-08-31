@@ -5,7 +5,7 @@
       <div class="page-title">专辑</div>
     </div>
 
-    <div v-if="!libraryScanned && libraryLoading" class="loading card">正在加载音乐库…</div>
+    <div v-if="libraryLoading && !libraryTracks.length" class="loading card">正在加载音乐库…</div>
     <div v-else-if="!album" class="empty card">
       <p>未找到该专辑</p>
       <router-link to="/library" class="btn-ghost btn-sm">返回音乐库</router-link>

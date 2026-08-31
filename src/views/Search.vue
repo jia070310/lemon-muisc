@@ -9,15 +9,14 @@
 
     <div class="search-header card">
       <form class="search-row" @submit.prevent="doSearch">
-        <div class="search-bar">
-          <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          <input
-            v-model="searchState.keyword"
-            :placeholder="searchState.searchMode === 'album' ? '搜索专辑名、歌手...' : '搜索歌曲、歌手...'"
-            class="search-input"
-            enterkeyhint="search"
-          />
-        </div>
+        <ClearableInput
+          v-model="searchState.keyword"
+          variant="bar"
+          show-search-icon
+          class="search-bar"
+          :placeholder="searchState.searchMode === 'album' ? '搜索专辑名、歌手...' : '搜索歌曲、歌手...'"
+          enterkeyhint="search"
+        />
         <button type="submit" class="btn-primary search-btn" :disabled="isSearching">
           {{ isSearching ? '搜索中...' : '搜索' }}
         </button>
@@ -238,6 +237,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import BatchQualityDialog from '../components/BatchQualityDialog.vue'
+import ClearableInput from '../components/ClearableInput.vue'
 import { useBatchDownload } from '../composables/useBatchDownload.js'
 import { api } from '../api.js'
 import { searchState, loadSearchSources } from '../stores/search.js'
@@ -606,29 +606,7 @@ function showToast(text, type = 'info') {
 .search-bar {
   flex: 1;
   min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  height: 44px;
-  background: var(--bg-input);
-  border-radius: var(--radius-pill);
-  padding: 0 16px;
-  border: 1px solid var(--border-light);
 }
-.search-bar:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-muted); }
-.search-icon { width: 18px; height: 18px; color: var(--text-muted); flex-shrink: 0; }
-.search-input {
-  flex: 1;
-  min-width: 0;
-  height: 100%;
-  font-size: 15px;
-  padding: 0;
-  background: transparent;
-  border: none;
-  box-shadow: none;
-  border-radius: 0;
-}
-.search-input:focus { box-shadow: none; border: none; }
 .search-btn {
   flex-shrink: 0;
   height: 44px;
@@ -997,10 +975,9 @@ function showToast(text, type = 'info') {
     margin-bottom: 12px;
   }
   .search-bar {
-    height: 44px;
     padding: 0 12px;
   }
-  .search-input {
+  .search-bar :deep(input) {
     font-size: 16px;
   }
   .search-btn {

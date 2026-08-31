@@ -1,19 +1,32 @@
 <template>
   <div class="library-page">
     <div class="library-topbar">
-      <form class="library-search" @submit.prevent="applySearch">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-        <input v-model="keyword" placeholder="搜索歌曲 / 歌手 / 专辑 / 歌单" />
+      <form class="library-search-form" @submit.prevent="applySearch">
+        <ClearableInput
+          v-model="keyword"
+          variant="pill"
+          show-search-icon
+          placeholder="搜索歌曲 / 歌手 / 专辑 / 歌单"
+          @clear="clearSearch"
+        />
       </form>
-      <button type="button" class="btn-ghost btn-sm" :disabled="libraryLoading" @click="refreshLibrary">
-        {{ libraryLoading ? '扫描中…' : '刷新库' }}
+      <button type="button" class="btn-ghost btn-sm" :disabled="libraryScanning" @click="refreshLibrary">
+        {{ scanButtonLabel }}
       </button>
       <button type="button" class="btn-primary btn-sm" @click="openCreatePlaylist">创建歌单</button>
     </div>
-    <p v-if="scanSummary" class="library-scan-summary">
-      {{ scanSummary }}
-      <router-link to="/settings" class="library-scan-link">管理目录</router-link>
-    </p>
+    <div v-if="scanSummary || showScanStatus" class="library-scan-summary">
+      <span v-if="scanSummary" class="library-scan-summary-main">
+        {{ scanSummary }}
+        <router-link to="/settings" class="library-scan-link">管理目录</router-link>
+      </span>
+      <span
+        v-if="showScanStatus"
+        class="library-scan-status"
+        role="status"
+        :aria-label="scanStatusHint"
+      >{{ scanStatusHint }}</span>
+    </div>
 
     <section class="playlist-row-wrap">
       <div class="section-head">
@@ -23,33 +36,81 @@
             v-model="playlistSort"
             :options="playlistSortOptions"
             title="歌单排序"
+            size="sm"
           />
           <button
-            v-if="sortedPlaylistCards.length > playlistPreviewLimit"
+            v-if="showPlaylistMoreBtn"
             type="button"
-            class="section-more"
+            class="section-more-btn"
+            :class="{ expanded: showAllPlaylistCards }"
             @click="showAllPlaylistCards = !showAllPlaylistCards"
-          >{{ showAllPlaylistCards ? '收起' : '更多' }}</button>
+          >
+            <span>{{ showAllPlaylistCards ? '收起' : '更多' }}</span>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+          </button>
+          <button
+            v-else-if="isNarrow && sortedPlaylistCards.length"
+            type="button"
+            class="section-more-btn"
+            @click="openAllPlaylists"
+          >
+            <span>全部</span>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+          </button>
         </div>
       </div>
-      <div class="playlist-row">
+      <div class="horizontal-scroll playlist-scroll">
+        <div class="playlist-row">
+          <button
+            v-for="card in visiblePlaylistCards"
+            :key="card.id"
+            class="playlist-card"
+            @click="openPlaylist(card)"
+          >
+            <PlaylistCover
+              :size="isNarrow ? 'compact' : 'row'"
+              :cover-style="card.coverStyle"
+              :cover-url="card.coverUrl"
+              :gradient="card.gradient"
+              :icon="card.icon"
+              :name="card.name"
+              :count="card.count"
+              :show-meta="!isNarrow"
+            />
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <section class="genre-section" v-if="visibleGenres.length">
+      <div class="section-head">
+        <h2>音乐风格</h2>
         <button
-          v-for="card in visiblePlaylistCards"
-          :key="card.id"
-          class="playlist-card"
-          @click="openPlaylist(card)"
+          v-if="allGenres.length > visibleGenres.length"
+          type="button"
+          class="section-more-btn"
+          @click="openAllGenres"
         >
-          <PlaylistCover
-            size="row"
-            :cover-style="card.coverStyle"
-            :cover-url="card.coverUrl"
-            :gradient="card.gradient"
-            :icon="card.icon"
-            :name="card.name"
-            :count="card.count"
-            show-meta
-          />
+          <span>全部</span>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
         </button>
+      </div>
+      <div class="horizontal-scroll genre-scroll">
+        <div class="genre-pill-row">
+          <button
+            v-for="genre in visibleGenres"
+            :key="genre.id"
+            type="button"
+            class="genre-pill"
+            :style="genrePillStyle(genre)"
+            @click="openGenre(genre)"
+          >
+            <span class="genre-pill-name">{{ genre.name }}</span>
+            <span class="genre-pill-play" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><polygon points="8,5 19,12 8,19"/></svg>
+            </span>
+          </button>
+        </div>
       </div>
     </section>
 
@@ -61,13 +122,26 @@
             v-model="albumSort"
             :options="albumSortOptions"
             title="专辑排序"
+            size="sm"
           />
           <button
-            v-if="sortedDisplayAlbums.length > albumPreviewLimit"
+            v-if="showAlbumMoreBtn"
             type="button"
-            class="section-more"
-            @click="showAllAlbums = !showAllAlbums"
-          >{{ showAllAlbums ? '收起' : '更多' }}</button>
+            class="section-more-btn"
+            @click="openAllAlbums"
+          >
+            <span>更多</span>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+          </button>
+          <button
+            v-else-if="isNarrow && sortedDisplayAlbums.length"
+            type="button"
+            class="section-more-btn"
+            @click="openAllAlbums"
+          >
+            <span>全部</span>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+          </button>
         </div>
       </div>
       <div class="album-row">
@@ -96,18 +170,23 @@
             v-model="songSort"
             :options="songSortOptions"
             title="歌曲排序"
+            size="sm"
           />
           <span class="song-total" v-if="sortedFilteredSongs.length">{{ sortedFilteredSongs.length }} 首</span>
         </div>
       </div>
 
-      <div v-if="libraryLoading" class="library-loading card">正在扫描音乐库… {{ loadProgress }}</div>
+      <div v-if="libraryLoading && !libraryTracks.length" class="library-loading card">正在扫描音乐库… {{ loadProgress }}</div>
       <div v-else-if="!libraryTracks.length" class="empty card">
         <p>暂无本地音乐</p>
         <p class="empty-hint">请先在「设置 → 文件路径」添加音乐库目录</p>
         <router-link to="/settings" class="btn-ghost btn-sm">打开设置</router-link>
       </div>
       <template v-else>
+        <div v-if="libraryMetaLoading" class="library-meta-loading">
+          <span>{{ loadProgress || '正在更新标签…' }}</span>
+          <span v-if="libraryScanTotal > 0" class="library-meta-loading-pct">{{ libraryScanPercent }}%</span>
+        </div>
         <div class="song-grid">
           <div
             v-for="song in pagedSongs"
@@ -118,11 +197,27 @@
             @mouseleave="hoverKey = ''"
             @dblclick="playSong(song)"
           >
-            <button class="song-cover-btn" @click="playSong(song)">
-              <img v-if="song.picUrl && !brokenCovers.has(song.key)" :src="song.picUrl" alt="" loading="lazy" @error="markCoverBroken(song.key)" />
-              <div v-else class="song-cover-fallback">{{ song.name.slice(0, 1) }}</div>
-              <span class="song-play-overlay" v-if="hoverKey === song.key || isPlayingSong(song)">
-                <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><polygon points="7,3 21,12 7,21"/></svg>
+            <button
+              class="song-cover-btn"
+              :class="{ rippling: tappingSongKey === song.key }"
+              @click="onSongCoverClick(song)"
+            >
+              <div class="song-cover-media">
+                <img v-if="song.picUrl && !brokenCovers.has(song.key)" :src="song.picUrl" alt="" loading="lazy" @error="markCoverBroken(song.key)" />
+                <div v-else class="song-cover-fallback">{{ song.name.slice(0, 1) }}</div>
+              </div>
+              <span class="song-cover-ripple" aria-hidden="true" />
+              <span
+                class="song-play-overlay"
+                v-if="showCoverOverlay(song)"
+              >
+                <svg v-if="isCoverPauseIcon(song)" viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true">
+                  <rect x="6" y="5" width="4" height="14" rx="1"/>
+                  <rect x="14" y="5" width="4" height="14" rx="1"/>
+                </svg>
+                <svg v-else viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true">
+                  <polygon points="7,3 21,12 7,21"/>
+                </svg>
               </span>
             </button>
             <div class="song-meta">
@@ -187,18 +282,20 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../api.js'
 import PlaylistCover from '../components/PlaylistCover.vue'
 import PlaylistEditModal from '../components/PlaylistEditModal.vue'
 import PickPlaylistModal from '../components/PickPlaylistModal.vue'
 import AppSelect from '../components/AppSelect.vue'
+import ClearableInput from '../components/ClearableInput.vue'
 import { formatTrackTags, formatAlbumTags } from '../utils/format.js'
 import { playItem, addToQueue, isInQueue, isPlayingItem, isPaused } from '../stores/player.js'
 import {
-  libraryTracks, libraryLoading, libraryLoadProgress,
-  groupAlbums, createPlaylist, buildPlaylistCards, sortPlaylistCards,
+  libraryTracks, libraryLoading, libraryMetaLoading, libraryLoadProgress,
+  libraryScanning, libraryScanPhase, libraryScanCurrent, libraryScanTotal, libraryScanPercent,
+  groupAlbums, groupGenres, getGenreTheme, createPlaylist, buildPlaylistCards, sortPlaylistCards,
   sortAlbums, sortLibrarySongs,
   PLAYLIST_SORT_OPTIONS, ALBUM_SORT_OPTIONS, SONG_SORT_OPTIONS,
   scanLibrary, isFavorite, toggleFavorite,
@@ -214,8 +311,36 @@ const appliedKeyword = ref('')
 const page = ref(1)
 const pageSize = 20
 const hoverKey = ref('')
+const tappingSongKey = ref('')
+const coverPendingPauseKey = ref('')
 const toast = ref(null)
 const loadProgress = libraryLoadProgress
+const scanButtonLabel = computed(() => {
+  if (!libraryScanning.value) return '刷新库'
+  if (libraryScanPhase.value === 'tags' && libraryScanTotal.value > 0) {
+    return `扫描中 ${libraryScanCurrent.value}/${libraryScanTotal.value}`
+  }
+  return '扫描中…'
+})
+const scanStatusHint = computed(() => {
+  if (libraryScanPhase.value === 'tags' && libraryScanTotal.value > 0) {
+    return `读取标签 ${libraryScanCurrent.value}/${libraryScanTotal.value}（${libraryScanPercent.value}%）`
+  }
+  return loadProgress.value || ''
+})
+const showScanStatus = computed(() => libraryScanning.value && !!scanStatusHint.value)
+
+function notifyScanComplete(result, { force = false } = {}) {
+  if (!result) return
+  const total = result.totalTracks || 0
+  if (force) {
+    showToast(total ? `音乐库已刷新，共 ${total} 首` : '音乐库已刷新', 'success')
+    return
+  }
+  if (result.hadPending) {
+    showToast(total ? `扫描完成，共 ${total} 首` : '扫描完成', 'success')
+  }
+}
 const showCreateModal = ref(false)
 const pickPlaylistTrack = ref(null)
 const brokenCovers = ref(new Set())
@@ -223,10 +348,16 @@ const scanSummary = ref('')
 const showAllPlaylistCards = ref(false)
 const playlistPreviewLimit = 9
 const playlistSort = ref(localStorage.getItem(PLAYLIST_SORT_KEY) || 'default')
-const showAllAlbums = ref(false)
 const albumPreviewLimit = 12
+const albumPreviewLimitMobile = 4
 const albumSort = ref(localStorage.getItem(ALBUM_SORT_KEY) || 'recent')
 const songSort = ref(localStorage.getItem(SONG_SORT_KEY) || 'recent')
+const isNarrow = ref(false)
+let narrowMq = null
+
+function updateNarrow() {
+  isNarrow.value = narrowMq?.matches ?? window.innerWidth <= 768
+}
 
 function markCoverBroken(key) {
   if (!key) return
@@ -235,16 +366,27 @@ function markCoverBroken(key) {
   brokenCovers.value = next
 }
 
+const genrePreviewLimit = 16
+
+const allGenres = computed(() => (
+  groupGenres(libraryTracks.value).filter(g => g.name !== '未知风格')
+))
+const visibleGenres = computed(() => allGenres.value.slice(0, genrePreviewLimit))
+
 const allAlbums = computed(() => groupAlbums(libraryTracks.value))
 const playlistSortOptions = computed(() => PLAYLIST_SORT_OPTIONS.map(o => ({ value: o.id, label: o.label })))
 const albumSortOptions = computed(() => ALBUM_SORT_OPTIONS.map(o => ({ value: o.id, label: o.label })))
 const songSortOptions = computed(() => SONG_SORT_OPTIONS.map(o => ({ value: o.id, label: o.label })))
 const allPlaylistCards = computed(() => buildPlaylistCards(libraryTracks.value))
 const sortedPlaylistCards = computed(() => sortPlaylistCards(allPlaylistCards.value, playlistSort.value))
-const visiblePlaylistCards = computed(() => (
-  showAllPlaylistCards.value
+const visiblePlaylistCards = computed(() => {
+  if (isNarrow.value) return sortedPlaylistCards.value
+  return showAllPlaylistCards.value
     ? sortedPlaylistCards.value
     : sortedPlaylistCards.value.slice(0, playlistPreviewLimit)
+})
+const showPlaylistMoreBtn = computed(() => (
+  !isNarrow.value && sortedPlaylistCards.value.length > playlistPreviewLimit
 ))
 
 const displayAlbums = computed(() => {
@@ -255,11 +397,14 @@ const displayAlbums = computed(() => {
   )
 })
 const sortedDisplayAlbums = computed(() => sortAlbums(displayAlbums.value, albumSort.value))
-const visibleAlbums = computed(() => (
-  showAllAlbums.value
-    ? sortedDisplayAlbums.value
-    : sortedDisplayAlbums.value.slice(0, albumPreviewLimit)
-))
+const visibleAlbums = computed(() => {
+  const limit = isNarrow.value ? albumPreviewLimitMobile : albumPreviewLimit
+  return sortedDisplayAlbums.value.slice(0, limit)
+})
+const showAlbumMoreBtn = computed(() => {
+  const limit = isNarrow.value ? albumPreviewLimitMobile : albumPreviewLimit
+  return sortedDisplayAlbums.value.length > limit
+})
 
 const filteredSongs = computed(() => {
   const q = appliedKeyword.value.trim().toLowerCase()
@@ -285,7 +430,6 @@ watch(playlistSort, (value) => {
 
 watch(albumSort, (value) => {
   try { localStorage.setItem(ALBUM_SORT_KEY, value) } catch {}
-  showAllAlbums.value = false
 })
 
 watch(songSort, (value) => {
@@ -324,20 +468,41 @@ function shortPath(p) {
 }
 
 onMounted(() => {
+  narrowMq = window.matchMedia('(max-width: 768px)')
+  updateNarrow()
+  narrowMq.addEventListener('change', updateNarrow)
   loadScanSummary()
-  scanLibrary(api, { onError: (msg) => showToast(msg, 'error') }).catch(() => {})
+  scanLibrary(api, {
+    onError: (msg) => showToast(msg, 'error'),
+    onComplete: (result, meta) => {
+      loadScanSummary()
+      notifyScanComplete(result, meta)
+    },
+  }).catch(() => {})
+})
+
+onUnmounted(() => {
+  narrowMq?.removeEventListener('change', updateNarrow)
 })
 
 async function refreshLibrary() {
   try {
-    await scanLibrary(api, { force: true })
+    const result = await scanLibrary(api, {
+      force: true,
+      onComplete: (r, meta) => notifyScanComplete(r, meta),
+    })
     await loadScanSummary()
-    showToast('音乐库已刷新', 'success')
+    if (!result) showToast('正在扫描中，请稍候', 'info')
   } catch {}
 }
 
 function applySearch() {
   appliedKeyword.value = keyword.value.trim()
+}
+
+function clearSearch() {
+  keyword.value = ''
+  appliedKeyword.value = ''
 }
 
 function trackPayload(song) {
@@ -356,6 +521,20 @@ function isPlayingSong(song) {
   return isPlayingItem(trackPayload(song)) && !isPaused.value
 }
 
+function isCurrentSong(song) {
+  return isPlayingItem(trackPayload(song))
+}
+
+function showCoverOverlay(song) {
+  return isNarrow.value || hoverKey.value === song.key || isCurrentSong(song)
+}
+
+function isCoverPauseIcon(song) {
+  if (coverPendingPauseKey.value === song.key) return true
+  if (!isCurrentSong(song)) return false
+  return !isPaused.value
+}
+
 async function playSong(song) {
   try {
     await playItem(trackPayload(song), 'local')
@@ -364,9 +543,52 @@ async function playSong(song) {
   }
 }
 
+async function onSongCoverClick(song) {
+  const key = song?.key || ''
+  const payload = trackPayload(song)
+  tappingSongKey.value = key
+  setTimeout(() => {
+    if (tappingSongKey.value === key) tappingSongKey.value = ''
+  }, 560)
+
+  if (isCurrentSong(song) && !isPaused.value) {
+    coverPendingPauseKey.value = ''
+  } else {
+    coverPendingPauseKey.value = key
+  }
+
+  try {
+    await playSong(song)
+  } finally {
+    if (coverPendingPauseKey.value === key) coverPendingPauseKey.value = ''
+  }
+}
+
 function openAlbum(album) {
   if (!album?.id) return
   router.push({ path: '/library/album', query: { id: album.id } })
+}
+
+function openGenre(genre) {
+  if (!genre?.id) return
+  router.push({ path: '/library/genre', query: { id: genre.id } })
+}
+
+function openAllGenres() {
+  router.push({ path: '/library/genres' })
+}
+
+function openAllAlbums() {
+  router.push({ path: '/library/albums' })
+}
+
+function genrePillStyle(genre) {
+  const theme = genre.theme || getGenreTheme(genre.name)
+  return {
+    borderColor: theme.border,
+    background: theme.bg,
+    '--genre-accent': theme.border,
+  }
 }
 
 function addToQueueSong(song) {
@@ -393,6 +615,10 @@ function openPlaylist(card) {
   router.push({ path: '/library/playlists', query: { id: card.id } })
 }
 
+function openAllPlaylists() {
+  router.push({ path: '/library/playlists' })
+}
+
 function openCreatePlaylist() {
   showCreateModal.value = true
 }
@@ -417,7 +643,12 @@ function showToast(text, type = 'info') {
 </script>
 
 <style scoped>
-.library-page { width: 100%; max-width: none; }
+.library-page {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: hidden;
+}
 
 .library-topbar {
   display: flex;
@@ -425,13 +656,30 @@ function showToast(text, type = 'info') {
   gap: 12px;
   margin-bottom: 10px;
   flex-wrap: wrap;
+  min-width: 0;
 }
 .library-scan-summary {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
   margin: 0 0 18px;
   font-size: 12px;
   color: var(--text-muted);
   line-height: 1.6;
-  word-break: break-all;
+  min-width: 0;
+}
+.library-scan-summary-main {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.library-scan-status {
+  flex-shrink: 0;
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: var(--text-muted);
 }
 .library-scan-link {
   margin-left: 8px;
@@ -439,60 +687,74 @@ function showToast(text, type = 'info') {
   text-decoration: none;
 }
 .library-scan-link:hover { text-decoration: underline; }
-.library-search {
-  flex: 1;
-  min-width: 220px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  height: 44px;
-  padding: 0 16px;
-  border-radius: var(--radius-pill);
-  background: var(--bg-input);
-  border: 1px solid var(--border-light);
-}
-.library-search:focus-within {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-muted);
-}
-.library-search svg { width: 18px; height: 18px; color: var(--text-muted); flex-shrink: 0; }
-.library-search input {
-  flex: 1;
+.library-search-form {
+  flex: 1 1 200px;
   min-width: 0;
-  border: none;
-  background: transparent;
-  padding: 0;
-  box-shadow: none;
-  font-size: 15px;
+  display: flex;
 }
 
 .section-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 10px;
   margin-bottom: 14px;
+  min-width: 0;
 }
 .section-head h2 {
   margin: 0;
   font-size: 22px;
   font-weight: 600;
+  flex-shrink: 0;
 }
 .section-head-actions {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
+  min-width: 0;
+  flex-shrink: 0;
 }
-.section-more {
-  font-size: 13px;
-  color: var(--text-muted);
-  background: none;
-  border: none;
-  padding: 0;
+.section-head-actions :deep(.app-select) {
+  flex-shrink: 0;
+  min-width: 88px;
+}
+.section-more-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
   cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
 }
-.section-more:hover { color: var(--accent); }
+.section-more-btn svg {
+  width: 14px;
+  height: 14px;
+  transition: transform 0.2s ease;
+}
+.section-more-btn.expanded svg { transform: rotate(180deg); }
+.section-more-btn:hover {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border-light));
+  background: var(--accent-muted);
+}
+
+.horizontal-scroll {
+  max-width: 100%;
+  min-width: 0;
+}
 
 .playlist-row-wrap { margin-bottom: 32px; }
+.playlist-scroll {
+  overflow: visible;
+}
 .playlist-row {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
@@ -507,11 +769,53 @@ function showToast(text, type = 'info') {
   text-align: left;
   cursor: pointer;
   overflow: hidden;
+  min-width: 0;
   transition: transform 0.18s ease, box-shadow 0.18s ease;
 }
 .playlist-card:hover {
   transform: translateY(-2px);
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.28);
+}
+
+.genre-section { margin-bottom: 28px; }
+.genre-scroll {
+  overflow: visible;
+}
+.genre-pill-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.genre-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 16px;
+  border-radius: 999px;
+  border: 1.5px solid;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.genre-pill:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+}
+.genre-pill-name {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.genre-pill-play {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--genre-accent, var(--accent));
+  opacity: 0.9;
+  line-height: 0;
 }
 
 .album-section { margin-bottom: 32px; }
@@ -526,6 +830,7 @@ function showToast(text, type = 'info') {
   padding: 0;
   text-align: left;
   cursor: pointer;
+  min-width: 0;
 }
 .album-cover {
   aspect-ratio: 1;
@@ -533,6 +838,7 @@ function showToast(text, type = 'info') {
   overflow: hidden;
   background: var(--bg-elevated);
   margin-bottom: 12px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
 }
 .album-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .album-cover-fallback {
@@ -571,12 +877,28 @@ function showToast(text, type = 'info') {
   opacity: 0.92;
 }
 
-.song-section { margin-bottom: 24px; }
-.song-total { font-size: 13px; color: var(--text-muted); }
+.song-section { margin-bottom: 24px; min-width: 0; }
+.song-total { font-size: 13px; color: var(--text-muted); white-space: nowrap; }
 .library-loading, .empty {
   padding: 40px 20px;
   text-align: center;
   color: var(--text-muted);
+}
+.library-meta-loading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--text-muted);
+  background: var(--bg-elevated, rgba(255,255,255,0.04));
+  border-radius: 8px;
+}
+.library-meta-loading-pct {
+  font-variant-numeric: tabular-nums;
+  color: var(--accent, #60a5fa);
 }
 .empty-hint { margin: 8px 0 14px; font-size: 13px; }
 
@@ -595,7 +917,8 @@ function showToast(text, type = 'info') {
   transition: background 0.15s ease;
 }
 .song-item:hover,
-.song-item.active {
+.song-item.active,
+.song-item.hovered {
   background: var(--bg-hover);
 }
 .song-cover-btn {
@@ -605,10 +928,47 @@ function showToast(text, type = 'info') {
   padding: 0;
   border: none;
   border-radius: 10px;
-  overflow: hidden;
+  overflow: visible;
   flex-shrink: 0;
   background: var(--bg-elevated);
   cursor: pointer;
+}
+.song-cover-media {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  overflow: hidden;
+  background: var(--bg-elevated);
+}
+.song-cover-ripple {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 68%;
+  height: 68%;
+  border-radius: 50%;
+  transform: translate(-50%, -50%) scale(0.3);
+  border: 2px solid rgba(125, 211, 252, 0.95);
+  box-shadow:
+    0 0 0 0 rgba(125, 211, 252, 0.5),
+    0 0 18px rgba(125, 211, 252, 0.28);
+  background: rgba(125, 211, 252, 0.18);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 3;
+}
+.song-cover-btn.rippling .song-cover-ripple {
+  animation: song-cover-ripple 0.65s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+@keyframes song-cover-ripple {
+  0% {
+    transform: translate(-50%, -50%) scale(0.35);
+    opacity: 0.95;
+  }
+  100% {
+    transform: translate(-50%, -50%) scale(2.2);
+    opacity: 0;
+  }
 }
 .song-cover-btn img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .song-cover-fallback {
@@ -629,6 +989,19 @@ function showToast(text, type = 'info') {
   justify-content: center;
   background: rgba(0, 0, 0, 0.42);
   color: #fff;
+  z-index: 4;
+  transition: background 0.18s ease, backdrop-filter 0.18s ease;
+  backdrop-filter: saturate(1);
+}
+.song-play-overlay svg {
+  transition: transform 0.22s ease, opacity 0.18s ease;
+}
+.song-cover-btn.rippling .song-play-overlay {
+  background: color-mix(in srgb, var(--accent) 48%, rgba(0, 0, 0, 0.26));
+  backdrop-filter: saturate(1.35);
+}
+.song-cover-btn.rippling .song-play-overlay svg {
+  transform: scale(1.28);
 }
 .song-meta { min-width: 0; flex: 1; }
 .song-actions {
@@ -685,11 +1058,134 @@ function showToast(text, type = 'info') {
 @media (max-width: 1100px) {
   .song-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
 @media (max-width: 768px) {
-  .playlist-row { grid-template-columns: 1fr; }
-  .album-row { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
-  .song-grid { grid-template-columns: 1fr; }
-  .library-topbar { gap: 10px; }
+  .library-topbar {
+    gap: 8px;
+  }
+  .library-scan-summary {
+    gap: 8px;
+  }
+  .library-scan-summary-main {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .library-search-form {
+    flex: 1 1 100%;
+  }
+  .library-search-form :deep(.clearable-input--pill) {
+    height: 42px;
+    padding: 0 14px;
+  }
+  .library-topbar .btn-ghost,
+  .library-topbar .btn-primary {
+    flex: 1;
+    min-width: 0;
+    padding: 8px 10px;
+    font-size: 13px;
+  }
+
+  .section-head {
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+  }
+  .section-head h2 { font-size: 18px; }
+  .section-head-actions {
+    margin-left: auto;
+  }
+
+  .playlist-scroll {
+    margin: 0 -14px;
+    padding: 0 14px 4px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+  .playlist-scroll::-webkit-scrollbar { display: none; }
+  .playlist-row {
+    display: flex;
+    gap: 12px;
+    width: max-content;
+    min-width: 100%;
+  }
+  .playlist-card {
+    flex: 0 0 112px;
+    width: 112px;
+    border-radius: 0;
+    box-shadow: none;
+  }
+  .playlist-card:hover {
+    transform: none;
+    box-shadow: none;
+  }
+
+  .genre-scroll {
+    margin: 0 -14px;
+    padding: 0 14px 4px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+  .genre-scroll::-webkit-scrollbar { display: none; }
+  .genre-pill-row {
+    flex-wrap: nowrap;
+    width: max-content;
+    min-width: 100%;
+  }
+  .genre-pill-name { max-width: 120px; }
+
+  .album-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px 12px;
+  }
+  .album-cover {
+    border-radius: 10px;
+    margin-bottom: 8px;
+  }
+  .album-name { font-size: 14px; }
+  .album-artist { font-size: 12px; margin-top: 2px; }
+  .album-tags { display: none; }
+
+  .song-grid {
+    grid-template-columns: 1fr;
+    gap: 0;
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid var(--border-light);
+    background: var(--bg-card, var(--bg-elevated));
+  }
+  .song-item {
+    padding: 10px 12px;
+    gap: 10px;
+    border-radius: 0;
+    border-bottom: 1px solid var(--border-light);
+  }
+  .song-item:last-child { border-bottom: none; }
+  .song-item:hover,
+  .song-item.active,
+  .song-item.hovered {
+    background: var(--bg-hover);
+  }
+  .song-cover-btn {
+    width: 48px;
+    height: 48px;
+    border-radius: 8px;
+  }
+  .song-title { font-size: 15px; }
+  .song-artist { font-size: 12px; }
+  .song-tags { display: none; }
+  .song-actions { gap: 2px; }
+  .song-actions .icon-action-btn {
+    width: 34px;
+    height: 34px;
+    padding: 0;
+  }
+
   .toast {
     left: 12px;
     right: 12px;

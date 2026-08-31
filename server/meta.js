@@ -437,10 +437,10 @@ function readMp3NativeTags(filePath) {
   }
 }
 
-function mergeNativeMeta(base, native) {
+function mergeNativeMeta(base, native, { lite = false } = {}) {
   if (!native) return base
   const pick = (primary, fallback) => (primary || fallback || '')
-  const lyric = base.lyric || native.lyric || ''
+  const lyric = lite ? (base.lyric || '') : (base.lyric || native.lyric || '')
   return {
     ...base,
     title: pick(base.title, native.title),
@@ -451,7 +451,7 @@ function mergeNativeMeta(base, native) {
     comment: pick(base.comment, native.comment),
     lyric,
     hasPicture: Boolean(base.hasPicture || native.hasPicture),
-    hasLyrics: Boolean(base.hasLyrics || native.hasLyrics || lyric),
+    hasLyrics: Boolean(base.hasLyrics || native.hasLyrics || (!lite && lyric)),
   }
 }
 
@@ -475,6 +475,23 @@ function probeLyricText(filePath, metadata) {
 }
 
 async function resolveEmbeddedAssets(base, filePath, metadata, { lite = false } = {}) {
+  if (lite) {
+    if (!base.hasPicture) {
+      try { base.hasPicture = await hasEmbeddedPicture(filePath) } catch {}
+    }
+    if (!base.hasLyrics) {
+      if (metadata) {
+        const flags = detectEmbeddedFlagsLite(metadata, filePath)
+        base.hasLyrics = flags.hasLyrics
+      }
+      if (!base.hasLyrics) base.hasLyrics = hasExternalLrc(filePath)
+    }
+    base.lyric = ''
+    base.pictureBase64 = ''
+    base.pictureMime = ''
+    return
+  }
+
   const lyricText = base.lyric?.trim() || probeLyricText(filePath, metadata)
   base.hasLyrics = Boolean(base.hasLyrics || lyricText || hasExternalLrc(filePath))
   if (!lite && lyricText) base.lyric = lyricText
@@ -584,12 +601,18 @@ async function readMetaCore(filePath, { lite = false } = {}) {
   }
 
   if (ext === '.mp3' || ext === '.flac') {
-    base = mergeNativeMeta(base, readNativeTags(filePath))
+    base = mergeNativeMeta(base, readNativeTags(filePath), { lite })
   }
 
   await resolveEmbeddedAssets(base, filePath, metadata, { lite })
 
-  return normalizeMetaFields(base)
+  const result = normalizeMetaFields(base)
+  if (lite) {
+    result.lyric = ''
+    result.pictureBase64 = ''
+    result.pictureMime = ''
+  }
+  return result
 }
 
 function detectEmbeddedFlagsLite(metadata, filePath) {

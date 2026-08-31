@@ -33,7 +33,13 @@
       <!-- 中间：文件列表 -->
       <section class="file-panel card">
         <div class="file-toolbar">
-          <input v-model="filterText" placeholder="按文件名过滤..." class="filter-input" />
+          <ClearableInput
+            v-model="filterText"
+            variant="plain"
+            input-class="filter-input"
+            class="filter-input-wrap"
+            placeholder="按文件名过滤..."
+          />
           <span class="file-count">
             {{ displayedFiles.length }} / {{ files.length }}
             <template v-if="missingFilesCount"> · 缺失 {{ missingFilesCount }}</template>
@@ -231,11 +237,11 @@
         <div class="fetch-search">
           <label class="search-field">
             <span>歌手</span>
-            <input v-model="fetchArtist" placeholder="歌手名" @keydown.enter="doFetchSearch" />
+            <ClearableInput v-model="fetchArtist" variant="plain" placeholder="歌手名" @enter="doFetchSearch" />
           </label>
           <label class="search-field">
             <span>歌名</span>
-            <input v-model="fetchTitle" placeholder="歌曲名" @keydown.enter="doFetchSearch" />
+            <ClearableInput v-model="fetchTitle" variant="plain" placeholder="歌曲名" @enter="doFetchSearch" />
           </label>
           <button class="btn-primary btn-sm search-btn" @click="doFetchSearch" :disabled="fetchLoading">
             {{ fetchLoading ? '搜索中...' : '搜索' }}
@@ -324,6 +330,7 @@ import {
   clearTagMatchResult,
 } from '../stores/tagMatch.js'
 import AppSelect from '../components/AppSelect.vue'
+import ClearableInput from '../components/ClearableInput.vue'
 
 const sourceOptions = [
   { value: 'tx', label: 'QQ音乐' },
@@ -1158,9 +1165,12 @@ function showToast(text, type = 'info') {
   flex-wrap: wrap;
   flex-shrink: 0;
 }
-.filter-input {
+.filter-input-wrap {
   flex: 1;
   min-width: 120px;
+}
+.filter-input {
+  width: 100%;
   font-size: 13px;
   border-radius: var(--radius-pill);
   padding: 6px 14px;
@@ -1346,7 +1356,7 @@ tr.playing .play-btn {
   min-width: 140px;
 }
 .search-field span { font-size: 12px; color: var(--text-muted); }
-.search-field input {
+.search-field :deep(input) {
   font-size: 13px;
   border-radius: var(--radius);
 }

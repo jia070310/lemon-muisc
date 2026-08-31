@@ -132,6 +132,29 @@ export const api = {
     remove: (dirPath) => request('/paths', { method: 'DELETE', body: { dirPath } }),
     setDownload: (dirPath, fromPicker) => request('/paths/download', { method: 'PUT', body: { dirPath, fromPicker } }),
   },
+  library: {
+    tracks: () => request('/library/tracks', { timeout: 60000 }),
+    sync: () => request('/library/sync', { method: 'POST', timeout: 120000 }),
+    scanBatch: (files) => request('/library/scan-batch', {
+      method: 'POST',
+      body: { files },
+      timeout: 180000,
+    }),
+    playlists: {
+      list: () => request('/library/playlists'),
+      save: (playlists) => request('/library/playlists', {
+        method: 'PUT',
+        body: { playlists },
+      }),
+    },
+    userData: {
+      get: () => request('/library/user-data'),
+      save: (data) => request('/library/user-data', {
+        method: 'PUT',
+        body: data,
+      }),
+    },
+  },
   tag: {
     dirs: {
       list: () => request('/tag/dirs'),
