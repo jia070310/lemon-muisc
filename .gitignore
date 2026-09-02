@@ -27,4 +27,5 @@ config/*.db-shm
 config/*.db-wal
 config/*.sqlite
 config/*.sqlite3
+config/ADMIN_CREDENTIALS.txt
 docs/forum-post*.md
