@@ -168,9 +168,65 @@ npm start
 
 ### 首次使用
 
-1. **设置 → 音源管理**：导入落雪兼容音源并激活（可同时激活多个）
-2. **设置 → 文件路径**：添加音乐库目录与下载保存目录
-3. **搜索** 或 **发现** 找歌试听、下载；**音乐库** 浏览本地收藏，或通过「复制网络歌单」导入平台歌单；**标签编辑** 整理本地文件
+1. **首次打开**：创建管理员账号（可选配置 SMTP 邮件服务）
+2. **设置 → 音源管理**：导入落雪兼容音源并激活（可同时激活多个）
+3. **设置 → 文件路径**：添加音乐库目录与下载保存目录
+4. **搜索** 或 **发现** 找歌试听、下载；**音乐库** 浏览本地收藏，或通过「复制网络歌单」导入平台歌单；**标签编辑** 整理本地文件
+
+---
+
+## 账号与恢复
+
+用户账号保存在配置目录下的 SQLite 数据库中：
+
+| 项目 | 路径 |
+|------|------|
+| 本地开发（默认） | `config/lx-music.db` |
+| 飞牛 NAS（示例） | `/vol1/@appconf/lemon-music/config/lx-music.db` |
+
+相关表：`users`（账号）、`sessions`（登录会话）、`auth_tokens`（邮件令牌）、`user_settings`（个人歌单/收藏）。
+
+### 首次初始化
+
+创建管理员后，可选择两种忘记密码的恢复方式：
+
+| 方式 | 说明 |
+|------|------|
+| **邮件找回** | 配置 SMTP，支持邮箱验证与登录页「忘记密码」 |
+| **本地保存账号** | 在配置目录生成 `ADMIN_CREDENTIALS.txt`（含明文密码），无需配置邮箱 |
+
+同时会生成 `SETUP_README.txt`（不含密码）记录初始化信息。
+
+### 忘记密码
+
+```bash
+# 列出用户
+npm run auth:reset-password -- --list
+
+# 重置指定用户密码（保留账号）
+CONFIG_PATH=/你的配置目录 npm run auth:reset-password -- admin 新密码
+```
+
+若已配置 SMTP 且邮箱已验证，也可在登录页使用「忘记密码」。若初始化时选择了「本地保存账号」，可查看配置目录下的 `ADMIN_CREDENTIALS.txt`。
+
+### 清空所有用户（重新初始化）
+
+删除全部账号后会再次进入「初始化管理员」向导。**不会**删除音源、路径、下载任务等全局数据。
+
+```bash
+# 先查看当前用户
+npm run auth:reset-users -- --list
+
+# 确认清空（必须带 --yes）
+npm run auth:reset-users -- --yes
+
+# 飞牛 NAS 示例
+CONFIG_PATH=/vol1/@appconf/lemon-music/config npm run auth:reset-users -- --yes
+```
+
+执行后请刷新浏览器；若仍自动登录，清除本站 `localStorage`（键名 `lemon-auth-token`）。
+
+初始化完成后，配置目录会生成 `SETUP_README.txt` 说明文件（不含密码）。
 
 ---
 
@@ -190,7 +246,11 @@ npm run fpk:build
 |------|------|
 | `npm run dev` | 同时启动前后端开发服务 |
 | `npm run build` | 构建前端到 `dist/public` |
-| `npm start` | 启动后端 |
+| `npm run start` | 启动后端 |
+| `npm run auth:reset-password -- --list` | 列出所有用户 |
+| `npm run auth:reset-password -- <用户> <新密码>` | 重置用户密码 |
+| `npm run auth:reset-users -- --list` | 查看用户（清空前预览） |
+| `npm run auth:reset-users -- --yes` | 清空所有用户并重新初始化 |
 | `npm run fpk:build` | 打包原生 FPK |
 
 ---

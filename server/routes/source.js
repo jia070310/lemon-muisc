@@ -18,6 +18,7 @@ import {
 } from '../utils/activeSources.js'
 import { getSourceFault, clearSourceFault, recordSourceFault } from '../sourceFault.js'
 import { parseScriptMeta, metaToDbFields } from '../utils/parseScriptMeta.js'
+import { requireAdmin } from '../middleware/auth.js'
 
 export const sourceRouter = Router()
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } })
@@ -53,7 +54,7 @@ sourceRouter.get('/list', (_req, res) => {
   })))
 })
 
-sourceRouter.post('/import', upload.single('file'), (req, res) => {
+sourceRouter.post('/import', requireAdmin, upload.single('file'), (req, res) => {
   try {
     const script = req.file ? req.file.buffer.toString('utf-8') : req.body.script
     if (!script) return res.status(400).json({ error: '没有提供脚本内容' })
@@ -65,7 +66,7 @@ sourceRouter.post('/import', upload.single('file'), (req, res) => {
   }
 })
 
-sourceRouter.post('/import-url', async (req, res) => {
+sourceRouter.post('/import-url', requireAdmin, async (req, res) => {
   try {
     const { url } = req.body
     if (!url) return res.status(400).json({ error: '请提供音源链接' })
@@ -78,7 +79,7 @@ sourceRouter.post('/import-url', async (req, res) => {
   }
 })
 
-sourceRouter.delete('/:id', (req, res) => {
+sourceRouter.delete('/:id', requireAdmin, (req, res) => {
   unloadSource(req.params.id)
   removeActiveSourceId(req.params.id)
   getDB().prepare('DELETE FROM user_apis WHERE id = ?').run(req.params.id)
@@ -96,7 +97,7 @@ sourceRouter.post('/fault/dismiss', (_req, res) => {
   res.json({ ok: true })
 })
 
-sourceRouter.post('/fault/delete', (_req, res) => {
+sourceRouter.post('/fault/delete', requireAdmin, (_req, res) => {
   try {
     const fault = getSourceFault()
     if (!fault?.id) {
@@ -113,7 +114,7 @@ sourceRouter.post('/fault/delete', (_req, res) => {
   }
 })
 
-sourceRouter.post('/fault/reimport', async (_req, res) => {
+sourceRouter.post('/fault/reimport', requireAdmin, async (_req, res) => {
   try {
     const fault = getSourceFault()
     if (!fault?.id) return res.status(400).json({ error: '没有待处理的音源故障' })
@@ -159,7 +160,7 @@ sourceRouter.post('/fault/reimport', async (_req, res) => {
   }
 })
 
-sourceRouter.post('/activate/:id', async (req, res) => {
+sourceRouter.post('/activate/:id', requireAdmin, async (req, res) => {
   try {
     const row = getDB().prepare('SELECT * FROM user_apis WHERE id = ?').get(req.params.id)
     if (!row) return res.status(404).json({ error: '音源不存在' })
@@ -200,13 +201,13 @@ sourceRouter.post('/activate/:id', async (req, res) => {
   }
 })
 
-sourceRouter.post('/deactivate/:id', (req, res) => {
+sourceRouter.post('/deactivate/:id', requireAdmin, (req, res) => {
   unloadSource(req.params.id)
   const ids = removeActiveSourceId(req.params.id)
   res.json({ ok: true, activeIds: ids })
 })
 
-sourceRouter.post('/deactivate', (_req, res) => {
+sourceRouter.post('/deactivate', requireAdmin, (_req, res) => {
   unloadSource()
   saveActiveSourceIds([])
   res.json({ ok: true, activeIds: [] })
@@ -259,7 +260,7 @@ export function refreshStoredSourceMeta() {
   }
 }
 
-sourceRouter.post('/refresh-meta', (_req, res) => {
+sourceRouter.post('/refresh-meta', requireAdmin, (_req, res) => {
   try {
     refreshStoredSourceMeta()
     const activeIds = new Set(getActiveSourceIds().length ? getActiveSourceIds() : getStoredActiveSourceIds())

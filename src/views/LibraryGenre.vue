@@ -65,23 +65,40 @@
               v-for="(song, i) in pagedTracks"
               :key="song.key"
               class="track-row"
-              :class="{ active: isPlayingSong(song) }"
+              :class="{ active: isPlayingSong(song), hovered: hoverKey === song.key }"
               @mouseenter="hoverKey = song.key"
               @mouseleave="hoverKey = ''"
               @dblclick="playOne(song)"
             >
               <span class="track-index">{{ listStart + i + 1 }}</span>
-              <button type="button" class="track-cover-btn" @click="playOne(song)">
-                <img
-                  v-if="song.picUrl && !brokenCovers.has(song.key)"
-                  :src="song.picUrl"
-                  alt=""
-                  class="track-cover-img"
-                  @error="markCoverBroken(song.key)"
-                />
-                <div v-else class="track-cover-fallback">{{ song.name.slice(0, 1) }}</div>
-                <span v-if="hoverKey === song.key || isPlayingSong(song)" class="track-play-overlay">
-                  <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><polygon points="7,3 21,12 7,21"/></svg>
+              <button
+                type="button"
+                class="song-cover-btn"
+                :class="{ rippling: tappingSongKey === song.key }"
+                @click="onTrackCoverClick(song)"
+              >
+                <div class="song-cover-media">
+                  <img
+                    v-if="song.picUrl && !brokenCovers.has(song.key)"
+                    :src="song.picUrl"
+                    alt=""
+                    loading="lazy"
+                    @error="markCoverBroken(song.key)"
+                  />
+                  <div v-else class="song-cover-fallback">{{ song.name.slice(0, 1) }}</div>
+                </div>
+                <span class="song-cover-ripple" aria-hidden="true" />
+                <span
+                  class="song-play-overlay"
+                  v-if="showCoverOverlay(song)"
+                >
+                  <svg v-if="isCoverPauseIcon(song)" viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true">
+                    <rect x="6" y="5" width="4" height="14" rx="1"/>
+                    <rect x="14" y="5" width="4" height="14" rx="1"/>
+                  </svg>
+                  <svg v-else viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true">
+                    <polygon points="7,3 21,12 7,21"/>
+                  </svg>
                 </span>
               </button>
               <div class="track-meta">
@@ -130,7 +147,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from '../api.js'
 import { formatTrackTags } from '../utils/format.js'
@@ -154,8 +171,12 @@ const pageSize = 30
 const coverBroken = ref(false)
 const brokenCovers = ref(new Set())
 const hoverKey = ref('')
+const tappingSongKey = ref('')
+const coverPendingPauseKey = ref('')
+const isNarrow = ref(false)
 const toast = ref(null)
 const pickPlaylistTrack = ref(null)
+let narrowMq = null
 
 const genre = computed(() => findGenreById(libraryTracks.value, genreId.value))
 const theme = computed(() => genre.value?.theme || getGenreTheme(genre.value?.name || ''))
@@ -193,19 +214,33 @@ function markCoverBroken(key) {
   brokenCovers.value = next
 }
 
+function updateNarrow() {
+  isNarrow.value = narrowMq?.matches ?? window.innerWidth <= 768
+}
+
 onMounted(async () => {
+  narrowMq = window.matchMedia('(max-width: 768px)')
+  updateNarrow()
+  narrowMq.addEventListener('change', updateNarrow)
   if (route.query.id) genreId.value = String(route.query.id)
   if (!libraryScanned.value) {
     try { await scanLibrary(api) } catch {}
   }
 })
 
+onUnmounted(() => {
+  narrowMq?.removeEventListener('change', updateNarrow)
+})
+
 function trackPayload(song) {
+  const filePath = song.localPath || song.filePath
   return {
+    key: song.key || (filePath ? `local:${filePath}` : ''),
     name: song.name,
     singer: song.singer,
     album: song.album,
-    localPath: song.localPath,
+    localPath: filePath,
+    filePath,
     source: 'local',
     picUrl: song.picUrl,
     lyric: song.lyric,
@@ -216,11 +251,45 @@ function isPlayingSong(song) {
   return isPlayingItem(trackPayload(song)) && !isPaused.value
 }
 
+function isCurrentSong(song) {
+  return isPlayingItem(trackPayload(song))
+}
+
+function showCoverOverlay(song) {
+  return isNarrow.value || hoverKey.value === song.key || isCurrentSong(song)
+}
+
+function isCoverPauseIcon(song) {
+  if (coverPendingPauseKey.value === song.key) return true
+  if (!isCurrentSong(song)) return false
+  return !isPaused.value
+}
+
 async function playOne(song) {
   try {
     await playItem(trackPayload(song), 'local')
   } catch (e) {
     showToast(e.message || '播放失败', 'error')
+  }
+}
+
+async function onTrackCoverClick(song) {
+  const key = song?.key || ''
+  tappingSongKey.value = key
+  setTimeout(() => {
+    if (tappingSongKey.value === key) tappingSongKey.value = ''
+  }, 560)
+
+  if (isCurrentSong(song) && !isPaused.value) {
+    coverPendingPauseKey.value = ''
+  } else {
+    coverPendingPauseKey.value = key
+  }
+
+  try {
+    await playOne(song)
+  } finally {
+    if (coverPendingPauseKey.value === key) coverPendingPauseKey.value = ''
   }
 }
 
@@ -446,38 +515,71 @@ function showToast(text, type = 'info') {
   transition: background 0.15s ease;
 }
 .track-row:hover,
-.track-row.active { background: var(--bg-hover); }
+.track-row.active,
+.track-row.hovered { background: var(--bg-hover); }
 .track-row.active .track-name { color: var(--accent); }
 .track-index { width: 28px; color: var(--text-muted); font-size: 14px; flex-shrink: 0; }
-.track-cover-btn {
+.song-cover-btn {
   position: relative;
-  width: 52px;
-  height: 52px;
+  width: 56px;
+  height: 56px;
   padding: 0;
   border: none;
   border-radius: 10px;
-  overflow: hidden;
+  overflow: visible;
   flex-shrink: 0;
   background: var(--bg-elevated);
   cursor: pointer;
 }
-.track-cover-img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
+.song-cover-media {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  overflow: hidden;
+  background: var(--bg-elevated);
 }
-.track-cover-fallback {
+.song-cover-ripple {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 68%;
+  height: 68%;
+  border-radius: 50%;
+  transform: translate(-50%, -50%) scale(0.3);
+  border: 2px solid rgba(125, 211, 252, 0.95);
+  box-shadow:
+    0 0 0 0 rgba(125, 211, 252, 0.5),
+    0 0 18px rgba(125, 211, 252, 0.28);
+  background: rgba(125, 211, 252, 0.18);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 3;
+}
+.song-cover-btn.rippling .song-cover-ripple {
+  animation: song-cover-ripple 0.65s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+@keyframes song-cover-ripple {
+  0% {
+    transform: translate(-50%, -50%) scale(0.35);
+    opacity: 0.95;
+  }
+  100% {
+    transform: translate(-50%, -50%) scale(2.2);
+    opacity: 0;
+  }
+}
+.song-cover-btn img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.song-cover-fallback {
   width: 100%;
   height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 18px;
+  font-size: 20px;
   font-weight: 700;
   color: var(--accent);
 }
-.track-play-overlay {
+.song-play-overlay {
   position: absolute;
   inset: 0;
   display: flex;
@@ -485,6 +587,19 @@ function showToast(text, type = 'info') {
   justify-content: center;
   background: rgba(0, 0, 0, 0.42);
   color: #fff;
+  z-index: 4;
+  transition: background 0.18s ease, backdrop-filter 0.18s ease;
+  backdrop-filter: saturate(1);
+}
+.song-play-overlay svg {
+  transition: transform 0.22s ease, opacity 0.18s ease;
+}
+.song-cover-btn.rippling .song-play-overlay {
+  background: color-mix(in srgb, var(--accent) 48%, rgba(0, 0, 0, 0.26));
+  backdrop-filter: saturate(1.35);
+}
+.song-cover-btn.rippling .song-play-overlay svg {
+  transform: scale(1.28);
 }
 .track-meta { flex: 1; min-width: 0; }
 .track-name {
@@ -543,6 +658,11 @@ function showToast(text, type = 'info') {
   .genre-hero-title { font-size: 22px; }
   .mix-cards { grid-template-columns: 1fr; }
   .track-tags { display: none; }
+  .song-cover-btn {
+    width: 48px;
+    height: 48px;
+    border-radius: 8px;
+  }
   .toast {
     left: 12px;
     right: 12px;

@@ -109,6 +109,12 @@ body {
   overflow-x: hidden;
 }
 
+html.player-fs-open,
+html.player-fs-open body {
+  overflow: hidden !important;
+  overscroll-behavior: none;
+}
+
 a { color: var(--accent); text-decoration: none; }
 a:hover { color: var(--accent-hover); }
 

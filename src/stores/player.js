@@ -2,7 +2,7 @@ import { ref, computed } from 'vue'
 import { api } from '../api.js'
 import { cleanTrackItem } from '../utils/text.js'
 import { buildPlayPayload } from '../utils/musicPayload.js'
-import { getCachedPlayUrl, setCachedPlayUrl, rememberLoadedPlayUrl } from '../utils/playUrlCache.js'
+import { getCachedPlayUrl, setCachedPlayUrl, rememberLoadedPlayUrl, clearCachedPlayUrl } from '../utils/playUrlCache.js'
 import { formatUserError } from '../utils/userError.js'
 import {
   askSourceFallback,
@@ -13,6 +13,8 @@ import {
 import { recordRecentPlay, localCoverUrl, bumpLibraryCoverVersion } from './library.js'
 import { parseLyric } from '../utils/lrc.js'
 import { formatArtists } from '../utils/text.js'
+import { getTrackFilePath, isLocalTrack, isSameTrackPath } from '../utils/trackPath.js'
+import { withStreamAuth, stripStreamAuth } from '../utils/streamAuth.js'
 
 export const currentPlaying = ref(null)
 export const loadingPlay = ref(null)
@@ -77,19 +79,47 @@ const VOLUME_KEY = 'lx-music-nas:volume'
 const MUTE_KEY = 'lx-music-nas:muted'
 let volumeBeforeMute = 0.8
 let lyricFetchToken = 0
+let coverFetchToken = 0
 let localMetaFetchToken = 0
+/** 当前 lyricLines 对应的曲目 key，用于避免切歌/重试后残留上一首歌词 */
+let lyricTrackKey = ''
 let analyserBoundSrc = ''
-const PLAYBACK_GRAPH_RETRY_DELAYS = [0, 60, 150, 400]
+const PLAYBACK_GRAPH_RETRY_DELAYS = [0, 120, 300]
 const MEDIA_AUDIO_CACHE_MAX = 5
 /** @type {Map<string, { element: HTMLAudioElement, url: string, savedTime: number, mediaSource?: MediaElementAudioSourceNode | null }>} */
 const mediaAudioCache = new Map()
 
+function shouldUseCrossOrigin(url) {
+  if (!url) return false
+  return stripStreamAuth(url).includes('/api/play/proxy')
+}
+
+function applyAudioCrossOrigin(el, url) {
+  if (!el) return
+  if (shouldUseCrossOrigin(url)) {
+    el.crossOrigin = 'anonymous'
+  } else {
+    el.removeAttribute('crossorigin')
+  }
+}
+
+function resetAudioBeforeLoad(el) {
+  if (!el) return
+  try {
+    el.pause()
+    el.removeAttribute('src')
+    el.load()
+  } catch {}
+}
+
 function urlsMatch(a, b) {
   if (!a || !b) return false
+  const left = stripStreamAuth(a)
+  const right = stripStreamAuth(b)
   try {
-    return new URL(a, window.location.href).href === new URL(b, window.location.href).href
+    return new URL(left, window.location.href).href === new URL(right, window.location.href).href
   } catch {
-    return a === b
+    return left === right
   }
 }
 
@@ -136,7 +166,8 @@ function trimMediaAudioCache() {
 
 function stashMediaAudio(trackKey) {
   if (!audio || !hasMediaSrc || !trackKey) return
-  const url = audio.src
+  if (audio.error || audio.readyState < 2) return
+  const url = stripStreamAuth(audio.src)
   if (!url) return
 
   try { audio.pause() } catch {}
@@ -169,12 +200,28 @@ function takeMediaAudioCache(trackKey, url) {
     destroyMediaAudioCacheEntry(trackKey)
     return null
   }
+  if (entry.element?.error) {
+    destroyMediaAudioCacheEntry(trackKey)
+    return null
+  }
   mediaAudioCache.delete(trackKey)
   return entry
 }
 
 async function activateCachedAudio(entry, { resumeTime = 0 } = {}) {
   if (!audio) initPlayer()
+
+  if (entry.mediaSource && !visualizerEnabled.value) {
+    const url = entry.url
+    const time = resumeTime > 0 ? resumeTime : (entry.savedTime || 0)
+    try {
+      entry.element.pause()
+      entry.element.removeAttribute('src')
+      entry.element.load()
+    } catch {}
+    await startPlaybackFromUrl(url, { resumeTime: time })
+    return
+  }
 
   audio = entry.element
   hasMediaSrc = true
@@ -202,7 +249,7 @@ async function activateCachedAudio(entry, { resumeTime = 0 } = {}) {
 
   unlockAudioFromGesture()
   if (audio.readyState < 2) {
-    await waitForAudioReady()
+    await waitForAudioReady(withStreamAuth(entry.url), { isLocal: entry.url.includes('/api/play/local') })
   }
 
   try {
@@ -215,6 +262,7 @@ async function activateCachedAudio(entry, { resumeTime = 0 } = {}) {
     throw playErr
   }
 
+  clearPlaybackError()
   endPlaybackBuffer()
   applyAudioOutput()
   if (visualizerEnabled.value) {
@@ -239,15 +287,26 @@ function patchQueueItem(trackKey, updates) {
   }
 }
 
-function applyLocalMetaToPlaying(data, filePath) {
-  if (!data || !filePath || !currentPlaying.value) return
-  const trackKey = `local:${filePath}`
-  if (getTrackKey(currentPlaying.value, 'local') !== trackKey) return
+function patchQueueItemsByPath(filePath, updates) {
+  if (!filePath || !updates || !Object.keys(updates).length) return false
+  let changed = false
+  playQueue.value = playQueue.value.map((entry) => {
+    const fp = getTrackFilePath(entry.item)
+    if (!fp || !isSameTrackPath(fp, filePath)) return entry
+    changed = true
+    return {
+      ...entry,
+      item: cleanTrackItem({ ...entry.item, ...updates }),
+    }
+  })
+  return changed
+}
 
+function buildPlayerUpdatesFromTagMeta(data, filePath) {
   const updates = {}
-  if (data.title) updates.name = data.title
-  if (data.artist) updates.singer = data.artist
-  if (data.album) updates.album = data.album
+  if (data.title !== undefined) updates.name = data.title
+  if (data.artist !== undefined) updates.singer = data.artist
+  if (data.album !== undefined) updates.album = data.album
 
   let pic = ''
   const coverTouched = Boolean(
@@ -258,64 +317,100 @@ function applyLocalMetaToPlaying(data, filePath) {
     pic = normalizeLocalCover(data.pictureBase64 || data.pic, data.pictureMime)
   } else if (data.picUrl) {
     pic = data.picUrl
-  } else if (data.hasPicture !== false) {
+  } else if (coverTouched && data.hasPicture !== false) {
     pic = localCoverUrl(filePath)
   }
   if (pic) {
-    coverUrl.value = pic
     updates.picUrl = pic
     updates.img = pic
   } else if (data.hasPicture === false) {
-    coverUrl.value = ''
     updates.picUrl = ''
     updates.img = ''
   }
 
-  const lyric = data.lyric || ''
-  if (lyric) {
-    lyricLines.value = parseLyric(lyric)
-    updates.lyric = lyric
-    activeLyricIdx.value = -1
+  if (data.lyric !== undefined) updates.lyric = data.lyric || ''
+  return updates
+}
+
+function resetLyricState() {
+  lyricFetchToken++
+  coverFetchToken++
+  lyricLines.value = []
+  activeLyricIdx.value = -1
+  lyricTrackKey = ''
+}
+
+function bindLyricsToTrack(trackKey, lyric) {
+  lyricTrackKey = trackKey || ''
+  lyricLines.value = lyric ? parseLyric(lyric) : []
+  activeLyricIdx.value = -1
+}
+
+function applyLyricStateFromTagMeta(data) {
+  if (!currentPlaying.value) return
+  const key = getTrackKey(currentPlaying.value, currentPlaying.value.source)
+  if (data.lyric !== undefined) {
+    bindLyricsToTrack(key, data.lyric)
     if (audio && !audio.paused && lyricLines.value.some((line) => line.time > 0)) {
       updateActiveLyric(audio.currentTime)
     }
-  } else if (data.hasLyrics === false) {
-    lyricLines.value = []
-    updates.lyric = ''
-    activeLyricIdx.value = -1
+    return
   }
+  if (data.hasLyrics === false) {
+    bindLyricsToTrack(key, '')
+  }
+}
+
+function applyLocalMetaToPlaying(data, filePath) {
+  if (!data || !filePath) return
+  const updates = buildPlayerUpdatesFromTagMeta(data, filePath)
+  const queueChanged = patchQueueItemsByPath(filePath, updates)
+
+  const playingPath = getTrackFilePath(currentPlaying.value)
+  if (!playingPath || !isSameTrackPath(playingPath, filePath)) {
+    if (queueChanged) saveQueueState()
+    return
+  }
+
+  if (updates.picUrl !== undefined || updates.img !== undefined) {
+    coverUrl.value = updates.picUrl || updates.img || ''
+  }
+  applyLyricStateFromTagMeta(data)
 
   if (Object.keys(updates).length) {
     currentPlaying.value = cleanTrackItem({ ...currentPlaying.value, ...updates })
-    patchQueueItem(trackKey, updates)
-    saveQueueState()
   }
+  saveQueueState()
 }
 
 /** 标签保存后刷新正在试听的本地文件信息 */
 export async function refreshPlayingLocalMeta(filePath, meta) {
-  if (!filePath || !currentPlaying.value?.localPath) return
-  if (currentPlaying.value.localPath !== filePath) return
+  if (!filePath) return
+  localMetaFetchToken++
   if (meta) {
     applyLocalMetaToPlaying(meta, filePath)
     return
   }
+  const playingPath = getTrackFilePath(currentPlaying.value)
+  if (!playingPath || !isSameTrackPath(playingPath, filePath)) return
+  const token = localMetaFetchToken
   try {
     const res = await api.tag.read(filePath)
+    if (token !== localMetaFetchToken) return
     if (res?.error) return
     applyLocalMetaToPlaying(res?.data || res, filePath)
   } catch {}
 }
 
 async function fetchLocalMeta(item) {
-  const filePath = item?.localPath
+  const filePath = getTrackFilePath(item)
   if (!filePath) return
-  const trackKey = getTrackKey(item, 'local')
   const token = ++localMetaFetchToken
   try {
     const res = await api.tag.read(filePath)
     if (token !== localMetaFetchToken) return
-    if (!currentPlaying.value || getTrackKey(currentPlaying.value, 'local') !== trackKey) return
+    const playingPath = getTrackFilePath(currentPlaying.value)
+    if (!playingPath || !isSameTrackPath(playingPath, filePath)) return
     applyLocalMetaToPlaying(res?.data || res, filePath)
   } catch {}
 }
@@ -326,6 +421,10 @@ function beginPlaybackBuffer() {
 
 function endPlaybackBuffer() {
   isBuffering.value = false
+}
+
+function clearPlaybackError() {
+  if (playerError.value) playerError.value = ''
 }
 
 function cancelPlaybackIntent() {
@@ -395,7 +494,7 @@ function bindAudioElementEvents(el) {
     updateActiveLyric(audio.currentTime)
     syncDurationFromAudio()
     const now = Date.now()
-    if (now - lastSessionSave > 2000) {
+    if (now - lastSessionSave > 5000) {
       lastSessionSave = now
       saveQueueState()
     }
@@ -412,6 +511,8 @@ function bindAudioElementEvents(el) {
   el.addEventListener('playing', () => {
     if (audio !== el) return
     endPlaybackBuffer()
+    clearPlaybackError()
+    isPaused.value = false
     syncMediaSessionPlaybackState()
     if (visualizerEnabled.value) scheduleAudioAnalyserRefresh()
   })
@@ -430,14 +531,13 @@ function bindAudioElementEvents(el) {
     if (audio !== el) return
     endPlaybackBuffer()
     isPaused.value = true
-    playerError.value = '音频加载失败，请尝试其他歌曲'
+    playerError.value = getAudioElementError(el) || '音频加载失败，请尝试其他歌曲'
     loadingPlay.value = null
   })
 }
 
 function createAudioElement() {
   const el = new Audio()
-  el.crossOrigin = 'anonymous'
   el.setAttribute('playsinline', '')
   el.setAttribute('webkit-playsinline', '')
   bindAudioElementEvents(el)
@@ -476,9 +576,10 @@ async function restoreNativeAudioOutput() {
     applyAudioOutput()
     return
   }
+  applyAudioCrossOrigin(audio, src)
   audio.src = src
   try {
-    await waitForAudioReady()
+    await waitForAudioReady(src, { isLocal: src.includes('/api/play/local') })
     if (time > 0) {
       audio.currentTime = time
       currentTime.value = time
@@ -689,14 +790,17 @@ async function applyBackgroundPlayMode() {
   updateMediaSession()
 }
 
-function pickItemFields(item) {
+function pickItemFields(item, queueKey = '') {
   if (!item) return null
   const cleaned = cleanTrackItem(item)
+  const localPath = cleaned.localPath || getTrackFilePath(cleaned) || ''
+  const key = queueKey || cleaned.key || (localPath ? `local:${localPath}` : '')
   return {
     id: cleaned.id,
     name: cleaned.name,
     singer: cleaned.singer,
     source: cleaned.source,
+    key,
     songmid: cleaned.songmid,
     hash: cleaned.hash,
     songId: cleaned.songId,
@@ -717,18 +821,20 @@ function pickItemFields(item) {
     interval: cleaned.interval,
     album: cleaned.album,
     albumName: cleaned.albumName,
-    localPath: cleaned.localPath || '',
+    localPath,
     lyric: cleaned.lyric || '',
   }
 }
 
-function saveQueueState() {
+let saveQueueTimer = null
+
+function persistQueueState() {
   try {
     localStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify({
       queue: playQueue.value.map(e => ({
         key: e.key,
         source: e.source,
-        item: pickItemFields(e.item),
+        item: pickItemFields(e.item, e.key),
       })),
       currentIndex: currentQueueIndex.value,
       playMode: playMode.value,
@@ -741,14 +847,29 @@ function saveQueueState() {
   } catch {}
 }
 
+function saveQueueState({ immediate = false } = {}) {
+  if (immediate) {
+    if (saveQueueTimer) {
+      clearTimeout(saveQueueTimer)
+      saveQueueTimer = null
+    }
+    persistQueueState()
+    return
+  }
+  if (saveQueueTimer) clearTimeout(saveQueueTimer)
+  saveQueueTimer = setTimeout(() => {
+    saveQueueTimer = null
+    persistQueueState()
+  }, 800)
+}
+
 function syncCurrentPlayingFromQueue(forcePaused = false) {
   if (currentQueueIndex.value < 0 || !playQueue.value[currentQueueIndex.value]) return
   const { item, source } = playQueue.value[currentQueueIndex.value]
   const cleaned = cleanTrackItem({ ...item, source: item.source || source })
   currentPlaying.value = cleaned
   coverUrl.value = cleaned.picUrl || cleaned.img || ''
-  lyricLines.value = cleaned.lyric ? parseLyric(cleaned.lyric) : []
-  activeLyricIdx.value = -1
+  bindLyricsToTrack(getTrackKey(cleaned, source), cleaned.lyric || '')
   applyDurationFallback(cleaned)
   if (forcePaused) isPaused.value = true
 }
@@ -761,8 +882,10 @@ function restoreSessionState() {
       if (data.currentPlaying?.name) {
         currentPlaying.value = cleanTrackItem(data.currentPlaying)
         coverUrl.value = data.currentPlaying.picUrl || data.currentPlaying.img || ''
-        lyricLines.value = data.currentPlaying.lyric ? parseLyric(data.currentPlaying.lyric) : []
-        activeLyricIdx.value = -1
+        bindLyricsToTrack(
+          getTrackKey(currentPlaying.value, currentPlaying.value.source),
+          data.currentPlaying.lyric || '',
+        )
         currentTime.value = Number(data.currentTime) || 0
         applyDurationFallback(currentPlaying.value)
         if (currentPlaying.value.localPath) {
@@ -821,6 +944,17 @@ export const currentLyricText = computed(() => {
   return lyricLines.value[0]?.text || ''
 })
 
+/** 当前可编辑标签的本地文件路径（兼容队列 key / 会话恢复） */
+export const currentLocalTrackPath = computed(() => {
+  const fromPlaying = getTrackFilePath(currentPlaying.value)
+  if (fromPlaying) return fromPlaying
+  const idx = currentQueueIndex.value
+  if (idx < 0 || idx >= playQueue.value.length) return ''
+  const entry = playQueue.value[idx]
+  if (entry?.key?.startsWith('local:')) return entry.key.slice(6)
+  return getTrackFilePath(entry?.item)
+})
+
 export const displayDuration = computed(() => {
   if (duration.value && isFinite(duration.value) && duration.value > 0) return duration.value
   return parseIntervalToSeconds(currentPlaying.value?.interval)
@@ -876,7 +1010,9 @@ function resolveNextIndex(fromAuto = false) {
 }
 
 export function getTrackKey(item, source) {
-  if (item?.localPath) return `local:${item.localPath}`
+  const filePath = getTrackFilePath(item)
+  if (filePath) return `local:${filePath}`
+  if (item?.key) return String(item.key)
   const id = item?.songmid || item?.hash || item?.songId || item?.musicId || item?.copyrightId || item?.id
   const src = item?.source || source || ''
   return `${src}:${id}`
@@ -911,10 +1047,10 @@ export function initPlayer() {
   loadCoverStyle()
   loadPlayerSettings()
 
-  window.addEventListener('beforeunload', saveQueueState)
+  window.addEventListener('beforeunload', () => saveQueueState({ immediate: true }))
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') {
-      saveQueueState()
+      saveQueueState({ immediate: true })
       if (isBackgroundPlayActive() && audio && !audio.paused && !isPaused.value) {
         syncMediaSessionPlaybackState()
       }
@@ -1060,10 +1196,16 @@ export function isInQueue(item, source) {
   return playQueue.value.some(q => q.key === key)
 }
 
+let playUrlAbort = null
+
+function cancelPlayUrlFetch() {
+  playUrlAbort?.abort()
+  playUrlAbort = null
+}
+
 async function resolvePlayUrl(item, source, quality = DEFAULT_PLAY_QUALITY, options = {}) {
-  const isLocal = Boolean(item.localPath) || source === 'local'
-  if (isLocal) {
-    const res = await api.play.getUrl(buildPlayPayload(item, 'local', quality, { localPath: item.localPath }))
+  if (isLocalTrack(item, source)) {
+    const res = await api.play.getUrl(buildPlayPayload(item, 'local', quality), { signal: options.signal })
     return res.url || ''
   }
 
@@ -1075,12 +1217,18 @@ async function resolvePlayUrl(item, source, quality = DEFAULT_PLAY_QUALITY, opti
   if (options.skipSourceIds?.length) payload.skipSourceIds = options.skipSourceIds
 
   try {
-    const res = await api.play.getUrl(payload)
+    const res = await api.play.getUrl(payload, { signal: options.signal })
+    if (options.intent != null && options.intent !== playIntentToken) return ''
     if (res.sourceInfo?.switched) notifySourceSwitch(res.sourceInfo)
     const url = res.url || ''
     if (url) setCachedPlayUrl(item, source, quality, url)
     return url
   } catch (e) {
+    if (e.aborted) {
+      const err = new Error('播放已取消')
+      err.aborted = true
+      throw err
+    }
     if (!options._fallbackHandled && isSourceFallbackError(e)) {
       const offer = getSourceFallbackOffer(e)
       const picked = await askSourceFallback(offer, { item, source, quality })
@@ -1103,7 +1251,7 @@ function canReuseLoadedAudio(url, item, source) {
     === getTrackKey(item, source)
 }
 
-async function startPlaybackFromUrl(url, { resumeTime = 0, item, source } = {}) {
+async function startPlaybackFromUrl(url, { resumeTime = 0, item, source, isLocal = false } = {}) {
   if (!audio) {
     if (!inited) initPlayer()
     else audio = createAudioElement()
@@ -1112,13 +1260,16 @@ async function startPlaybackFromUrl(url, { resumeTime = 0, item, source } = {}) 
   if (!resumeTime) currentTime.value = 0
   duration.value = 0
   if (item) applyDurationFallback(item)
+  const authedUrl = withStreamAuth(url)
   if (!urlsMatch(audio.src, url)) {
     invalidatePlaybackGraph()
+    resetAudioBeforeLoad(audio)
   }
-  audio.src = url
+  applyAudioCrossOrigin(audio, url)
+  audio.src = authedUrl
   hasMediaSrc = true
   if (audio.readyState < 2) {
-    await waitForAudioReady()
+    await waitForAudioReady(authedUrl, { isLocal })
   }
 
   applyAudioOutput()
@@ -1141,6 +1292,7 @@ async function startPlaybackFromUrl(url, { resumeTime = 0, item, source } = {}) 
     throw playErr
   }
 
+  clearPlaybackError()
   applyAudioOutput()
   rememberLoadedPlayUrl(item, source, url, DEFAULT_PLAY_QUALITY)
   if (visualizerEnabled.value) {
@@ -1240,9 +1392,6 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 }
   unlockAudioFromGesture()
 
   const prevIndex = currentQueueIndex.value
-  const prevTrackKey = currentPlaying.value
-    ? getTrackKey(currentPlaying.value, currentPlaying.value.source)
-    : ''
   if (!fromHistory && prevIndex >= 0 && prevIndex !== index) {
     playHistory.push(prevIndex)
   }
@@ -1251,6 +1400,10 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 }
   const trackKey = getTrackKey(item, source)
   const intent = ++playIntentToken
 
+  if (lyricTrackKey !== trackKey) {
+    resetLyricState()
+  }
+
   if (prevIndex >= 0 && prevIndex !== index) {
     const prevEntry = playQueue.value[prevIndex]
     if (prevEntry?.key) stashMediaAudio(prevEntry.key)
@@ -1258,70 +1411,95 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 }
 
   currentQueueIndex.value = index
 
-  currentPlaying.value = cleanTrackItem(item)
+  const enrichedItem = { ...item }
+  if (!getTrackFilePath(enrichedItem) && trackKey.startsWith('local:')) {
+    enrichedItem.localPath = trackKey.slice(6)
+  }
+  currentPlaying.value = cleanTrackItem(enrichedItem)
   coverUrl.value = item.picUrl || item.img || ''
-  if (!coverUrl.value && item.localPath && item.hasPicture !== false) {
-    coverUrl.value = localCoverUrl(item.localPath)
+  const filePath = getTrackFilePath(item)
+  if (!coverUrl.value && filePath && item.hasPicture !== false) {
+    coverUrl.value = localCoverUrl(filePath)
   }
 
   beginPlaybackBuffer()
   saveQueueState()
 
+  cancelPlayUrlFetch()
+  const playUrlController = new AbortController()
+  playUrlAbort = playUrlController
+
   loadingPlay.value = item.id
   playerError.value = ''
+  const isLocal = isLocalTrack(item, source)
+  const quality = DEFAULT_PLAY_QUALITY
+  const maxAttempts = isLocal ? 2 : 1
+
   try {
-    const quality = DEFAULT_PLAY_QUALITY
-    const cachedUrl = getCachedPlayUrl(item, source, quality)
-    const cachedMedia = cachedUrl ? takeMediaAudioCache(trackKey, cachedUrl) : null
-    if (cachedMedia) {
-      await activateCachedAudio(cachedMedia, { resumeTime })
-      rememberLoadedPlayUrl(item, source, cachedUrl, quality)
-    } else if (canReuseLoadedAudio(cachedUrl, item, source)) {
-      await startPlaybackFromUrl(cachedUrl, { resumeTime, item, source })
-    } else {
-      const url = cachedUrl || await resolvePlayUrl(item, source, quality)
-      if (!url) throw new Error('获取播放链接失败')
-      await startPlaybackFromUrl(url, { resumeTime, item, source })
-    }
-
-    if (intent !== playIntentToken) {
-      try { audio?.pause() } catch {}
-      return
-    }
-
-    syncDurationFromAudio()
-    applyDurationFallback(item)
-
-    const sameTrackLyrics = prevTrackKey === trackKey
-
-    currentPlaying.value = cleanTrackItem(item)
-    isPaused.value = false
-    recordRecentPlay({ ...currentPlaying.value, source })
-    coverUrl.value = item.picUrl || item.img || ''
-    if (!sameTrackLyrics) {
-      lyricLines.value = []
-      activeLyricIdx.value = -1
-    }
-
-    const isLocal = Boolean(item.localPath) || source === 'local'
-    if (isLocal) {
-      if (item.lyric && !sameTrackLyrics) lyricLines.value = parseLyric(item.lyric)
-      if (!coverUrl.value && item.localPath && item.hasPicture !== false) {
-        coverUrl.value = item.picUrl || item.img || localCoverUrl(item.localPath)
+    let lastError = null
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      if (intent !== playIntentToken) return
+      if (attempt > 0) {
+        clearCachedPlayUrl(item, source, quality)
+        destroyMediaAudioCacheEntry(trackKey)
+        if (audio) resetAudioBeforeLoad(audio)
       }
-      fetchLocalMeta(item)
-    } else {
-      if (!sameTrackLyrics) {
-        if (item.lyric) lyricLines.value = parseLyric(item.lyric)
-        else fetchLyric(item, source)
+
+      try {
+        const cachedUrl = attempt === 0 ? getCachedPlayUrl(item, source, quality) : ''
+        const cachedMedia = cachedUrl ? takeMediaAudioCache(trackKey, cachedUrl) : null
+        if (cachedMedia) {
+          await activateCachedAudio(cachedMedia, { resumeTime })
+          rememberLoadedPlayUrl(item, source, cachedUrl, quality)
+        } else if (attempt === 0 && canReuseLoadedAudio(cachedUrl, item, source)) {
+          await startPlaybackFromUrl(cachedUrl, { resumeTime, item, source, isLocal })
+        } else {
+          const url = cachedUrl || await resolvePlayUrl(item, source, quality, {
+            signal: playUrlController.signal,
+            intent,
+          })
+          if (!url) {
+            if (intent !== playIntentToken) return
+            throw new Error('获取播放链接失败')
+          }
+          await startPlaybackFromUrl(url, { resumeTime, item, source, isLocal })
+        }
+
+        if (intent !== playIntentToken) {
+          try { audio?.pause() } catch {}
+          return
+        }
+
+        syncDurationFromAudio()
+        applyDurationFallback(item)
+
+        currentPlaying.value = cleanTrackItem(enrichedItem)
+        isPaused.value = false
+        recordRecentPlay({ ...currentPlaying.value, source })
+        coverUrl.value = item.picUrl || item.img || ''
+        if (isLocal) {
+          if (!coverUrl.value && filePath && item.hasPicture !== false) {
+            coverUrl.value = item.picUrl || item.img || localCoverUrl(filePath)
+          }
+          fetchLocalMeta(item)
+        } else if (!coverUrl.value) {
+          fetchCover(item, source)
+        }
+        ensureLyricsForTrack(item, source, trackKey)
+        updateActiveLyric(audio?.currentTime || 0)
+        saveQueueState()
+        updateMediaSession()
+        return
+      } catch (e) {
+        if (e.aborted || intent !== playIntentToken) throw e
+        lastError = e
+        if (attempt + 1 >= maxAttempts) throw e
       }
-      if (!coverUrl.value) fetchCover(item, source)
     }
-    updateActiveLyric(audio?.currentTime || 0)
-    saveQueueState()
-    updateMediaSession()
+    if (lastError) throw lastError
   } catch (e) {
     if (intent === playIntentToken) {
+      if (e.aborted) return
       endPlaybackBuffer()
       isPaused.value = true
       const message = formatPlayClientError(e)
@@ -1336,7 +1514,20 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 }
 
 function formatPlayClientError(e) {
   if (isBenignPlayInterrupt(e)) return ''
-  return formatUserError(e, '试听失败，请确认音源已激活')
+  return formatUserError(e, '播放失败，请稍后重试')
+}
+
+const AUDIO_ELEMENT_ERROR_TEXT = {
+  1: '音频加载被中止',
+  2: '网络异常，无法加载音频',
+  3: '音频解码失败，文件可能已损坏',
+  4: '浏览器无法播放该音频格式',
+}
+
+function getAudioElementError(el = audio) {
+  const code = el?.error?.code
+  if (code && AUDIO_ELEMENT_ERROR_TEXT[code]) return AUDIO_ELEMENT_ERROR_TEXT[code]
+  return ''
 }
 
 function isBenignPlayInterrupt(error) {
@@ -1345,7 +1536,8 @@ function isBenignPlayInterrupt(error) {
     || /play\(\) request was interrupted/i.test(text)
 }
 
-function waitForAudioReady() {
+function waitForAudioReady(expectedUrl = '', { isLocal = false } = {}) {
+  const timeoutMs = isLocal ? 20000 : 8000
   return new Promise((resolve, reject) => {
     if (!audio) { resolve(); return }
     if (audio.readyState >= 1 && !audio.error) {
@@ -1354,26 +1546,64 @@ function waitForAudioReady() {
       return
     }
     let settled = false
-    const finish = () => {
+    const isStale = () => expectedUrl && audio && !urlsMatch(audio.src, expectedUrl)
+    const cleanup = () => {
+      audio?.removeEventListener('loadedmetadata', finish)
+      audio?.removeEventListener('canplay', finish)
+      audio?.removeEventListener('durationchange', finish)
+      audio?.removeEventListener('error', onError)
+    }
+    const fail = (err) => {
       if (settled) return
       settled = true
+      cleanup()
+      if (isStale()) {
+        reject(Object.assign(new Error('播放已取消'), { aborted: true }))
+        return
+      }
+      reject(err instanceof Error ? err : new Error(formatPlayClientError(err)))
+    }
+    const finish = () => {
+      if (settled) return
+      if (isStale()) {
+        fail(Object.assign(new Error('播放已取消'), { aborted: true }))
+        return
+      }
+      settled = true
+      cleanup()
       if (audio.error) {
-        reject(new Error(formatPlayClientError({ name: 'NotSupportedError' })))
+        const detail = getAudioElementError(audio)
+        fail(new Error(detail || '音频加载失败，请尝试其他歌曲'))
         return
       }
       syncDurationFromAudio()
       resolve()
     }
     const onError = () => {
-      if (settled) return
-      settled = true
-      reject(new Error(formatPlayClientError({ name: 'NotSupportedError' })))
+      if (isStale()) {
+        fail(Object.assign(new Error('播放已取消'), { aborted: true }))
+        return
+      }
+      const detail = getAudioElementError(audio)
+      fail(new Error(detail || '音频加载失败，请尝试其他歌曲'))
     }
-    audio.addEventListener('loadedmetadata', finish, { once: true })
-    audio.addEventListener('canplay', finish, { once: true })
-    audio.addEventListener('durationchange', finish, { once: true })
-    audio.addEventListener('error', onError, { once: true })
-    setTimeout(finish, 8000)
+    audio.addEventListener('loadedmetadata', finish)
+    audio.addEventListener('canplay', finish)
+    audio.addEventListener('durationchange', finish)
+    audio.addEventListener('error', onError)
+    setTimeout(() => {
+      if (settled) return
+      if (isStale()) {
+        fail(Object.assign(new Error('播放已取消'), { aborted: true }))
+        return
+      }
+      if (audio.error) {
+        onError()
+        return
+      }
+      if (audio.readyState >= 1) finish()
+      else fail(new Error(isLocal ? '本地音频加载超时，请检查文件是否存在或路径是否有效' : '音频加载超时，请检查网络或文件路径'))
+    }, timeoutMs)
   })
 }
 
@@ -1434,6 +1664,8 @@ export async function togglePause() {
     try {
       unlockAudioFromGesture()
       await audio.play()
+      clearPlaybackError()
+      isPaused.value = false
       saveQueueState()
       if (visualizerEnabled.value) {
         await ensurePlaybackGraph()
@@ -1477,8 +1709,7 @@ export function stopPlay() {
   currentTime.value = 0
   duration.value = 0
   coverUrl.value = ''
-  lyricLines.value = []
-  activeLyricIdx.value = -1
+  resetLyricState()
   playerError.value = ''
   clearMediaSession()
   saveQueueState()
@@ -1533,6 +1764,16 @@ export function toggleQueuePanel() {
   showQueuePanel.value = !showQueuePanel.value
 }
 
+function ensureLyricsForTrack(item, source, trackKey) {
+  if (lyricTrackKey === trackKey && lyricLines.value.length) return
+  if (item.lyric) {
+    bindLyricsToTrack(trackKey, item.lyric)
+    return
+  }
+  if (isLocalTrack(item, source)) return
+  fetchLyric(item, source)
+}
+
 async function fetchLyric(item, activeSource) {
   const source = item.source || activeSource
   const trackKey = getTrackKey(item, source)
@@ -1542,9 +1783,7 @@ async function fetchLyric(item, activeSource) {
     if (!lyric || token !== lyricFetchToken) return
     if (!currentPlaying.value) return
     if (getTrackKey(currentPlaying.value, currentPlaying.value.source) !== trackKey) return
-    const lines = parseLyric(lyric)
-    lyricLines.value = lines
-    activeLyricIdx.value = -1
+    bindLyricsToTrack(trackKey, lyric)
     currentPlaying.value = { ...currentPlaying.value, lyric }
     patchQueueItem(trackKey, { lyric })
     saveQueueState()
@@ -1553,7 +1792,7 @@ async function fetchLyric(item, activeSource) {
 
   const payload = buildPlayPayload(item, source, '128k')
   const nameForSearch = normalizeLyricSearchName(item.name)
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < 2; attempt++) {
     if (token !== lyricFetchToken) return
     try {
       const res = await api.play.getLyric({
@@ -1565,18 +1804,20 @@ async function fetchLyric(item, activeSource) {
         return
       }
     } catch {}
-    if (attempt < 2) {
-      await new Promise(resolve => setTimeout(resolve, 700 * (attempt + 1)))
+    if (attempt < 1) {
+      await new Promise(resolve => setTimeout(resolve, 500))
     }
   }
 }
 
 async function fetchCover(item, activeSource) {
   const source = item.source || activeSource
+  const trackKey = getTrackKey(item, source)
+  const token = ++coverFetchToken
   try {
     const res = await api.play.getCover(buildPlayPayload(item, source, '128k'))
+    if (token !== coverFetchToken) return
     if (res.url && currentPlaying.value) {
-      const trackKey = getTrackKey(item, source)
       const same = getTrackKey(currentPlaying.value, currentPlaying.value.source) === trackKey
       if (same) {
         coverUrl.value = res.url

@@ -26,13 +26,65 @@ export const downloadRouter = Router()
 
 const activeDownloads = new Map()
 let runningCount = 0
+
+export function getDownloadQueueStats() {
+  try {
+    const row = getDB().prepare(`
+      SELECT COUNT(*) AS c FROM download_tasks WHERE status IN ('waiting', 'downloading', 'await_confirm', 'await_source')
+    `).get()
+    return {
+      running: runningCount,
+      active: activeDownloads.size,
+      pending: Number(row?.c) || 0,
+    }
+  } catch {
+    return { running: runningCount, active: activeDownloads.size, pending: 0 }
+  }
+}
+
 const SAME_QUALITY_ATTEMPTS = 3
 const RETRY_DELAY_MS = 1200
-const DOWNLOAD_ARTIFACT_EXTS = ['.mp3', '.flac', '.wav', '.ape', '.ogg']
+const DOWNLOAD_ARTIFACT_EXTS = ['.mp3', '.flac', '.wav', '.ape', '.ogg', '.m4a', '.aac', '.wma', '.opus']
 
-downloadRouter.get('/list', (_req, res) => {
+function isAdmin(user) {
+  return user?.role === 'admin'
+}
+
+function canAccessTask(user, task) {
+  if (!task) return false
+  if (isAdmin(user)) return true
+  return !task.user_id || task.user_id === user.id
+}
+
+function getTaskForUser(user, taskId) {
+  const row = getDB().prepare('SELECT * FROM download_tasks WHERE id = ?').get(taskId)
+  if (!row || !canAccessTask(user, row)) return null
+  return row
+}
+
+function listTasksQuery(user) {
+  if (isAdmin(user)) {
+    return getDB().prepare('SELECT * FROM download_tasks ORDER BY created_at DESC').all()
+  }
+  return getDB().prepare('SELECT * FROM download_tasks WHERE user_id = ? ORDER BY created_at DESC').all(user.id)
+}
+
+function dlBroadcast(type, data, explicitUserId = undefined) {
+  let userId = explicitUserId
+  if (userId === undefined) {
+    if (data?.id) {
+      const row = getDB().prepare('SELECT user_id FROM download_tasks WHERE id = ?').get(data.id)
+      userId = row?.user_id || null
+    } else {
+      userId = null
+    }
+  }
+  broadcast(type, data, userId)
+}
+
+downloadRouter.get('/list', (req, res) => {
   reconcileStaleDownloads()
-  const rows = getDB().prepare('SELECT * FROM download_tasks ORDER BY created_at DESC').all()
+  const rows = listTasksQuery(req.user)
   res.json(rows.map(r => ({ ...r, meta: JSON.parse(r.meta) })))
 })
 
@@ -40,11 +92,12 @@ downloadRouter.post('/add', async (req, res) => {
   try {
     const { tasks } = req.body
     if (!Array.isArray(tasks) || !tasks.length) return res.status(400).json({ error: '没有下载任务' })
+    if (tasks.length > 50) return res.status(400).json({ error: '单次最多添加 50 个下载任务' })
 
     const settings = getSettings()
     const insert = getDB().prepare(`
-      INSERT INTO download_tasks (id, name, singer, source, album, interval, quality, meta, status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'waiting')
+      INSERT INTO download_tasks (id, name, singer, source, album, interval, quality, meta, status, user_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'waiting', ?)
     `)
 
     const added = []
@@ -72,7 +125,7 @@ downloadRouter.post('/add', async (req, res) => {
           qualitys: t.qualitys || [],
           requestedQuality: t.quality || '320k',
         })
-        insert.run(id, t.name, t.singer || '', t.source || '', t.album || '', t.interval || '', t.quality || '320k', meta)
+        insert.run(id, t.name, t.singer || '', t.source || '', t.album || '', t.interval || '', t.quality || '320k', meta, req.user.id)
         added.push(id)
       }
     })
@@ -86,11 +139,17 @@ downloadRouter.post('/add', async (req, res) => {
 })
 
 downloadRouter.post('/pause/:id', (req, res) => {
+  if (!getTaskForUser(req.user, req.params.id)) {
+    return res.status(404).json({ error: '任务不存在' })
+  }
   pauseTask(req.params.id)
   res.json({ ok: true })
 })
 
 downloadRouter.post('/resume/:id', (req, res) => {
+  if (!getTaskForUser(req.user, req.params.id)) {
+    return res.status(404).json({ error: '任务不存在' })
+  }
   if (!resumeTask(req.params.id)) {
     return res.status(400).json({ error: '该任务当前状态无法继续或重试' })
   }
@@ -112,7 +171,7 @@ downloadRouter.post('/resume-all', (req, res) => {
 /** 用户确认：以降一档音质重新下载（仅在同音质重试失败后出现） */
 downloadRouter.post('/confirm-downgrade/:id', (req, res) => {
   try {
-    const row = getDB().prepare('SELECT * FROM download_tasks WHERE id = ?').get(req.params.id)
+    const row = getTaskForUser(req.user, req.params.id)
     if (!row) return res.status(404).json({ error: '任务不存在' })
     let meta = {}
     try { meta = JSON.parse(row.meta || '{}') } catch { meta = {} }
@@ -130,12 +189,13 @@ downloadRouter.post('/confirm-downgrade/:id', (req, res) => {
     }
     cleanupTaskDownloadArtifacts(row, meta, getSettings())
     clearTaskStoredFilePath(row.id)
+    meta.forceRedownload = true
     getDB().prepare(`
       UPDATE download_tasks
       SET quality = ?, meta = ?, status = 'waiting', error = NULL, progress = 0, downloaded_size = 0, file_path = NULL
       WHERE id = ?
     `).run(toQuality, JSON.stringify(meta), req.params.id)
-    broadcast('download:status', {
+    dlBroadcast('download:status', {
       id: req.params.id,
       status: 'waiting',
       quality: toQuality,
@@ -152,7 +212,7 @@ downloadRouter.post('/confirm-downgrade/:id', (req, res) => {
 /** 用户拒绝降质：保留失败状态 */
 downloadRouter.post('/reject-downgrade/:id', (req, res) => {
   try {
-    const row = getDB().prepare('SELECT * FROM download_tasks WHERE id = ?').get(req.params.id)
+    const row = getTaskForUser(req.user, req.params.id)
     if (!row) return res.status(404).json({ error: '任务不存在' })
     let meta = {}
     try { meta = JSON.parse(row.meta || '{}') } catch { meta = {} }
@@ -161,7 +221,7 @@ downloadRouter.post('/reject-downgrade/:id', (req, res) => {
     getDB().prepare(`
       UPDATE download_tasks SET status = 'error', error = ?, meta = ? WHERE id = ?
     `).run(reason, JSON.stringify(meta), req.params.id)
-    broadcast('download:status', {
+    dlBroadcast('download:status', {
       id: req.params.id,
       status: 'error',
       error: reason,
@@ -176,7 +236,7 @@ downloadRouter.post('/reject-downgrade/:id', (req, res) => {
 /** 用户确认：切换到指定音源继续下载 */
 downloadRouter.post('/confirm-source/:id', (req, res) => {
   try {
-    const row = getDB().prepare('SELECT * FROM download_tasks WHERE id = ?').get(req.params.id)
+    const row = getTaskForUser(req.user, req.params.id)
     if (!row) return res.status(404).json({ error: '任务不存在' })
     const sourceApiId = String(req.body?.sourceApiId || '').trim()
     if (!sourceApiId) return res.status(400).json({ error: '请选择要切换的音源' })
@@ -203,12 +263,13 @@ downloadRouter.post('/confirm-source/:id', (req, res) => {
 
     cleanupTaskDownloadArtifacts(row, meta, getSettings())
     clearTaskStoredFilePath(row.id)
+    meta.forceRedownload = true
     getDB().prepare(`
       UPDATE download_tasks
       SET status = 'waiting', error = NULL, progress = 0, downloaded_size = 0, file_path = NULL, meta = ?
       WHERE id = ?
     `).run(JSON.stringify(meta), req.params.id)
-    broadcast('download:status', {
+    dlBroadcast('download:status', {
       id: req.params.id,
       status: 'waiting',
       error: '',
@@ -224,7 +285,7 @@ downloadRouter.post('/confirm-source/:id', (req, res) => {
 /** 用户拒绝切换音源 */
 downloadRouter.post('/reject-source/:id', (req, res) => {
   try {
-    const row = getDB().prepare('SELECT * FROM download_tasks WHERE id = ?').get(req.params.id)
+    const row = getTaskForUser(req.user, req.params.id)
     if (!row) return res.status(404).json({ error: '任务不存在' })
     let meta = {}
     try { meta = JSON.parse(row.meta || '{}') } catch { meta = {} }
@@ -232,7 +293,7 @@ downloadRouter.post('/reject-source/:id', (req, res) => {
     getDB().prepare(`
       UPDATE download_tasks SET status = 'error', error = ?, meta = ? WHERE id = ?
     `).run('已取消切换音源', JSON.stringify(meta), req.params.id)
-    broadcast('download:status', {
+    dlBroadcast('download:status', {
       id: req.params.id,
       status: 'error',
       error: '已取消切换音源',
@@ -246,6 +307,9 @@ downloadRouter.post('/reject-source/:id', (req, res) => {
 
 downloadRouter.delete('/:id', (req, res) => {
   try {
+    if (!getTaskForUser(req.user, req.params.id)) {
+      return res.status(404).json({ error: '任务不存在' })
+    }
     removeDownloadTask(req.params.id, { deleteFile: true })
     res.json({ ok: true })
   } catch (e) {
@@ -266,22 +330,22 @@ downloadRouter.post('/dismiss', (req, res) => {
 })
 
 /** 清空下载列表记录，不删除已下载文件 */
-downloadRouter.post('/dismiss-all', (_req, res) => {
+downloadRouter.post('/dismiss-all', (req, res) => {
   try {
-    const rows = getDB().prepare('SELECT id FROM download_tasks').all()
+    const rows = listTasksQuery(req.user)
     const ids = rows.map(r => r.id)
     const count = dismissDownloadTasks(ids)
-    broadcast('download:cleared', { all: true })
+    broadcast('download:cleared', { all: true }, req.user.id)
     res.json({ ok: true, count })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
 })
 
-downloadRouter.post('/clear-completed', (_req, res) => {
-  const rows = getDB().prepare("SELECT id FROM download_tasks WHERE status = 'completed'").all()
+downloadRouter.post('/clear-completed', (req, res) => {
+  const rows = listTasksQuery(req.user).filter(r => r.status === 'completed')
   const count = dismissDownloadTasks(rows.map(r => r.id))
-  broadcast('download:cleared', {})
+  broadcast('download:cleared', {}, req.user.id)
   res.json({ ok: true, count })
 })
 
@@ -322,7 +386,7 @@ function removeDownloadTask(id, { deleteFile = false } = {}) {
     cleanupTaskDownloadArtifacts(row, meta, settings)
   }
   getDB().prepare('DELETE FROM download_tasks WHERE id = ?').run(taskId)
-  broadcast('download:removed', { id: taskId })
+  dlBroadcast('download:removed', { id: taskId })
   return true
 }
 
@@ -331,7 +395,7 @@ function reconcileStaleDownloads() {
   for (const row of rows) {
     if (activeDownloads.has(row.id)) continue
     getDB().prepare("UPDATE download_tasks SET status = 'paused' WHERE id = ?").run(row.id)
-    broadcast('download:status', { id: row.id, status: 'paused' })
+    dlBroadcast('download:status', { id: row.id, status: 'paused' })
   }
 }
 
@@ -341,7 +405,7 @@ function pauseTask(id) {
   const row = getDB().prepare("SELECT id FROM download_tasks WHERE id = ? AND status IN ('waiting', 'downloading')").get(id)
   if (!row) return false
   getDB().prepare("UPDATE download_tasks SET status = 'paused' WHERE id = ?").run(id)
-  broadcast('download:status', { id, status: 'paused' })
+  dlBroadcast('download:status', { id, status: 'paused' })
   return true
 }
 
@@ -360,14 +424,15 @@ function requeueTask(id, { allowedStatuses = ['paused', 'error', 'await_confirm'
   const row = getDB().prepare('SELECT * FROM download_tasks WHERE id = ?').get(id)
   if (!row || !allowedStatuses.includes(row.status)) return false
 
-  const { meta } = prepareTaskForRetry(row, { cleanupFiles })
+  const forceRedownload = ['error', 'await_confirm'].includes(row.status)
+  const { meta } = prepareTaskForRetry(row, { cleanupFiles, forceRedownload })
 
   getDB().prepare(`
     UPDATE download_tasks
     SET status = 'waiting', error = NULL, progress = 0, downloaded_size = 0, file_path = NULL, meta = ?
     WHERE id = ?
   `).run(JSON.stringify(meta), id)
-  broadcast('download:status', { id, status: 'waiting', error: '', progress: 0, downgradeOffer: null })
+  dlBroadcast('download:status', { id, status: 'waiting', error: '', progress: 0, downgradeOffer: null })
   processQueue()
   return true
 }
@@ -421,7 +486,7 @@ async function processQueue() {
 
     runningCount++
     getDB().prepare("UPDATE download_tasks SET status = 'downloading' WHERE id = ?").run(task.id)
-    broadcast('download:status', { id: task.id, status: 'downloading', quality: task.quality })
+    dlBroadcast('download:status', { id: task.id, status: 'downloading', quality: task.quality })
 
     downloadTask(task, settings).finally(() => {
       runningCount--
@@ -470,15 +535,44 @@ async function streamToFile(url, partPath, taskId, abort) {
 
   try {
     await new Promise((resolve, reject) => {
+      let lastProgressAt = 0
+      let pendingProgress = null
+      let progressTimer = null
+
+      const flushProgress = (force = false) => {
+        if (!pendingProgress) return
+        const now = Date.now()
+        if (!force && now - lastProgressAt < 400) return
+        const { downloaded: d, progress: p, total: t } = pendingProgress
+        getDB().prepare('UPDATE download_tasks SET downloaded_size = ?, progress = ? WHERE id = ?')
+          .run(d, p, taskId)
+        dlBroadcast('download:progress', { id: taskId, progress: p, downloaded: d, total: t })
+        lastProgressAt = now
+        pendingProgress = null
+      }
+
+      const scheduleProgress = (downloaded, total) => {
+        const progress = total > 0 ? downloaded / total : 0
+        pendingProgress = { downloaded, progress, total }
+        if (!progressTimer) {
+          progressTimer = setTimeout(() => {
+            progressTimer = null
+            flushProgress(true)
+          }, 400)
+        }
+      }
+
       stream.on('data', (chunk) => {
         downloaded += chunk.length
         writer.write(chunk)
-        const progress = total > 0 ? downloaded / total : 0
-        getDB().prepare('UPDATE download_tasks SET downloaded_size = ?, progress = ? WHERE id = ?')
-          .run(downloaded, progress, taskId)
-        broadcast('download:progress', { id: taskId, progress, downloaded, total })
+        scheduleProgress(downloaded, total)
       })
       stream.on('done', (err) => {
+        if (progressTimer) {
+          clearTimeout(progressTimer)
+          progressTimer = null
+        }
+        if (!err && pendingProgress) flushProgress(true)
         writer.end()
         if (err) reject(err)
         else resolve()
@@ -508,7 +602,7 @@ function markSourceFallbackOffer(task, meta, error) {
   getDB().prepare(`
     UPDATE download_tasks SET status = 'await_source', error = ?, meta = ?, progress = 0 WHERE id = ?
   `).run(tip, JSON.stringify(meta), task.id)
-  broadcast('download:status', {
+  dlBroadcast('download:status', {
     id: task.id,
     status: 'await_source',
     error: tip,
@@ -537,7 +631,7 @@ function markAwaitConfirm(task, meta, fromQuality, toQuality, reason) {
   getDB().prepare(`
     UPDATE download_tasks SET status = 'await_confirm', error = ?, meta = ?, progress = 0 WHERE id = ?
   `).run(tip, JSON.stringify(meta), task.id)
-  broadcast('download:status', {
+  dlBroadcast('download:status', {
     id: task.id,
     status: 'await_confirm',
     error: tip,
@@ -559,7 +653,7 @@ function markError(taskId, message, meta) {
   taskMeta.downloadArtifacts = []
   saveTaskMeta(taskId, taskMeta)
   getDB().prepare("UPDATE download_tasks SET status = 'error', error = ?, file_path = NULL WHERE id = ?").run(friendly, taskId)
-  broadcast('download:status', { id: taskId, status: 'error', error: friendly, downgradeOffer: null })
+  dlBroadcast('download:status', { id: taskId, status: 'error', error: friendly, downgradeOffer: null })
 }
 
 function partPathFor(filePath) {
@@ -611,20 +705,50 @@ function cleanupTaskDownloadArtifacts(task, meta, settings, { exceptPath } = {})
     if (except.has(filePath)) continue
     cleanupDownloadPath(filePath)
   }
+  cleanupGroupDirArtifacts(task, settings, except)
   if (meta?.downloadArtifacts) meta.downloadArtifacts = []
+}
+
+function resolveTaskFileBaseName(task, settings) {
+  const template = settings['download.fileName'] || '{name} - {singer}'
+  return sanitize(template
+    .replace(/\{name\}/g, task.name || 'Unknown')
+    .replace(/\{singer\}/g, task.singer || 'Unknown')
+    .replace(/\{album\}/g, task.album || ''))
+}
+
+function cleanupGroupDirArtifacts(task, settings, except = new Set()) {
+  const baseName = resolveTaskFileBaseName(task, settings)
+  if (!baseName) return
+  const groupDir = resolveDownloadGroupDir(getDownloadSavePath(), settings, task)
+  if (!fs.existsSync(groupDir)) return
+  let entries = []
+  try {
+    entries = fs.readdirSync(groupDir)
+  } catch {
+    return
+  }
+  for (const entry of entries) {
+    if (entry !== baseName && !entry.startsWith(`${baseName}.`)) continue
+    const fullPath = path.join(groupDir, entry)
+    if (except.has(fullPath)) continue
+    if (entry.endsWith('.part')) safeUnlink(fullPath)
+    else cleanupDownloadPath(fullPath)
+  }
 }
 
 function clearTaskStoredFilePath(taskId) {
   getDB().prepare('UPDATE download_tasks SET file_path = NULL WHERE id = ?').run(taskId)
 }
 
-function prepareTaskForRetry(taskRow, { cleanupFiles = true } = {}) {
+function prepareTaskForRetry(taskRow, { cleanupFiles = true, forceRedownload = false } = {}) {
   const settings = getSettings()
   let meta = parseTaskMeta(taskRow)
   if (cleanupFiles) {
     cleanupTaskDownloadArtifacts(taskRow, meta, settings)
     clearTaskStoredFilePath(taskRow.id)
   }
+  if (forceRedownload) meta.forceRedownload = true
   if (meta.downgradeOffer) delete meta.downgradeOffer
   if (meta.sourceFallbackOffer) delete meta.sourceFallbackOffer
   return { meta, settings }
@@ -664,7 +788,7 @@ async function downloadTask(task, settings) {
       let partPath = ''
       try {
         if (attempt > 1) {
-          broadcast('download:status', {
+          dlBroadcast('download:status', {
             id: task.id,
             status: 'downloading',
             quality,
@@ -686,7 +810,7 @@ async function downloadTask(task, settings) {
               at: new Date().toISOString(),
             }
             saveTaskMeta(task.id, meta)
-            broadcast('download:source-switched', {
+            dlBroadcast('download:source-switched', {
               id: task.id,
               name: task.name,
               fromName: sourceInfo.fromSourceName,
@@ -704,12 +828,19 @@ async function downloadTask(task, settings) {
 
         fs.mkdirSync(path.dirname(filePath), { recursive: true })
 
-        if (settings['download.skipExistFile'] === 'true' && fs.existsSync(filePath)) {
+        const forceRedownload = meta.forceRedownload === true
+        if (forceRedownload) {
+          cleanupTaskDownloadArtifacts(task, meta, settings)
+          delete meta.forceRedownload
+          saveTaskMeta(task.id, meta)
+        }
+
+        if (!forceRedownload && settings['download.skipExistFile'] === 'true' && fs.existsSync(filePath)) {
           cleanupTaskDownloadArtifacts(task, meta, settings, { exceptPath: filePath })
           getDB().prepare("UPDATE download_tasks SET status = 'completed', file_path = ?, progress = 1 WHERE id = ?")
             .run(filePath, task.id)
           await writeMetaIfNeeded(task, meta, filePath, ext, settings)
-          broadcast('download:status', { id: task.id, status: 'completed', progress: 1, filePath, quality })
+          dlBroadcast('download:status', { id: task.id, status: 'completed', progress: 1, filePath, quality })
           scanBatchAndCache([{ filePath }]).catch(() => {})
           notifyLibraryChanged([filePath], { reason: 'download' })
           return
@@ -727,7 +858,7 @@ async function downloadTask(task, settings) {
         getDB().prepare("UPDATE download_tasks SET status = 'completed', file_path = ?, progress = 1, error = NULL WHERE id = ?")
           .run(filePath, task.id)
         await writeMetaIfNeeded(task, meta, filePath, ext, settings)
-        broadcast('download:status', { id: task.id, status: 'completed', progress: 1, filePath, quality })
+        dlBroadcast('download:status', { id: task.id, status: 'completed', progress: 1, filePath, quality })
         scanBatchAndCache([{ filePath }]).catch(() => {})
         notifyLibraryChanged([filePath], { reason: 'download' })
         return
@@ -875,10 +1006,7 @@ function guessExt(url, quality) {
 }
 
 function buildFileName(template, task, ext) {
-  return sanitize(template
-    .replace(/\{name\}/g, task.name || 'Unknown')
-    .replace(/\{singer\}/g, task.singer || 'Unknown')
-    .replace(/\{album\}/g, task.album || '')) + ext
+  return resolveTaskFileBaseName(task, { 'download.fileName': template }) + ext
 }
 
 function sanitize(name) {

@@ -44,10 +44,19 @@
             {{ selectedCard.count }} 首
             <template v-if="canEditSelected && isImportedSelected">
               · 本地 {{ trackOrigins.local }} / 网络 {{ trackOrigins.online }}
+              <template v-if="lastRemoteSyncLabel"> · {{ lastRemoteSyncLabel }}</template>
             </template>
           </p>
           <div class="detail-actions">
             <button class="btn-primary btn-sm" :disabled="!selectedCard.tracks.length" @click="playAll">播放全部</button>
+            <button
+              v-if="canEditSelected && isImportedSelected"
+              class="btn-ghost btn-sm"
+              :disabled="syncingRemote"
+              @click="syncRemote"
+            >
+              {{ syncingRemote ? '更新中…' : '更新歌单' }}
+            </button>
             <button
               v-if="canEditSelected && isImportedSelected"
               class="btn-ghost btn-sm"
@@ -56,6 +65,27 @@
             >
               {{ syncingLocal ? '同步中…' : '同步本地' }}
             </button>
+            <div
+              v-if="isImportedSelected && onlineTrackCount"
+              class="dl-wrap batch-dl-wrap"
+            >
+              <button
+                class="btn-ghost btn-sm"
+                :disabled="!batchDownloadCount || batchDownloading"
+                @click.stop="toggleBatchQualityMenu($event)"
+              >
+                {{ batchDownloading ? '添加中…' : `批量下载${batchDownloadCount ? ` (${batchDownloadCount})` : ''}` }}
+              </button>
+              <div class="quality-menu" v-if="showBatchQualityMenu" :style="batchMenuStyle" @click.stop>
+                <div class="quality-menu-title">批量音质：不支持时将自动降为最接近可用音质</div>
+                <button
+                  v-for="q in batchQualities"
+                  :key="q"
+                  class="quality-option"
+                  @click="downloadBatch(q)"
+                >{{ getQualityLabel(q) }}</button>
+              </div>
+            </div>
             <button v-if="canEditSelected" class="btn-ghost btn-sm" @click="openEdit">编辑歌单</button>
             <button v-if="canEditSelected" class="btn-ghost btn-sm" @click="showAddModal = true">添加歌曲</button>
             <button v-if="canEditSelected" class="btn-ghost btn-sm btn-danger-hover" @click="openDeletePlaylistModal">删除歌单</button>
@@ -68,28 +98,69 @@
         <button v-if="canEditSelected" class="btn-primary btn-sm" @click="showAddModal = true">添加歌曲</button>
       </div>
       <template v-else>
+        <div v-if="isImportedSelected && onlineTrackCount" class="track-list-toolbar">
+          <label class="batch-select-all">
+            <input
+              type="checkbox"
+              :checked="allOnlineSelected"
+              :indeterminate.prop="someOnlineSelected && !allOnlineSelected"
+              @change="toggleSelectAllOnline"
+            />
+            全选网络歌曲
+          </label>
+          <span v-if="selectedDownloadCount" class="batch-count">已选 {{ selectedDownloadCount }}</span>
+        </div>
         <div class="track-list">
           <div
             v-for="(song, i) in pagedTracks"
             :key="song.key"
             class="track-row"
-            :class="{ active: isPlayingSong(song) }"
+            :class="{ active: isPlayingSong(song), hovered: hoverKey === song.key }"
             @mouseenter="hoverKey = song.key"
             @mouseleave="hoverKey = ''"
             @dblclick="playOne(song)"
           >
-            <span class="track-index">{{ listStart + i + 1 }}</span>
-            <button type="button" class="track-cover-btn" @click="playOne(song)">
-              <img
-                v-if="song.picUrl && !brokenCovers.has(song.key)"
-                :src="song.picUrl"
-                alt=""
-                class="track-cover-img"
-                @error="markCoverBroken(song.key)"
+            <label
+              v-if="isImportedSelected && !song.isLocal"
+              class="track-check"
+              @click.stop
+            >
+              <input
+                type="checkbox"
+                :checked="selectedDownloadKeys.has(song.key)"
+                @change="toggleSelectOnline(song)"
               />
-              <div v-else class="track-cover-fallback">{{ song.name.slice(0, 1) }}</div>
-              <span v-if="hoverKey === song.key || isPlayingSong(song)" class="track-play-overlay">
-                <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><polygon points="7,3 21,12 7,21"/></svg>
+            </label>
+            <span v-else-if="isImportedSelected && song.isLocal" class="track-check-placeholder" />
+            <span class="track-index">{{ listStart + i + 1 }}</span>
+            <button
+              type="button"
+              class="song-cover-btn"
+              :class="{ rippling: tappingSongKey === song.key }"
+              @click="onTrackCoverClick(song)"
+            >
+              <div class="song-cover-media">
+                <img
+                  v-if="song.picUrl && !brokenCovers.has(song.key)"
+                  :src="song.picUrl"
+                  alt=""
+                  loading="lazy"
+                  @error="markCoverBroken(song.key)"
+                />
+                <div v-else class="song-cover-fallback">{{ song.name.slice(0, 1) }}</div>
+              </div>
+              <span class="song-cover-ripple" aria-hidden="true" />
+              <span
+                v-if="showCoverOverlay(song)"
+                class="song-play-overlay"
+              >
+                <svg v-if="isCoverPauseIcon(song)" viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true">
+                  <rect x="6" y="5" width="4" height="14" rx="1"/>
+                  <rect x="14" y="5" width="4" height="14" rx="1"/>
+                </svg>
+                <svg v-else viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true">
+                  <polygon points="7,3 21,12 7,21"/>
+                </svg>
               </span>
             </button>
             <div class="track-meta">
@@ -126,6 +197,28 @@
               >
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
               </button>
+              <div v-if="!song.isLocal" class="dl-wrap">
+                <button
+                  type="button"
+                  class="icon-action-btn dl-btn"
+                  title="下载"
+                  @click.stop="toggleQualityMenu(song, $event)"
+                >
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                </button>
+                <div class="quality-menu" v-if="qualityMenuKey === song.key" :style="menuStyle" @click.stop>
+                  <div class="quality-menu-title">选择音质</div>
+                  <template v-if="getItemQualities(trackPayload(song)).length">
+                    <button
+                      v-for="q in getItemQualities(trackPayload(song))"
+                      :key="q"
+                      class="quality-option"
+                      @click="downloadOne(song, q)"
+                    >{{ getQualityDisplay(q, song.types) }}</button>
+                  </template>
+                  <div v-else class="quality-empty">暂无可用音质</div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -183,18 +276,31 @@
     </div>
 
     <div v-if="toast" class="toast" :class="toast.type">{{ toast.text }}</div>
+
+    <BatchQualityDialog
+      :plan="batchDialog"
+      :preferred-label="batchPreferredLabel"
+      :busy="batchDownloading"
+      @cancel="closeBatchDialog"
+      @confirm="handleBatchConfirm"
+    />
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import PlaylistCover from '../components/PlaylistCover.vue'
 import PlaylistEditModal from '../components/PlaylistEditModal.vue'
 import CreatePlaylistModal from '../components/CreatePlaylistModal.vue'
 import AddToPlaylistModal from '../components/AddToPlaylistModal.vue'
 import PickPlaylistModal from '../components/PickPlaylistModal.vue'
+import BatchQualityDialog from '../components/BatchQualityDialog.vue'
+import { useBatchDownload, formatBatchDownloadToast } from '../composables/useBatchDownload.js'
 import { platformLabel } from '../utils/platforms.js'
+import { getQualityLabel, getQualityDisplay } from '../utils/quality.js'
+import { buildDownloadTask, getItemQualities } from '../utils/musicPayload.js'
+import { useQualityMenuPosition } from '../utils/qualityMenu.js'
 import { playItem, addToQueue, isInQueue, isPlayingItem, isPaused } from '../stores/player.js'
 import { formatTrackTags } from '../utils/format.js'
 import {
@@ -208,6 +314,7 @@ import {
   isImportedPlaylist,
   getCustomPlaylist,
   syncPlaylistLocalTracks,
+  refreshImportedPlaylistFromNetwork,
   countPlaylistTrackOrigins,
   snapshotToPlayTrack,
   scanLibrary,
@@ -228,10 +335,42 @@ const showDeleteModal = ref(false)
 const toast = ref(null)
 const brokenCovers = ref(new Set())
 const hoverKey = ref('')
+const tappingSongKey = ref('')
+const coverPendingPauseKey = ref('')
+const isNarrow = ref(false)
 const pickPlaylistTrack = ref(null)
 const pickPlaylistSource = ref('local')
 const pickPlaylistExcludeId = ref('')
 const syncingLocal = ref(false)
+const syncingRemote = ref(false)
+const qualityMenuKey = ref('')
+const showBatchQualityMenu = ref(false)
+const selectedDownloadKeys = ref(new Set())
+const { menuStyle, positionMenu, clearMenuPosition } = useQualityMenuPosition()
+const { menuStyle: batchMenuStyle, positionMenu: positionBatchMenu, clearMenuPosition: clearBatchMenuPosition } = useQualityMenuPosition()
+let narrowMq = null
+
+const playlistSource = computed(() => editingPlaylist.value?.importSource || '')
+
+const {
+  batchDialog,
+  batchDownloading,
+  startBatchDownload,
+  confirmBatchDialog,
+  closeBatchDialog,
+  getBatchQualities,
+} = useBatchDownload({
+  getSource: () => playlistSource.value,
+  onCompleted: (count, summary) => {
+    showToast(formatBatchDownloadToast(count, summary), 'success')
+    selectedDownloadKeys.value = new Set()
+  },
+  onError: (e) => showToast(e.message || '下载失败', 'error'),
+})
+
+function updateNarrow() {
+  isNarrow.value = narrowMq?.matches ?? window.innerWidth <= 768
+}
 
 function markCoverBroken(key) {
   if (!key) return
@@ -246,6 +385,13 @@ const canEditSelected = computed(() => isCustomPlaylist(selectedId.value))
 const isImportedSelected = computed(() => isImportedPlaylist(editingPlaylist.value))
 const editingPlaylist = computed(() => getCustomPlaylist(selectedId.value))
 const trackOrigins = computed(() => countPlaylistTrackOrigins(selectedCard.value?.tracks || []))
+const lastRemoteSyncLabel = computed(() => {
+  const ts = editingPlaylist.value?.lastRemoteSyncedAt || editingPlaylist.value?.lastSyncedAt
+  if (!ts) return ''
+  const d = new Date(ts)
+  if (Number.isNaN(d.getTime())) return ''
+  return `上次更新 ${d.toLocaleDateString('zh-CN')}`
+})
 
 const deleteConfirmMessage = computed(() => {
   if (!selectedCard.value) return ''
@@ -264,13 +410,46 @@ const pagedTracks = computed(() => {
   return tracks.slice(listStart.value, listStart.value + trackPageSize)
 })
 
-watch(selectedId, () => { trackPage.value = 1 })
+const allOnlineTracks = computed(() => (selectedCard.value?.tracks || []).filter(s => !s.isLocal))
+const onlineTrackCount = computed(() => allOnlineTracks.value.length)
+const selectedDownloadCount = computed(() => selectedDownloadKeys.value.size)
+const selectedOnlineTracks = computed(() =>
+  allOnlineTracks.value.filter(s => selectedDownloadKeys.value.has(s.key))
+)
+const batchDownloadCount = computed(() =>
+  selectedDownloadCount.value || onlineTrackCount.value
+)
+const batchDownloadItems = computed(() =>
+  selectedOnlineTracks.value.length
+    ? selectedOnlineTracks.value.map(trackPayload)
+    : allOnlineTracks.value.map(trackPayload)
+)
+const batchQualities = computed(() => getBatchQualities(batchDownloadItems.value))
+const batchPreferredLabel = computed(() => {
+  const q = batchDialog.value?.preferred
+  return q ? getQualityLabel(q) : ''
+})
+const allOnlineSelected = computed(() =>
+  allOnlineTracks.value.length > 0
+  && allOnlineTracks.value.every(s => selectedDownloadKeys.value.has(s.key))
+)
+const someOnlineSelected = computed(() => selectedDownloadCount.value > 0)
+
+watch(selectedId, () => {
+  trackPage.value = 1
+  selectedDownloadKeys.value = new Set()
+  closeMenus()
+})
 
 watch(() => route.query.id, (id) => {
   selectedId.value = id ? String(id) : ''
 })
 
 onMounted(async () => {
+  narrowMq = window.matchMedia('(max-width: 768px)')
+  updateNarrow()
+  narrowMq.addEventListener('change', updateNarrow)
+  document.addEventListener('click', closeMenus)
   const q = route.query.id
   if (q) selectedId.value = String(q)
   if (!libraryScanned.value) {
@@ -278,21 +457,143 @@ onMounted(async () => {
   }
 })
 
+onUnmounted(() => {
+  narrowMq?.removeEventListener('change', updateNarrow)
+  document.removeEventListener('click', closeMenus)
+})
+
 function selectCard(card) {
   selectedId.value = card.id
 }
 
 function trackPayload(song) {
-  return snapshotToPlayTrack(song, song.source || (song.localPath ? 'local' : ''))
+  return snapshotToPlayTrack(song, song.source || playlistSource.value || (song.localPath ? 'local' : ''))
+}
+
+function songDownloadSource(song) {
+  return song.source || playlistSource.value
+}
+
+function toggleSelectOnline(song) {
+  if (song.isLocal) return
+  const next = new Set(selectedDownloadKeys.value)
+  if (next.has(song.key)) next.delete(song.key)
+  else next.add(song.key)
+  selectedDownloadKeys.value = next
+}
+
+function toggleSelectAllOnline() {
+  if (allOnlineSelected.value) {
+    selectedDownloadKeys.value = new Set()
+    return
+  }
+  selectedDownloadKeys.value = new Set(allOnlineTracks.value.map(s => s.key))
+}
+
+function toggleQualityMenu(song, event) {
+  showBatchQualityMenu.value = false
+  clearBatchMenuPosition()
+  if (qualityMenuKey.value === song.key) {
+    qualityMenuKey.value = ''
+    clearMenuPosition()
+    return
+  }
+  qualityMenuKey.value = song.key
+  positionMenu(event?.currentTarget, { align: 'right' })
+}
+
+function toggleBatchQualityMenu(event) {
+  if (!batchDownloadCount.value) return
+  qualityMenuKey.value = ''
+  clearMenuPosition()
+  showBatchQualityMenu.value = !showBatchQualityMenu.value
+  if (showBatchQualityMenu.value) {
+    positionBatchMenu(event?.currentTarget, { align: 'left' })
+  } else {
+    clearBatchMenuPosition()
+  }
+}
+
+function closeMenus() {
+  qualityMenuKey.value = ''
+  showBatchQualityMenu.value = false
+  clearMenuPosition()
+  clearBatchMenuPosition()
+}
+
+function getBatchEntries() {
+  const list = selectedOnlineTracks.value.length ? selectedOnlineTracks.value : allOnlineTracks.value
+  return list.map(song => ({ item: trackPayload(song), key: song.key }))
+}
+
+async function downloadOne(song, quality) {
+  closeMenus()
+  const item = trackPayload(song)
+  const source = songDownloadSource(song)
+  try {
+    await api.download.add([buildDownloadTask(item, source, quality)])
+    showToast(`已添加下载: ${song.name}`, 'success')
+  } catch (e) {
+    showToast(e.message || '下载失败', 'error')
+  }
+}
+
+async function downloadBatch(quality) {
+  const entries = getBatchEntries()
+  if (!entries.length) return
+  closeMenus()
+  await startBatchDownload(entries, quality)
+}
+
+async function handleBatchConfirm(payload) {
+  await confirmBatchDialog(payload)
 }
 
 function isPlayingSong(song) {
   return isPlayingItem(trackPayload(song)) && !isPaused.value
 }
 
+function isCurrentSong(song) {
+  return isPlayingItem(trackPayload(song))
+}
+
+function showCoverOverlay(song) {
+  return isNarrow.value || hoverKey.value === song.key || isCurrentSong(song)
+}
+
+function isCoverPauseIcon(song) {
+  if (coverPendingPauseKey.value === song.key) return true
+  if (!isCurrentSong(song)) return false
+  return !isPaused.value
+}
+
 async function playOne(song) {
   const source = song.source || (song.localPath ? 'local' : '')
-  await playItem(trackPayload(song), source)
+  try {
+    await playItem(trackPayload(song), source)
+  } catch (e) {
+    showToast(e.message || '播放失败', 'error')
+  }
+}
+
+async function onTrackCoverClick(song) {
+  const key = song?.key || ''
+  tappingSongKey.value = key
+  setTimeout(() => {
+    if (tappingSongKey.value === key) tappingSongKey.value = ''
+  }, 560)
+
+  if (isCurrentSong(song) && !isPaused.value) {
+    coverPendingPauseKey.value = ''
+  } else {
+    coverPendingPauseKey.value = key
+  }
+
+  try {
+    await playOne(song)
+  } finally {
+    if (coverPendingPauseKey.value === key) coverPendingPauseKey.value = ''
+  }
 }
 
 async function playAll() {
@@ -362,6 +663,24 @@ async function syncLocal() {
     showToast(e.message || '同步失败', 'error')
   } finally {
     syncingLocal.value = false
+  }
+}
+
+async function syncRemote() {
+  if (!canEditSelected.value || syncingRemote.value) return
+  syncingRemote.value = true
+  try {
+    const { added, matched } = await refreshImportedPlaylistFromNetwork(api, selectedId.value)
+    if (added > 0) {
+      const localText = matched > 0 ? `，已匹配本地 ${matched} 首` : ''
+      showToast(`网络歌单新增 ${added} 首${localText}`, 'success')
+    } else {
+      showToast('网络歌单暂无新增歌曲', 'info')
+    }
+  } catch (e) {
+    showToast(e.message || '更新失败', 'error')
+  } finally {
+    syncingRemote.value = false
   }
 }
 
@@ -456,6 +775,33 @@ function showToast(text, type = 'info') {
   gap: 12px;
   flex-wrap: wrap;
 }
+.track-list-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+  padding: 0 4px;
+  flex-wrap: wrap;
+}
+.batch-select-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+.batch-select-all input { accent-color: var(--accent); }
+.batch-count { font-size: 13px; color: var(--text-muted); }
+.track-check {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  width: 20px;
+}
+.track-check input { accent-color: var(--accent); }
+.track-check-placeholder { width: 20px; flex-shrink: 0; }
 .track-list {
   display: flex;
   flex-direction: column;
@@ -471,40 +817,73 @@ function showToast(text, type = 'info') {
   transition: background 0.15s ease;
 }
 .track-row:hover,
-.track-row.active {
+.track-row.active,
+.track-row.hovered {
   background: var(--bg-hover);
 }
 .track-row.active .track-name { color: var(--accent); }
 .track-index { width: 28px; color: var(--text-muted); font-size: 14px; flex-shrink: 0; }
-.track-cover-btn {
+.song-cover-btn {
   position: relative;
   width: 52px;
   height: 52px;
   padding: 0;
   border: none;
   border-radius: 10px;
-  overflow: hidden;
+  overflow: visible;
   flex-shrink: 0;
   background: var(--bg-elevated);
   cursor: pointer;
 }
-.track-cover-img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
+.song-cover-media {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  overflow: hidden;
+  background: var(--bg-elevated);
 }
-.track-cover-fallback {
+.song-cover-ripple {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 68%;
+  height: 68%;
+  border-radius: 50%;
+  transform: translate(-50%, -50%) scale(0.3);
+  border: 2px solid rgba(125, 211, 252, 0.95);
+  box-shadow:
+    0 0 0 0 rgba(125, 211, 252, 0.5),
+    0 0 18px rgba(125, 211, 252, 0.28);
+  background: rgba(125, 211, 252, 0.18);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 3;
+}
+.song-cover-btn.rippling .song-cover-ripple {
+  animation: song-cover-ripple 0.65s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+@keyframes song-cover-ripple {
+  0% {
+    transform: translate(-50%, -50%) scale(0.35);
+    opacity: 0.95;
+  }
+  100% {
+    transform: translate(-50%, -50%) scale(2.2);
+    opacity: 0;
+  }
+}
+.song-cover-btn img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.song-cover-fallback {
   width: 100%;
   height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--accent-muted);
-  color: var(--accent);
+  font-size: 18px;
   font-weight: 700;
+  color: var(--accent);
 }
-.track-play-overlay {
+.song-play-overlay {
   position: absolute;
   inset: 0;
   display: flex;
@@ -512,6 +891,19 @@ function showToast(text, type = 'info') {
   justify-content: center;
   background: rgba(0, 0, 0, 0.42);
   color: #fff;
+  z-index: 4;
+  transition: background 0.18s ease, backdrop-filter 0.18s ease;
+  backdrop-filter: saturate(1);
+}
+.song-play-overlay svg {
+  transition: transform 0.22s ease, opacity 0.18s ease;
+}
+.song-cover-btn.rippling .song-play-overlay {
+  background: color-mix(in srgb, var(--accent) 48%, rgba(0, 0, 0, 0.26));
+  backdrop-filter: saturate(1.35);
+}
+.song-cover-btn.rippling .song-play-overlay svg {
+  transform: scale(1.28);
 }
 .track-meta { flex: 1; min-width: 0; }
 .track-name-row {
@@ -539,7 +931,40 @@ function showToast(text, type = 'info') {
 }
 .track-artist { font-size: 13px; color: var(--text-muted); }
 .track-tags { font-size: 12px; color: var(--text-muted); margin-top: 3px; }
-.track-row-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.track-row-actions { display: flex; gap: 6px; flex-shrink: 0; align-items: center; }
+.dl-wrap { position: relative; display: inline-block; }
+.dl-btn:hover { color: var(--success); }
+.quality-menu {
+  position: fixed;
+  z-index: 1100;
+  min-width: 160px;
+  max-height: min(280px, 50vh);
+  overflow-y: auto;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.quality-menu-title {
+  padding: 8px 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border-light);
+}
+.quality-option {
+  display: block;
+  width: 100%;
+  padding: 8px 12px;
+  text-align: left;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  border: none;
+  border-radius: 0;
+}
+.quality-option:hover { background: var(--bg-hover); color: var(--accent); }
+.quality-empty { padding: 10px 12px; font-size: 13px; color: var(--text-muted); }
+.batch-dl-wrap { display: inline-block; }
 .pager {
   display: flex;
   align-items: center;
@@ -590,5 +1015,14 @@ function showToast(text, type = 'info') {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
+}
+
+@media (max-width: 768px) {
+  .song-cover-btn {
+    width: 48px;
+    height: 48px;
+    border-radius: 8px;
+  }
+  .track-tags { display: none; }
 }
 </style>

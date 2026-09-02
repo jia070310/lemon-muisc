@@ -1,7 +1,7 @@
 <template>
   <div class="discover-page">
     <div class="page-title">发现</div>
-    <div class="page-subtitle">输入各平台歌单链接，浏览并试听、下载；可多选后批量下载，不支持所选音质的歌曲会提示确认</div>
+    <div class="page-subtitle">输入各平台歌单链接，浏览并试听、下载；可多选后批量下载，不支持所选音质时将自动降档</div>
 
     <div v-if="playlistPickTarget" class="pick-hint card">
       点击歌曲右侧「加入歌单」添加到「{{ playlistPickTarget.name }}」
@@ -117,12 +117,30 @@
       </div>
     </div>
 
+    <div
+      v-if="discoverState.viewMode === 'detail' && showPlaylistLoadBar"
+      class="playlist-load-bar card"
+      role="progressbar"
+      :aria-valuenow="playlistLoadProgress"
+      aria-valuemin="0"
+      aria-valuemax="100"
+      :aria-label="playlistLoadLabel"
+    >
+      <div class="playlist-load-meta">
+        <span class="playlist-load-text">{{ playlistLoadLabel }}</span>
+        <span v-if="!discoverState.loading || discoverState.results.length" class="playlist-load-percent">{{ playlistLoadProgress }}%</span>
+      </div>
+      <div class="playlist-load-track" :class="{ indeterminate: discoverState.loading && !discoverState.results.length }">
+        <div class="playlist-load-fill" :style="{ width: `${playlistLoadProgress}%` }" />
+      </div>
+    </div>
+
     <div class="results card" v-if="discoverState.viewMode === 'detail' && discoverState.results.length">
       <div class="results-toolbar">
         <span class="results-count">
           共 {{ discoverState.total || discoverState.results.length }} 首
+          <template v-if="showPagination"> · 第 {{ playlistTrackPage }}/{{ playlistTrackTotalPages }} 页</template>
           <template v-if="discoverState.loadingMore"> · 加载剩余歌曲...</template>
-          <template v-else-if="discoverState.results.length < (discoverState.total || 0)"> · 已显示 {{ discoverState.results.length }} 首</template>
           <template v-if="selectedCount"> · 已选 {{ selectedCount }}</template>
         </span>
         <label class="mobile-select-all">
@@ -139,7 +157,7 @@
               {{ batchDownloading ? '添加中...' : `批量下载${selectedCount ? ` (${selectedCount})` : ''}` }}
             </button>
             <div class="quality-menu" v-if="showBatchQualityMenu" :style="batchMenuStyle" @click.stop>
-              <div class="quality-menu-title">批量音质：不支持所选音质的歌曲将弹出确认</div>
+              <div class="quality-menu-title">批量音质：不支持时将自动降为最接近可用音质</div>
               <button
                 v-for="q in batchQualities"
                 :key="q"
@@ -166,61 +184,41 @@
         <span class="col-action">操作</span>
       </div>
       <div
-        v-for="(item, i) in discoverState.results" :key="trackSelectKey(item, i)"
-        class="result-row"
-        :class="{ playing: isPlayingItem(item), selected: isSelected(item, i) }"
+        ref="trackListContainerRef"
+        class="result-list-body"
+        :class="{ 'is-virtual': trackListUseVirtual }"
+        @scroll="onTrackListScroll"
       >
-        <span class="col-check" @click.stop>
-          <input type="checkbox" :checked="isSelected(item, i)" @change="toggleSelect(item, i)" />
-        </span>
-        <span class="col-index">{{ i + 1 }}</span>
-        <span class="col-name" :title="cleanText(item.name)">{{ cleanText(item.name) }}</span>
-        <span class="col-singer" :title="formatArtists(item.singer)">{{ formatArtists(item.singer) }}</span>
-        <span class="col-album" :title="cleanText(item.album || item.albumName)">{{ cleanText(item.album || item.albumName) || '-' }}</span>
-        <span class="col-duration">{{ item.interval || '-' }}</span>
-        <span class="col-play">
-          <button class="play-btn" @click="togglePlay(item)" :title="isPlayingItem(item) && !isPaused ? '暂停' : '试听'">
-            <svg v-if="isPlayingItem(item) && !isPaused" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
-            <svg v-else-if="loadingPlay === item.id" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" class="spin"><circle cx="12" cy="12" r="10" stroke-dasharray="50" stroke-dashoffset="20"/></svg>
-            <svg v-else viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
-          </button>
-        </span>
-        <span class="col-queue">
-          <button
-            class="queue-add-btn"
-            :class="{ added: isInQueue(item, activeSource) }"
-            @click="addOneToQueue(item)"
-            :title="isInQueue(item, activeSource) ? '已在列表' : '加入试听列表'"
-          >
-            <svg v-if="isInQueue(item, activeSource)" viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><polyline points="20 6 9 17 4 12" stroke="currentColor" stroke-width="2" fill="none"/></svg>
-            <svg v-else viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-          </button>
-        </span>
-        <span class="col-action">
-          <button
-            v-if="playlistPickTarget"
-            class="btn-sm btn-ghost playlist-add-btn"
-            @click="addToPlaylist(item)"
-            title="加入歌单"
-          >加入歌单</button>
-          <div class="dl-wrap">
-            <button class="dl-btn" @click.stop="toggleQualityMenu(item, i, $event)" title="下载">
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-            </button>
-            <div class="quality-menu" v-if="qualityMenuId === trackSelectKey(item, i)" :style="menuStyle" @click.stop>
-              <div class="quality-menu-title">选择音质</div>
-              <template v-if="getItemQualities(item).length">
-                <button
-                  v-for="q in getItemQualities(item)"
-                  :key="q"
-                  class="quality-option"
-                  @click="downloadOne(item, q)"
-                >{{ getQualityDisplay(q, item.types) }}</button>
-              </template>
-              <div v-else class="quality-empty">暂无可用音质</div>
-            </div>
-          </div>
-        </span>
+        <div
+          class="result-list-spacer"
+          :style="{ paddingTop: `${trackListPaddingTop}px`, paddingBottom: `${trackListPaddingBottom}px` }"
+        >
+      <TrackResultRow
+        v-for="{ item, i } in displayRows" :key="trackSelectKey(item, i)"
+        :item="item"
+        :index="i"
+        :selected="isSelected(item, i)"
+        :playing="isPlayingItem(item)"
+        :paused="isPaused"
+        :loading="loadingPlay === item.id"
+        :in-queue="isInQueue(item, activeSource)"
+        :show-playlist-pick="Boolean(playlistPickTarget)"
+        :quality-menu-open="qualityMenuId === trackSelectKey(item, i)"
+        :menu-style="menuStyle"
+        @toggle-select="toggleSelect(item, i)"
+        @toggle-play="togglePlay(item)"
+        @add-queue="addOneToQueue(item)"
+        @add-playlist="addToPlaylist(item)"
+        @toggle-quality-menu="toggleQualityMenu(item, i, $event)"
+        @download="downloadOne(item, $event)"
+      />
+        </div>
+      </div>
+
+      <div class="pagination" v-if="showPagination">
+        <button class="btn-ghost btn-sm" :disabled="playlistTrackPage <= 1" @click="playlistTrackPage--">上一页</button>
+        <span class="page-info">{{ playlistTrackPage }} / {{ playlistTrackTotalPages }}</span>
+        <button class="btn-ghost btn-sm" :disabled="playlistTrackPage >= playlistTrackTotalPages" @click="playlistTrackPage++">下一页</button>
       </div>
     </div>
 
@@ -230,31 +228,27 @@
 
     <BatchQualityDialog
       :plan="batchDialog"
-      :selections="rowSelections"
-      :bulk-quality="bulkQuality"
-      :bulk-options="bulkQualityOptions"
       :preferred-label="batchPreferredLabel"
       :busy="batchDownloading"
       @cancel="closeBatchDialog"
       @confirm="handleBatchConfirm"
-      @apply-bulk="applyBulkQuality"
-      @update:bulk-quality="bulkQuality = $event"
     />
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import BatchQualityDialog from '../components/BatchQualityDialog.vue'
-import { useBatchDownload } from '../composables/useBatchDownload.js'
+import TrackResultRow from '../components/TrackResultRow.vue'
+import { useBatchDownload, formatBatchDownloadToast } from '../composables/useBatchDownload.js'
+import { useTrackListView } from '../composables/useTrackListView.js'
 import { api } from '../api.js'
 import { discoverState, loadDiscoverSources, reloadDiscoverSources, sourcePlaceholders, recommendSortOptions } from '../stores/discover.js'
 import { loadingPlay, isPaused, isPlayingItem, playItem, addToQueue, isInQueue } from '../stores/player.js'
-import { getQualityLabel, getQualityDisplay } from '../utils/quality.js'
+import { getQualityLabel } from '../utils/quality.js'
 import { platformLabel } from '../utils/platforms.js'
-import { cleanText, formatArtists, cleanTrackItem } from '../utils/text.js'
+import { cleanText, cleanTrackItem } from '../utils/text.js'
 import {
-  getItemQualities,
   trackSelectKey,
   buildDownloadTask,
 } from '../utils/musicPayload.js'
@@ -270,19 +264,15 @@ const { menuStyle: batchMenuStyle, positionMenu: positionBatchMenu, clearMenuPos
 
 const {
   batchDialog,
-  rowSelections,
-  bulkQuality,
-  bulkQualityOptions,
   batchDownloading,
   startBatchDownload,
   confirmBatchDialog,
   closeBatchDialog,
-  applyBulkQuality,
   getBatchQualities,
 } = useBatchDownload({
   getSource: () => activeSource.value,
-  onCompleted: (count) => {
-    showToast(`已添加 ${count} 首到下载队列`, 'success')
+  onCompleted: (count, summary) => {
+    showToast(formatBatchDownloadToast(count, summary), 'success')
     clearSelection()
   },
   onError: (e) => showToast(e.message, 'error'),
@@ -292,6 +282,31 @@ const activeSource = computed(() => discoverState.activeSource)
 const showRecommend = computed(() => discoverState.viewMode === 'recommend')
 const currentPlaceholder = computed(() =>
   sourcePlaceholders[discoverState.activeSource] || '粘贴歌单链接或 ID')
+
+const showPlaylistLoadBar = computed(() =>
+  discoverState.viewMode === 'detail' && (discoverState.loading || discoverState.loadingMore))
+
+const playlistLoadProgress = computed(() => {
+  const total = discoverState.total || 0
+  const loaded = discoverState.results.length
+  if (discoverState.loading && !loaded) return 0
+  if (!total) return discoverState.loadingMore ? 60 : 100
+  const pct = Math.round((loaded / total) * 100)
+  if (discoverState.loadingMore) return Math.min(95, Math.max(pct, 8))
+  return Math.min(100, pct)
+})
+
+const playlistLoadLabel = computed(() => {
+  const total = discoverState.total || 0
+  const loaded = discoverState.results.length
+  if (discoverState.loading && !loaded) return '正在解析歌单...'
+  if (discoverState.loadingMore) {
+    return total
+      ? `已加载 ${loaded} / ${total} 首，继续加载剩余歌曲...`
+      : '正在加载剩余歌曲...'
+  }
+  return '歌单加载完成'
+})
 
 const selectedCount = computed(() => selectedKeys.value.size)
 const allSelected = computed(() =>
@@ -308,16 +323,53 @@ const batchPreferredLabel = computed(() => {
   return q ? getQualityLabel(q) : ''
 })
 
+const MAX_PLAYLIST_QUEUE = 100
+const {
+  page: playlistTrackPage,
+  totalPages: playlistTrackTotalPages,
+  displayRows,
+  containerRef: trackListContainerRef,
+  useVirtual: trackListUseVirtual,
+  paddingTop: trackListPaddingTop,
+  paddingBottom: trackListPaddingBottom,
+  onScroll: onTrackListScroll,
+  resetView: resetPlaylistTrackPage,
+  showPagination,
+  measureViewport,
+} = useTrackListView(() => discoverState.results)
+
 function getSelectedEntries() {
   return discoverState.results
     .map((item, index) => ({ item, key: trackSelectKey(item, index) }))
     .filter(({ key }) => selectedKeys.value.has(key))
 }
 
+let discoverSeq = 0
+let playlistFetchAbort = null
+let recommendAbort = null
+
+function cancelPlaylistFetch() {
+  playlistFetchAbort?.abort()
+  playlistFetchAbort = null
+}
+
+function cancelRecommendFetch() {
+  recommendAbort?.abort()
+  recommendAbort = null
+}
+
+function isAbortedError(e) {
+  return e?.aborted || e?.name === 'AbortError' || e?.message === '请求已取消'
+}
+
 onMounted(async () => {
   await loadDiscoverSources(api, { force: true })
   loadRecommend()
   document.addEventListener('click', closeMenus)
+})
+
+watch(() => discoverState.results.length, () => {
+  nextTick(() => measureViewport())
 })
 
 watch(() => discoverState.activeSource, () => {
@@ -375,17 +427,24 @@ function applyRecommendPage(data, { append = false } = {}) {
 
 async function loadRecommend(retrying = false) {
   if (!discoverState.activeSource) return
+
+  cancelRecommendFetch()
+  const controller = new AbortController()
+  recommendAbort = controller
+  const seq = ++discoverSeq
+  const source = discoverState.activeSource
+  const sort = discoverState.recommendSort
+
   discoverState.recommendPage = 1
   discoverState.recommendLoading = true
   discoverState.recommendHasMore = false
   try {
-    const res = await api.playlist.recommend(
-      discoverState.activeSource,
-      discoverState.recommendSort,
-      discoverState.recommendPage,
-    )
+    const res = await api.playlist.recommend(source, sort, 1, { signal: controller.signal })
+    if (seq !== discoverSeq || source !== discoverState.activeSource) return
     applyRecommendPage(res.data, { append: false })
   } catch (e) {
+    if (isAbortedError(e)) return
+    if (seq !== discoverSeq) return
     discoverState.recommendList = []
     discoverState.recommendHasMore = false
     discoverState.recommendTotal = 0
@@ -399,20 +458,26 @@ async function loadRecommend(retrying = false) {
     }
     showToast(e.message, 'error')
   } finally {
-    discoverState.recommendLoading = false
+    if (recommendAbort === controller) recommendAbort = null
+    if (seq === discoverSeq) discoverState.recommendLoading = false
   }
 }
 
 async function loadMoreRecommend() {
   if (!discoverState.activeSource || !discoverState.recommendHasMore || discoverState.recommendLoadingMore) return
+
+  cancelRecommendFetch()
+  const controller = new AbortController()
+  recommendAbort = controller
+  const seq = ++discoverSeq
+  const source = discoverState.activeSource
+  const sort = discoverState.recommendSort
   const nextPage = discoverState.recommendPage + 1
+
   discoverState.recommendLoadingMore = true
   try {
-    const res = await api.playlist.recommend(
-      discoverState.activeSource,
-      discoverState.recommendSort,
-      nextPage,
-    )
+    const res = await api.playlist.recommend(source, sort, nextPage, { signal: controller.signal })
+    if (seq !== discoverSeq || source !== discoverState.activeSource) return
     const before = discoverState.recommendList.length
     discoverState.recommendPage = nextPage
     applyRecommendPage(res.data, { append: true })
@@ -420,9 +485,12 @@ async function loadMoreRecommend() {
       discoverState.recommendHasMore = false
     }
   } catch (e) {
+    if (isAbortedError(e)) return
+    if (seq !== discoverSeq) return
     showToast(e.message, 'error')
   } finally {
-    discoverState.recommendLoadingMore = false
+    if (recommendAbort === controller) recommendAbort = null
+    if (seq === discoverSeq) discoverState.recommendLoadingMore = false
   }
 }
 
@@ -442,7 +510,6 @@ async function openRecommendPlaylist(item) {
 }
 
 async function fetchPlaylistByInput() {
-  if (discoverState.loading) return
   if (!discoverState.url.trim()) {
     backToRecommend()
     return
@@ -452,6 +519,8 @@ async function fetchPlaylistByInput() {
 
 onUnmounted(() => {
   document.removeEventListener('click', closeMenus)
+  cancelPlaylistFetch()
+  cancelRecommendFetch()
 })
 
 function onCoverError(e) {
@@ -533,23 +602,31 @@ function addOneToQueue(item) {
 
 function addAllToQueue() {
   let added = 0
-  for (const item of discoverState.results) {
+  const items = discoverState.results.slice(0, MAX_PLAYLIST_QUEUE)
+  for (const item of items) {
     if (!isInQueue(item, activeSource.value)) {
       addToQueue(item, activeSource.value)
       added++
     }
   }
-  showToast(added ? `已加入 ${added} 首` : '全部已在列表中', added ? 'success' : 'info')
+  const tip = discoverState.results.length > MAX_PLAYLIST_QUEUE
+    ? `已加入 ${added} 首（仅前 ${MAX_PLAYLIST_QUEUE} 首，共 ${discoverState.results.length} 首）`
+    : (added ? `已加入 ${added} 首` : '全部已在列表中')
+  showToast(tip, added ? 'success' : 'info')
 }
 
 async function playAll() {
   if (!discoverState.results.length) return
-  for (const item of discoverState.results) {
+  const items = discoverState.results.slice(0, MAX_PLAYLIST_QUEUE)
+  for (const item of items) {
     addToQueue(item, activeSource.value)
   }
   try {
-    await playItem(discoverState.results[0], activeSource.value)
-    showToast(`开始播放，共 ${discoverState.results.length} 首`, 'success')
+    await playItem(items[0], activeSource.value)
+    const tip = discoverState.results.length > MAX_PLAYLIST_QUEUE
+      ? `开始播放，已加入前 ${MAX_PLAYLIST_QUEUE} 首（共 ${discoverState.results.length} 首）`
+      : `开始播放，共 ${items.length} 首`
+    showToast(tip, 'success')
   } catch (e) {
     showToast(e.message || '播放失败', 'error')
   }
@@ -558,6 +635,13 @@ async function playAll() {
 async function fetchPlaylist() {
   const input = discoverState.url.trim()
   if (!input || !discoverState.activeSource) return
+
+  cancelPlaylistFetch()
+  const controller = new AbortController()
+  playlistFetchAbort = controller
+  const seq = ++discoverSeq
+  const source = discoverState.activeSource
+
   discoverState.loading = true
   discoverState.loadingMore = false
   discoverState.fetched = true
@@ -565,50 +649,49 @@ async function fetchPlaylist() {
   discoverState.results = []
   discoverState.playlistInfo = null
   discoverState.total = 0
+  resetPlaylistTrackPage()
   clearSelection()
   closeMenus()
-  const source = discoverState.activeSource
   try {
-    if (source === 'kg') {
-      const partialRes = await api.playlist.fetch(input, source, { partial: true })
-      const partialData = partialRes.data
-      discoverState.results = (partialData.list || []).map(cleanTrackItem)
-      discoverState.playlistInfo = partialData.info || null
-      discoverState.total = partialData.total || discoverState.results.length
-      discoverState.loading = false
+    const partialRes = await api.playlist.fetch(input, source, { partial: true, signal: controller.signal })
+    if (seq !== discoverSeq || source !== discoverState.activeSource) return
+    const partialData = partialRes.data
+    discoverState.results = (partialData.list || []).map(cleanTrackItem)
+    discoverState.playlistInfo = partialData.info || null
+    discoverState.total = partialData.total || discoverState.results.length
+    discoverState.loading = false
 
-      if (partialData.hasMore) {
-        discoverState.loadingMore = true
-        try {
-          const fullRes = await api.playlist.fetch(input, source)
-          const fullData = fullRes.data
-          discoverState.results = (fullData.list || []).map(cleanTrackItem)
-          discoverState.playlistInfo = fullData.info || discoverState.playlistInfo
-          discoverState.total = fullData.total || discoverState.results.length
-        } catch (e) {
-          showToast(e.message || '剩余歌曲加载失败', 'error')
-        } finally {
-          discoverState.loadingMore = false
-        }
+    if (partialData.hasMore) {
+      discoverState.loadingMore = true
+      try {
+        const fullRes = await api.playlist.fetch(input, source, { signal: controller.signal })
+        if (seq !== discoverSeq || source !== discoverState.activeSource) return
+        const fullData = fullRes.data
+        discoverState.results = (fullData.list || []).map(cleanTrackItem)
+        discoverState.playlistInfo = fullData.info || discoverState.playlistInfo
+        discoverState.total = fullData.total || discoverState.results.length
+      } catch (e) {
+        if (!isAbortedError(e)) showToast(e.message || '剩余歌曲加载失败', 'error')
+      } finally {
+        if (seq === discoverSeq) discoverState.loadingMore = false
       }
-    } else {
-      const res = await api.playlist.fetch(input, source)
-      const data = res.data
-      discoverState.results = (data.list || []).map(cleanTrackItem)
-      discoverState.playlistInfo = data.info || null
-      discoverState.total = data.total || discoverState.results.length
     }
 
     if (!discoverState.results.length) {
       showToast('歌单为空或解析失败', 'error')
     }
   } catch (e) {
+    if (isAbortedError(e)) return
+    if (seq !== discoverSeq) return
     discoverState.results = []
     discoverState.playlistInfo = null
     showToast(e.message, 'error')
   } finally {
-    discoverState.loading = false
-    discoverState.loadingMore = false
+    if (playlistFetchAbort === controller) playlistFetchAbort = null
+    if (seq === discoverSeq) {
+      discoverState.loading = false
+      discoverState.loadingMore = false
+    }
   }
 }
 
@@ -629,8 +712,8 @@ async function downloadSelected(quality) {
   await startBatchDownload(entries, quality)
 }
 
-async function handleBatchConfirm() {
-  await confirmBatchDialog()
+async function handleBatchConfirm(payload) {
+  await confirmBatchDialog(payload)
 }
 
 function addToPlaylist(item) {
@@ -907,6 +990,47 @@ function showToast(text, type = 'info') {
   overflow: hidden;
 }
 
+.playlist-load-bar {
+  padding: 12px 16px;
+  margin-bottom: 12px;
+}
+.playlist-load-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.playlist-load-percent {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+  font-weight: 600;
+}
+.playlist-load-track {
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-input);
+  overflow: hidden;
+  border: 1px solid var(--border-light);
+}
+.playlist-load-track.indeterminate .playlist-load-fill {
+  width: 35% !important;
+  animation: playlist-load-indeterminate 1.2s ease-in-out infinite;
+}
+.playlist-load-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--lemon-gradient, linear-gradient(90deg, var(--accent), #f59e0b));
+  transition: width 0.35s ease;
+}
+@keyframes playlist-load-indeterminate {
+  0% { transform: translateX(-120%); }
+  100% { transform: translateX(320%); }
+}
+
 .results { overflow: visible; }
 
 .results-toolbar {
@@ -920,6 +1044,17 @@ function showToast(text, type = 'info') {
   gap: 8px;
 }
 .results-count { font-size: 13px; color: var(--text-muted); }
+
+.result-list-body.is-virtual {
+  max-height: min(70vh, 720px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.result-list-spacer {
+  min-height: 0;
+}
+
 .mobile-select-all {
   display: none;
   align-items: center;

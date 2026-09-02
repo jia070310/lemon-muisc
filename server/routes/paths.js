@@ -10,7 +10,10 @@ import {
   setDownloadSavePath,
   getSetupStatus,
 } from '../utils/filePaths.js'
+import { onMusicPathRemoved, onMusicPathUpdated } from '../utils/libraryScanSettings.js'
 import { listAudioFiles, probeDir } from '../utils/audioScan.js'
+
+import { requireAdmin } from '../middleware/auth.js'
 
 export const pathsRouter = Router()
 
@@ -64,7 +67,7 @@ pathsRouter.get('/', (_req, res) => {
   })
 })
 
-pathsRouter.post('/', (req, res) => {
+pathsRouter.post('/', requireAdmin, (req, res) => {
   try {
     const { dirPath, fromPicker } = req.body
     const data = addMusicPath(dirPath, { fromPicker: Boolean(fromPicker) })
@@ -74,27 +77,29 @@ pathsRouter.post('/', (req, res) => {
   }
 })
 
-pathsRouter.put('/', (req, res) => {
+pathsRouter.put('/', requireAdmin, (req, res) => {
   try {
     const { oldPath, newPath, fromPicker } = req.body
     const data = updateMusicPath(oldPath, newPath, { fromPicker: Boolean(fromPicker) })
+    onMusicPathUpdated(oldPath, newPath)
     res.json({ ok: true, data, musicPaths: data, downloadPath: getDownloadSavePath() })
   } catch (e) {
     res.status(400).json({ error: e.message })
   }
 })
 
-pathsRouter.delete('/', (req, res) => {
+pathsRouter.delete('/', requireAdmin, (req, res) => {
   try {
     const { dirPath } = req.body
     const data = removeMusicPath(dirPath)
+    onMusicPathRemoved(dirPath)
     res.json({ ok: true, data, musicPaths: data, downloadPath: getDownloadSavePath() })
   } catch (e) {
     res.status(400).json({ error: e.message })
   }
 })
 
-pathsRouter.put('/download', (req, res) => {
+pathsRouter.put('/download', requireAdmin, (req, res) => {
   try {
     const { dirPath, fromPicker } = req.body
     const downloadPath = setDownloadSavePath(dirPath, { fromPicker: Boolean(fromPicker) })

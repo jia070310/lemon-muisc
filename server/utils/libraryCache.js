@@ -1,7 +1,7 @@
 import fs from 'fs'
 import path from 'path'
 import { getDB } from '../db.js'
-import { getMusicPaths, isConfiguredMusicDir } from './filePaths.js'
+import { getMusicPaths, isUnderConfiguredMusicDir, isPathUnderMusicDirs } from './filePaths.js'
 import { listAudioFiles } from './audioScan.js'
 import { parseFilename } from './filenameParse.js'
 import { readMetaLite } from '../meta.js'
@@ -148,7 +148,7 @@ export function getAllCachedTracks() {
 export function buildDiskIndex(dirs) {
   const map = new Map()
   for (const dir of dirs) {
-    if (!isConfiguredMusicDir(dir)) continue
+    if (!isUnderConfiguredMusicDir(dir)) continue
     if (!fs.existsSync(dir)) continue
     const paths = listAudioFiles(dir)
     for (const fp of paths) {
@@ -171,13 +171,16 @@ export function buildDiskIndex(dirs) {
   return map
 }
 
-export function syncLibraryIndex(dirs) {
+export function syncLibraryIndex(dirs, { partial = false } = {}) {
   ensureLibraryCacheTable()
   const db = getDB()
   const musicDirs = (dirs?.length ? dirs : getMusicPaths()).filter(Boolean)
   const disk = buildDiskIndex(musicDirs)
 
-  const cachedRows = db.prepare('SELECT file_path, mtime, size, meta_json FROM library_index').all()
+  const filter = partial ? buildDirSqlFilter(musicDirs) : null
+  const cachedRows = filter
+    ? db.prepare(`SELECT file_path, mtime, size, meta_json FROM library_index WHERE ${filter.where}`).all(...filter.params)
+    : db.prepare('SELECT file_path, mtime, size, meta_json FROM library_index').all()
   const cachedMap = new Map(cachedRows.map(r => [normalizePathKey(r.file_path), r]))
 
   const cached = []
@@ -200,7 +203,9 @@ export function syncLibraryIndex(dirs) {
   }
 
   for (const [, row] of cachedMap) {
-    removed.push(row.file_path)
+    if (!partial || isPathUnderMusicDirs(row.file_path, musicDirs)) {
+      removed.push(row.file_path)
+    }
   }
 
   if (removed.length) {
@@ -217,6 +222,7 @@ export function syncLibraryIndex(dirs) {
 export function upsertCacheEntry(filePath, mtime, size, meta) {
   ensureLibraryCacheTable()
   const db = getDB()
+  const key = normalizePathKey(filePath)
   const { filePath: _fp, mtime: _mt, size: _sz, ok: _ok, error: _err, ...rest } = meta || {}
   const metaJson = JSON.stringify(sanitizeCacheMeta(rest))
   db.prepare(`
@@ -227,7 +233,7 @@ export function upsertCacheEntry(filePath, mtime, size, meta) {
       size = excluded.size,
       meta_json = excluded.meta_json,
       scanned_at = excluded.scanned_at
-  `).run(filePath, mtime || 0, size || 0, metaJson)
+  `).run(key, mtime || 0, size || 0, metaJson)
 }
 
 export function removeCachePaths(paths) {
@@ -299,4 +305,89 @@ export async function scanBatchAndCache(files) {
     upsertCacheEntry(fp, mtime, size, metaOnly)
     return stub
   })
+}
+
+function isDiskEntryFresh(row, filePath) {
+  if (!row) return false
+  try {
+    const st = fs.statSync(filePath)
+    const diskMtime = st.mtimeMs || 0
+    const diskSize = st.size || 0
+    return Math.abs((row.mtime || 0) - diskMtime) < 2 && row.size === diskSize
+  } catch {
+    return false
+  }
+}
+
+/** 旧版曾误清空「专辑名=标题」的标签，需强制重扫 */
+function needsAlbumCacheRefresh(cached) {
+  if (!cached?.title) return false
+  if (cached.album) return false
+  return true
+}
+
+export function getCacheEntry(filePath) {
+  ensureLibraryCacheTable()
+  const db = getDB()
+  if (!db || !filePath) return null
+  const key = normalizePathKey(filePath)
+  const row = db.prepare('SELECT file_path, mtime, size, meta_json FROM library_index WHERE file_path = ?').get(key)
+  if (!row) return null
+  return rowToFile(row)
+}
+
+/** 用 SQLite 缓存补全文件列表（标签编辑 / 快速扫描） */
+export function enrichFilesFromCache(files) {
+  return (files || []).map((file) => {
+    const fp = file?.filePath
+    if (!fp) return file
+    const cached = getCacheEntry(fp)
+    if (!cached || !isDiskEntryFresh(cached, fp) || needsAlbumCacheRefresh(cached)) return file
+    return {
+      ...file,
+      ...cached,
+      filePath: fp,
+      fileName: file.fileName || cached.fileName || path.basename(fp),
+    }
+  })
+}
+
+/** 优先读缓存，未命中再扫描并写入 library_index（音乐库与标签编辑共用） */
+export async function readBatchFromCacheOrScan(filePaths) {
+  const list = [...new Set((filePaths || []).map(String).filter(Boolean))]
+  if (!list.length) return []
+
+  const hits = []
+  const pending = []
+
+  for (const fp of list) {
+    const cached = getCacheEntry(fp)
+    if (cached && isDiskEntryFresh(cached, fp) && !needsAlbumCacheRefresh(cached)) {
+      hits.push({ ...cached, filePath: fp, ok: true })
+      continue
+    }
+    let mtime = 0
+    let size = 0
+    try {
+      const st = fs.statSync(fp)
+      mtime = st.mtimeMs || 0
+      size = st.size || 0
+    } catch {}
+    pending.push({ filePath: fp, mtime, size })
+  }
+
+  const scanned = pending.length ? await scanBatchAndCache(pending) : []
+  const order = new Map(list.map((fp, idx) => [normalizePathKey(fp), idx]))
+  return [...hits, ...scanned].sort((a, b) => {
+    const ia = order.get(normalizePathKey(a.filePath)) ?? 0
+    const ib = order.get(normalizePathKey(b.filePath)) ?? 0
+    return ia - ib
+  })
+}
+
+/** 若缓存与磁盘 mtime/size 一致则返回缓存条目 */
+export function getFreshCacheEntry(filePath) {
+  const entry = getCacheEntry(filePath)
+  if (!entry || !isDiskEntryFresh(entry, filePath)) return null
+  return entry
 }

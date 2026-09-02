@@ -5,13 +5,56 @@ import { readMeta, readMetaLite, batchWriteMeta, writeMeta, readEmbeddedCover } 
 import { matchByFilename, matchByArtistTitle, fetchMatchMeta, normalizeTagSource } from '../utils/tagMatch.js'
 import { parseFilename } from '../utils/filenameParse.js'
 import { fetchPicBuffer } from '../utils/fetchPic.js'
-import { getMusicPaths, addMusicPath, removeMusicPath, isConfiguredMusicDir, isAllowedMediaPath } from '../utils/filePaths.js'
-import { listAudioFiles, probeDir } from '../utils/audioScan.js'
+import { getMusicPaths, addMusicPath, removeMusicPath, isUnderConfiguredMusicDir, isAllowedMediaPath } from '../utils/filePaths.js'
+import { listAudioFiles, listDirEntries, probeDir } from '../utils/audioScan.js'
 import { mapWithConcurrency } from '../utils/asyncPool.js'
 import { notifyLibraryChanged } from '../utils/libraryNotify.js'
-import { scanBatchAndCache } from '../utils/libraryCache.js'
+import { scanBatchAndCache, enrichFilesFromCache, readBatchFromCacheOrScan } from '../utils/libraryCache.js'
 
 export const tagRouter = Router()
+
+function buildFileStub(fp) {
+  const fileName = path.basename(fp)
+  const parsed = parseFilename(fileName)
+  let mtime = 0
+  try { mtime = fs.statSync(fp).mtimeMs || 0 } catch {}
+  return {
+    filePath: fp,
+    fileName,
+    mtime,
+    parsedTitle: parsed.title,
+    parsedArtist: parsed.artist,
+    title: parsed.title,
+    artist: parsed.artist,
+    album: '',
+    year: '',
+    genre: '',
+    comment: '',
+    hasPicture: false,
+    hasLyrics: false,
+    lyric: '',
+    pictureBase64: '',
+  }
+}
+
+function assertMusicDirAccess(dirPath) {
+  if (!dirPath || !fs.existsSync(dirPath)) {
+    return { ok: false, status: 400, error: `目录不存在：${dirPath || ''}` }
+  }
+  if (!isUnderConfiguredMusicDir(dirPath)) {
+    return { ok: false, status: 400, error: '该目录未在音乐库路径中配置，请先在设置中添加' }
+  }
+  const probe = probeDir(dirPath)
+  if (!probe.readable) {
+    return {
+      ok: false,
+      status: 400,
+      error: `目录不可读：${dirPath}（${probe.error || '权限不足'}）。请检查飞牛访问权限与路径设置。`,
+      probe,
+    }
+  }
+  return { ok: true, probe }
+}
 
 /** 读取本地音频内嵌封面 */
 tagRouter.get('/cover', async (req, res) => {
@@ -64,7 +107,7 @@ tagRouter.post('/read', async (req, res) => {
   }
 })
 
-/** 批量读取标签（列表页分批加载，避免单次请求超时） */
+/** 批量读取标签（优先 library_index 缓存，未命中再扫描写入） */
 tagRouter.post('/read-batch', async (req, res) => {
   try {
     const { filePaths, lite = true } = req.body
@@ -75,7 +118,11 @@ tagRouter.post('/read-batch', async (req, res) => {
       return res.status(400).json({ error: '单次最多读取 100 个文件' })
     }
 
-    const reader = lite ? readMetaLite : readMeta
+    if (lite) {
+      const data = await readBatchFromCacheOrScan(filePaths)
+      return res.json({ ok: true, data })
+    }
+
     const results = await mapWithConcurrency(filePaths, 4, async (filePath) => {
       if (!filePath || !fs.existsSync(filePath)) {
         return { filePath, ok: false, error: '文件不存在' }
@@ -83,7 +130,7 @@ tagRouter.post('/read-batch', async (req, res) => {
       let lastErr = null
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
-          const meta = await reader(filePath)
+          const meta = await readMeta(filePath)
           return { filePath, ok: true, ...meta }
         } catch (e) {
           lastErr = e
@@ -114,7 +161,7 @@ tagRouter.post('/write', async (req, res) => {
     }
 
     await writeMeta(filePath, ext, writeData)
-    scanBatchAndCache([{ filePath }]).catch(() => {})
+    await scanBatchAndCache([{ filePath }]).catch(() => {})
     notifyLibraryChanged([filePath], { reason: 'tag-write' })
     res.json({ ok: true })
   } catch (e) {
@@ -138,9 +185,39 @@ tagRouter.post('/write-batch', async (req, res) => {
     }
 
     const results = await batchWriteMeta(prepared)
-    scanBatchAndCache(prepared.map(f => ({ filePath: f.filePath }))).catch(() => {})
+    await scanBatchAndCache(prepared.map(f => ({ filePath: f.filePath }))).catch(() => {})
     notifyLibraryChanged(prepared.map(f => f.filePath), { reason: 'tag-write-batch' })
     res.json({ ok: true, data: results })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+/** 列出单层目录（子文件夹 + 当前层音频），用于标签编辑目录树 */
+tagRouter.post('/list-dir', async (req, res) => {
+  try {
+    const { dirPath } = req.body
+    const access = assertMusicDirAccess(dirPath)
+    if (!access.ok) {
+      return res.status(access.status).json({ error: access.error, probe: access.probe })
+    }
+
+    const { dirs, audioFiles, error } = listDirEntries(dirPath)
+    if (error) {
+      return res.status(400).json({ error: `读取目录失败：${error}` })
+    }
+
+    const fileStubs = audioFiles.map(buildFileStub)
+    const enriched = enrichFilesFromCache(fileStubs)
+
+    res.json({
+      ok: true,
+      data: {
+        dirs,
+        files: enriched,
+        dirPath,
+      },
+    })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
@@ -149,46 +226,27 @@ tagRouter.post('/write-batch', async (req, res) => {
 /** 快速扫描：只列出文件，不读标签（大目录秒开） */
 tagRouter.post('/scan', async (req, res) => {
   try {
-    const { dirPath } = req.body
-    if (!dirPath || !fs.existsSync(dirPath)) {
-      return res.status(400).json({ error: `目录不存在：${dirPath || ''}` })
+    const { dirPath, recursive = true } = req.body
+    const access = assertMusicDirAccess(dirPath)
+    if (!access.ok) {
+      return res.status(access.status).json({ error: access.error, probe: access.probe })
     }
-    if (!isConfiguredMusicDir(dirPath)) {
-      return res.status(400).json({ error: '该目录未在音乐库路径中配置，请先在设置中添加' })
-    }
+    const probe = access.probe
 
-    const probe = probeDir(dirPath)
-    if (!probe.readable) {
-      return res.status(400).json({
-        error: `目录不可读：${dirPath}（${probe.error || '权限不足'}）。请检查飞牛访问权限与路径设置。`,
-        probe,
-      })
-    }
-
-    const filePaths = listAudioFiles(dirPath)
-    const results = filePaths.map((fp) => {
-      const fileName = path.basename(fp)
-      const parsed = parseFilename(fileName)
-      let mtime = 0
-      try { mtime = fs.statSync(fp).mtimeMs || 0 } catch {}
-      return {
-        filePath: fp,
-        fileName,
-        mtime,
-        parsedTitle: parsed.title,
-        parsedArtist: parsed.artist,
-        title: parsed.title,
-        artist: parsed.artist,
-        album: '',
-        year: '',
-        genre: '',
-        comment: '',
-        hasPicture: false,
-        hasLyrics: false,
-        lyric: '',
-        pictureBase64: '',
+    let filePaths = []
+    if (recursive) {
+      filePaths = listAudioFiles(dirPath)
+    } else {
+      const listed = listDirEntries(dirPath)
+      if (listed.error) {
+        return res.status(400).json({ error: `读取目录失败：${listed.error}` })
       }
-    })
+      filePaths = listed.audioFiles
+    }
+
+    const results = filePaths.map(buildFileStub)
+
+    const enriched = enrichFilesFromCache(results)
 
     let tip = ''
     if (!results.length) {
@@ -205,8 +263,8 @@ tagRouter.post('/scan', async (req, res) => {
 
     res.json({
       ok: true,
-      data: results,
-      total: results.length,
+      data: enriched,
+      total: enriched.length,
       tip,
       probe,
       scanErrors: listAudioFiles.lastErrors?.slice(0, 5) || [],

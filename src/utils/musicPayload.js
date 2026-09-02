@@ -1,3 +1,4 @@
+import { getTrackFilePath } from './trackPath.js'
 import { QUALITY_ORDER, DEFAULT_QUALITIES, sortQualities } from './quality.js'
 
 function pickField(...values) {
@@ -52,6 +53,14 @@ export function prepareBatchDownload(entries, preferred) {
     rows,
     needsConfirm: rows.length > 0,
   }
+}
+
+/** 根据批量计划生成每首歌的实际下载音质 */
+export function buildBatchQualityMap(plan) {
+  const qualityMap = {}
+  for (const m of plan?.matched || []) qualityMap[m.key] = m.quality
+  for (const row of plan?.rows || []) qualityMap[row.key] = row.selected
+  return qualityMap
 }
 
 export function buildBatchDownloadTasks(entries, source, qualityMap) {
@@ -151,7 +160,8 @@ export function buildPlayPayload(item, source, quality = '128k', extra = {}) {
     picUrl: cover,
     types: item.types || [],
     qualitys: item.qualitys || [],
-    localPath: item.localPath || '',
+    localPath: getTrackFilePath(item) || extra.localPath || '',
+    key: item.key || '',
     ...extra,
   }
 }

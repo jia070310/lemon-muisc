@@ -1,3 +1,5 @@
+import { getItemQualities } from './musicPayload.js'
+
 /** 解码 HTML 实体、Unicode 转义并去除标签，用于歌曲名/歌手名等展示 */
 export function cleanText(str) {
   if (!str || typeof str !== 'string') return str || ''
@@ -28,11 +30,13 @@ export function formatArtists(str) {
 
 export function cleanTrackItem(item) {
   if (!item) return item
+  const qualities = getItemQualities(item)
   return {
     ...item,
     name: cleanText(item.name),
     singer: formatArtists(item.singer),
     album: cleanText(item.album || item.albumName),
     albumName: cleanText(item.albumName),
+    ...(qualities.length ? { _qualities: qualities } : {}),
   }
 }

@@ -1,5 +1,7 @@
 <template>
   <div class="app">
+    <router-view v-if="isPublicPage" class="public-page" />
+    <template v-else>
     <aside class="sidebar">
       <div class="logo">
         <img src="/icon.png" alt="柠檬音乐下载" class="logo-img" />
@@ -47,6 +49,13 @@
       </nav>
 
       <div class="sidebar-footer">
+        <div v-if="currentUser" class="user-bar">
+          <router-link to="/settings?tab=account" class="user-info" :title="currentUser.username">
+            <span class="user-name">{{ currentUser.displayName || currentUser.username }}</span>
+            <span class="user-role">{{ currentUser.role === 'admin' ? '管理员' : '用户' }}</span>
+          </router-link>
+          <button class="btn-ghost btn-sm logout-btn" type="button" @click="handleLogout">退出</button>
+        </div>
         <button class="theme-toggle" type="button" :title="theme === 'light' ? '切换深色模式' : '切换浅色模式'" @click="toggleTheme">
           <svg v-if="theme === 'dark'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
           <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 14.5A8.5 8.5 0 1 1 9.5 3 7 7 0 0 0 21 14.5z"/></svg>
@@ -59,7 +68,7 @@
       </div>
     </aside>
 
-    <header class="mobile-topbar">
+    <header v-if="!showFullscreenPlayer" class="mobile-topbar">
       <div class="mobile-brand">
         <img src="/icon.png" alt="" class="mobile-brand-icon" />
         <span>柠檬音乐下载</span>
@@ -81,38 +90,42 @@
       </button>
     </header>
 
-    <main class="content" :class="{ 'content-fixed': isTagPage }">
-      <div v-if="setupBanner" class="setup-banner">
+    <div v-if="hasAppNotices && !showFullscreenPlayer" class="app-notice-stack">
+      <div v-if="setupBanner" class="app-notice setup-banner">
         <strong>首次使用请先配置数据目录</strong>
         <span>请到「应用设置 → 访问权限」添加音乐库与下载目录，保存后停用再启用。</span>
         <router-link to="/settings" class="setup-link">打开设置</router-link>
       </div>
-      <div v-if="playlistPickTarget" class="playlist-pick-banner">
+      <div v-if="playlistPickTarget" class="app-notice playlist-pick-banner">
         <span>正在添加歌曲到歌单「{{ playlistPickTarget.name }}」</span>
         <router-link :to="{ path: '/library/playlists', query: { id: playlistPickTarget.id } }" class="setup-link">返回歌单</router-link>
         <button type="button" class="btn-ghost btn-sm" @click="stopPlaylistPick">取消</button>
       </div>
-      <div v-if="tagMatchRunning && !isTagPage" class="tag-match-banner">
+      <div v-if="tagMatchRunning && !isTagPage" class="app-notice tag-match-banner">
         <span>标签自动匹配并保存中 {{ tagMatchProgress.done }}/{{ tagMatchProgress.total }}<template v-if="tagMatchProgress.current"> · {{ tagMatchProgress.current }}</template></span>
         <router-link to="/tag" class="setup-link">查看</router-link>
       </div>
-      <div v-else-if="tagMatchResult && !isTagPage" class="tag-match-banner" :class="tagMatchResult.type">
+      <div v-else-if="tagMatchResult && !isTagPage" class="app-notice tag-match-banner" :class="tagMatchResult.type">
         <span>{{ tagMatchResult.text }}</span>
         <button type="button" class="btn-ghost btn-sm" @click="clearTagMatchResult">知道了</button>
       </div>
-      <div v-if="sourceSwitchNotice" class="source-switch-banner">
+      <div v-if="sourceSwitchNotice" class="app-notice source-switch-banner">
         <span>{{ sourceSwitchNotice }}</span>
         <button type="button" class="btn-ghost btn-sm" @click="sourceSwitchNotice = ''">知道了</button>
       </div>
-      <div v-if="libraryHotNotice" class="library-hot-banner">
+      <div v-if="libraryHotNotice" class="app-notice library-hot-banner">
         <span>{{ libraryHotNotice }}</span>
         <button type="button" class="btn-ghost btn-sm" @click="clearLibraryHotNotice">知道了</button>
       </div>
+    </div>
+
+    <main class="content" :class="{ 'content-fixed': isTagPage }">
       <router-view />
     </main>
 
     <PlayerBar />
     <FullscreenPlayer />
+    <TagEditModal />
 
     <div v-if="showFaultModal" class="modal-overlay source-fault-overlay">
       <div class="source-fault-modal">
@@ -217,7 +230,7 @@
       </div>
     </div>
 
-    <nav class="mobile-tabbar" aria-label="主导航">
+    <nav v-if="!showFullscreenPlayer" class="mobile-tabbar" aria-label="主导航">
       <router-link to="/search" class="tab-item" active-class="active">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
         <span>搜索</span>
@@ -248,21 +261,24 @@
         <span v-if="hasUpdate" class="tab-dot"></span>
       </router-link>
     </nav>
+    </template>
   </div>
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { connectWS, connected as wsConnected, onWS } from './ws.js'
+import { connectWS, connected as wsConnected, onWS, disconnectWS } from './ws.js'
 import { initPlayer } from './stores/player.js'
 import { checkForUpdate, hasUpdate } from './composables/useUpdateCheck.js'
 import { api } from './api.js'
+import { currentUser, logout as authLogout, isAuthReady, isSessionValid, getToken } from './utils/auth.js'
+import { useRouter } from 'vue-router'
 import { applyTheme, theme, THEME_KEY, COLOR_SCHEME_KEY, CUSTOM_COLOR_KEY } from './utils/theme.js'
 import { formatUserError } from './utils/userError.js'
 import {
   playlistPickTarget, stopPlaylistPick,
-  initLibraryHotReload, initLibraryUserData, libraryHotNotice,
+  initLibraryHotReload, initLibraryUserData, libraryHotNotice, clearLibraryHotNotice,
 } from './stores/library.js'
 import {
   tagMatchRunning, tagMatchProgress, tagMatchResult, clearTagMatchResult,
@@ -277,10 +293,23 @@ import {
   notifySourceSwitch,
 } from './stores/sourceFallback.js'
 import PlayerBar from './components/PlayerBar.vue'
+import TagEditModal from './components/TagEditModal.vue'
 import FullscreenPlayer from './components/FullscreenPlayer.vue'
+import { showFullscreenPlayer } from './stores/player.js'
 
 const route = useRoute()
+const router = useRouter()
+const isPublicPage = computed(() => ['Login', 'Setup', 'AuthCallback', 'ResetPassword', 'VerifyEmail'].includes(route.name))
 const isTagPage = computed(() => route.path === '/tag' || route.path.startsWith('/tag/'))
+
+const hasAppNotices = computed(() => Boolean(
+  setupBanner.value
+  || playlistPickTarget.value
+  || (tagMatchRunning.value && !isTagPage.value)
+  || (tagMatchResult.value && !isTagPage.value)
+  || sourceSwitchNotice.value
+  || libraryHotNotice.value,
+))
 const setupBanner = ref(false)
 const sourceFault = ref(null)
 const faultBusy = ref(false)
@@ -406,10 +435,6 @@ function showNextDowngradePrompt() {
 
 function formatPromptReason(reason) {
   return formatUserError(reason, '音源取链失败，请稍后重试')
-}
-
-function clearLibraryHotNotice() {
-  libraryHotNotice.value = ''
 }
 
 /** 仅关闭弹窗，任务仍保持「待确认」，可在下载页再操作 */
@@ -547,8 +572,19 @@ function toggleTheme() {
   persistTheme(theme.value === 'light' ? 'dark' : 'light')
 }
 
+async function handleLogout() {
+  disconnectWS()
+  await authLogout()
+  router.replace('/login')
+}
+
+watch([isAuthReady, isSessionValid], ([ready, valid]) => {
+  if (!ready) return
+  if (valid && getToken()) connectWS()
+  else disconnectWS()
+}, { immediate: true })
+
 onMounted(() => {
-  connectWS()
   initPlayer()
   initLibraryUserData(api).catch(() => {})
   offLibraryHotReload = initLibraryHotReload(api, { onWS })
@@ -613,6 +649,13 @@ onUnmounted(() => {
   background: var(--bg);
   width: 100%;
   overflow-x: hidden;
+}
+
+.public-page {
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  align-self: stretch;
 }
 
 .sidebar {
@@ -702,6 +745,45 @@ onUnmounted(() => {
   padding: 16px 20px;
   border-top: 1px solid var(--border-light);
 }
+.user-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+}
+.user-info {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-decoration: none;
+  flex: 1;
+  border-radius: calc(var(--radius) - 2px);
+  padding: 2px 4px;
+  margin: -2px -4px;
+  transition: background 0.15s;
+}
+.user-info:hover {
+  background: var(--bg-hover);
+}
+.user-name {
+  font-size: 13px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.user-role {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.logout-btn {
+  flex-shrink: 0;
+}
 .theme-toggle {
   display: flex;
   align-items: center;
@@ -751,65 +833,93 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
 }
-.content-fixed > .setup-banner {
-  flex: 0 0 auto;
-  margin-bottom: 12px;
-}
-.content-fixed > *:not(.setup-banner) {
+.content-fixed > * {
   flex: 1;
   min-height: 0;
+}
+
+.app-notice-stack {
+  position: fixed;
+  z-index: 200;
+  top: 28px;
+  left: calc(var(--sidebar-width) + 32px);
+  right: 220px;
+  min-height: 44px;
+  height: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  pointer-events: none;
+}
+.app-notice-stack > .app-notice {
+  pointer-events: auto;
+  margin: 0;
+  width: max-content;
+  max-width: min(360px, 100%);
+  padding: 5px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.35;
+  gap: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+  animation: app-notice-in 0.2s ease-out;
+}
+.app-notice-stack .btn-ghost.btn-sm {
+  padding: 2px 8px;
+  font-size: 11px;
+  min-height: 0;
+}
+@keyframes app-notice-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .setup-banner {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
-  margin-bottom: 16px;
+  justify-content: center;
+  text-align: center;
   padding: 8px 12px;
+  max-width: min(440px, calc(100vw - 32px));
   border-radius: 8px;
   background: rgba(255, 193, 7, 0.12);
   border: 1px solid rgba(255, 193, 7, 0.35);
   color: var(--text);
-  font-size: 13px;
-  line-height: 1.4;
+  font-size: 12px;
+  line-height: 1.35;
 }
-.setup-banner strong { color: #ffc107; }
+.setup-banner strong { color: #ffc107; font-size: 12px; }
 .setup-link {
-  margin-left: auto;
   color: var(--accent);
   text-decoration: none;
   white-space: nowrap;
+  font-size: 12px;
 }
 .setup-link:hover { text-decoration: underline; }
 
 .playlist-pick-banner {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
-  margin-bottom: 16px;
-  padding: 8px 12px;
-  border-radius: 8px;
+  justify-content: center;
   background: rgba(99, 102, 241, 0.12);
   border: 1px solid rgba(99, 102, 241, 0.35);
   color: var(--text);
-  font-size: 13px;
-  line-height: 1.4;
 }
-.playlist-pick-banner .setup-link { margin-left: auto; }
 
 .tag-match-banner {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
   flex-wrap: wrap;
-  margin: 0 0 12px;
-  padding: 10px 14px;
-  border-radius: 10px;
+  justify-content: center;
   background: rgba(108, 158, 255, 0.1);
   border: 1px solid rgba(108, 158, 255, 0.28);
-  font-size: 13px;
   color: var(--text-secondary);
 }
 .tag-match-banner.success {
@@ -820,8 +930,6 @@ onUnmounted(() => {
   background: rgba(239, 68, 68, 0.08);
   border-color: rgba(239, 68, 68, 0.28);
 }
-.tag-match-banner .setup-link { margin-left: auto; }
-.tag-match-banner .btn-ghost { margin-left: auto; }
 
 .mobile-topbar { display: none; }
 .mobile-tabbar { display: none; }
@@ -919,13 +1027,19 @@ onUnmounted(() => {
     min-height: auto;
   }
 
+  .app-notice-stack {
+    top: calc(52px + env(safe-area-inset-top, 0px) + 6px);
+    left: 14px;
+    right: 14px;
+    height: auto;
+    min-height: 36px;
+  }
+
   .setup-banner {
     font-size: 12px;
-    padding: 8px 10px;
   }
   .setup-link {
-    margin-left: 0;
-    width: 100%;
+    width: auto;
   }
 
   .mobile-tabbar {
@@ -1117,15 +1231,12 @@ onUnmounted(() => {
 .source-switch-banner {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
-  padding: 10px 14px;
-  border-radius: var(--radius);
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: wrap;
   background: var(--accent-muted);
   border: 1px solid var(--brand-border-soft);
   color: var(--text-secondary);
-  font-size: 13px;
 }
 
 .source-fallback-options {
@@ -1143,14 +1254,11 @@ onUnmounted(() => {
 .library-hot-banner {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
-  padding: 10px 14px;
-  border-radius: var(--radius);
-  background: color-mix(in srgb, var(--success) 12%, var(--bg-elevated));
-  border: 1px solid color-mix(in srgb, var(--success) 35%, transparent);
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+  background: rgba(34, 197, 94, 0.1);
+  border: 1px solid rgba(34, 197, 94, 0.28);
   color: var(--text-secondary);
-  font-size: 13px;
 }
 </style>

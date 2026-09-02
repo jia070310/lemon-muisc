@@ -12,6 +12,12 @@
         :class="{ active: batchMode }"
         @click="toggleBatchMode"
       >{{ batchMode ? '退出批量' : '批量' }}</button>
+      <button
+        v-if="failedCount"
+        class="btn-ghost btn-sm"
+        :disabled="retryingFailed"
+        @click="retryAllFailed"
+      >{{ retryingFailed ? '重试中…' : `重试失败 (${failedCount})` }}</button>
       <button class="btn-ghost btn-sm" @click="clearCompleted">清除已完成</button>
       <button class="btn-ghost btn-sm" @click="dismissAll" :disabled="!tasks.length">清理全部列表</button>
       <button class="btn-primary btn-sm" @click="playAllPlayable" :disabled="!playableTasks.length">试听全部</button>
@@ -26,6 +32,7 @@
       <div class="batch-actions">
         <button class="btn-ghost btn-sm" :disabled="!selectedPausableCount" @click="resumeSelected">继续</button>
         <button class="btn-ghost btn-sm" :disabled="!selectedActiveCount" @click="pauseSelected">暂停</button>
+        <button class="btn-ghost btn-sm" :disabled="!selectedRetryableCount" @click="retrySelected">重试失败</button>
         <button class="btn-ghost btn-sm" :disabled="!selectedCount" @click="dismissSelected">移出列表</button>
         <button class="btn-ghost btn-sm btn-danger-hover" :disabled="!selectedDeletableCount" @click="removeSelected">删除文件</button>
       </div>
@@ -66,7 +73,16 @@
             class="task-error"
             :class="{ warn: task.status === 'await_confirm' || task.status === 'await_source' }"
             v-if="task.status === 'error' || task.status === 'await_confirm' || task.status === 'await_source'"
-          >{{ formatTaskError(task) }}</div>
+          >
+            <span class="task-error-text">{{ formatTaskError(task) }}</span>
+            <button
+              v-if="canRetry(task)"
+              type="button"
+              class="task-error-retry"
+              :disabled="retryingTaskId === task.id"
+              @click="retryTask(task)"
+            >{{ retryingTaskId === task.id ? '重试中…' : '重试' }}</button>
+          </div>
         </div>
         <div class="task-progress" v-if="showTaskProgress(task)">
           <div class="progress-bar">
@@ -122,7 +138,9 @@
             >切到「{{ alt.name }}」</button>
             <button class="btn-sm btn-ghost" @click="rejectSourceSwitch(task)">放弃</button>
           </template>
-          <button v-if="task.status === 'error'" class="btn-sm btn-ghost" @click="resume(task.id)" title="按当前音质重新排队下载">重试</button>
+          <button v-if="canRetry(task)" class="btn-sm btn-primary" :disabled="retryingTaskId === task.id" @click="retryTask(task)" title="按当前音质重新排队下载">
+            {{ retryingTaskId === task.id ? '重试中…' : '重试' }}
+          </button>
           <button class="btn-sm btn-ghost" @click="dismiss(task.id)" title="移出列表，不删除已下载文件">移出</button>
           <button
             v-if="task.file_path"
@@ -153,6 +171,8 @@ const tasks = ref([])
 const toast = ref(null)
 const batchMode = ref(false)
 const selectedIds = ref(new Set())
+const retryingFailed = ref(false)
+const retryingTaskId = ref('')
 
 onMounted(() => loadList())
 
@@ -165,15 +185,35 @@ const selectedTasks = computed(() => tasks.value.filter(t => selectedIds.value.h
 const selectedPausableCount = computed(() => selectedTasks.value.filter(canResume).length)
 const selectedActiveCount = computed(() => selectedTasks.value.filter(canPause).length)
 const selectedDeletableCount = computed(() => selectedTasks.value.filter(t => t.file_path).length)
+const selectedRetryableCount = computed(() => selectedTasks.value.filter(canRetry).length)
+const failedCount = computed(() => tasks.value.filter(t => t.status === 'error').length)
 
 const unsubs = []
-unsubs.push(onWS('download:progress', (d) => {
-  const t = tasks.value.find(x => x.id === d.id)
-  if (t) {
-    t.progress = d.total > 0 ? d.downloaded / d.total : (d.progress ?? t.progress)
-    t.downloaded_size = d.downloaded
-    t.total_size = d.total
+const progressPending = new Map()
+let progressFlushTimer = null
+
+function flushDownloadProgress() {
+  progressFlushTimer = null
+  for (const [id, data] of progressPending) {
+    const t = tasks.value.find(x => x.id === id)
+    if (!t) continue
+    t.progress = data.progress
+    t.downloaded_size = data.downloaded
+    t.total_size = data.total
     t.status = 'downloading'
+  }
+  progressPending.clear()
+}
+
+unsubs.push(onWS('download:progress', (d) => {
+  if (!d?.id) return
+  progressPending.set(d.id, {
+    progress: d.total > 0 ? d.downloaded / d.total : (d.progress ?? 0),
+    downloaded: d.downloaded,
+    total: d.total,
+  })
+  if (!progressFlushTimer) {
+    progressFlushTimer = setTimeout(flushDownloadProgress, 250)
   }
 }))
 unsubs.push(onWS('download:status', (d) => {
@@ -199,7 +239,14 @@ unsubs.push(onWS('download:cleared', (d) => {
   }
   tasks.value = tasks.value.filter(x => x.status !== 'completed')
 }))
-onUnmounted(() => unsubs.forEach(fn => fn()))
+onUnmounted(() => {
+  if (progressFlushTimer) {
+    clearTimeout(progressFlushTimer)
+    progressFlushTimer = null
+  }
+  progressPending.clear()
+  unsubs.forEach(fn => fn())
+})
 
 const playableTasks = computed(() => tasks.value.filter(canPreview))
 
@@ -294,6 +341,10 @@ async function playAllPlayable() {
 
 function canResume(task) {
   return task.status === 'paused'
+}
+
+function canRetry(task) {
+  return task.status === 'error'
 }
 
 function canPause(task) {
@@ -433,6 +484,22 @@ async function resume(id) {
   }
 }
 
+async function retryTask(task) {
+  if (!canRetry(task) || retryingTaskId.value === task.id) return
+  retryingTaskId.value = task.id
+  try {
+    await api.download.resume(task.id)
+    task.status = 'waiting'
+    task.error = ''
+    task.progress = 0
+    showToast(`已重新排队：${task.name}`, 'success')
+  } catch (e) {
+    showToast(e.message || '重试失败', 'error')
+  } finally {
+    if (retryingTaskId.value === task.id) retryingTaskId.value = ''
+  }
+}
+
 async function pauseAll() {
   try {
     const res = await api.download.pauseAll()
@@ -453,6 +520,25 @@ async function resumeAll() {
   }
 }
 
+async function retryAllFailed() {
+  const failed = tasks.value.filter(t => t.status === 'error')
+  if (!failed.length || retryingFailed.value) return
+  retryingFailed.value = true
+  let ok = 0
+  try {
+    for (const task of failed) {
+      try {
+        await api.download.resume(task.id)
+        ok++
+      } catch {}
+    }
+    await loadList()
+    showToast(ok ? `已重试 ${ok} 个失败任务` : '重试失败', ok ? 'success' : 'error')
+  } finally {
+    retryingFailed.value = false
+  }
+}
+
 async function pauseSelected() {
   const ids = selectedTasks.value.filter(canPause).map(t => t.id)
   if (!ids.length) return
@@ -462,6 +548,27 @@ async function pauseSelected() {
     showToast(`已暂停 ${res.count || ids.length} 项`, 'success')
   } catch (e) {
     showToast(e.message || '暂停失败', 'error')
+  }
+}
+
+async function retrySelected() {
+  const list = selectedTasks.value.filter(canRetry)
+  if (!list.length || retryingFailed.value) return
+  retryingFailed.value = true
+  let ok = 0
+  try {
+    for (const task of list) {
+      try {
+        await api.download.resume(task.id)
+        task.status = 'waiting'
+        task.error = ''
+        task.progress = 0
+        ok++
+      } catch {}
+    }
+    showToast(ok ? `已重试 ${ok} 个失败任务` : '重试失败', ok ? 'success' : 'error')
+  } finally {
+    retryingFailed.value = false
   }
 }
 
@@ -673,8 +780,25 @@ function showToast(text, type = 'info') {
 .task-info { flex: 1; min-width: 0; }
 .task-name { font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .task-meta { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
-.task-error { font-size: 12px; color: var(--error); margin-top: 2px; }
+.task-error { font-size: 12px; color: var(--error); margin-top: 2px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .task-error.warn { color: var(--warning); }
+.task-error-text { flex: 1; min-width: 0; }
+.task-error-retry {
+  flex-shrink: 0;
+  padding: 2px 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--accent);
+  background: var(--accent-muted);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.task-error-retry:hover:not(:disabled) {
+  color: #fff;
+  background: var(--accent);
+}
+.task-error-retry:disabled { opacity: 0.6; cursor: not-allowed; }
 .status-await_confirm,
 .status-await_source { color: var(--warning); }
 

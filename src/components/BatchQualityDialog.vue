@@ -1,44 +1,50 @@
 <template>
   <div v-if="plan" class="batch-quality-overlay" @click.self="$emit('cancel')">
     <div class="batch-quality-modal" role="dialog" aria-modal="true" aria-labelledby="batch-quality-title">
-      <h3 id="batch-quality-title">部分歌曲不支持所选音质</h3>
+      <h3 id="batch-quality-title">确认批量下载音质</h3>
       <p class="batch-quality-desc">
         你选择了 <strong>{{ preferredLabel }}</strong>。
-        <template v-if="matchedCount > 0">{{ matchedCount }} 首将按该音质下载，</template>
-        以下 {{ plan.rows.length }} 首需单独选择可用音质：
+        <template v-if="matchedCount > 0">{{ matchedCount }} 首将按该音质下载。</template>
+        <template v-if="downgradedCount > 0">
+          <span v-if="matchedCount > 0"> </span>
+          另有 <strong>{{ downgradedCount }}</strong> 首不支持该音质，将自动降为最接近的可用音质。
+        </template>
       </p>
 
-      <div v-if="bulkOptions.length > 1" class="batch-bulk-bar">
-        <span>以下歌曲统一设为</span>
-        <AppSelect
-          :model-value="bulkQuality"
-          :options="bulkQualitySelectOptions"
-          min-width="132px"
-          @update:model-value="$emit('update:bulkQuality', $event)"
-        />
-        <button type="button" class="btn-ghost btn-sm" @click="$emit('apply-bulk')">应用</button>
-      </div>
-
-      <div class="batch-quality-list">
-        <div v-for="row in plan.rows" :key="row.key" class="batch-quality-row">
-          <div class="batch-quality-meta">
-            <div class="batch-quality-name" :title="cleanText(row.item.name)">{{ cleanText(row.item.name) }}</div>
-            <div class="batch-quality-singer" :title="formatArtists(row.item.singer)">{{ formatArtists(row.item.singer) }}</div>
-            <div class="batch-quality-available">
-              可用：{{ row.available.map(q => formatQuality(q, row.item.types)).join('、') || '未知' }}
+      <div v-if="downgradedCount" class="batch-summary-box">
+        <button
+          type="button"
+          class="batch-summary-toggle"
+          @click="showDetails = !showDetails"
+        >
+          <span>{{ showDetails ? '收起详情' : '查看降档歌曲' }}（{{ downgradedCount }} 首）</span>
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" :class="{ open: showDetails }">
+            <polyline points="6 9 12 15 18 9"/>
+          </svg>
+        </button>
+        <div v-if="showDetails" class="batch-quality-list">
+          <div v-for="row in downgradedRows" :key="row.key" class="batch-quality-row">
+            <div class="batch-quality-meta">
+              <div class="batch-quality-name" :title="cleanText(row.name)">{{ cleanText(row.name) }}</div>
+              <div class="batch-quality-singer" :title="formatArtists(row.singer)">{{ formatArtists(row.singer) }}</div>
+            </div>
+            <div class="batch-quality-result">
+              <span class="batch-quality-from">{{ formatQuality(row.from) }}</span>
+              <span class="batch-quality-arrow">→</span>
+              <span class="batch-quality-to">{{ formatQuality(row.to) }}</span>
             </div>
           </div>
-          <AppSelect
-            v-model="selections[row.key]"
-            :options="qualityOptionsForRow(row)"
-            min-width="132px"
-          />
         </div>
       </div>
 
+      <label class="batch-remember">
+        <input v-model="rememberChoice" type="checkbox" />
+        <span>以后不再提示，不支持所选音质时自动按最接近音质下载</span>
+      </label>
+
       <div class="batch-quality-actions">
         <button type="button" class="btn-ghost" :disabled="busy" @click="$emit('cancel')">取消</button>
-        <button type="button" class="btn-primary" :disabled="busy" @click="$emit('confirm')">
+        <button type="button" class="btn-primary" :disabled="busy" @click="onConfirm">
           {{ busy ? '添加中...' : `确认并下载 ${totalCount} 首` }}
         </button>
       </div>
@@ -47,41 +53,46 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { getQualityLabel } from '../utils/quality.js'
 import { cleanText, formatArtists } from '../utils/text.js'
-import AppSelect from './AppSelect.vue'
 
 const props = defineProps({
   plan: { type: Object, default: null },
-  selections: { type: Object, required: true },
-  bulkQuality: { type: String, default: '' },
-  bulkOptions: { type: Array, default: () => [] },
   preferredLabel: { type: String, default: '' },
   busy: { type: Boolean, default: false },
 })
 
-defineEmits(['cancel', 'confirm', 'apply-bulk', 'update:bulkQuality'])
+const emit = defineEmits(['cancel', 'confirm'])
+
+const showDetails = ref(false)
+const rememberChoice = ref(false)
 
 const matchedCount = computed(() => props.plan?.matched?.length || 0)
-const totalCount = computed(() => (props.plan?.matched?.length || 0) + (props.plan?.rows?.length || 0))
-
-const bulkQualitySelectOptions = computed(() =>
-  props.bulkOptions.map(q => ({ value: q, label: formatQuality(q) }))
-)
-
-function qualityOptionsForRow(row) {
-  if (!row.available?.length) {
-    return [{ value: '128k', label: formatQuality('128k', row.item?.types) }]
-  }
-  return row.available.map(q => ({
-    value: q,
-    label: formatQuality(q, row.item?.types),
+const downgradedRows = computed(() => {
+  const preferred = props.plan?.preferred
+  return (props.plan?.rows || []).map((row) => ({
+    key: row.key,
+    name: row.item?.name || '',
+    singer: row.item?.singer || '',
+    from: preferred,
+    to: row.selected,
   }))
+})
+const downgradedCount = computed(() => downgradedRows.value.length)
+const totalCount = computed(() => matchedCount.value + downgradedCount.value)
+
+watch(() => props.plan, () => {
+  showDetails.value = false
+  rememberChoice.value = false
+})
+
+function formatQuality(q) {
+  return getQualityLabel(q)
 }
 
-function formatQuality(q, types) {
-  return getQualityLabel(q, types)
+function onConfirm() {
+  emit('confirm', { remember: rememberChoice.value })
 }
 </script>
 
@@ -98,8 +109,8 @@ function formatQuality(q, types) {
 }
 
 .batch-quality-modal {
-  width: min(560px, 100%);
-  max-height: min(80vh, 720px);
+  width: min(480px, 100%);
+  max-height: min(80vh, 640px);
   display: flex;
   flex-direction: column;
   background: var(--bg-elevated);
@@ -118,7 +129,7 @@ function formatQuality(q, types) {
 .batch-quality-desc {
   margin: 0 0 14px;
   font-size: 14px;
-  line-height: 1.55;
+  line-height: 1.6;
   color: var(--text-secondary);
 }
 
@@ -126,34 +137,53 @@ function formatQuality(q, types) {
   color: var(--accent);
 }
 
-.batch-bulk-bar {
+.batch-summary-box {
+  margin-bottom: 14px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.batch-summary-toggle {
+  width: 100%;
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
-  flex-wrap: wrap;
-  margin-bottom: 12px;
   padding: 10px 12px;
-  border-radius: var(--radius);
-  background: var(--accent-muted);
-  font-size: 13px;
+  border: none;
+  background: var(--bg-card, var(--bg));
   color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.batch-summary-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.batch-summary-toggle svg {
+  flex-shrink: 0;
+  transition: transform 0.2s ease;
+}
+
+.batch-summary-toggle svg.open {
+  transform: rotate(180deg);
 }
 
 .batch-quality-list {
-  flex: 1;
-  min-height: 0;
+  max-height: min(36vh, 280px);
   overflow-y: auto;
-  margin-bottom: 16px;
-  border: 1px solid var(--border-light);
-  border-radius: var(--radius);
+  border-top: 1px solid var(--border-light);
 }
 
 .batch-quality-row {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 12px 14px;
+  padding: 10px 12px;
   border-bottom: 1px solid var(--border-light);
 }
 
@@ -167,7 +197,7 @@ function formatQuality(q, types) {
 }
 
 .batch-quality-name {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 500;
   color: var(--text);
   overflow: hidden;
@@ -184,18 +214,44 @@ function formatQuality(q, types) {
   white-space: nowrap;
 }
 
-.batch-quality-available {
-  margin-top: 6px;
+.batch-quality-result {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 12px;
-  line-height: 1.45;
-  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
 }
 
-.batch-quality-select,
-.batch-quality-row .app-select {
+.batch-quality-from {
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+
+.batch-quality-arrow {
+  color: var(--text-muted);
+}
+
+.batch-quality-to {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.batch-remember {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.batch-remember input {
+  margin-top: 3px;
   flex-shrink: 0;
-  min-width: 132px;
-  max-width: 42%;
 }
 
 .batch-quality-actions {
@@ -218,11 +274,10 @@ function formatQuality(q, types) {
 
   .batch-quality-row {
     flex-direction: column;
-    align-items: stretch;
+    align-items: flex-start;
   }
 
-  .batch-quality-select {
-    max-width: none;
+  .batch-quality-result {
     width: 100%;
   }
 }

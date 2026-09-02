@@ -1,5 +1,6 @@
 import { ref, computed } from 'vue'
 import { findLocalMatchForTrack, isLocalPlaylistTrack } from '../utils/trackMatch.js'
+import { withStreamAuth } from '../utils/streamAuth.js'
 
 const FAVORITES_KEY = 'lemon-library-favorites'
 const RECENT_KEY = 'lemon-library-recent'
@@ -41,6 +42,39 @@ function setScanProgress(phase, { current = 0, total = 0, text = '' } = {}) {
   libraryScanCurrent.value = current
   libraryScanTotal.value = total
   libraryLoadProgress.value = text
+}
+
+function applyServerScanProgress(scan = {}) {
+  if (!scan?.phase) return
+  const phase = scan.phase === 'tags' || scan.phase === 'sync' ? scan.phase : (scan.running ? 'tags' : '')
+  if (!phase) return
+  setScanProgress(phase, {
+    current: scan.current || 0,
+    total: scan.total || 0,
+    text: scan.text || (scan.phase === 'tags' && scan.total
+      ? `读取标签 ${scan.current || 0}/${scan.total}`
+      : ''),
+  })
+  libraryMetaLoading.value = Boolean(scan.running)
+}
+
+async function reloadTracksFromCache(api) {
+  if (!api?.library?.tracks) return
+  try {
+    const cachedRes = await api.library.tracks()
+    const cachedList = cachedRes.data || []
+    if (cachedList.length) {
+      libraryTracks.value = sortTracksByMtime(cachedList.map(fileToLibraryTrack))
+      saveSessionTracks(libraryTracks.value)
+    }
+  } catch {}
+}
+
+async function finishBackgroundScan(api) {
+  libraryMetaLoading.value = false
+  resetScanProgress()
+  await reloadTracksFromCache(api)
+  syncAllImportedPlaylists()
 }
 
 function loadSessionTracks() {
@@ -332,9 +366,16 @@ export async function initLibraryUserData(api) {
     customPlaylists.value = readJson(PLAYLISTS_KEY, []).map(normalizePlaylist)
     favorites.value = readJson(FAVORITES_KEY, [])
     recentPlays.value = readJson(RECENT_KEY, [])
-  } finally {
+  }
+  try {
+    const settingsRes = await api.settings.get()
+    const days = settingsRes?.[PLAYLIST_REMOTE_SYNC_DAYS_KEY]
+    if (days != null) setPlaylistRemoteSyncDays(days)
+  } catch {}
+  finally {
     userDataSyncReady = true
     flushPendingUserDataPersist()
+    void maybeAutoSyncImportedPlaylists(api)
   }
 }
 
@@ -370,6 +411,8 @@ function normalizePlaylist(pl) {
     importSource: pl.importSource || '',
     importUrl: pl.importUrl || '',
     lastSyncedAt: pl.lastSyncedAt || 0,
+    lastRemoteSyncedAt: pl.lastRemoteSyncedAt || 0,
+    remoteAutoSync: pl.remoteAutoSync !== false,
   }
 }
 
@@ -423,9 +466,11 @@ export function trackToSnapshot(track, sourceOverride) {
 }
 
 export function snapshotToPlayTrack(snapshot, sourceOverride) {
-  const source = sourceOverride || snapshot.source || (snapshot.localPath ? 'local' : '')
+  const source = sourceOverride || snapshot.source || (snapshot.localPath || snapshot.filePath ? 'local' : '')
+  const localPath = snapshot.localPath || snapshot.filePath || ''
   return {
     id: snapshot.songId || snapshot.songmid || snapshot.hash || snapshot.copyrightId || snapshot.key,
+    key: snapshot.key || (localPath ? `local:${localPath}` : ''),
     songId: snapshot.songId,
     songmid: snapshot.songmid,
     hash: snapshot.hash,
@@ -434,7 +479,8 @@ export function snapshotToPlayTrack(snapshot, sourceOverride) {
     name: snapshot.name,
     singer: snapshot.singer,
     album: snapshot.album,
-    localPath: snapshot.localPath,
+    localPath,
+    filePath: localPath,
     source,
     picUrl: snapshot.picUrl,
     lyric: snapshot.lyric,
@@ -484,7 +530,8 @@ export function localCoverUrl(filePath) {
   if (!filePath) return ''
   const v = coverVersions.get(filePath)
   const q = `path=${encodeURIComponent(filePath)}`
-  return v ? `/api/tag/cover?${q}&v=${v}` : `/api/tag/cover?${q}`
+  const base = v ? `/api/tag/cover?${q}&v=${v}` : `/api/tag/cover?${q}`
+  return withStreamAuth(base)
 }
 
 function enrichLocalCover(track) {
@@ -842,6 +889,96 @@ export function syncAllImportedPlaylists() {
   return totalMatched
 }
 
+export const PLAYLIST_REMOTE_SYNC_DAYS_KEY = 'playlist.remoteSyncDays'
+export const playlistRemoteSyncRunning = ref(false)
+
+export function getPlaylistRemoteSyncDays() {
+  const raw = Number(localStorage.getItem(PLAYLIST_REMOTE_SYNC_DAYS_KEY))
+  if (!Number.isFinite(raw) || raw < 0) return 0
+  return Math.floor(raw)
+}
+
+export function setPlaylistRemoteSyncDays(days) {
+  const value = Math.max(0, Math.floor(Number(days) || 0))
+  localStorage.setItem(PLAYLIST_REMOTE_SYNC_DAYS_KEY, String(value))
+  return value
+}
+
+export async function refreshImportedPlaylistFromNetwork(api, playlistId, { onProgress } = {}) {
+  const pl = getCustomPlaylist(playlistId)
+  if (!pl || !isImportedPlaylist(pl)) throw new Error('不是网络导入歌单')
+  if (!pl.importUrl || !pl.importSource) throw new Error('歌单缺少导入链接信息')
+
+  const { list, info } = await fetchPlatformPlaylistTracks(api, pl.importUrl, pl.importSource, onProgress)
+  const existingKeys = new Set(pl.trackKeys || [])
+  const newTracks = []
+  for (const track of list) {
+    const snap = trackToSnapshot(track, pl.importSource)
+    if (!snap || existingKeys.has(snap.key)) continue
+    newTracks.push(track)
+    existingKeys.add(snap.key)
+  }
+
+  const patch = { lastRemoteSyncedAt: Date.now() }
+  const coverUrl = info?.img || info?.picUrl || ''
+  if (coverUrl && pl.coverMode !== 'custom') {
+    patch.coverUrl = coverUrl
+    patch.coverMode = 'custom'
+  }
+  updatePlaylist(playlistId, patch)
+
+  let added = 0
+  if (newTracks.length) {
+    const res = addTracksToPlaylist(playlistId, newTracks, pl.importSource)
+    added = res.added
+  }
+
+  const { matched, playlist } = syncPlaylistLocalTracks(playlistId)
+  return { added, total: list.length, matched, playlist }
+}
+
+export async function maybeAutoSyncImportedPlaylists(api) {
+  const days = getPlaylistRemoteSyncDays()
+  if (!days || !api || playlistRemoteSyncRunning.value) return { synced: 0, added: 0 }
+
+  const intervalMs = days * 24 * 60 * 60 * 1000
+  const now = Date.now()
+  const due = customPlaylists.value.filter((pl) => {
+    if (!isImportedPlaylist(pl)) return false
+    if (pl.remoteAutoSync === false) return false
+    if (!pl.importUrl || !pl.importSource) return false
+    const last = pl.lastRemoteSyncedAt || pl.lastSyncedAt || pl.createdAt || 0
+    return now - last >= intervalMs
+  })
+  if (!due.length) return { synced: 0, added: 0 }
+
+  playlistRemoteSyncRunning.value = true
+  let synced = 0
+  let totalAdded = 0
+  const updatedNames = []
+  try {
+    for (const pl of due) {
+      try {
+        const { added } = await refreshImportedPlaylistFromNetwork(api, pl.id)
+        synced += 1
+        if (added > 0) {
+          totalAdded += added
+          updatedNames.push(pl.name)
+        }
+      } catch {}
+    }
+    if (totalAdded > 0) {
+      const label = updatedNames.length === 1
+        ? `网络歌单「${updatedNames[0]}」新增 ${totalAdded} 首`
+        : `网络歌单已更新，共新增 ${totalAdded} 首`
+      showLibraryHotNotice(label)
+    }
+  } finally {
+    playlistRemoteSyncRunning.value = false
+  }
+  return { synced, added: totalAdded }
+}
+
 export async function importPlaylistFromUrl(api, { url, source, name = '', onProgress } = {}) {
   const input = String(url || '').trim()
   if (!input) throw new Error('请输入歌单链接')
@@ -859,6 +996,7 @@ export async function importPlaylistFromUrl(api, { url, source, name = '', onPro
     importSource: source,
     importUrl: input,
     lastSyncedAt: Date.now(),
+    lastRemoteSyncedAt: Date.now(),
   })
   if (!pl) throw new Error('创建歌单失败')
 
@@ -970,7 +1108,7 @@ export function removeLibraryTracks(filePaths) {
 let scanPromise = null
 
 /** 扫描音乐库目录并读取标签（含封面地址、专辑等信息） */
-export async function scanLibrary(api, { force = false, onError, onComplete } = {}) {
+export async function scanLibrary(api, { force = false, dirs = null, scanAll = false, onError, onComplete } = {}) {
   if (scanPromise && !force) return scanPromise
 
   const run = async () => {
@@ -986,6 +1124,7 @@ export async function scanLibrary(api, { force = false, onError, onComplete } = 
 
     let pendingCount = 0
     let tagScanned = 0
+    let serverScanActive = false
 
     try {
       const res = await api.paths.list()
@@ -1024,10 +1163,39 @@ export async function scanLibrary(api, { force = false, onError, onComplete } = 
         } catch {}
       }
 
-      setScanProgress('sync', { text: '比对文件' })
-      const syncRes = await api.library.sync()
-      const { cached = [], pending = [], removed = [] } = syncRes.data || {}
+      if (!force) {
+        try {
+          const statusRes = await api.library.scanStatus()
+          if (statusRes.scan?.running) {
+            serverScanActive = true
+            applyServerScanProgress(statusRes.scan)
+            await reloadTracksFromCache(api)
+            libraryScanned.value = true
+            libraryLoading.value = false
+            libraryMetaLoading.value = true
+            maybeShowBackgroundScanInitHint()
+            const result = {
+              totalTracks: libraryTracks.value.length,
+              scannedTags: statusRes.scan.current || 0,
+              hadPending: true,
+              resumed: true,
+            }
+            onComplete?.(result, { force })
+            return result
+          }
+        } catch {}
+      }
+
+      setScanProgress('sync', { text: '比对文件，启动后台扫描' })
+      const startRes = await api.library.scanStart(force, { dirs, scanAll })
+      const { cached = [], pending = [], removed = [] } = startRes.data || {}
+      const scan = startRes.scan || {}
       pendingCount = pending.length
+      tagScanned = scan.scanned || 0
+
+      const keysBeforeSync = new Set(
+        libraryTracks.value.map(t => t.filePath || t.localPath).filter(Boolean),
+      )
 
       if (removed.length) removeLibraryTracks(removed)
 
@@ -1041,35 +1209,37 @@ export async function scanLibrary(api, { force = false, onError, onComplete } = 
         libraryTracks.value = []
       }
 
+      let addedFromSync = 0
+      for (const f of pending) {
+        const fp = f.filePath
+        if (fp && !keysBeforeSync.has(fp)) addedFromSync++
+      }
+      const showedBgScanInitHint = scan.running
+        ? maybeShowBackgroundScanInitHint()
+        : false
+
+      if (addedFromSync > 0 && !showedBgScanInitHint) {
+        showLibraryHotNotice(
+          addedFromSync === 1
+            ? '音乐库已更新：新增 1 首歌曲'
+            : `音乐库已更新：新增 ${addedFromSync} 首歌曲`,
+          8000,
+        )
+      }
+
       libraryScanned.value = true
       libraryLoading.value = false
 
-      if (pending.length) {
+      if (scan.running) {
+        serverScanActive = true
         libraryMetaLoading.value = true
-        const chunk = 20
-        setScanProgress('tags', { current: 0, total: pending.length, text: `读取标签 0/${pending.length}` })
-        for (let i = 0; i < pending.length; i += chunk) {
-          const done = Math.min(i + chunk, pending.length)
-          tagScanned = done
-          setScanProgress('tags', {
-            current: done,
-            total: pending.length,
-            text: `读取标签 ${done}/${pending.length}`,
-          })
-          const batch = pending.slice(i, i + chunk)
-          try {
-            const batchRes = await api.library.scanBatch(batch)
-            const tracks = (batchRes.data || []).map((row) => {
-              const base = batch.find(f => f.filePath === row.filePath) || {}
-              if (row.ok === false) return fileToLibraryTrack({ ...base, ...row })
-              return fileToLibraryTrack({ ...base, ...row })
-            })
-            mergeLibraryTracks(tracks)
-          } catch {
-            mergeLibraryTracks(batch.map(f => fileToLibraryTrack(f)))
-          }
-        }
-      } else if (!showedCache && !cached.length && !pending.length) {
+        applyServerScanProgress(scan)
+      } else {
+        applyServerScanProgress(scan)
+        await reloadTracksFromCache(api)
+      }
+
+      if (!showedCache && !cached.length && !pending.length && !libraryTracks.value.length) {
         libraryTracks.value = []
       }
 
@@ -1079,16 +1249,18 @@ export async function scanLibrary(api, { force = false, onError, onComplete } = 
         hadPending: pendingCount > 0,
       }
       saveSessionTracks(libraryTracks.value)
-      syncAllImportedPlaylists()
-      onComplete?.(result, { force })
+      if (!serverScanActive) syncAllImportedPlaylists()
+      if (!serverScanActive) onComplete?.(result, { force })
       return result
     } catch (e) {
       onError?.(e.message || '加载音乐库失败')
       throw e
     } finally {
       libraryLoading.value = false
-      libraryMetaLoading.value = false
-      resetScanProgress()
+      if (!serverScanActive) {
+        libraryMetaLoading.value = false
+        resetScanProgress()
+      }
     }
   }
 
@@ -1395,14 +1567,51 @@ export async function ingestLibraryTracks(api, filePaths) {
 }
 
 export const libraryHotNotice = ref('')
+const BG_SCAN_INIT_HINT_KEY = 'lemon-library-bg-scan-init-hint-seen'
+
+/** 首次后台扫描时提示：关闭页面不影响扫描任务（每浏览器仅一次） */
+function maybeShowBackgroundScanInitHint() {
+  try {
+    if (localStorage.getItem(BG_SCAN_INIT_HINT_KEY)) return false
+    localStorage.setItem(BG_SCAN_INIT_HINT_KEY, '1')
+  } catch {
+    return false
+  }
+  showLibraryHotNotice(
+    '已开启后台自动扫描音乐库，关闭网页或 App 不会影响扫描任务，歌曲会陆续出现在音乐库中。',
+    30000,
+  )
+  return true
+}
+
 let hotReloadApi = null
 let pendingHotPaths = new Set()
 let hotReloadTimer = null
+let libraryHotNoticeTimer = null
 let offLibraryChanged = null
 let offLibraryRemoved = null
 let offUserDataChanged = null
 let offPlaylistsChanged = null
 let offDownloadComplete = null
+let offScanProgress = null
+let offScanComplete = null
+
+function showLibraryHotNotice(text, ttl = 4500) {
+  libraryHotNotice.value = text
+  if (libraryHotNoticeTimer) clearTimeout(libraryHotNoticeTimer)
+  libraryHotNoticeTimer = setTimeout(() => {
+    if (libraryHotNotice.value === text) libraryHotNotice.value = ''
+    libraryHotNoticeTimer = null
+  }, ttl)
+}
+
+export function clearLibraryHotNotice() {
+  if (libraryHotNoticeTimer) {
+    clearTimeout(libraryHotNoticeTimer)
+    libraryHotNoticeTimer = null
+  }
+  libraryHotNotice.value = ''
+}
 
 async function flushLibraryHotReload() {
   hotReloadTimer = null
@@ -1412,12 +1621,14 @@ async function flushLibraryHotReload() {
   try {
     const { added, updated } = await ingestLibraryTracks(hotReloadApi, paths)
     if (added > 0) {
-      libraryHotNotice.value = added === 1 && updated === 0
-        ? '音乐库已更新：新增 1 首歌曲'
-        : `音乐库已更新：新增 ${added} 首${updated ? `，更新 ${updated} 首` : ''}`
-      setTimeout(() => {
-        if (libraryHotNotice.value.includes('音乐库已更新')) libraryHotNotice.value = ''
-      }, 4200)
+      showLibraryHotNotice(
+        added === 1 && updated === 0
+          ? '音乐库已更新：新增 1 首歌曲'
+          : `音乐库已更新：新增 ${added} 首${updated ? `，更新 ${updated} 首` : ''}`,
+        8000,
+      )
+    } else if (updated > 0 && paths.length === 1) {
+      showLibraryHotNotice('音乐库已更新：歌曲信息已刷新', 5000)
     }
   } catch {}
 }
@@ -1437,6 +1648,8 @@ export function initLibraryHotReload(api, { onWS } = {}) {
   offLibraryRemoved?.()
   offUserDataChanged?.()
   offDownloadComplete?.()
+  offScanProgress?.()
+  offScanComplete?.()
   if (!onWS) return () => {}
 
   offLibraryChanged = onWS('library:changed', (payload) => {
@@ -1445,12 +1658,33 @@ export function initLibraryHotReload(api, { onWS } = {}) {
   offLibraryRemoved = onWS('library:removed', (payload) => {
     const removed = removeLibraryTracks(payload?.filePaths)
     if (removed > 0) {
-      libraryHotNotice.value = removed === 1
-        ? '音乐库已更新：移除 1 首歌曲'
-        : `音乐库已更新：移除 ${removed} 首歌曲`
-      setTimeout(() => {
-        if (libraryHotNotice.value.includes('移除')) libraryHotNotice.value = ''
-      }, 4200)
+      showLibraryHotNotice(
+        removed === 1
+          ? '音乐库已更新：移除 1 首歌曲'
+          : `音乐库已更新：移除 ${removed} 首歌曲`,
+      )
+    }
+  })
+  offScanProgress = onWS('library:scan-progress', (payload) => {
+    applyServerScanProgress(payload)
+  })
+  offScanComplete = onWS('library:scan-complete', async (payload) => {
+    if (!hotReloadApi) return
+    await finishBackgroundScan(hotReloadApi)
+    const hadPending = Boolean(payload?.hadPending)
+    const scanned = Number(payload?.scannedTags) || 0
+    const current = libraryHotNotice.value
+    if (current.includes('新增')) {
+      if (hadPending && scanned > 0) {
+        showLibraryHotNotice(`${current.replace(/[。…]*$/, '')}，标签读取完成`, 6000)
+      }
+      return
+    }
+    if (!hadPending) return
+    if (scanned > 0) {
+      showLibraryHotNotice(`音乐库扫描完成：已处理 ${scanned} 首歌曲`, 6000)
+    } else {
+      showLibraryHotNotice('音乐库后台扫描已完成', 5000)
     }
   })
   offUserDataChanged = onWS('library:user-data-changed', () => {
@@ -1471,11 +1705,15 @@ export function initLibraryHotReload(api, { onWS } = {}) {
     offUserDataChanged?.()
     offPlaylistsChanged?.()
     offDownloadComplete?.()
+    offScanProgress?.()
+    offScanComplete?.()
     offLibraryChanged = null
     offLibraryRemoved = null
     offUserDataChanged = null
     offPlaylistsChanged = null
     offDownloadComplete = null
+    offScanProgress = null
+    offScanComplete = null
     if (hotReloadTimer) clearTimeout(hotReloadTimer)
     hotReloadTimer = null
     pendingHotPaths.clear()

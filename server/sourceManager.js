@@ -299,8 +299,27 @@ function candidatesFor(source, action) {
   })
 }
 
+const MAX_SOURCE_CONCURRENCY = 6
+let sourceActiveRequests = 0
+const sourceWaitQueue = []
+
+function acquireSourceSlot() {
+  if (sourceActiveRequests < MAX_SOURCE_CONCURRENCY) {
+    sourceActiveRequests++
+    return Promise.resolve()
+  }
+  return new Promise((resolve) => { sourceWaitQueue.push(resolve) })
+    .then(() => { sourceActiveRequests++ })
+}
+
+function releaseSourceSlot() {
+  sourceActiveRequests = Math.max(0, sourceActiveRequests - 1)
+  const next = sourceWaitQueue.shift()
+  if (next) next()
+}
+
 function invokeHandler(entry, payload) {
-  return new Promise((resolve, reject) => {
+  return acquireSourceSlot().then(() => new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error('请求超时(30s)')), 30000)
     try {
       const result = entry.handler(payload)
@@ -315,7 +334,9 @@ function invokeHandler(entry, payload) {
       clearTimeout(timeout)
       reject(e)
     }
-  })
+  }).finally(() => {
+    releaseSourceSlot()
+  }))
 }
 
 const sourceNameCache = new Map()

@@ -5,10 +5,6 @@
         v-if="showFullscreenPlayer"
         ref="playerRootRef"
         class="fs-player"
-        :class="{
-          'fs-landscape-active': isLandscapePlayback && !useForceLandscapeLayout,
-          'fs-force-landscape': useForceLandscapeLayout,
-        }"
         @click.self="closeFullscreenPlayer"
       >
         <div class="fs-bg" :style="bgStyle"></div>
@@ -35,21 +31,6 @@
             <svg v-else viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/>
               <line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/>
-            </svg>
-          </button>
-
-          <button
-            v-if="showLandscapeBtn"
-            class="fs-landscape-btn"
-            type="button"
-            :class="{ active: isLandscapePlayback }"
-            :title="isLandscapePlayback ? '退出横屏' : '横屏播放'"
-            @click="toggleLandscapePlayback"
-          >
-            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="2" y="7" width="20" height="10" rx="2"/>
-              <polyline points="17 12 20 12"/>
-              <polygon points="16,10 19,12 16,14" fill="currentColor" stroke="none"/>
             </svg>
           </button>
         </div>
@@ -135,6 +116,18 @@
             </button>
             <button class="fs-btn" type="button" title="下一曲" :disabled="!playQueue.length" @click="onNext">
               <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><polygon points="5,4 15,12 5,20"/><line x1="19" y1="4" x2="19" y2="20" stroke="currentColor" stroke-width="2"/></svg>
+            </button>
+            <button
+              v-if="currentLocalTrackPath"
+              class="fs-btn"
+              type="button"
+              title="标签编辑"
+              @click="onOpenTagEdit"
+            >
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
+                <line x1="7" y1="7" x2="7.01" y2="7"/>
+              </svg>
             </button>
             <button class="fs-btn" type="button" title="试听列表" :class="{ active: showQueuePanel }" @click="onOpenQueue">
               <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
@@ -230,9 +223,11 @@ import {
   showFullscreenPlayer, visualizerEnabled, volume, isMuted, playerError,
   togglePause, seekTo, setVolume, toggleMute, fmtTime, playNext, playPrev, togglePlayMode,
   closeFullscreenPlayer, showQueuePanel, playTrackAt, removeFromQueue, clearQueue,
-  resumeOrTogglePause, unlockAudioFromGesture,
+  resumeOrTogglePause, unlockAudioFromGesture, currentLocalTrackPath,
 } from '../stores/player.js'
 import { cleanText, formatArtists } from '../utils/text.js'
+import { openTagEditTrack } from '../utils/tagEdit.js'
+import { isMobileUiContext, supportsElementFullscreen } from '../utils/device.js'
 import SpectrumVisualizer from './SpectrumVisualizer.vue'
 
 const lyricPanelRef = ref(null)
@@ -241,18 +236,22 @@ const playerRootRef = ref(null)
 const isNativeFullscreen = ref(false)
 const nativeFullscreenSupported = ref(false)
 const mobileScreenExpanded = ref(false)
-const isLandscapePlayback = ref(false)
-const useForceLandscapeLayout = ref(false)
-const isMobileViewport = ref(false)
+const mobileLayoutTick = ref(0)
 let mobileViewportMq = null
+
+const isMobileViewport = computed(() => {
+  mobileLayoutTick.value
+  return isMobileUiContext(860)
+})
 
 const isScreenExpanded = computed(() => isNativeFullscreen.value || mobileScreenExpanded.value)
 const showScreenFullBtn = computed(() => nativeFullscreenSupported.value || isMobileViewport.value)
-const showLandscapeBtn = computed(() => isMobileViewport.value && isScreenExpanded.value)
 /** @type {import('vue').Ref<(HTMLElement | null)[]>} */
 const lyricLineEls = ref([])
 
 const volumePercent = computed(() => Math.round((volume.value || 0) * 100))
+
+const currentLocalPath = currentLocalTrackPath
 
 const bgStyle = computed(() => {
   if (!coverUrl.value) return {}
@@ -301,6 +300,11 @@ function onOpenQueue() {
   showQueuePanel.value = !showQueuePanel.value
 }
 
+function onOpenTagEdit() {
+  if (!currentLocalPath.value) return
+  openTagEditTrack(currentLocalPath.value)
+}
+
 async function onPlayAt(index) {
   unlockAudioFromGesture()
   try { await playTrackAt(index) } catch (e) { playerError.value = e?.message || '播放失败' }
@@ -330,13 +334,9 @@ function scrollActiveLyric() {
 
 function syncNativeFullscreenState() {
   const el = playerRootRef.value
-  const wasNative = isNativeFullscreen.value
   isNativeFullscreen.value = Boolean(
     el && (document.fullscreenElement === el || document.webkitFullscreenElement === el),
   )
-  if (wasNative && !isNativeFullscreen.value && !mobileScreenExpanded.value) {
-    unlockLandscapePlayback()
-  }
 }
 
 async function exitNativeFullscreen() {
@@ -369,7 +369,6 @@ async function enterNativeFullscreen() {
 }
 
 async function collapseScreenExpand() {
-  await unlockLandscapePlayback()
   mobileScreenExpanded.value = false
   await exitNativeFullscreen()
 }
@@ -383,82 +382,30 @@ async function toggleNativeFullscreen() {
   if (entered) {
     mobileScreenExpanded.value = false
   } else if (isMobileViewport.value) {
-    // 部分手机浏览器无法系统全屏，仍进入「放大」步骤以显示横屏按钮
+    // 部分手机浏览器无法系统全屏，仍进入无边框放大模式
     mobileScreenExpanded.value = true
   }
 }
 
-function isPortraitViewport() {
-  return window.innerWidth < window.innerHeight
-}
-
-function updateForceLandscapeLayout() {
-  if (!isLandscapePlayback.value) {
-    useForceLandscapeLayout.value = false
-    return
-  }
-  // 飞牛等宿主 WebView 可能 orientation.lock 成功但视口仍为竖屏，需 CSS 旋转
-  useForceLandscapeLayout.value = isPortraitViewport()
-}
-
-function isOrientationLockSupported() {
-  return typeof screen !== 'undefined'
-    && screen.orientation
-    && typeof screen.orientation.lock === 'function'
-}
-
-async function unlockLandscapePlayback() {
-  isLandscapePlayback.value = false
-  useForceLandscapeLayout.value = false
-  try {
-    screen.orientation?.unlock?.()
-  } catch {}
-}
-
-async function lockLandscapePlayback() {
-  if (!isScreenExpanded.value) return
-  unlockAudioFromGesture()
-  try {
-    if (isOrientationLockSupported()) {
-      await screen.orientation.lock('landscape')
-    }
-  } catch {}
-
-  isLandscapePlayback.value = true
-  await nextTick()
-  await new Promise((resolve) => requestAnimationFrame(resolve))
-  updateForceLandscapeLayout()
-  // 部分 WebView 方向变化滞后，再同步一次
-  window.setTimeout(updateForceLandscapeLayout, 300)
-}
-
-async function toggleLandscapePlayback() {
-  if (isLandscapePlayback.value) {
-    await unlockLandscapePlayback()
-    return
-  }
-  await lockLandscapePlayback()
-}
-
-function syncLandscapeLayout() {
-  updateForceLandscapeLayout()
+function bumpMobileLayout() {
+  mobileLayoutTick.value++
 }
 
 function updateMobileViewport() {
-  isMobileViewport.value = mobileViewportMq?.matches ?? window.innerWidth <= 860
+  bumpMobileLayout()
+}
+
+function onVisualViewportResize() {
+  bumpMobileLayout()
 }
 
 function onOrientationChange() {
-  syncLandscapeLayout()
+  bumpMobileLayout()
 }
 
 function onKeydown(e) {
   if (!showFullscreenPlayer.value) return
   if (e.key === 'Escape') {
-    if (isLandscapePlayback.value) {
-      unlockLandscapePlayback()
-      return
-    }
     if (isScreenExpanded.value) {
       collapseScreenExpand()
       return
@@ -487,13 +434,15 @@ watch(activeLyricIdx, async () => {
 
 watch(showFullscreenPlayer, async (open) => {
   document.body.style.overflow = open ? 'hidden' : ''
+  document.documentElement.classList.toggle('player-fs-open', open)
   if (open) {
     await nextTick()
+    updateMobileViewport()
     scrollActiveLyric()
     return
   }
-  await unlockLandscapePlayback()
   mobileScreenExpanded.value = false
+  document.documentElement.classList.remove('player-fs-open')
   await exitNativeFullscreen()
 })
 
@@ -506,14 +455,9 @@ onMounted(() => {
   updateMobileViewport()
   mobileViewportMq.addEventListener('change', updateMobileViewport)
   window.addEventListener('orientationchange', onOrientationChange)
-  window.addEventListener('resize', syncLandscapeLayout)
-  window.visualViewport?.addEventListener('resize', syncLandscapeLayout)
-  nativeFullscreenSupported.value = Boolean(
-    document.fullscreenEnabled
-    || document.webkitFullscreenEnabled
-    || typeof document.documentElement.requestFullscreen === 'function'
-    || typeof document.documentElement.webkitRequestFullscreen === 'function',
-  )
+  window.addEventListener('resize', bumpMobileLayout)
+  window.visualViewport?.addEventListener('resize', onVisualViewportResize)
+  nativeFullscreenSupported.value = supportsElementFullscreen()
   document.addEventListener('fullscreenchange', syncNativeFullscreenState)
   document.addEventListener('webkitfullscreenchange', syncNativeFullscreenState)
   document.addEventListener('keydown', onKeydown)
@@ -522,14 +466,14 @@ onMounted(() => {
 onUnmounted(() => {
   mobileViewportMq?.removeEventListener('change', updateMobileViewport)
   window.removeEventListener('orientationchange', onOrientationChange)
-  window.removeEventListener('resize', syncLandscapeLayout)
-  window.visualViewport?.removeEventListener('resize', syncLandscapeLayout)
+  window.removeEventListener('resize', bumpMobileLayout)
+  window.visualViewport?.removeEventListener('resize', onVisualViewportResize)
   document.removeEventListener('fullscreenchange', syncNativeFullscreenState)
   document.removeEventListener('webkitfullscreenchange', syncNativeFullscreenState)
   document.removeEventListener('keydown', onKeydown)
   document.body.style.overflow = ''
+  document.documentElement.classList.remove('player-fs-open')
   mobileScreenExpanded.value = false
-  unlockLandscapePlayback()
   exitNativeFullscreen()
 })
 </script>
@@ -538,7 +482,7 @@ onUnmounted(() => {
 .fs-player {
   position: fixed;
   inset: 0;
-  z-index: 200;
+  z-index: 10000;
   display: flex;
   flex-direction: column;
   color: #fff;
@@ -594,8 +538,7 @@ onUnmounted(() => {
   gap: 10px;
 }
 
-.fs-screen-full,
-.fs-landscape-btn {
+.fs-screen-full {
   width: 46px;
   height: 46px;
   border: none;
@@ -608,32 +551,7 @@ onUnmounted(() => {
   cursor: pointer;
   flex-shrink: 0;
 }
-.fs-screen-full:hover,
-.fs-landscape-btn:hover { background: rgba(0, 0, 0, 0.6); }
-.fs-landscape-btn.active {
-  background: rgba(255, 255, 255, 0.22);
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.28);
-}
-
-/* 无法锁定系统方向时，强制旋转横屏布局 */
-.fs-player.fs-force-landscape {
-  position: fixed;
-  top: 50%;
-  left: 50%;
-  right: auto;
-  bottom: auto;
-  width: 100vh;
-  width: 100dvh;
-  height: 100vw;
-  height: 100dvw;
-  max-width: 100vh;
-  max-width: 100dvh;
-  max-height: 100vw;
-  max-height: 100dvw;
-  transform: translate(-50%, -50%) rotate(90deg);
-  transform-origin: center center;
-  overflow: hidden;
-}
+.fs-screen-full:hover { background: rgba(0, 0, 0, 0.6); }
 
 .fs-player:fullscreen,
 .fs-player:-webkit-full-screen {
@@ -657,6 +575,7 @@ onUnmounted(() => {
   gap: 32px;
   padding: calc(64px + env(safe-area-inset-top, 0px)) 40px 16px;
   min-height: 0;
+  overflow: hidden;
   align-items: center;
 }
 .fs-cover-col {
@@ -756,7 +675,8 @@ onUnmounted(() => {
 
 .fs-controls {
   position: relative;
-  z-index: 3;
+  z-index: 10;
+  flex-shrink: 0;
   padding: 8px 28px calc(20px + env(safe-area-inset-bottom, 0px));
   background: linear-gradient(to top, rgba(0, 0, 0, 0.55), transparent);
 }
@@ -1094,7 +1014,6 @@ onUnmounted(() => {
   .fs-title { font-size: 17px; margin-bottom: 4px; }
   .fs-artist { font-size: 13px; }
   .fs-lyric-col {
-    /* 强制吃掉剩余高度，避免内容撑破后压到控制栏 */
     flex: 1 1 0;
     height: 0;
     min-height: 0;
@@ -1106,20 +1025,18 @@ onUnmounted(() => {
     -webkit-mask-image: linear-gradient(to bottom, transparent, #000 10%, #000 82%, transparent);
   }
   .fs-lyric-list {
-    /* 上下留白用固定值，避免 % 按宽度算导致空隙过大 */
-    padding: 28vh 6px 22vh;
+    padding: 12vh 6px 14vh;
   }
   .fs-lyric-line { font-size: 15px; padding: 7px 4px; }
   .fs-lyric-line.active { font-size: 17px; }
   .fs-spectrum {
     height: min(28vh, 180px);
     opacity: 0.55;
-    /* 频谱停在控制区上方，减少盖住歌词 */
     bottom: 72px;
   }
   .fs-controls {
     flex: 0 0 auto;
-    z-index: 4;
+    z-index: 10;
     padding: 4px 12px calc(10px + env(safe-area-inset-bottom, 0px));
     background: linear-gradient(to top, rgba(0, 0, 0, 0.72) 55%, transparent);
   }
@@ -1147,7 +1064,6 @@ onUnmounted(() => {
   .fs-btns {
     gap: 8px 14px;
   }
-  /* 与底栏一致：窄屏隐藏音量，腾出歌词空间 */
   .fs-volume {
     display: none;
   }
@@ -1158,143 +1074,18 @@ onUnmounted(() => {
 
 /* 矮屏竖屏：压缩封面，优先留给歌词 */
 @media (max-width: 860px) and (max-height: 700px) {
-  .fs-player:not(.fs-landscape-active):not(.fs-force-landscape) .fs-cover {
+  .fs-cover {
     width: min(110px, 28vw);
   }
-  .fs-player:not(.fs-landscape-active):not(.fs-force-landscape) .fs-cover-col { gap: 6px; }
-  .fs-player:not(.fs-landscape-active):not(.fs-force-landscape) .fs-body {
+  .fs-cover-col { gap: 6px; }
+  .fs-body {
     padding-top: calc(44px + env(safe-area-inset-top, 0px));
     gap: 6px;
   }
-  .fs-player:not(.fs-landscape-active):not(.fs-force-landscape) .fs-lyric-list { padding: 22vh 6px 18vh; }
-  .fs-player:not(.fs-landscape-active):not(.fs-force-landscape) .fs-spectrum {
+  .fs-lyric-list { padding: 22vh 6px 18vh; }
+  .fs-spectrum {
     height: min(22vh, 140px);
     bottom: 64px;
-  }
-}
-
-@media (max-width: 860px) {
-  .fs-player.fs-landscape-active .fs-body,
-  .fs-player.fs-force-landscape .fs-body {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    align-items: center;
-    padding: calc(12px + env(safe-area-inset-top, 0px)) max(16px, 3vw) 4px max(24px, 6vw);
-    gap: clamp(40px, 8vw, 64px);
-  }
-  .fs-player.fs-landscape-active .fs-cover-col,
-  .fs-player.fs-force-landscape .fs-cover-col {
-    grid-column: 1;
-    width: auto;
-    flex: none;
-    justify-content: center;
-    align-items: center;
-    gap: 0;
-  }
-  .fs-player.fs-landscape-active .fs-cover,
-  .fs-player.fs-force-landscape .fs-cover {
-    width: min(58vh, 58dvh, 220px);
-    height: auto;
-    aspect-ratio: 1;
-    flex-shrink: 0;
-  }
-  .fs-player.fs-landscape-active .fs-cover img,
-  .fs-player.fs-force-landscape .fs-cover img {
-    object-fit: cover;
-  }
-  .fs-player.fs-landscape-active .fs-meta,
-  .fs-player.fs-force-landscape .fs-meta {
-    display: none;
-  }
-  .fs-player.fs-landscape-active .fs-lyric-col,
-  .fs-player.fs-force-landscape .fs-lyric-col {
-    grid-column: 2;
-    width: 100%;
-    min-height: 0;
-    min-width: 0;
-    align-self: stretch;
-    height: auto;
-  }
-  .fs-player.fs-landscape-active .fs-lyric-list,
-  .fs-player.fs-force-landscape .fs-lyric-list {
-    width: min(100%, 300px);
-    margin: 0 auto;
-    padding: 14vh 8px;
-    box-sizing: border-box;
-  }
-  .fs-player.fs-landscape-active .fs-spectrum,
-  .fs-player.fs-force-landscape .fs-spectrum {
-    z-index: 3;
-    height: min(40vh, 160px);
-    bottom: 56px;
-  }
-  .fs-player.fs-landscape-active .fs-top-left,
-  .fs-player.fs-force-landscape .fs-top-left {
-    left: max(32px, 6vw);
-  }
-  .fs-player.fs-landscape-active .fs-close,
-  .fs-player.fs-force-landscape .fs-close {
-    right: max(32px, 6vw);
-  }
-  .fs-player.fs-landscape-active .fs-controls,
-  .fs-player.fs-force-landscape .fs-controls {
-    padding-left: max(28px, 6vw);
-    padding-right: max(28px, 6vw);
-  }
-}
-
-@media (max-width: 860px) and (orientation: landscape) {
-  .fs-player:not(.fs-landscape-active):not(.fs-force-landscape) .fs-body {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    align-items: center;
-    padding: calc(12px + env(safe-area-inset-top, 0px)) max(16px, 3vw) 4px max(24px, 6vw);
-    gap: clamp(40px, 8vw, 64px);
-  }
-  .fs-player:not(.fs-landscape-active):not(.fs-force-landscape) .fs-cover-col {
-    grid-column: 1;
-    width: auto;
-    flex: none;
-    justify-content: center;
-    align-items: center;
-    gap: 0;
-  }
-  .fs-player:not(.fs-landscape-active):not(.fs-force-landscape) .fs-cover {
-    width: min(58vh, 58dvh, 220px);
-    height: auto;
-    aspect-ratio: 1;
-    flex-shrink: 0;
-  }
-  .fs-player:not(.fs-landscape-active):not(.fs-force-landscape) .fs-meta {
-    display: none;
-  }
-  .fs-player:not(.fs-landscape-active):not(.fs-force-landscape) .fs-lyric-col {
-    grid-column: 2;
-    width: 100%;
-    flex: none;
-    min-width: 0;
-    align-self: stretch;
-  }
-  .fs-player:not(.fs-landscape-active):not(.fs-force-landscape) .fs-lyric-list {
-    width: min(100%, 300px);
-    margin: 0 auto;
-    padding: 14vh 8px;
-    box-sizing: border-box;
-  }
-  .fs-player:not(.fs-landscape-active):not(.fs-force-landscape) .fs-spectrum {
-    z-index: 3;
-    height: min(40vh, 160px);
-    bottom: 56px;
-  }
-  .fs-player:not(.fs-landscape-active):not(.fs-force-landscape) .fs-top-left {
-    left: max(32px, 6vw);
-  }
-  .fs-player:not(.fs-landscape-active):not(.fs-force-landscape) .fs-close {
-    right: max(32px, 6vw);
-  }
-  .fs-player:not(.fs-landscape-active):not(.fs-force-landscape) .fs-controls {
-    padding-left: max(28px, 6vw);
-    padding-right: max(28px, 6vw);
   }
 }
 </style>

@@ -292,6 +292,7 @@ import PickPlaylistModal from '../components/PickPlaylistModal.vue'
 import AppSelect from '../components/AppSelect.vue'
 import ClearableInput from '../components/ClearableInput.vue'
 import { formatTrackTags, formatAlbumTags } from '../utils/format.js'
+import { getTrackFilePath } from '../utils/trackPath.js'
 import { playItem, addToQueue, isInQueue, isPlayingItem, isPaused } from '../stores/player.js'
 import {
   libraryTracks, libraryLoading, libraryMetaLoading, libraryLoadProgress,
@@ -490,6 +491,7 @@ async function refreshLibrary() {
   try {
     const result = await scanLibrary(api, {
       force: true,
+      scanAll: true,
       onComplete: (r, meta) => notifyScanComplete(r, meta),
     })
     await loadScanSummary()
@@ -507,11 +509,14 @@ function clearSearch() {
 }
 
 function trackPayload(song) {
+  const filePath = getTrackFilePath(song)
   return {
+    key: song.key || (filePath ? `local:${filePath}` : ''),
     name: song.name,
     singer: song.singer,
     album: song.album,
-    localPath: song.localPath,
+    localPath: filePath,
+    filePath,
     source: 'local',
     picUrl: song.picUrl,
     lyric: song.lyric,

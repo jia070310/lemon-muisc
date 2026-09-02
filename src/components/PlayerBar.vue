@@ -1,5 +1,5 @@
 <template>
-  <div class="player-bar" ref="playerBarRef" :class="{ compact: isCompact }">
+  <div v-show="!showFullscreenPlayer" class="player-bar" ref="playerBarRef" :class="{ compact: isCompact }">
     <div v-if="visualizerEnabled" class="bar-spectrum">
       <SpectrumVisualizer mode="bar" :active="visualizerEnabled && !!currentPlaying && !showFullscreenPlayer" />
     </div>
@@ -106,6 +106,18 @@
         @click="onToggleFavorite"
       >
         <svg viewBox="0 0 24 24" width="16" height="16" :fill="isCurrentFavorite ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8z"/></svg>
+      </button>
+      <button
+        v-if="currentLocalPath && !isMobilePlayer"
+        class="ctrl-btn ctrl-tag"
+        type="button"
+        title="标签编辑"
+        @click="onOpenTagEdit"
+      >
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
+          <line x1="7" y1="7" x2="7.01" y2="7"/>
+        </svg>
       </button>
       <button ref="queueBtnRef" class="ctrl-btn ctrl-queue" @click="onToggleQueuePanel" :title="`试听列表 (${playQueue.length})`" :class="{ active: showQueuePanel }">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
@@ -214,23 +226,33 @@ import {
   togglePause, stopPlay, seekTo, setVolume, toggleMute, fmtTime, initPlayer,
   playNext, playPrev, togglePlayMode, resumeOrTogglePause, unlockAudioFromGesture,
   removeFromQueue, clearQueue, playTrackAt, openFullscreenPlayer,
+  currentLocalTrackPath,
 } from '../stores/player.js'
 import { onMounted, onUnmounted, ref, computed, watch } from 'vue'
 import { cleanText, formatArtists } from '../utils/text.js'
 import SpectrumVisualizer from './SpectrumVisualizer.vue'
 import { isFavorite, toggleFavorite } from '../stores/library.js'
+import { openTagEditTrack } from '../utils/tagEdit.js'
+import { isMobileUiContext } from '../utils/device.js'
 
 const queuePanelRef = ref(null)
 const queueBtnRef = ref(null)
 const playerBarRef = ref(null)
 const volumeWrapRef = ref(null)
 const isCompact = ref(false)
+const mobileLayoutTick = ref(0)
 const showVolumePanel = ref(false)
+
+const isMobilePlayer = computed(() => {
+  mobileLayoutTick.value
+  return isMobileUiContext(768)
+})
 
 const COMPACT_ON = 980
 const COMPACT_OFF = 1040
 
 let compactObserver = null
+let mobilePlayerMq = null
 let volumeLeaveTimer = null
 
 const volumePercent = computed(() => Math.round((volume.value || 0) * 100))
@@ -241,6 +263,8 @@ const isCurrentFavorite = computed(() => currentPlaying.value ? isFavorite({
   source: currentPlaying.value.source,
   localPath: currentPlaying.value.localPath,
 }) : false)
+
+const currentLocalPath = currentLocalTrackPath
 
 function isQueueFavorite(item, source) {
   return isFavorite({ ...item, source, localPath: item.localPath })
@@ -259,12 +283,21 @@ function onToggleQueueFavorite(item, source) {
   toggleFavorite({ ...item, source, localPath: item.localPath })
 }
 
+function onOpenTagEdit() {
+  if (!currentLocalPath.value) return
+  openTagEditTrack(currentLocalPath.value)
+}
+
 function applyCompact(width) {
   if (isCompact.value) {
     if (width >= COMPACT_OFF) isCompact.value = false
   } else if (width <= COMPACT_ON) {
     isCompact.value = true
   }
+}
+
+function updateMobilePlayer() {
+  mobileLayoutTick.value++
 }
 
 watch(isCompact, (compact) => {
@@ -291,6 +324,11 @@ const cardDashoffset = computed(() => 100 * (1 - progressRatio.value))
 onMounted(() => {
   initPlayer()
   document.addEventListener('click', onDocumentClick)
+  mobilePlayerMq = window.matchMedia('(max-width: 768px)')
+  updateMobilePlayer()
+  mobilePlayerMq.addEventListener('change', updateMobilePlayer)
+  window.addEventListener('orientationchange', updateMobilePlayer)
+  window.visualViewport?.addEventListener('resize', updateMobilePlayer)
   if (playerBarRef.value && typeof ResizeObserver !== 'undefined') {
     compactObserver = new ResizeObserver((entries) => {
       const width = entries[0]?.contentRect?.width
@@ -303,6 +341,9 @@ onMounted(() => {
 
 onUnmounted(() => {
   document.removeEventListener('click', onDocumentClick)
+  mobilePlayerMq?.removeEventListener('change', updateMobilePlayer)
+  window.removeEventListener('orientationchange', updateMobilePlayer)
+  window.visualViewport?.removeEventListener('resize', updateMobilePlayer)
   compactObserver?.disconnect()
   compactObserver = null
   clearTimeout(volumeLeaveTimer)
@@ -622,6 +663,25 @@ async function onQueuePlayClick(index) {
   color: #ef4444;
   border-color: rgba(239, 68, 68, 0.45);
   background: rgba(239, 68, 68, 0.1);
+}
+.ctrl-tag {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+.ctrl-tag svg { display: block; flex-shrink: 0; }
+.ctrl-tag:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-muted);
 }
 .queue-badge {
   position: absolute;
@@ -1088,6 +1148,7 @@ async function onQueuePlayClick(index) {
 }
 
 .player-bar.compact .ctrl-sub[title="停止"],
+.player-bar.compact .ctrl-tag,
 .player-bar.compact .player-progress,
 .player-bar.compact .player-volume {
   display: none;
@@ -1126,6 +1187,10 @@ async function onQueuePlayClick(index) {
   .player-bar {
     left: 0;
     bottom: calc(var(--mobile-nav-height) + env(safe-area-inset-bottom, 0px));
+  }
+
+  .player-bar .ctrl-tag {
+    display: none;
   }
 
   .bar-spectrum {

@@ -93,7 +93,7 @@ function loadMountMap() {
   return mounts && (mounts.music || mounts.downloads) ? mounts : null
 }
 
-function resolveReal(p) {
+export function resolveReal(p) {
   try {
     return fs.realpathSync(p)
   } catch {
@@ -263,6 +263,21 @@ export function getDownloadSavePath() {
 }
 
 /** 判断路径是否位于已配置的音乐库/下载目录内（防任意文件读取） */
+function pathIsUnderRoot(resolved, root) {
+  const filePath = path.resolve(resolved)
+  const base = path.resolve(root)
+  if (process.platform === 'win32') {
+    const fileLower = filePath.toLowerCase()
+    const baseLower = base.toLowerCase()
+    if (fileLower === baseLower) return true
+    const prefix = (baseLower.endsWith(path.sep) ? baseLower : `${baseLower}${path.sep}`)
+    return fileLower.startsWith(prefix)
+  }
+  if (filePath === base) return true
+  const prefix = base.endsWith(path.sep) ? base : `${base}${path.sep}`
+  return filePath.startsWith(prefix)
+}
+
 export function isAllowedMediaPath(filePath) {
   if (!filePath || typeof filePath !== 'string') return false
   let resolved
@@ -286,9 +301,7 @@ export function isAllowedMediaPath(filePath) {
   }).filter(Boolean))
 
   for (const root of roots) {
-    if (resolved === root) return true
-    const prefix = root.endsWith(path.sep) ? root : root + path.sep
-    if (resolved.startsWith(prefix)) return true
+    if (pathIsUnderRoot(resolved, root)) return true
   }
   return false
 }
@@ -452,6 +465,45 @@ export function isConfiguredMusicDir(dirPath) {
   if (!p) return false
   const real = resolveReal(p)
   return getMusicPaths().some(x => resolveReal(x) === real || x === p)
+}
+
+/** 判断目录是否位于已配置的音乐库路径下（含子目录） */
+export function isUnderConfiguredMusicDir(dirPath) {
+  const p = mapToContainerPath((dirPath || '').trim())
+  if (!p) return false
+  let resolved
+  try {
+    resolved = path.resolve(p)
+  } catch {
+    return false
+  }
+  if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) return false
+  const roots = getMusicPaths().map((root) => {
+    try {
+      return path.resolve(mapToContainerPath(root) || root)
+    } catch {
+      return null
+    }
+  }).filter(Boolean)
+  return roots.some((root) => pathIsUnderRoot(resolved, root))
+}
+
+export function isPathUnderMusicDirs(filePath, dirs) {
+  if (!filePath) return false
+  let resolved
+  try {
+    resolved = path.resolve(filePath)
+  } catch {
+    return false
+  }
+  const roots = (dirs || []).map((root) => {
+    try {
+      return path.resolve(mapToContainerPath(root) || root)
+    } catch {
+      return null
+    }
+  }).filter(Boolean)
+  return roots.some((root) => pathIsUnderRoot(resolved, root))
 }
 
 function getAuthorizedPathsFromEnv() {

@@ -176,13 +176,14 @@ export function normalizeTagText(value) {
   return s
 }
 
-function normalizeMetaFields(meta) {
+function normalizeMetaFields(meta, { keepAlbumSameAsTitle = false } = {}) {
   const title = normalizeTagText(meta.title)
   let album = normalizeTagText(meta.album)
   const artist = normalizeTagText(meta.artist)
   const genre = normalizeTagText(meta.genre)
   const comment = normalizeTagText(meta.comment)
-  if (album && title && album === title) album = ''
+  // 仅在没有明确 ALBUM 标签、且专辑疑似由标题回填时清空
+  if (!keepAlbumSameAsTitle && album && title && album === title) album = ''
   return {
     ...meta,
     title,
@@ -589,6 +590,7 @@ async function readMetaCore(filePath, { lite = false } = {}) {
   const ext = filePath.match(/\.[^.]+$/)?.[0]?.toLowerCase() || ''
   let base = buildEmptyMeta(filePath)
   let metadata = null
+  let native = null
 
   try {
     metadata = await parseFileWithRetry(filePath, {
@@ -601,12 +603,14 @@ async function readMetaCore(filePath, { lite = false } = {}) {
   }
 
   if (ext === '.mp3' || ext === '.flac') {
-    base = mergeNativeMeta(base, readNativeTags(filePath), { lite })
+    native = readNativeTags(filePath)
+    base = mergeNativeMeta(base, native, { lite })
   }
 
   await resolveEmbeddedAssets(base, filePath, metadata, { lite })
 
-  const result = normalizeMetaFields(base)
+  const keepAlbumSameAsTitle = Boolean(native?.album) || Boolean(metadata?.common?.album)
+  const result = normalizeMetaFields(base, { keepAlbumSameAsTitle })
   if (lite) {
     result.lyric = ''
     result.pictureBase64 = ''

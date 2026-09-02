@@ -1,7 +1,7 @@
 <template>
   <div class="search-page">
     <div class="page-title">搜索</div>
-    <div class="page-subtitle">搜索歌曲或专辑，试听、下载；可多选后批量下载，不支持所选音质的歌曲会提示确认</div>
+    <div class="page-subtitle">搜索歌曲或专辑，试听、下载；可多选后批量下载，不支持所选音质时将自动降档</div>
 
     <div v-if="playlistPickTarget" class="pick-hint card">
       点击歌曲右侧「加入歌单」添加到「{{ playlistPickTarget.name }}」
@@ -108,6 +108,7 @@
       <div class="results-toolbar">
         <span class="results-count">
           共 {{ searchState.results.length }} 首
+          <template v-if="showPagination"> · 第 {{ albumTrackPage }}/{{ albumTrackTotalPages }} 页</template>
           <template v-if="selectedCount"> · 已选 {{ selectedCount }}</template>
         </span>
         <label class="mobile-select-all">
@@ -124,7 +125,7 @@
               {{ batchDownloading ? '添加中...' : `批量下载${selectedCount ? ` (${selectedCount})` : ''}` }}
             </button>
             <div class="quality-menu" v-if="showBatchQualityMenu" :style="batchMenuStyle" @click.stop>
-              <div class="quality-menu-title">批量音质：不支持所选音质的歌曲将弹出确认</div>
+              <div class="quality-menu-title">批量音质：不支持时将自动降为最接近可用音质</div>
               <button
                 v-for="q in batchQualities"
                 :key="q"
@@ -151,64 +152,44 @@
         <span class="col-action">操作</span>
       </div>
       <div
-        v-for="(item, i) in searchState.results" :key="trackSelectKey(item, i)"
-        class="result-row"
-        :class="{ playing: isPlayingItem(item), selected: isSelected(item, i) }"
+        ref="trackListContainerRef"
+        class="result-list-body"
+        :class="{ 'is-virtual': trackListUseVirtual }"
+        @scroll="onTrackListScroll"
       >
-        <span class="col-check" @click.stop>
-          <input type="checkbox" :checked="isSelected(item, i)" @change="toggleSelect(item, i)" />
-        </span>
-        <span class="col-index">{{ i + 1 }}</span>
-        <span class="col-name" :title="cleanText(item.name)">{{ cleanText(item.name) }}</span>
-        <span class="col-singer" :title="formatArtists(item.singer)">{{ formatArtists(item.singer) }}</span>
-        <span class="col-album" :title="cleanText(item.album || item.albumName)">{{ cleanText(item.album || item.albumName) || '-' }}</span>
-        <span class="col-duration">{{ item.interval || '-' }}</span>
-        <span class="col-play">
-          <button class="play-btn" @click="togglePlay(item)" :title="isPlayingItem(item) && !isPaused ? '暂停' : '试听'">
-            <svg v-if="isPlayingItem(item) && !isPaused" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
-            <svg v-else-if="loadingPlay === item.id" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" class="spin"><circle cx="12" cy="12" r="10" stroke-dasharray="50" stroke-dashoffset="20"/></svg>
-            <svg v-else viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
-          </button>
-        </span>
-        <span class="col-queue">
-          <button
-            class="queue-add-btn"
-            :class="{ added: isInQueue(item, searchState.activeSource) }"
-            @click="addOneToQueue(item)"
-            :title="isInQueue(item, searchState.activeSource) ? '已在列表' : '加入试听列表'"
-          >
-            <svg v-if="isInQueue(item, searchState.activeSource)" viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><polyline points="20 6 9 17 4 12" stroke="currentColor" stroke-width="2" fill="none"/></svg>
-            <svg v-else viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-          </button>
-        </span>
-        <span class="col-action">
-          <button
-            v-if="playlistPickTarget"
-            class="btn-sm btn-ghost playlist-add-btn"
-            @click="addToPlaylist(item)"
-            title="加入歌单"
-          >加入歌单</button>
-          <div class="dl-wrap">
-            <button class="dl-btn" @click.stop="toggleQualityMenu(item, i, $event)" title="下载">
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-            </button>
-            <div class="quality-menu" v-if="qualityMenuId === trackSelectKey(item, i)" :style="menuStyle" @click.stop>
-              <div class="quality-menu-title">选择音质</div>
-              <template v-if="getItemQualities(item).length">
-                <button
-                  v-for="q in getItemQualities(item)"
-                  :key="q"
-                  class="quality-option"
-                  @click="downloadOne(item, q)"
-                >{{ getQualityDisplay(q, item.types) }}</button>
-              </template>
-              <div v-else class="quality-empty">暂无可用音质</div>
-            </div>
-          </div>
-        </span>
+        <div
+          class="result-list-spacer"
+          :style="{ paddingTop: `${trackListPaddingTop}px`, paddingBottom: `${trackListPaddingBottom}px` }"
+        >
+      <TrackResultRow
+        v-for="{ item, i } in displayRows" :key="trackSelectKey(item, i)"
+        :item="item"
+        :index="i"
+        :selected="isSelected(item, i)"
+        :playing="isPlayingItem(item)"
+        :paused="isPaused"
+        :loading="loadingPlay === item.id"
+        :in-queue="isInQueue(item, searchState.activeSource)"
+        :show-playlist-pick="Boolean(playlistPickTarget)"
+        :quality-menu-open="qualityMenuId === trackSelectKey(item, i)"
+        :menu-style="menuStyle"
+        @toggle-select="toggleSelect(item, i)"
+        @toggle-play="togglePlay(item)"
+        @add-queue="addOneToQueue(item)"
+        @add-playlist="addToPlaylist(item)"
+        @toggle-quality-menu="toggleQualityMenu(item, i, $event)"
+        @download="downloadOne(item, $event)"
+      />
+        </div>
       </div>
 
-      <div class="pagination" v-if="searchState.totalPages > 1">
+      <div class="pagination" v-if="showPagination">
+        <button class="btn-ghost btn-sm" :disabled="albumTrackPage <= 1" @click="albumTrackPage--">上一页</button>
+        <span class="page-info">{{ albumTrackPage }} / {{ albumTrackTotalPages }}</span>
+        <button class="btn-ghost btn-sm" :disabled="albumTrackPage >= albumTrackTotalPages" @click="albumTrackPage++">下一页</button>
+      </div>
+
+      <div class="pagination" v-if="searchState.totalPages > 1 && searchState.viewMode !== 'album-detail'">
         <button class="btn-ghost btn-sm" :disabled="searchState.page <= 1" @click="searchState.page--; doSearch()">上一页</button>
         <span class="page-info">{{ searchState.page }} / {{ searchState.totalPages }}</span>
         <button class="btn-ghost btn-sm" :disabled="searchState.page >= searchState.totalPages" @click="searchState.page++; doSearch()">下一页</button>
@@ -221,38 +202,35 @@
 
     <BatchQualityDialog
       :plan="batchDialog"
-      :selections="rowSelections"
-      :bulk-quality="bulkQuality"
-      :bulk-options="bulkQualityOptions"
       :preferred-label="batchPreferredLabel"
       :busy="batchDownloading"
       @cancel="closeBatchDialog"
       @confirm="handleBatchConfirm"
-      @apply-bulk="applyBulkQuality"
-      @update:bulk-quality="bulkQuality = $event"
     />
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import BatchQualityDialog from '../components/BatchQualityDialog.vue'
 import ClearableInput from '../components/ClearableInput.vue'
-import { useBatchDownload } from '../composables/useBatchDownload.js'
+import TrackResultRow from '../components/TrackResultRow.vue'
+import { useBatchDownload, formatBatchDownloadToast } from '../composables/useBatchDownload.js'
+import { useTrackListView } from '../composables/useTrackListView.js'
 import { api } from '../api.js'
 import { searchState, loadSearchSources } from '../stores/search.js'
 import { loadingPlay, isPaused, isPlayingItem, playItem, addToQueue, isInQueue } from '../stores/player.js'
-import { getQualityLabel, getQualityDisplay } from '../utils/quality.js'
+import { getQualityLabel } from '../utils/quality.js'
 import { platformLabel } from '../utils/platforms.js'
-import { cleanText, formatArtists, cleanTrackItem } from '../utils/text.js'
+import { cleanText, cleanTrackItem } from '../utils/text.js'
 import {
-  getItemQualities,
   trackSelectKey,
   buildDownloadTask,
 } from '../utils/musicPayload.js'
 import { useQualityMenuPosition } from '../utils/qualityMenu.js'
 import { playlistPickTarget, addToPickingPlaylist } from '../stores/library.js'
 
+const MAX_PLAYLIST_QUEUE = 100
 const toast = ref(null)
 const qualityMenuId = ref(null)
 const showBatchQualityMenu = ref(false)
@@ -262,19 +240,15 @@ const { menuStyle: batchMenuStyle, positionMenu: positionBatchMenu, clearMenuPos
 
 const {
   batchDialog,
-  rowSelections,
-  bulkQuality,
-  bulkQualityOptions,
   batchDownloading,
   startBatchDownload,
   confirmBatchDialog,
   closeBatchDialog,
-  applyBulkQuality,
   getBatchQualities,
 } = useBatchDownload({
   getSource: () => searchState.activeSource,
-  onCompleted: (count) => {
-    showToast(`已添加 ${count} 首到下载队列`, 'success')
+  onCompleted: (count, summary) => {
+    showToast(formatBatchDownloadToast(count, summary), 'success')
     clearSelection()
   },
   onError: (e) => showToast(e.message, 'error'),
@@ -292,6 +266,22 @@ const batchQualities = computed(() => getBatchQualities(selectedItems.value))
 const batchPreferredLabel = computed(() => {
   const q = batchDialog.value?.preferred
   return q ? getQualityLabel(q) : ''
+})
+
+const {
+  page: albumTrackPage,
+  totalPages: albumTrackTotalPages,
+  displayRows,
+  containerRef: trackListContainerRef,
+  useVirtual: trackListUseVirtual,
+  paddingTop: trackListPaddingTop,
+  paddingBottom: trackListPaddingBottom,
+  onScroll: onTrackListScroll,
+  resetView: resetAlbumTrackPage,
+  showPagination,
+  measureViewport,
+} = useTrackListView(() => searchState.results, {
+  paginateWhen: () => searchState.viewMode === 'album-detail',
 })
 
 const isSearching = computed(() =>
@@ -323,8 +313,15 @@ onMounted(async () => {
   document.addEventListener('click', closeMenus)
 })
 
+watch(() => searchState.results.length, () => {
+  nextTick(() => measureViewport())
+})
+
 onUnmounted(() => {
   document.removeEventListener('click', closeMenus)
+  cancelSongSearch()
+  cancelAlbumSearch()
+  cancelAlbumOpen()
 })
 
 function isSelected(item, i) {
@@ -402,23 +399,31 @@ function addOneToQueue(item) {
 
 function addAllToQueue() {
   let added = 0
-  for (const item of searchState.results) {
+  const items = searchState.results.slice(0, MAX_PLAYLIST_QUEUE)
+  for (const item of items) {
     if (!isInQueue(item, searchState.activeSource)) {
       addToQueue(item, searchState.activeSource)
       added++
     }
   }
-  showToast(added ? `已加入 ${added} 首` : '全部已在列表中', added ? 'success' : 'info')
+  const tip = searchState.results.length > MAX_PLAYLIST_QUEUE
+    ? `已加入 ${added} 首（仅前 ${MAX_PLAYLIST_QUEUE} 首，共 ${searchState.results.length} 首）`
+    : (added ? `已加入 ${added} 首` : '全部已在列表中')
+  showToast(tip, added ? 'success' : 'info')
 }
 
 async function playAll() {
   if (!searchState.results.length) return
-  for (const item of searchState.results) {
+  const items = searchState.results.slice(0, MAX_PLAYLIST_QUEUE)
+  for (const item of items) {
     addToQueue(item, searchState.activeSource)
   }
   try {
-    await playItem(searchState.results[0], searchState.activeSource)
-    showToast(`开始播放，共 ${searchState.results.length} 首`, 'success')
+    await playItem(items[0], searchState.activeSource)
+    const tip = searchState.results.length > MAX_PLAYLIST_QUEUE
+      ? `开始播放，已加入前 ${MAX_PLAYLIST_QUEUE} 首（共 ${searchState.results.length} 首）`
+      : `开始播放，共 ${items.length} 首`
+    showToast(tip, 'success')
   } catch (e) {
     showToast(e.message || '播放失败', 'error')
   }
@@ -433,6 +438,7 @@ function switchSearchMode(mode) {
   searchState.albumResults = []
   searchState.albumInfo = null
   searchState.searched = false
+  resetAlbumTrackPage()
   clearSelection()
   closeMenus()
 }
@@ -450,6 +456,30 @@ function switchSource(key) {
   if (searchState.keyword.trim()) doSearch()
 }
 
+let searchSeq = 0
+let songSearchAbort = null
+let albumSearchAbort = null
+let albumOpenAbort = null
+
+function cancelSongSearch() {
+  songSearchAbort?.abort()
+  songSearchAbort = null
+}
+
+function cancelAlbumSearch() {
+  albumSearchAbort?.abort()
+  albumSearchAbort = null
+}
+
+function cancelAlbumOpen() {
+  albumOpenAbort?.abort()
+  albumOpenAbort = null
+}
+
+function isAbortedError(e) {
+  return e?.aborted || e?.name === 'AbortError' || e?.message === '请求已取消'
+}
+
 function onCoverError(e) {
   e.target.style.display = 'none'
 }
@@ -462,13 +492,23 @@ async function doSearch() {
     searchState.results = []
     return doAlbumSearch()
   }
-  if (searchState.loading) return
+
+  cancelSongSearch()
+  const controller = new AbortController()
+  songSearchAbort = controller
+  const seq = ++searchSeq
+  const source = searchState.activeSource
+  const keyword = searchState.keyword.trim()
+  const page = searchState.page
+
   searchState.loading = true
   searchState.searched = true
+  resetAlbumTrackPage()
   clearSelection()
   closeMenus()
   try {
-    const res = await api.search.search(searchState.keyword, searchState.activeSource, searchState.page)
+    const res = await api.search.search(keyword, source, page, { signal: controller.signal })
+    if (seq !== searchSeq || source !== searchState.activeSource) return
     const data = res.data
     if (Array.isArray(data)) {
       searchState.results = data.map(cleanTrackItem)
@@ -481,16 +521,28 @@ async function doSearch() {
       searchState.totalPages = 1
     }
   } catch (e) {
+    if (isAbortedError(e)) return
+    if (seq !== searchSeq) return
     searchState.results = []
     searchState.totalPages = 1
     showToast(e.message, 'error')
   } finally {
-    searchState.loading = false
+    if (songSearchAbort === controller) songSearchAbort = null
+    if (seq === searchSeq) searchState.loading = false
   }
 }
 
 async function doAlbumSearch() {
-  if (!searchState.keyword.trim() || !searchState.activeSource || searchState.albumLoading) return
+  if (!searchState.keyword.trim() || !searchState.activeSource) return
+
+  cancelAlbumSearch()
+  const controller = new AbortController()
+  albumSearchAbort = controller
+  const seq = ++searchSeq
+  const source = searchState.activeSource
+  const keyword = searchState.keyword.trim()
+  const page = searchState.page
+
   searchState.albumLoading = true
   searchState.searched = true
   searchState.viewMode = 'list'
@@ -498,26 +550,38 @@ async function doAlbumSearch() {
   searchState.results = []
   closeMenus()
   try {
-    const res = await api.search.searchAlbums(searchState.keyword, searchState.activeSource, searchState.page)
+    const res = await api.search.searchAlbums(keyword, source, page, { signal: controller.signal })
+    if (seq !== searchSeq || source !== searchState.activeSource) return
     const data = res.data
     searchState.albumResults = data?.list || []
     searchState.totalPages = data?.allPage || data?.totalPage || 1
   } catch (e) {
+    if (isAbortedError(e)) return
+    if (seq !== searchSeq) return
     searchState.albumResults = []
     searchState.totalPages = 1
     showToast(e.message, 'error')
   } finally {
-    searchState.albumLoading = false
+    if (albumSearchAbort === controller) albumSearchAbort = null
+    if (seq === searchSeq) searchState.albumLoading = false
   }
 }
 
 async function openAlbum(item) {
-  if (!item?.id || searchState.albumLoading) return
+  if (!item?.id) return
+
+  cancelAlbumOpen()
+  const controller = new AbortController()
+  albumOpenAbort = controller
+  const seq = ++searchSeq
+  const source = item.source || searchState.activeSource
+
   searchState.albumLoading = true
   clearSelection()
   closeMenus()
   try {
-    const res = await api.search.fetchAlbum(item.source || searchState.activeSource, item.id)
+    const res = await api.search.fetchAlbum(source, item.id, { signal: controller.signal })
+    if (seq !== searchSeq) return
     const data = res.data
     searchState.albumInfo = data?.info || {
       name: item.name,
@@ -527,10 +591,14 @@ async function openAlbum(item) {
     }
     searchState.results = (data?.list || []).map(cleanTrackItem)
     searchState.viewMode = 'album-detail'
+    resetAlbumTrackPage()
   } catch (e) {
+    if (isAbortedError(e)) return
+    if (seq !== searchSeq) return
     showToast(e.message, 'error')
   } finally {
-    searchState.albumLoading = false
+    if (albumOpenAbort === controller) albumOpenAbort = null
+    if (seq === searchSeq) searchState.albumLoading = false
   }
 }
 
@@ -559,8 +627,8 @@ async function downloadSelected(quality) {
   await startBatchDownload(entries, quality)
 }
 
-async function handleBatchConfirm() {
-  await confirmBatchDialog()
+async function handleBatchConfirm(payload) {
+  await confirmBatchDialog(payload)
 }
 
 function addToPlaylist(item) {
@@ -773,6 +841,16 @@ function showToast(text, type = 'info') {
 .tab.active { color: #fff; }
 
 .results { overflow: visible; }
+
+.result-list-body.is-virtual {
+  max-height: min(70vh, 720px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.result-list-spacer {
+  min-height: 0;
+}
 
 .results-toolbar {
   display: flex;

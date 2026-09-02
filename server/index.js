@@ -14,6 +14,7 @@ import { loadSource } from './sourceManager.js'
 import { getStoredActiveSourceIds, saveActiveSourceIds } from './utils/activeSources.js'
 import { refreshStoredSourceMeta } from './routes/source.js'
 import { installSourceFaultHandlers, recordSourceFault, getSourceFault } from './sourceFault.js'
+import { startMemoryGuard } from './utils/memoryGuard.js'
 
 installSourceFaultHandlers()
 
@@ -82,6 +83,32 @@ async function restoreActiveSources() {
 
 await restoreActiveSources()
 initDownloadQueue()
+startMemoryGuard()
+
+function shutdown(signal) {
+  console.log(`收到 ${signal}，正在关闭服务...`)
+  wss.close(() => {
+    server.close(() => process.exit(0))
+  })
+  setTimeout(() => process.exit(1), 3000).unref()
+}
+
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.once(signal, () => shutdown(signal))
+}
+
+server.on('error', (err) => {
+  if (err?.code === 'EADDRINUSE') {
+    console.error(`端口 ${PORT} 已被占用，请关闭其他柠檬音乐/Node 进程后重试`)
+    process.exit(1)
+  }
+  console.error('服务器启动失败:', err)
+  process.exit(1)
+})
+
+server.timeout = 120000
+server.keepAliveTimeout = 65000
+server.headersTimeout = 66000
 
 server.listen(PORT, '::', () => {
   console.log(`Lemon Music running at http://[::]:${PORT} (IPv4+IPv6)`)

@@ -13,19 +13,60 @@
     </div>
 
     <div class="tag-layout">
-      <!-- 左侧：文件目录（来自设置） -->
+      <!-- 左侧：目录树（按文件夹逐层浏览） -->
       <aside class="dir-panel card">
         <div class="panel-title">文件目录</div>
-        <p class="dir-hint">路径在「设置 → 文件路径」中管理</p>
-        <div class="dir-list">
-          <div
-            v-for="dir in dirs" :key="dir"
-            :class="['dir-item', { active: activeDir === dir, scanning: scanning && activeDir === dir }]"
-            @click="scanDir(dir)"
-          >
-            <span class="dir-path" :title="dir">{{ dir }}</span>
-            <span v-if="scanning && activeDir === dir" class="dir-status">扫描中...</span>
-          </div>
+        <p class="dir-hint">展开文件夹浏览；点击文件夹仅加载该层音频。路径在「设置 → 文件路径」中管理。</p>
+        <div class="dir-tree">
+          <template v-for="row in visibleTreeRows" :key="row.path">
+            <div
+              class="tree-row"
+              :class="{ active: activeDir === row.path, loading: row.loading }"
+              :style="{ paddingLeft: `${8 + row.depth * 14}px` }"
+            >
+              <button
+                class="tree-toggle"
+                :class="{ invisible: row.loaded && !row.hasChildren }"
+                :disabled="row.loading"
+                @click.stop="toggleTreeNode(row.path)"
+                :title="row.expanded ? '收起' : '展开'"
+              >
+                <span v-if="row.loading" class="tree-spin" />
+                <svg
+                  v-else
+                  viewBox="0 0 24 24"
+                  width="12"
+                  height="12"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <polyline v-if="row.expanded" points="6 9 12 15 18 9" />
+                  <polyline v-else points="9 18 15 12 9 6" />
+                </svg>
+              </button>
+              <span class="tree-folder" @click="selectFolder(row.path)">
+                <svg
+                  viewBox="0 0 24 24"
+                  width="14"
+                  height="14"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M3 7v12a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-6l-2-2H5a2 2 0 0 0-2 2z" />
+                </svg>
+              </span>
+              <span class="tree-label" :title="row.path" @click="selectFolder(row.path)">{{ row.name }}</span>
+              <span v-if="scanning && activeDir === row.path" class="dir-status">加载中</span>
+            </div>
+          </template>
           <div v-if="!dirs.length" class="dir-empty">请先在设置中添加文件路径</div>
         </div>
       </aside>
@@ -40,41 +81,51 @@
             class="filter-input-wrap"
             placeholder="按文件名过滤..."
           />
-          <span class="file-count">
-            {{ displayedFiles.length }} / {{ files.length }}
-            <template v-if="missingFilesCount"> · 缺失 {{ missingFilesCount }}</template>
-          </span>
-          <span v-if="loadingMeta" class="meta-progress">读取标签 {{ metaProgress.done }}/{{ metaProgress.total }}</span>
-          <span v-if="matching" class="meta-progress match-progress" :title="matchProgress.current">
-            匹配并保存 {{ matchProgress.done }}/{{ matchProgress.total }}<template v-if="matchProgress.current"> · {{ matchProgress.current }}</template>
-          </span>
-          <AppSelect
-            v-model="missingFilter"
-            :options="missingFilterOptions"
-            size="sm"
-            title="缺失筛选"
-          />
-          <label class="check-all">
-            <input type="checkbox" v-model="selectAll" @change="toggleAll" /> 全选
-          </label>
-          <button class="btn-ghost btn-sm" :disabled="!displayedFiles.length" @click="playAllVisible">
-            试听全部
-          </button>
-          <button class="btn-ghost btn-sm" :disabled="!missingFilesCount || matching" @click="selectMissingFiles">
-            选中缺失
-          </button>
-          <button class="btn-ghost btn-sm" :disabled="!missingFilesCount || matching" @click="autoMatchMissing">
-            {{ matching ? '匹配中...' : `匹配缺失 (${missingMatchCount})` }}
-          </button>
-          <button class="btn-ghost btn-sm" :disabled="!selectedFiles.length || matching" @click="autoMatchSelected">
-            {{ matching ? '匹配中...' : `匹配选中 (${selectedFiles.length})` }}
-          </button>
-          <AppSelect
-            v-model="fetchSource"
-            :options="sourceOptions"
-            size="sm"
-            title="自动匹配音源"
-          />
+          <div class="file-toolbar-info">
+            <span v-if="loadingMeta" class="meta-progress">
+              读取标签 {{ metaProgress.done }}/{{ metaProgress.total }}
+              <button class="btn-ghost btn-sm meta-stop" @click="cancelMetaLoad">停止</button>
+            </span>
+            <span v-if="matching" class="meta-progress match-progress" :title="matchProgress.current">
+              匹配并保存 {{ matchProgress.done }}/{{ matchProgress.total }}<template v-if="matchProgress.current"> · {{ matchProgress.current }}</template>
+            </span>
+          </div>
+          <div class="file-toolbar-actions">
+            <span class="file-count">
+              {{ displayedFiles.length }} / {{ files.length }}
+              <template v-if="missingFilesCount"> · 缺失 {{ missingFilesCount }}</template>
+            </span>
+            <AppSelect
+              v-model="missingFilter"
+              :options="missingFilterOptions"
+              size="sm"
+              title="缺失筛选"
+            />
+            <label class="check-all">
+              <input type="checkbox" v-model="selectAll" @change="toggleAll" /> 全选
+            </label>
+            <button class="btn-ghost btn-sm" :disabled="!activeDir || scanning || loadingMeta" @click="scanSubdirsRecursive">
+              含子目录扫描
+            </button>
+            <button class="btn-ghost btn-sm" :disabled="!displayedFiles.length" @click="playAllVisible">
+              试听全部
+            </button>
+            <button class="btn-ghost btn-sm" :disabled="!missingFilesCount || matching" @click="selectMissingFiles">
+              选中缺失
+            </button>
+            <button class="btn-ghost btn-sm" :disabled="!missingFilesCount || matching" @click="autoMatchMissing">
+              {{ matching ? '匹配中...' : `匹配缺失 (${missingMatchCount})` }}
+            </button>
+            <button class="btn-ghost btn-sm" :disabled="!selectedFiles.length || matching" @click="autoMatchSelected">
+              {{ matching ? '匹配中...' : `匹配选中 (${selectedFiles.length})` }}
+            </button>
+            <AppSelect
+              v-model="fetchSource"
+              :options="sourceOptions"
+              size="sm"
+              title="自动匹配音源"
+            />
+          </div>
         </div>
         <div v-if="matching && matchProgress.total" class="match-progress-bar">
           <div class="match-progress-fill" :style="{ width: matchPercent + '%' }" />
@@ -110,9 +161,9 @@
                 <td class="cell-file" :title="f.filePath">{{ f.fileName }}</td>
                 <td class="cell-text">{{ f.title || '-' }}</td>
                 <td class="cell-text">{{ f.artist || '-' }}</td>
-                <td class="cell-text">{{ f.album || '-' }}</td>
-                <td :class="{ 'cell-missing': !f.hasPicture }">{{ f.hasPicture ? '✓' : '-' }}</td>
-                <td :class="{ 'cell-missing': !f.hasLyrics }">{{ f.hasLyrics ? '✓' : '-' }}</td>
+                <td class="cell-text" :class="{ 'cell-missing': isTagFieldMissing(f, 'album') }">{{ f.album || '-' }}</td>
+                <td :class="{ 'cell-missing': isTagFieldMissing(f, 'cover') }">{{ f.hasPicture ? '✓' : '-' }}</td>
+                <td :class="{ 'cell-missing': isTagFieldMissing(f, 'lyric') }">{{ f.hasLyrics ? '✓' : '-' }}</td>
                 <td class="col-play" @click.stop>
                   <button
                     class="play-btn"
@@ -137,9 +188,9 @@
             </tbody>
           </table>
         </div>
-        <div v-else-if="scanning" class="empty">正在扫描目录...</div>
+        <div v-else-if="scanning" class="empty">正在加载文件夹...</div>
         <div v-else-if="files.length && missingFilter !== 'all'" class="empty">当前筛选条件下没有缺失文件</div>
-        <div v-else class="empty">添加目录并扫描，或选择左侧目录加载文件</div>
+        <div v-else class="empty">在左侧展开并选择文件夹，加载该层音频文件</div>
       </section>
 
       <!-- 右侧：编辑面板（常驻，未选中时仅显示标题与占位） -->
@@ -159,6 +210,20 @@
         <div v-if="loadingDetail" class="detail-loading">正在读取文件内置信息...</div>
 
         <div v-else-if="editForm" class="edit-form">
+          <div class="field-toolbar meta-fetch-toolbar">
+            <div class="split-btn">
+              <button class="btn-primary btn-sm" @click="openFetchModal('meta')" :disabled="fetchLoading">
+                {{ fetchLoading ? '获取中...' : '网络获取信息' }}
+              </button>
+              <AppSelect
+                v-model="fetchSource"
+                :options="sourceOptions"
+                size="sm"
+                variant="attached-end"
+                title="选择音源"
+              />
+            </div>
+          </div>
           <label>标题<input v-model="editForm.title" @input="markModified" /></label>
           <label>歌手<input v-model="editForm.artist" @input="markModified" /></label>
           <label>专辑<input v-model="editForm.album" @input="markModified" /></label>
@@ -257,7 +322,8 @@
               @click="previewFetchItem(item)"
             >
               <img v-if="fetchIntent === 'cover' && item.picUrl" :src="item.picUrl" class="fetch-thumb" alt="" />
-              <div v-else-if="fetchIntent === 'cover'" class="fetch-thumb placeholder">♪</div>
+              <div v-else-if="item.picUrl" class="fetch-thumb"><img :src="item.picUrl" alt="" /></div>
+              <div v-else class="fetch-thumb placeholder">♪</div>
               <div class="fetch-item-info">
                 <div class="fetch-item-name">{{ item.name }}</div>
                 <div class="fetch-item-meta">{{ item.singer }} · {{ item.album || item.albumName || '-' }}</div>
@@ -271,6 +337,15 @@
               <p><strong>标题</strong> {{ fetchPreviewMeta.title || fetchPreview?.name || '-' }}</p>
               <p><strong>歌手</strong> {{ fetchPreviewMeta.artist || fetchPreview?.singer || '-' }}</p>
               <p><strong>专辑</strong> {{ fetchPreviewMeta.album || '-' }}</p>
+              <p v-if="fetchIntent !== 'cover' && fetchIntent !== 'lyric' || fetchPreviewMeta.year">
+                <strong>年份</strong> {{ fetchPreviewMeta.year || '-' }}
+              </p>
+              <p v-if="fetchIntent !== 'cover' && fetchIntent !== 'lyric' || fetchPreviewMeta.genre">
+                <strong>风格</strong> {{ fetchPreviewMeta.genre || '-' }}
+              </p>
+              <p v-if="fetchIntent === 'meta' && fetchPreviewMeta.comment">
+                <strong>描述</strong> {{ fetchPreviewMeta.comment }}
+              </p>
             </div>
 
             <template v-if="fetchIntent === 'cover'">
@@ -288,7 +363,7 @@
             </template>
           </div>
           <div class="fetch-preview empty" v-else>
-            <p>请从左侧选择一条结果查看{{ fetchIntent === 'cover' ? '封面' : '歌词' }}</p>
+            <p>请从左侧选择一条结果查看{{ fetchPreviewEmptyHint }}</p>
           </div>
         </div>
 
@@ -331,6 +406,7 @@ import {
 } from '../stores/tagMatch.js'
 import AppSelect from '../components/AppSelect.vue'
 import ClearableInput from '../components/ClearableInput.vue'
+import { collectDefaultExpandedPaths } from '../utils/dirTreeExpand.js'
 
 const sourceOptions = [
   { value: 'tx', label: 'QQ音乐' },
@@ -338,9 +414,9 @@ const sourceOptions = [
 ]
 const missingFilterOptions = [
   { value: 'all', label: '全部文件' },
-  { value: 'any', label: '缺封面或歌词' },
-  { value: 'cover', label: '仅缺封面' },
-  { value: 'lyric', label: '仅缺歌词' },
+  { value: 'album', label: '缺专辑' },
+  { value: 'cover', label: '缺封面' },
+  { value: 'lyric', label: '缺歌词' },
 ]
 
 const matching = tagMatchRunning
@@ -348,6 +424,8 @@ const matchProgress = tagMatchProgress
 const matchPercent = tagMatchPercent
 const dirs = ref([])
 const activeDir = ref('')
+const expandedPaths = ref(new Set())
+const treeCache = ref({})
 const files = ref([])
 const filterText = ref('')
 const missingFilter = ref('all')
@@ -371,13 +449,83 @@ const loadingDetail = ref(false)
 const metaProgress = ref({ done: 0, total: 0 })
 const metaLoadToken = ref(0)
 
+function folderDisplayName(dirPath, depth) {
+  if (!dirPath) return ''
+  if (depth === 0) {
+    const parts = String(dirPath).replace(/\\/g, '/').split('/').filter(Boolean)
+    return parts[parts.length - 1] || dirPath
+  }
+  const parts = String(dirPath).replace(/\\/g, '/').split('/').filter(Boolean)
+  return parts[parts.length - 1] || dirPath
+}
+
+function getTreeEntry(dirPath) {
+  return treeCache.value[dirPath] || { dirs: [], loaded: false, loading: false }
+}
+
+const visibleTreeRows = computed(() => {
+  const rows = []
+  const visit = (dirPath, depth) => {
+    const cached = getTreeEntry(dirPath)
+    const expanded = expandedPaths.value.has(dirPath)
+    rows.push({
+      path: dirPath,
+      name: folderDisplayName(dirPath, depth),
+      depth,
+      expanded,
+      loading: cached.loading,
+      loaded: cached.loaded,
+      hasChildren: !cached.loaded || cached.dirs.length > 0,
+    })
+    if (expanded && cached.loaded) {
+      for (const child of cached.dirs) visit(child.path, depth + 1)
+    }
+  }
+  for (const root of dirs.value) visit(root, 0)
+  return rows
+})
+
+function mapListedFiles(list) {
+  return (list || []).map(f => ({
+    ...f,
+    _selected: false,
+    _modified: false,
+    _metaLoaded: Boolean(
+      f.album || f.genre || f.year || f.comment
+      || (f.title && f.title !== f.parsedTitle)
+      || (f.artist && f.artist !== f.parsedArtist),
+    ),
+  }))
+}
+
+function cancelMetaLoad() {
+  metaLoadToken.value += 1
+  loadingMeta.value = false
+  showToast('已停止读取标签', 'info')
+}
+
+function hasTagText(value) {
+  return Boolean(String(value ?? '').trim())
+}
+
+const MISSING_FIELDS = ['album', 'cover', 'lyric']
+
+function isTagFieldMissing(f, field) {
+  if (!f) return false
+  switch (field) {
+    case 'album': return !hasTagText(f.album)
+    case 'cover': return !f.hasPicture
+    case 'lyric': return !f.hasLyrics
+    default: return false
+  }
+}
+
 function isFileMissing(f, mode = missingFilter.value) {
   if (!f || mode === 'all') return false
-  const noCover = !f.hasPicture
-  const noLyric = !f.hasLyrics
-  if (mode === 'cover') return noCover
-  if (mode === 'lyric') return noLyric
-  return noCover || noLyric
+  if (mode === 'album' || mode === 'cover' || mode === 'lyric') {
+    return isTagFieldMissing(f, mode)
+  }
+  return MISSING_FIELDS.some(field => isTagFieldMissing(f, field))
 }
 
 function getMissingMode() {
@@ -405,13 +553,26 @@ const selectedFiles = computed(() => files.value.filter(f => f._selected))
 const isBatchMode = computed(() => selectedFiles.value.length > 1)
 const hasChanges = computed(() => files.value.some(f => f._modified))
 const fetchSourceLabel = computed(() => fetchSource.value === 'tx' ? 'QQ音乐' : '网易云')
-const fetchIntentLabel = computed(() => fetchIntent.value === 'cover' ? '网络获取封面' : '网络获取歌词')
+const fetchIntentLabel = computed(() => {
+  if (fetchIntent.value === 'cover') return '网络获取封面'
+  if (fetchIntent.value === 'lyric') return '网络获取歌词'
+  return '网络获取标签'
+})
+const fetchPreviewEmptyHint = computed(() => {
+  if (fetchIntent.value === 'cover') return '封面'
+  if (fetchIntent.value === 'lyric') return '歌词'
+  return '标签信息'
+})
 const canConfirmFetch = computed(() => {
   if (!fetchPreviewMeta.value) return false
+  const meta = fetchPreviewMeta.value
   if (fetchIntent.value === 'cover') {
-    return Boolean(fetchPreviewMeta.value.pic || fetchPreviewMeta.value.picUrl || fetchPreview.value?.picUrl)
+    return Boolean(meta.pic || meta.picUrl || fetchPreview.value?.picUrl)
   }
-  return Boolean(fetchPreviewMeta.value.lyric)
+  if (fetchIntent.value === 'lyric') {
+    return Boolean(meta.lyric)
+  }
+  return Boolean(meta.title || meta.artist || meta.album || meta.year || meta.genre || meta.comment)
 })
 const editPanelTitle = computed(() => {
   if (loadingDetail.value) return '读取文件信息'
@@ -443,7 +604,10 @@ function handleMatchPatchesSync() {
 
 watch(tagMatchPatchVersion, handleMatchPatchesSync)
 watch(tagMatchRunning, (running, wasRunning) => {
-  if (wasRunning && !running) handleMatchPatchesSync()
+  if (wasRunning && !running) {
+    handleMatchPatchesSync()
+    saveTagEditorSession(activeDir.value, files.value)
+  }
 })
 
 watch(tagMatchResult, (result) => {
@@ -458,6 +622,7 @@ watch(missingFilter, () => {
 
 onMounted(async () => {
   await loadDirs()
+  await initTreeExpansion()
   const session = tagEditorSession.value
   if (session.activeDir && session.files?.length) {
     activeDir.value = session.activeDir
@@ -479,33 +644,130 @@ async function loadDirs() {
   } catch {}
 }
 
-async function scanDir(dir) {
+/** 默认展开一级根目录及其二级子目录（三级及更深保持折叠） */
+async function initTreeExpansion() {
+  if (!dirs.value.length) return
+  treeCache.value = {}
+  expandedPaths.value = await collectDefaultExpandedPaths(
+    dirs.value,
+    getTreeEntry,
+    ensureTreeChildren,
+  )
+}
+
+async function ensureTreeChildren(dirPath) {
+  const cached = getTreeEntry(dirPath)
+  if (cached.loaded || cached.loading) return
+  treeCache.value = {
+    ...treeCache.value,
+    [dirPath]: { ...cached, loading: true },
+  }
+  try {
+    const res = await api.tag.listDir(dirPath)
+    const data = res.data || {}
+    treeCache.value = {
+      ...treeCache.value,
+      [dirPath]: {
+        dirs: data.dirs || [],
+        loaded: true,
+        loading: false,
+      },
+    }
+  } catch (e) {
+    treeCache.value = {
+      ...treeCache.value,
+      [dirPath]: { dirs: [], loaded: true, loading: false },
+    }
+    showToast(e.message, 'error')
+  }
+}
+
+async function toggleTreeNode(dirPath) {
+  if (expandedPaths.value.has(dirPath)) {
+    const next = new Set(expandedPaths.value)
+    next.delete(dirPath)
+    expandedPaths.value = next
+    return
+  }
+  await ensureTreeChildren(dirPath)
+  const next = new Set(expandedPaths.value)
+  next.add(dirPath)
+  expandedPaths.value = next
+}
+
+async function selectFolder(dir) {
   if (scanning.value) return
+  metaLoadToken.value += 1
+  loadingMeta.value = false
+  const token = metaLoadToken.value
   activeDir.value = dir
   scanning.value = true
-  loadingMeta.value = false
-  metaLoadToken.value += 1
-  const token = metaLoadToken.value
   files.value = []
   editingFile.value = null
   editForm.value = null
   selectAll.value = false
 
   try {
-    const res = await api.tag.scan(dir)
+    const res = await api.tag.listDir(dir)
     if (token !== metaLoadToken.value) return
 
-    files.value = (res.data || []).map(f => ({
-      ...f,
-      _selected: false,
-      _modified: false,
-      _metaLoaded: false,
-    }))
+    const data = res.data || {}
+    const cached = getTreeEntry(dir)
+    if (!cached.loaded) {
+      treeCache.value = {
+        ...treeCache.value,
+        [dir]: {
+          dirs: data.dirs || [],
+          loaded: true,
+          loading: false,
+        },
+      }
+    }
+
+    files.value = mapListedFiles(data.files)
+    if (!files.value.length) {
+      const subCount = (data.dirs || []).length
+      showToast(subCount
+        ? '该文件夹没有音频，请展开子文件夹或选择其他目录'
+        : '该文件夹为空', 'info')
+      saveTagEditorSession(activeDir.value, files.value)
+      return
+    }
+    const needTextMeta = files.value.filter(f => !f._metaLoaded)
+    const toastText = needTextMeta.length
+      ? `已发现 ${files.value.length} 个文件，正在读取标签...`
+      : `已加载 ${files.value.length} 个文件，正在同步封面/歌词状态...`
+    showToast(toastText, 'info')
+    saveTagEditorSession(activeDir.value, files.value)
+    loadMetaInBatches(token)
+  } catch (e) {
+    showToast(e.message, 'error')
+  } finally {
+    if (token === metaLoadToken.value) scanning.value = false
+  }
+}
+
+async function scanSubdirsRecursive() {
+  if (!activeDir.value || scanning.value) return
+  metaLoadToken.value += 1
+  loadingMeta.value = false
+  const token = metaLoadToken.value
+  scanning.value = true
+  files.value = []
+  editingFile.value = null
+  editForm.value = null
+  selectAll.value = false
+
+  try {
+    const res = await api.tag.scan(activeDir.value, { recursive: true })
+    if (token !== metaLoadToken.value) return
+
+    files.value = mapListedFiles(res.data)
     if (!files.value.length) {
       showToast(res.tip || '未发现音频文件', 'error')
       return
     }
-    showToast(`已发现 ${files.value.length} 个文件，正在读取标签...`, 'info')
+    showToast(`已递归扫描 ${files.value.length} 个文件，正在读取标签...`, 'info')
     saveTagEditorSession(activeDir.value, files.value)
     loadMetaInBatches(token)
   } catch (e) {
@@ -519,17 +781,23 @@ function applyMetaRow(file, item) {
   if (!file || !item?.ok) return false
   const hasPicture = Boolean(item.hasPicture || item.pictureBase64)
   const hasLyrics = Boolean(item.hasLyrics || item.lyric)
-  Object.assign(file, {
-    title: item.title || file.parsedTitle || file.title,
-    artist: item.artist || file.parsedArtist || file.artist,
-    album: item.album || '',
-    year: item.year || '',
-    genre: item.genre || '',
-    comment: item.comment || '',
-    hasPicture,
-    hasLyrics,
-  })
-  file._metaLoaded = true
+  if (!file._metaLoaded) {
+    Object.assign(file, {
+      title: item.title || file.parsedTitle || file.title,
+      artist: item.artist || file.parsedArtist || file.artist,
+      album: item.album || '',
+      year: item.year || '',
+      genre: item.genre || '',
+      comment: item.comment || '',
+    })
+    file._metaLoaded = true
+  } else {
+    if (item.year) file.year = item.year
+    if (item.genre) file.genre = item.genre
+    if (item.comment) file.comment = item.comment
+  }
+  file.hasPicture = hasPicture
+  file.hasLyrics = hasLyrics
   return true
 }
 
@@ -541,7 +809,10 @@ async function loadMetaInBatches(token) {
   const batchSize = 8
 
   for (let i = 0; i < files.value.length; i += batchSize) {
-    if (token !== metaLoadToken.value) return
+    if (token !== metaLoadToken.value) {
+      loadingMeta.value = false
+      return
+    }
 
     const batch = files.value.slice(i, i + batchSize).map(f => f.filePath)
     try {
@@ -565,7 +836,10 @@ async function loadMetaInBatches(token) {
   const failed = files.value.filter(f => !f._metaLoaded)
   if (failed.length && token === metaLoadToken.value) {
     for (let i = 0; i < failed.length; i += 4) {
-      if (token !== metaLoadToken.value) return
+      if (token !== metaLoadToken.value) {
+        loadingMeta.value = false
+        return
+      }
       const batch = failed.slice(i, i + 4).map(f => f.filePath)
       try {
         const res = await api.tag.readBatch(batch, true)
@@ -814,7 +1088,7 @@ async function saveAll() {
 }
 
 async function openFetchModal(intent) {
-  if (!editingFile.value) return
+  if (!editForm.value) return
   fetchIntent.value = intent
   showFetchModal.value = true
   fetchResults.value = []
@@ -822,10 +1096,10 @@ async function openFetchModal(intent) {
   fetchPreviewMeta.value = null
 
   const f = editingFile.value
-  fetchArtist.value = editForm.value?.artist || f.parsedArtist || ''
-  fetchTitle.value = editForm.value?.title || f.parsedTitle || ''
+  fetchArtist.value = editForm.value?.artist || f?.parsedArtist || ''
+  fetchTitle.value = editForm.value?.title || f?.parsedTitle || ''
 
-  if (!fetchArtist.value && !fetchTitle.value) {
+  if (!fetchArtist.value && !fetchTitle.value && f?.fileName) {
     const parsed = parseLocalFilename(f.fileName)
     fetchArtist.value = parsed.artist
     fetchTitle.value = parsed.title
@@ -870,15 +1144,37 @@ async function doFetchSearch() {
   }
 }
 
+function fetchFieldsForIntent(intent) {
+  if (intent === 'cover') return ['cover', 'title', 'artist', 'album', 'year', 'genre', 'comment']
+  if (intent === 'lyric') return ['lyric', 'title', 'artist', 'album', 'year', 'genre', 'comment']
+  return ['title', 'artist', 'album', 'year', 'genre', 'comment']
+}
+
 async function previewFetchItem(item) {
   fetchPreview.value = item
   fetchPreviewMeta.value = null
   try {
-    const fields = fetchIntent.value === 'cover' ? ['cover'] : ['lyric']
-    const res = await api.tag.matchApply(item, fetchSource.value, fields)
+    const res = await api.tag.matchApply(item, fetchSource.value, fetchFieldsForIntent(fetchIntent.value))
     fetchPreviewMeta.value = res.data
   } catch (e) {
     showToast(e.message, 'error')
+  }
+}
+
+function applyFetchedMetaToForm(meta) {
+  if (!meta || !editForm.value) return
+  if (meta.title) editForm.value.title = meta.title
+  if (meta.artist) editForm.value.artist = meta.artist
+  if (meta.album) editForm.value.album = meta.album
+  if (meta.year) editForm.value.year = String(meta.year)
+  if (meta.genre) editForm.value.genre = meta.genre
+  if (meta.comment) editForm.value.comment = meta.comment
+  if (fetchIntent.value === 'cover') {
+    if (meta.pic) editForm.value.pictureBase64 = meta.pic
+    else if (meta.picUrl) editForm.value.picUrl = meta.picUrl
+    else if (fetchPreview.value?.picUrl) editForm.value.picUrl = fetchPreview.value.picUrl
+  } else if (fetchIntent.value === 'lyric' && meta.lyric) {
+    editForm.value.lyric = meta.lyric
   }
 }
 
@@ -886,17 +1182,15 @@ function confirmFetchApply() {
   const meta = fetchPreviewMeta.value
   if (!meta || !editForm.value || !canConfirmFetch.value) return
 
-  if (fetchIntent.value === 'cover') {
-    if (meta.pic) editForm.value.pictureBase64 = meta.pic
-    else if (meta.picUrl) editForm.value.picUrl = meta.picUrl
-    else if (fetchPreview.value?.picUrl) editForm.value.picUrl = fetchPreview.value.picUrl
-  } else {
-    if (meta.lyric) editForm.value.lyric = meta.lyric
-  }
-
+  applyFetchedMetaToForm(meta)
   markModified()
   closeFetchModal()
-  showToast(fetchIntent.value === 'cover' ? '已应用封面' : '已应用歌词', 'success')
+  const toastMap = {
+    cover: '已应用封面与标签信息',
+    lyric: '已应用歌词与标签信息',
+    meta: '已应用网络标签信息',
+  }
+  showToast(toastMap[fetchIntent.value] || '已应用网络信息', 'success')
 }
 
 function autoMatchSelected() {
@@ -1121,6 +1415,79 @@ function showToast(text, type = 'info') {
   flex: 1;
   min-height: 0;
 }
+.dir-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  border-radius: var(--radius);
+  cursor: default;
+  min-width: 0;
+}
+.tree-row:hover { background: var(--bg-hover); }
+.tree-row.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.tree-row.loading { opacity: 0.85; }
+.tree-toggle {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+}
+.tree-toggle.invisible { visibility: hidden; pointer-events: none; }
+.tree-toggle:disabled { cursor: default; }
+.tree-spin {
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--border-light);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+.tree-folder {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.tree-row.active .tree-folder {
+  color: var(--accent);
+}
+.tree-label {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.meta-stop {
+  margin-left: 6px;
+  padding: 0 6px;
+  font-size: 11px;
+  line-height: 1.4;
+}
 .dir-item {
   display: flex;
   align-items: center;
@@ -1160,28 +1527,65 @@ function showToast(text, type = 'info') {
 .file-toolbar {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   margin-bottom: 10px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   flex-shrink: 0;
+  min-width: 0;
 }
 .filter-input-wrap {
-  flex: 1;
-  min-width: 120px;
+  flex: 0 0 auto;
+  width: auto;
+  overflow: visible;
 }
 .filter-input {
-  width: 100%;
+  width: 148px;
+  min-width: 148px;
   font-size: 13px;
   border-radius: var(--radius-pill);
   padding: 6px 14px;
+  text-overflow: clip;
 }
-.file-count { font-size: 12px; color: var(--text-muted); }
-.meta-progress { font-size: 12px; color: var(--accent); }
-.match-progress {
-  max-width: 220px;
+.file-toolbar-actions .file-count {
+  font-size: 12px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.file-toolbar-info {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  overflow: hidden;
+  padding-right: 4px;
+}
+.file-toolbar-info .meta-progress {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.file-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.file-toolbar-actions .btn-ghost,
+.file-toolbar-actions .check-all,
+.file-toolbar-actions :deep(.app-select) {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.meta-progress {
+  font-size: 12px;
+  color: var(--accent);
+}
+.match-progress {
+  max-width: none;
 }
 .match-progress-bar {
   height: 3px;
@@ -1196,7 +1600,12 @@ function showToast(text, type = 'info') {
   border-radius: inherit;
   transition: width 0.2s ease;
 }
-.check-all { font-size: 13px; display: flex; align-items: center; gap: 4px; }
+.check-all {
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
 
 .table-wrap {
   overflow: auto;
@@ -1224,7 +1633,10 @@ tbody tr.active { background: var(--accent-muted); }
 tbody tr.selected td:first-child { background: color-mix(in srgb, var(--accent) 8%, transparent); }
 
 tbody tr.playing { background: var(--accent-muted); }
-tbody tr.row-missing td.cell-missing { color: #f59e0b; }
+tbody tr.row-missing td.cell-missing,
+tbody tr td.cell-missing {
+  color: #f59e0b;
+}
 
 .col-check { width: 32px; }
 .col-play {
@@ -1305,6 +1717,7 @@ tr.playing .play-btn {
 
 .field-block { gap: 6px !important; }
 .field-toolbar { display: flex; align-items: center; margin-bottom: 4px; }
+.meta-fetch-toolbar { margin-bottom: 8px; }
 .split-btn { display: flex; align-items: stretch; gap: 0; }
 .split-btn .btn-primary { border-radius: var(--radius) 0 0 var(--radius); }
 .split-btn .app-select { flex-shrink: 0; }
@@ -1397,6 +1810,13 @@ tr.playing .play-btn {
   object-fit: cover;
   flex-shrink: 0;
   background: var(--bg-input);
+  overflow: hidden;
+}
+.fetch-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 .fetch-thumb.placeholder {
   display: flex;
@@ -1507,7 +1927,7 @@ tr.playing .play-btn {
     overflow: visible;
     min-height: auto;
   }
-  .dir-list { max-height: 200px; }
+  .dir-tree { max-height: 200px; }
   .table-wrap { max-height: 50vh; }
   .edit-panel { order: 3; }
   .fetch-body { grid-template-columns: 1fr; }
@@ -1528,12 +1948,11 @@ tr.playing .play-btn {
     width: 100%;
   }
   .file-toolbar {
-    flex-wrap: wrap;
-    gap: 8px;
+    gap: 6px;
   }
   .filter-input {
-    width: 100%;
-    flex: 1 1 100%;
+    width: 132px;
+    min-width: 132px;
   }
   .table-wrap {
     overflow-x: auto;

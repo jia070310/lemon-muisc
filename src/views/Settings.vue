@@ -13,8 +13,96 @@
     <main class="settings-panel card">
       <h3 class="panel-title">{{ currentTab.label }}</h3>
 
+      <!-- 我的账号 -->
+      <div v-if="activeTab === 'account'" class="panel-body account-panel-body">
+        <div class="account-layout">
+          <section class="account-section card-inner">
+            <div class="block-label">基本信息</div>
+            <div class="account-info-row">
+              <span class="account-info-key">用户名</span>
+              <code class="account-info-val">{{ currentAuthUser?.username }}</code>
+            </div>
+            <div class="account-info-row">
+              <span class="account-info-key">角色</span>
+              <span class="account-info-val">{{ currentAuthUser?.role === 'admin' ? '管理员' : '普通用户' }}</span>
+            </div>
+            <label class="field-inline account-field">
+              <span>显示名称</span>
+              <input v-model="accountForm.displayName" placeholder="在界面中显示的名称" />
+            </label>
+            <div class="account-actions">
+              <button class="btn-primary btn-sm" type="button" :disabled="accountSaving" @click="saveAccountProfile">
+                {{ accountSaving ? '保存中…' : '保存名称' }}
+              </button>
+            </div>
+          </section>
+
+          <section class="account-section card-inner">
+            <div class="block-label">邮箱</div>
+            <p class="account-tip">绑定邮箱后可接收验证邮件，并使用「忘记密码」找回账号。</p>
+            <div v-if="currentAuthUser?.email" class="account-email-status">
+              <span>{{ currentAuthUser.email }}</span>
+              <span :class="['email-badge', currentAuthUser.emailVerified ? 'verified' : 'pending']">
+                {{ currentAuthUser.emailVerified ? '已验证' : '未验证' }}
+              </span>
+            </div>
+            <label class="field-inline account-field">
+              <span>{{ currentAuthUser?.email ? '更换邮箱' : '绑定邮箱' }}</span>
+              <input
+                v-model="accountForm.email"
+                type="email"
+                name="account-email"
+                class="account-email-input"
+                autocomplete="email"
+                inputmode="email"
+                autocapitalize="off"
+                spellcheck="false"
+                :readonly="emailInputReadonly"
+                placeholder="请输入邮箱，如 name@example.com"
+                @focus="onAccountEmailFocus"
+              />
+            </label>
+            <div class="account-actions">
+              <button class="btn-primary btn-sm" type="button" :disabled="emailBinding" @click="bindAccountEmail">
+                {{ emailBinding ? '提交中…' : (currentAuthUser?.email ? '更新邮箱' : '绑定邮箱') }}
+              </button>
+              <button
+                v-if="currentAuthUser?.email && !currentAuthUser?.emailVerified"
+                class="btn-ghost btn-sm"
+                type="button"
+                :disabled="resendingVerify"
+                @click="resendAccountVerification"
+              >
+                {{ resendingVerify ? '发送中…' : '重发验证邮件' }}
+              </button>
+            </div>
+          </section>
+
+          <section class="account-section card-inner">
+            <div class="block-label">修改密码</div>
+            <label class="field-inline account-field">
+              <span>当前密码</span>
+              <input v-model="accountForm.oldPassword" type="password" autocomplete="current-password" />
+            </label>
+            <label class="field-inline account-field">
+              <span>新密码</span>
+              <input v-model="accountForm.newPassword" type="password" autocomplete="new-password" placeholder="至少 6 位" />
+            </label>
+            <label class="field-inline account-field">
+              <span>确认新密码</span>
+              <input v-model="accountForm.confirmPassword" type="password" autocomplete="new-password" />
+            </label>
+            <div class="account-actions">
+              <button class="btn-primary btn-sm" type="button" :disabled="passwordChanging" @click="changeAccountPassword">
+                {{ passwordChanging ? '修改中…' : '修改密码' }}
+              </button>
+            </div>
+          </section>
+        </div>
+      </div>
+
       <!-- 文件路径 -->
-      <div v-if="activeTab === 'paths'" class="panel-body">
+      <div v-if="activeTab === 'paths'" class="panel-body paths-panel-body">
         <div v-if="needsPathSetup" class="setup-alert">
           <strong>尚未配置数据目录</strong>
           <p>请到飞牛「应用设置 → <b>访问权限</b>」用文件夹选择器添加音乐库与下载目录（会自动授权），保存后停用再启用应用。也可在「运行设置」填写绝对路径。</p>
@@ -35,114 +123,238 @@
           </div>
           <p class="summary-tip">修改路径：飞牛应用设置 → 运行设置（或访问权限授权两个文件夹）→ 保存后停用再启用。</p>
         </div>
-        <div class="setting-item">
-          <div class="setting-item-info">
-            <div class="setting-item-label">音乐库路径</div>
-            <div class="setting-item-desc">
-              用于音乐库、标签编辑等扫描本地歌曲，可添加一个或多个目录。请使用 NAS 绝对路径（如 <code>/vol1/1000/Music</code>），同一物理目录只会保留一条。
-              {{ fnosAvailable ? '点击「选择文件夹」会调用系统文件管理器。' : '' }}
-            </div>
-          </div>
-          <div class="setting-item-action">
-            <button v-if="fnosAvailable" class="btn-primary btn-sm" @click="browseAddPath" :disabled="pickingFolder">
-              {{ pickingFolder ? '选择中...' : '选择文件夹' }}
-            </button>
-            <button v-else class="btn-primary btn-sm" @click="addPath">添加路径</button>
-          </div>
-        </div>
 
-        <div v-if="musicPaths.length" class="library-stats card-inner">
-          <div class="library-stats-head">
-            <span class="block-label">音乐库扫描概况</span>
-            <button type="button" class="btn-ghost btn-sm" :disabled="libraryStatsLoading" @click="loadLibraryStats">
-              {{ libraryStatsLoading ? '统计中…' : '刷新统计' }}
-            </button>
-          </div>
-          <p v-if="libraryStatsLoading" class="library-stats-text">正在统计各目录下的音频文件…</p>
-          <template v-else-if="libraryStats">
-            <p class="library-stats-text">
-              共 <strong>{{ libraryStats.musicDirs }}</strong> 个目录，
-              合计 <strong>{{ libraryStats.totalTracks }}</strong> 首歌曲
-              <span v-if="libraryStats.musicDirs > 1">（多目录重复文件已去重）</span>。
-              音乐库与标签编辑会扫描这些目录中的全部音频文件（含子文件夹）。
-            </p>
-            <p v-if="downloadPath && musicPaths.includes(downloadPath)" class="library-stats-warn">
-              提示：下载目录与音乐库目录相同，每次下载的新歌也会出现在音乐库中。
-            </p>
-          </template>
-        </div>
-
-        <div v-if="musicPaths.length" class="path-block">
-          <div class="block-label">已添加的音乐库目录</div>
-          <div v-for="p in musicPaths" :key="p" class="path-row">
-            <template v-if="editingPath === p">
-              <input v-model="editPathValue" class="path-input" @keydown.enter="saveEditPath(p)" />
-              <button v-if="fnosAvailable" class="btn-sm btn-ghost" @click="browseEditPath(p)" :disabled="pickingFolder">浏览</button>
-              <button class="btn-sm btn-primary" @click="saveEditPath(p)">保存</button>
-              <button class="btn-sm btn-ghost" @click="cancelEditPath">取消</button>
-            </template>
-            <template v-else>
-              <span class="path-text" :title="p">{{ p }}</span>
-              <span v-if="dirTrackCount(p) != null" class="path-count-badge">{{ dirTrackCountLabel(p) }}</span>
-              <div class="path-actions">
-                <button v-if="fnosAvailable" class="btn-sm btn-ghost" @click="browseReplacePath(p)" :disabled="pickingFolder">浏览</button>
-                <button class="btn-sm btn-ghost" @click="startEditPath(p)">修改</button>
-                <button class="btn-sm btn-danger" @click="removePath(p)">移除</button>
+        <div class="paths-layout">
+          <section class="paths-section paths-section-block">
+            <h4 class="paths-section-title">音乐库</h4>
+            <div class="setting-item setting-item-flat">
+              <div class="setting-item-info">
+                <div class="setting-item-label">音乐库路径</div>
+                <div class="setting-item-desc">
+                  用于音乐库、标签编辑等扫描本地歌曲，可添加一个或多个目录。请使用 NAS 绝对路径（如 <code>/vol1/1000/Music</code>），同一物理目录只会保留一条。
+                  {{ fnosAvailable ? '点击「选择文件夹」会调用系统文件管理器。' : '' }}
+                </div>
               </div>
-            </template>
-          </div>
-        </div>
-        <div v-else class="empty-hint">暂无音乐库目录，请添加或选择路径</div>
-
-        <div v-if="!fnosAvailable" class="path-manual">
-          <input v-model="newPath" placeholder="手动输入音乐库绝对路径，如 /vol1/1000/Music" class="path-input" @keydown.enter="addPath" />
-          <button class="btn-primary btn-sm" @click="addPath">添加</button>
-        </div>
-
-        <div class="path-section-divider" />
-
-        <div class="setting-item">
-          <div class="setting-item-info">
-            <div class="setting-item-label">下载保存路径</div>
-            <div class="setting-item-desc">
-              下载歌曲的默认保存目录，与音乐库路径相互独立。
-              {{ fnosAvailable ? '可点击下方按钮重新选择。' : '' }}
-            </div>
-          </div>
-          <div class="setting-item-action">
-            <button v-if="fnosAvailable" class="btn-primary btn-sm" @click="browseDownloadPath" :disabled="pickingFolder">
-              {{ pickingFolder ? '选择中...' : '选择文件夹' }}
-            </button>
-          </div>
-        </div>
-
-        <div class="path-block">
-          <div class="block-label">当前下载目录</div>
-          <div class="path-row path-row-static">
-            <template v-if="editingDownload">
-              <input v-model="editDownloadValue" class="path-input" @keydown.enter="saveDownloadPathEdit" />
-              <button class="btn-sm btn-primary" @click="saveDownloadPathEdit">保存</button>
-              <button class="btn-sm btn-ghost" @click="cancelDownloadEdit">取消</button>
-            </template>
-            <template v-else>
-              <span class="path-text" :title="downloadPath">{{ downloadPath || '未设置' }}</span>
-              <div class="path-actions">
-                <button v-if="!fnosAvailable" class="btn-sm btn-ghost" @click="startDownloadEdit">修改</button>
+              <div class="setting-item-action">
+                <button v-if="fnosAvailable" class="btn-primary btn-sm" @click="browseAddPath" :disabled="pickingFolder">
+                  {{ pickingFolder ? '选择中...' : '选择文件夹' }}
+                </button>
+                <button v-else class="btn-primary btn-sm" @click="addPath">添加路径</button>
               </div>
-            </template>
-          </div>
-        </div>
+            </div>
 
-        <div v-if="!fnosAvailable" class="path-manual path-manual-download">
-          <input v-model="newDownloadPath" placeholder="手动输入下载目录绝对路径" class="path-input" @keydown.enter="setDownloadPathManual" />
-          <button class="btn-primary btn-sm" @click="setDownloadPathManual">应用</button>
+            <div v-if="musicPaths.length" class="paths-library-panel card-inner">
+              <div class="setting-item setting-item-path-row">
+                <div class="setting-item-info">
+                  <div class="setting-item-label">音乐库扫描概况</div>
+                  <p v-if="libraryStatsLoading" class="setting-item-desc">正在统计各目录下的音频文件…</p>
+                  <template v-else-if="libraryStats">
+                    <p class="setting-item-desc">
+                      共 <strong>{{ libraryStats.musicDirs }}</strong> 个根目录，
+                      合计 <strong>{{ libraryStats.totalTracks }}</strong> 首歌曲
+                      <span v-if="libraryStats.musicDirs > 1">（多目录重复文件已去重）</span>。
+                      可在下方目录树中勾选要扫描的文件夹（含子目录），不必扫描整个根目录。
+                    </p>
+                    <p v-if="downloadPath && musicPaths.includes(downloadPath)" class="library-stats-warn">
+                      提示：下载目录与音乐库目录相同，每次下载的新歌也会出现在音乐库中。
+                    </p>
+                  </template>
+                  <p v-else class="setting-item-desc">点击右侧按钮刷新各目录下的歌曲统计。</p>
+                </div>
+                <div class="setting-item-action">
+                  <button type="button" class="btn-ghost btn-sm" :disabled="libraryStatsLoading" @click="loadLibraryStats">
+                    {{ libraryStatsLoading ? '统计中…' : '刷新统计' }}
+                  </button>
+                </div>
+              </div>
+
+              <div class="setting-item setting-item-path-row">
+                <div class="setting-item-info">
+                  <div class="setting-item-label">
+                    自动扫描范围
+                    <span class="setting-item-label-hint">（后台扫描，关闭网页/App 不影响，歌曲热更新）</span>
+                  </div>
+                  <div class="setting-item-desc">
+                    进入音乐库时，后台自动扫描并刷新元数据。
+                    <template v-if="scanAutoMode === 'all'">当前为所有已添加目录。</template>
+                    <template v-else>当前为目录列表中勾选「自动」的目录。</template>
+                  </div>
+                </div>
+                <div class="setting-item-action">
+                  <AppSelect
+                    v-model="scanAutoMode"
+                    :options="scanAutoModeOptions"
+                    size="sm"
+                    min-width="168px"
+                    @change="saveScanSettings"
+                  />
+                </div>
+              </div>
+
+              <div class="setting-item setting-item-path-row setting-item-path-row-last">
+                <div class="setting-item-info">
+                  <div class="setting-item-label">手动扫描</div>
+                  <div class="setting-item-desc">立即扫描目录列表中勾选「手动」的目录</div>
+                </div>
+                <div class="setting-item-action path-scan-toolbar">
+                  <button
+                    type="button"
+                    class="btn-ghost btn-sm"
+                    :disabled="!manualScanDirs.length || dirScanBusy"
+                    @click="scanSelectedDirs"
+                  >
+                    {{ dirScanBusy ? '扫描中…' : `扫描选中 (${manualScanDirs.length})` }}
+                  </button>
+                  <button
+                    type="button"
+                    class="btn-ghost btn-sm"
+                    :disabled="dirScanBusy"
+                    @click="scanAllMusicDirs"
+                  >
+                    {{ dirScanBusy ? '扫描中…' : '扫描全部' }}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div v-if="musicPaths.length" class="path-block scan-dir-block" :class="{ 'has-auto-col': scanAutoMode === 'selected' }">
+              <div class="block-label">扫描目录</div>
+              <p v-if="scanAutoMode === 'selected'" class="path-block-hint">
+                展开目录树后勾选要扫描的文件夹。「手动」勾选后立即扫描；「自动」勾选后，进入音乐库时会自动刷新该文件夹。
+              </p>
+              <p v-else class="path-block-hint">
+                展开目录树后勾选要扫描的文件夹。「手动」勾选后立即扫描；自动扫描范围为所有根目录，进入音乐库时会全部刷新。
+              </p>
+
+              <div v-if="editingPath" class="path-row path-row-edit card-inner">
+                <input v-model="editPathValue" class="path-input path-edit-input" @keydown.enter="saveEditPath(editingPath)" />
+                <button v-if="fnosAvailable" class="btn-sm btn-ghost" @click="browseEditPath(editingPath)" :disabled="pickingFolder">浏览</button>
+                <button class="btn-sm btn-primary" @click="saveEditPath(editingPath)">保存</button>
+                <button class="btn-sm btn-ghost" @click="cancelEditPath">取消</button>
+              </div>
+
+              <div class="scan-tree-head">
+                <span class="path-col-check" title="勾选后用于手动扫描">手动</span>
+                <span v-if="scanAutoMode === 'selected'" class="path-col-auto" title="勾选后进入音乐库时自动扫描">自动</span>
+                <span class="path-col-tree">目录</span>
+                <span class="path-col-actions">操作</span>
+              </div>
+
+              <div class="scan-dir-tree">
+                <template v-for="row in visibleScanTreeRows" :key="row.path">
+                  <div class="scan-tree-row" :class="{ loading: row.loading }" :style="{ paddingLeft: `${4 + row.depth * 14}px` }">
+                    <label class="path-col-check path-check" @click.stop>
+                      <input
+                        type="checkbox"
+                        :checked="manualScanDirs.includes(row.path)"
+                        @change="toggleManualScanDir(row.path)"
+                      />
+                    </label>
+                    <label v-if="scanAutoMode === 'selected'" class="path-col-auto path-auto-check" @click.stop>
+                      <input
+                        type="checkbox"
+                        :checked="autoScanDirs.includes(row.path)"
+                        @change="toggleAutoScanDir(row.path)"
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      class="tree-toggle"
+                      :class="{ invisible: row.loaded && !row.hasChildren }"
+                      :disabled="row.loading"
+                      @click.stop="toggleScanTreeNode(row.path)"
+                      :title="row.expanded ? '收起' : '展开'"
+                    >
+                      <span v-if="row.loading" class="tree-spin" />
+                      <svg
+                        v-else
+                        viewBox="0 0 24 24"
+                        width="12"
+                        height="12"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        aria-hidden="true"
+                      >
+                        <polyline v-if="row.expanded" points="6 9 12 15 18 9" />
+                        <polyline v-else points="9 18 15 12 9 6" />
+                      </svg>
+                    </button>
+                    <span class="tree-folder" aria-hidden="true">
+                      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M3 7v12a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-6l-2-2H5a2 2 0 0 0-2 2z" />
+                      </svg>
+                    </span>
+                    <span class="scan-tree-label" :title="row.path">{{ row.depth === 0 ? row.path : row.name }}</span>
+                    <div class="path-col-actions scan-tree-actions">
+                      <button class="btn-sm btn-ghost" :disabled="dirScanBusy" @click="scanOneDir(row.path)">扫描</button>
+                      <template v-if="row.isRoot">
+                        <button v-if="fnosAvailable" class="btn-sm btn-ghost" @click="browseReplacePath(row.path)" :disabled="pickingFolder">浏览</button>
+                        <button class="btn-sm btn-ghost" @click="startEditPath(row.path)">修改</button>
+                        <button class="btn-sm btn-danger" @click="removePath(row.path)">移除</button>
+                      </template>
+                    </div>
+                  </div>
+                </template>
+              </div>
+            </div>
+            <div v-else class="empty-hint">暂无音乐库目录，请添加或选择路径</div>
+
+            <div v-if="!fnosAvailable" class="path-manual">
+              <input v-model="newPath" placeholder="手动输入音乐库绝对路径，如 /vol1/1000/Music" class="path-input" @keydown.enter="addPath" />
+              <button class="btn-primary btn-sm" @click="addPath">添加</button>
+            </div>
+          </section>
+
+          <section class="paths-section paths-section-block">
+            <h4 class="paths-section-title">下载保存</h4>
+            <div class="setting-item setting-item-flat">
+              <div class="setting-item-info">
+                <div class="setting-item-label">下载保存路径</div>
+                <div class="setting-item-desc">
+                  下载歌曲的默认保存目录，与音乐库路径相互独立。
+                  {{ fnosAvailable ? '可点击下方按钮重新选择。' : '' }}
+                </div>
+              </div>
+              <div class="setting-item-action">
+                <button v-if="fnosAvailable" class="btn-primary btn-sm" @click="browseDownloadPath" :disabled="pickingFolder">
+                  {{ pickingFolder ? '选择中...' : '选择文件夹' }}
+                </button>
+              </div>
+            </div>
+
+            <div class="path-block">
+              <div class="block-label">当前下载目录</div>
+              <div class="path-row path-row-static path-row-download">
+                <template v-if="editingDownload">
+                  <input v-model="editDownloadValue" class="path-input" @keydown.enter="saveDownloadPathEdit" />
+                  <button class="btn-sm btn-primary" @click="saveDownloadPathEdit">保存</button>
+                  <button class="btn-sm btn-ghost" @click="cancelDownloadEdit">取消</button>
+                </template>
+                <template v-else>
+                  <span class="path-text path-col-path" :title="downloadPath">{{ downloadPath || '未设置' }}</span>
+                  <div class="path-actions">
+                    <button v-if="!fnosAvailable" class="btn-sm btn-ghost" @click="startDownloadEdit">修改</button>
+                  </div>
+                </template>
+              </div>
+            </div>
+
+            <div v-if="!fnosAvailable" class="path-manual path-manual-download">
+              <input v-model="newDownloadPath" placeholder="手动输入下载目录绝对路径" class="path-input" @keydown.enter="setDownloadPathManual" />
+              <button class="btn-primary btn-sm" @click="setDownloadPathManual">应用</button>
+            </div>
+          </section>
         </div>
       </div>
 
       <!-- 音源管理 -->
       <div v-if="activeTab === 'source'" class="panel-body">
-        <p class="source-tip">支持同时激活多个音源。试听 / 下载时按平台匹配，同一平台有多个音源时优先使用最近激活的；当前音源失败时可自动或询问后切换到其他已激活音源。</p>
-        <div class="setting-item">
+        <p v-if="isAdminUser" class="source-tip">支持同时激活多个音源。试听 / 下载时按平台匹配，同一平台有多个音源时优先使用最近激活的；当前音源失败时可自动或询问后切换到其他已激活音源。</p>
+        <p v-else class="source-tip">音源由管理员统一配置，你可以查看当前可用音源并使用搜索、试听、下载功能。</p>
+        <div v-if="isAdminUser" class="setting-item">
           <div class="setting-item-info">
             <div class="setting-item-label">音源切换方式</div>
             <div class="setting-item-desc">当前音源无法播放或下载时的处理方式</div>
@@ -162,7 +374,7 @@
               <span class="source-name">{{ s.name }}</span>
               <span class="source-meta">{{ s.author || '未知作者' }} · v{{ s.version || '?' }}{{ isSourceActive(s.id) ? ' · 已激活' : '' }}</span>
             </div>
-            <div class="source-actions">
+            <div class="source-actions" v-if="isAdminUser">
               <button v-if="!isSourceActive(s.id)" class="btn-sm btn-primary" @click="activateSource(s.id)">激活</button>
               <button v-else class="btn-sm btn-ghost" @click="deactivateSource(s.id)">停用</button>
               <button class="btn-sm btn-danger" @click="removeSource(s.id)">删除</button>
@@ -171,20 +383,37 @@
         </div>
         <div v-else class="empty-hint">暂未导入音源</div>
 
-        <div class="import-tabs">
+        <div v-if="isAdminUser" class="import-tabs">
           <button :class="['pill-tab', { active: importMode === 'file' }]" @click="importMode = 'file'">本地导入</button>
           <button :class="['pill-tab', { active: importMode === 'url' }]" @click="importMode = 'url'">在线导入</button>
         </div>
-        <div class="import-area" v-if="importMode === 'file'">
+        <div class="import-area" v-if="isAdminUser && importMode === 'file'">
           <input type="file" ref="fileInput" accept=".js" @change="importFile" style="display:none" />
           <button class="btn-primary btn-sm" @click="$refs.fileInput.click()">选择文件</button>
           <span class="hint">支持 .js 格式的自定义音源脚本</span>
         </div>
-        <div class="import-area" v-else>
+        <div class="import-area" v-else-if="isAdminUser">
           <input v-model="importUrl" placeholder="输入音源脚本链接" class="url-input" />
           <button class="btn-primary btn-sm" @click="importFromUrl" :disabled="importingUrl">
             {{ importingUrl ? '导入中...' : '导入' }}
           </button>
+        </div>
+
+        <div class="playlist-sync-settings card-inner">
+          <h4 class="paths-section-title playlist-sync-title">网络歌单自动更新</h4>
+          <div class="setting-item setting-item-compact">
+            <div class="setting-item-info">
+              <div class="setting-item-label">检查间隔</div>
+              <div class="setting-item-desc">打开应用时，若距上次更新已超过设定天数，将自动检查网络歌单是否有新增歌曲</div>
+            </div>
+            <AppSelect
+              v-model="settings[PLAYLIST_REMOTE_SYNC_DAYS_KEY]"
+              :options="playlistRemoteSyncOptions"
+              size="sm"
+              min-width="140px"
+              @change="savePlaylistRemoteSyncDays"
+            />
+          </div>
         </div>
       </div>
 
@@ -380,22 +609,205 @@
           </div>
         </div>
       </div>
+
+      <!-- 用户管理 -->
+      <div v-if="activeTab === 'users'" class="panel-body users-panel-body">
+        <p class="source-tip">仅管理员可创建与管理账号。普通用户无法自助注册。</p>
+        <form class="user-create-form" @submit.prevent="createManagedUser">
+          <label class="field-inline">
+            <span>用户名</span>
+            <input v-model="newUser.username" required placeholder="新用户名" />
+          </label>
+          <label class="field-inline">
+            <span>显示名称</span>
+            <input v-model="newUser.displayName" placeholder="可选" />
+          </label>
+          <label class="field-inline">
+            <span>密码</span>
+            <input v-model="newUser.password" type="password" required placeholder="至少 6 位" />
+          </label>
+          <label class="field-inline">
+            <span>邮箱</span>
+            <input v-model="newUser.email" type="email" placeholder="可选，用于找回密码" />
+          </label>
+          <label class="field-inline">
+            <span>角色</span>
+            <AppSelect v-model="newUser.role" :options="userRoleOptions" min-width="120px" />
+          </label>
+          <button class="btn-primary btn-sm" type="submit" :disabled="creatingUser">
+            {{ creatingUser ? '创建中…' : '创建用户' }}
+          </button>
+        </form>
+
+        <div v-if="managedUsers.length" class="user-table">
+          <div class="user-table-head">
+            <span>用户</span>
+            <span>邮箱</span>
+            <span>角色</span>
+            <span>操作</span>
+          </div>
+          <div v-for="u in managedUsers" :key="u.id" class="user-table-row">
+            <template v-if="editingUserId === u.id">
+              <div class="user-edit-fields">
+                <label class="field-inline">
+                  <span>显示名称</span>
+                  <input v-model="editUserForm.displayName" />
+                </label>
+                <label class="field-inline">
+                  <span>邮箱</span>
+                  <input v-model="editUserForm.email" type="email" placeholder="留空表示清除" />
+                </label>
+                <label class="field-inline">
+                  <span>角色</span>
+                  <AppSelect v-model="editUserForm.role" :options="userRoleOptions" min-width="120px" />
+                </label>
+              </div>
+              <div class="user-row-actions">
+                <button class="btn-sm btn-primary" type="button" :disabled="userUpdating" @click="saveManagedUserEdit">保存</button>
+                <button class="btn-sm btn-ghost" type="button" @click="cancelManagedUserEdit">取消</button>
+              </div>
+            </template>
+            <template v-else>
+              <div class="user-cell-name">
+                <div class="user-row-name">{{ u.displayName || u.username }}</div>
+                <div class="user-row-meta">@{{ u.username }}</div>
+              </div>
+              <div class="user-cell-email">
+                <span v-if="u.email">{{ u.email }}</span>
+                <span v-else class="text-muted">未绑定</span>
+                <span v-if="u.email" :class="['email-badge', u.emailVerified ? 'verified' : 'pending']">
+                  {{ u.emailVerified ? '已验证' : '未验证' }}
+                </span>
+              </div>
+              <div class="user-cell-role">{{ u.role === 'admin' ? '管理员' : '普通用户' }}</div>
+              <div class="user-row-actions">
+                <button class="btn-sm btn-ghost" type="button" @click="startManagedUserEdit(u)">编辑</button>
+                <button class="btn-sm btn-ghost" type="button" @click="openResetPasswordModal(u)">重置密码</button>
+                <button class="btn-sm btn-danger" type="button" :disabled="u.id === currentAuthUser?.id" @click="confirmDeleteUser(u)">删除</button>
+              </div>
+            </template>
+          </div>
+        </div>
+        <div v-else class="empty-hint">暂无用户</div>
+      </div>
+
+      <!-- 邮件服务 -->
+      <div v-if="activeTab === 'mail'" class="panel-body">
+        <p class="source-tip">配置 SMTP 后，用户可通过邮箱验证与「忘记密码」找回账号。QQ/163 邮箱需使用授权码而非登录密码。</p>
+        <MailConfigGuide />
+        <div class="setting-item">
+          <div class="setting-item-info">
+            <div class="setting-item-label">启用邮件</div>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" :checked="settings['mail.enabled'] === 'true'" @change="toggleMailEnabled" />
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="setting-item">
+          <div class="setting-item-info">
+            <div class="setting-item-label">SMTP 服务器</div>
+          </div>
+          <input v-model="settings['mail.smtp.host']" class="path-input" placeholder="smtp.qq.com" @change="saveSetting('mail.smtp.host')" />
+        </div>
+        <div class="setting-item">
+          <div class="setting-item-info">
+            <div class="setting-item-label">端口</div>
+          </div>
+          <input v-model="settings['mail.smtp.port']" class="path-input" type="number" placeholder="465" @change="saveSetting('mail.smtp.port')" />
+        </div>
+        <div class="setting-item">
+          <div class="setting-item-info">
+            <div class="setting-item-label">发件人地址</div>
+            <div class="setting-item-desc">需与 SMTP 账号一致或已授权</div>
+          </div>
+          <input v-model="settings['mail.from']" class="path-input" placeholder="柠檬音乐 &lt;music@example.com&gt;" @change="saveSetting('mail.from')" />
+        </div>
+        <div class="setting-item">
+          <div class="setting-item-info">
+            <div class="setting-item-label">SMTP 用户名</div>
+          </div>
+          <input v-model="settings['mail.smtp.user']" class="path-input" @change="saveSetting('mail.smtp.user')" />
+        </div>
+        <div class="setting-item">
+          <div class="setting-item-info">
+            <div class="setting-item-label">SMTP 密码 / 授权码</div>
+          </div>
+          <input v-model="mailPasswordInput" type="password" class="path-input" placeholder="留空则不修改" @change="saveMailPassword" />
+        </div>
+        <div class="setting-item">
+          <div class="setting-item-info">
+            <div class="setting-item-label">应用访问地址</div>
+            <div class="setting-item-desc">邮件中重置/验证链接的前缀，如 https://nas.example.com:7983</div>
+          </div>
+          <input v-model="settings['mail.appUrl']" class="path-input" placeholder="留空则自动识别" @change="saveSetting('mail.appUrl')" />
+        </div>
+        <div class="mail-test-row">
+          <input v-model="mailTestTo" class="path-input" placeholder="测试收件邮箱" />
+          <button class="btn-primary btn-sm" type="button" :disabled="mailTesting" @click="sendTestMail">
+            {{ mailTesting ? '发送中…' : '发送测试邮件' }}
+          </button>
+        </div>
+      </div>
     </main>
 
     <div v-if="toast" class="toast" :class="toast.type">{{ toast.text }}</div>
+
+    <!-- 重置密码弹窗 -->
+    <div v-if="resetPasswordUser" class="modal-overlay" @click.self="closeResetPasswordModal">
+      <div class="modal-card">
+        <h4 class="modal-title">重置密码</h4>
+        <p class="modal-desc">为「{{ resetPasswordUser.displayName || resetPasswordUser.username }}」设置新密码</p>
+        <label class="field-inline account-field">
+          <span>新密码</span>
+          <input v-model="resetPasswordForm.password" type="password" placeholder="至少 6 位" @keydown.enter="submitResetPassword" />
+        </label>
+        <label class="field-inline account-field">
+          <span>确认密码</span>
+          <input v-model="resetPasswordForm.confirm" type="password" @keydown.enter="submitResetPassword" />
+        </label>
+        <div class="modal-actions">
+          <button class="btn-ghost btn-sm" type="button" @click="closeResetPasswordModal">取消</button>
+          <button class="btn-primary btn-sm" type="button" :disabled="resetPasswordSaving" @click="submitResetPassword">
+            {{ resetPasswordSaving ? '保存中…' : '确认重置' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 删除用户确认 -->
+    <div v-if="deleteConfirmUser" class="modal-overlay" @click.self="deleteConfirmUser = null">
+      <div class="modal-card">
+        <h4 class="modal-title">删除用户</h4>
+        <p class="modal-desc">确定删除用户「{{ deleteConfirmUser.displayName || deleteConfirmUser.username }}」？此操作不可恢复。</p>
+        <div class="modal-actions">
+          <button class="btn-ghost btn-sm" type="button" @click="deleteConfirmUser = null">取消</button>
+          <button class="btn-danger btn-sm" type="button" :disabled="deletingUser" @click="submitDeleteUser">
+            {{ deletingUser ? '删除中…' : '确认删除' }}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
 import { ref, reactive, computed, onMounted, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { api } from '../api.js'
 import { loadCoverStyle, loadPlayerSettings } from '../stores/player.js'
+import { scanLibrary, libraryScanning, PLAYLIST_REMOTE_SYNC_DAYS_KEY, setPlaylistRemoteSyncDays, getPlaylistRemoteSyncDays } from '../stores/library.js'
 import { reloadSearchSources } from '../stores/search.js'
 import { reloadDiscoverSources } from '../stores/discover.js'
 import { applySourceFallbackMode, SOURCE_FALLBACK_MODE_KEY } from '../stores/sourceFallback.js'
+import { isAdmin as isAdminUser, currentUser as currentAuthUser, patchLocalUser } from '../utils/auth.js'
 import { canPickFolder, pickFolder } from '../utils/fnos.js'
 import { applyTheme, theme as currentTheme, THEME_KEY, COLOR_SCHEME_KEY, CUSTOM_COLOR_KEY, COLOR_SCHEME_OPTIONS, applyColorScheme, setCustomColor, normalizeHex, colorScheme as currentColorScheme, customColor as currentCustomColor } from '../utils/theme.js'
 import AppSelect from '../components/AppSelect.vue'
+import MailConfigGuide from '../components/MailConfigGuide.vue'
+import { collectDefaultExpandedPaths, collectAllDescendantDirPaths, removeDirPathAndDescendants } from '../utils/dirTreeExpand.js'
+
+const route = useRoute()
 
 const themeOptions = [
   { value: 'dark', label: '深色' },
@@ -429,6 +841,42 @@ const sourceFallbackOptions = [
   { value: 'auto', label: '自动切换（默认）' },
   { value: 'ask', label: '切换前询问' },
 ]
+const userRoleOptions = [
+  { value: 'user', label: '普通用户' },
+  { value: 'admin', label: '管理员' },
+]
+const managedUsers = ref([])
+const creatingUser = ref(false)
+const editingUserId = ref(null)
+const userUpdating = ref(false)
+const editUserForm = reactive({ displayName: '', email: '', role: 'user' })
+const resetPasswordUser = ref(null)
+const resetPasswordForm = reactive({ password: '', confirm: '' })
+const resetPasswordSaving = ref(false)
+const deleteConfirmUser = ref(null)
+const deletingUser = ref(false)
+const accountSaving = ref(false)
+const emailBinding = ref(false)
+const resendingVerify = ref(false)
+const passwordChanging = ref(false)
+const emailInputReadonly = ref(true)
+const accountForm = reactive({
+  displayName: '',
+  email: '',
+  oldPassword: '',
+  newPassword: '',
+  confirmPassword: '',
+})
+const newUser = reactive({
+  username: '',
+  displayName: '',
+  email: '',
+  password: '',
+  role: 'user',
+})
+const mailPasswordInput = ref('')
+const mailTestTo = ref('')
+const mailTesting = ref(false)
 
 const settings = reactive({})
 const sourceList = ref([])
@@ -455,6 +903,155 @@ const mountInfo = ref(null)
 const mountProbeText = ref('')
 const libraryStats = ref(null)
 const libraryStatsLoading = ref(false)
+const scanAutoMode = ref('all')
+const autoScanDirs = ref([])
+const manualScanDirs = ref([])
+const scanTreeCache = ref({})
+const scanExpandedPaths = ref(new Set())
+const libraryDirScanning = ref(false)
+
+function folderDisplayName(dirPath, depth) {
+  if (!dirPath) return ''
+  const parts = String(dirPath).replace(/\\/g, '/').split('/').filter(Boolean)
+  if (depth === 0) return parts[parts.length - 1] || dirPath
+  return parts[parts.length - 1] || dirPath
+}
+
+function getScanTreeEntry(dirPath) {
+  return scanTreeCache.value[dirPath] || { dirs: [], loaded: false, loading: false }
+}
+
+const visibleScanTreeRows = computed(() => {
+  const rows = []
+  const visit = (dirPath, depth) => {
+    const cached = getScanTreeEntry(dirPath)
+    const expanded = scanExpandedPaths.value.has(dirPath)
+    rows.push({
+      path: dirPath,
+      name: folderDisplayName(dirPath, depth),
+      depth,
+      expanded,
+      loading: cached.loading,
+      loaded: cached.loaded,
+      hasChildren: !cached.loaded || cached.dirs.length > 0,
+      isRoot: depth === 0,
+    })
+    if (expanded && cached.loaded) {
+      for (const child of cached.dirs) visit(child.path, depth + 1)
+    }
+  }
+  for (const root of musicPaths.value) visit(root, 0)
+  return rows
+})
+
+async function ensureScanTreeChildren(dirPath) {
+  const cached = getScanTreeEntry(dirPath)
+  if (cached.loaded || cached.loading) return
+  scanTreeCache.value = {
+    ...scanTreeCache.value,
+    [dirPath]: { ...cached, loading: true },
+  }
+  try {
+    const res = await api.tag.listDir(dirPath)
+    const data = res.data || {}
+    scanTreeCache.value = {
+      ...scanTreeCache.value,
+      [dirPath]: {
+        dirs: data.dirs || [],
+        loaded: true,
+        loading: false,
+      },
+    }
+  } catch (e) {
+    scanTreeCache.value = {
+      ...scanTreeCache.value,
+      [dirPath]: { dirs: [], loaded: true, loading: false },
+    }
+    showToast(e.message, 'error')
+  }
+}
+
+async function initScanTreeExpansion() {
+  scanTreeCache.value = {}
+  if (!musicPaths.value.length) {
+    scanExpandedPaths.value = new Set()
+    return
+  }
+  scanExpandedPaths.value = await collectDefaultExpandedPaths(
+    musicPaths.value,
+    getScanTreeEntry,
+    ensureScanTreeChildren,
+  )
+}
+
+async function toggleScanTreeNode(dirPath) {
+  if (scanExpandedPaths.value.has(dirPath)) {
+    const next = new Set(scanExpandedPaths.value)
+    next.delete(dirPath)
+    scanExpandedPaths.value = next
+    return
+  }
+  await ensureScanTreeChildren(dirPath)
+  const next = new Set(scanExpandedPaths.value)
+  next.add(dirPath)
+  scanExpandedPaths.value = next
+}
+
+function pruneScanDirSelections() {
+  const keep = (dirPath) => {
+    const norm = String(dirPath).replace(/\\/g, '/')
+    return musicPaths.value.some((root) => {
+      const r = String(root).replace(/\\/g, '/')
+      return norm === r || norm.startsWith(`${r}/`)
+    })
+  }
+  const nextManual = manualScanDirs.value.filter(keep)
+  if (nextManual.length !== manualScanDirs.value.length) manualScanDirs.value = nextManual
+  const nextAuto = autoScanDirs.value.filter(keep)
+  if (nextAuto.length !== autoScanDirs.value.length) {
+    autoScanDirs.value = nextAuto
+    saveScanSettings()
+  }
+}
+
+async function toggleManualScanDir(dirPath) {
+  const set = new Set(manualScanDirs.value)
+  const checking = !set.has(dirPath)
+  if (checking) {
+    set.add(dirPath)
+    const descendants = await collectAllDescendantDirPaths(dirPath, getScanTreeEntry, ensureScanTreeChildren)
+    for (const p of descendants) set.add(p)
+  } else {
+    removeDirPathAndDescendants(set, dirPath)
+  }
+  manualScanDirs.value = [...set]
+}
+
+async function toggleAutoScanDir(dirPath) {
+  const set = new Set(autoScanDirs.value)
+  const checking = !set.has(dirPath)
+  if (checking) {
+    set.add(dirPath)
+    const descendants = await collectAllDescendantDirPaths(dirPath, getScanTreeEntry, ensureScanTreeChildren)
+    for (const p of descendants) set.add(p)
+  } else {
+    removeDirPathAndDescendants(set, dirPath)
+  }
+  autoScanDirs.value = [...set]
+  saveScanSettings()
+}
+
+const dirScanBusy = computed(() => libraryDirScanning.value || libraryScanning.value)
+const scanAutoModeOptions = [
+  { value: 'all', label: '所有目录' },
+  { value: 'selected', label: '勾选的自动目录' },
+]
+const playlistRemoteSyncOptions = [
+  { value: '0', label: '关闭' },
+  { value: '1', label: '每 1 天' },
+  { value: '3', label: '每 3 天' },
+  { value: '7', label: '每 7 天' },
+]
 let customColorSaveTimer = 0
 
 function parseActiveIds(raw) {
@@ -473,14 +1070,21 @@ function isSourceActive(id) {
   return activeSourceIds.value.includes(id)
 }
 
-const tabs = [
-  { id: 'paths', label: '文件路径' },
-  { id: 'source', label: '音源管理' },
-  { id: 'appearance', label: '风格样式' },
-  { id: 'download', label: '下载设置' },
-  { id: 'embed', label: '内嵌数据' },
-  { id: 'lrc', label: '歌词文件' },
-]
+const tabs = computed(() => {
+  const all = [
+    { id: 'account', label: '我的账号' },
+    { id: 'paths', label: '文件路径' },
+    { id: 'source', label: '音源管理' },
+    { id: 'appearance', label: '风格样式' },
+    { id: 'download', label: '下载设置' },
+    { id: 'embed', label: '内嵌数据' },
+    { id: 'lrc', label: '歌词文件' },
+    { id: 'users', label: '用户管理' },
+    { id: 'mail', label: '邮件服务' },
+  ]
+  if (isAdminUser.value) return all
+  return all.filter(t => ['account', 'source', 'appearance'].includes(t.id))
+})
 
 const embedItems = [
   { key: 'download.isEmbedPic', label: '内嵌封面', desc: '将封面写入音频文件' },
@@ -495,7 +1099,7 @@ const lrcToggleItems = [
   { key: 'download.isDownloadRLrc', label: '下载罗马音歌词', desc: '写入 .lrc 时附带罗马音' },
 ]
 
-const currentTab = computed(() => tabs.find(t => t.id === activeTab.value) || tabs[0])
+const currentTab = computed(() => tabs.value.find(t => t.id === activeTab.value) || tabs.value[0])
 const customPreview = computed(() => normalizeHex(settings[CUSTOM_COLOR_KEY] || currentCustomColor.value))
 
 watch(currentTheme, (v) => {
@@ -506,21 +1110,314 @@ watch(currentColorScheme, (v) => {
   settings[COLOR_SCHEME_KEY] = v
 })
 
-watch(activeTab, (tab) => {
-  if (tab === 'paths' && musicPaths.value.length) loadLibraryStats()
+watch(tabs, (list) => {
+  if (!list.some(t => t.id === activeTab.value)) {
+    activeTab.value = list[0]?.id || 'account'
+  }
+}, { immediate: true })
+
+watch(activeTab, async (tab) => {
+  if (tab === 'paths' && musicPaths.value.length) {
+    loadLibraryStats()
+    await loadScanSettings()
+    await initScanTreeExpansion()
+  }
+  if (tab === 'users') loadManagedUsers()
+  if (tab === 'account') loadAccountInfo()
 })
 
-function dirTrackCount(p) {
-  const row = libraryStats.value?.dirs?.find(d => d.path === p)
-  if (!row) return null
-  return row.readable ? row.count : null
+watch(musicPaths, async () => {
+  pruneScanDirSelections()
+  if (activeTab.value === 'paths') {
+    await initScanTreeExpansion()
+  }
+}, { deep: true })
+
+function syncAccountFormFromUser() {
+  accountForm.displayName = currentAuthUser.value?.displayName || currentAuthUser.value?.username || ''
+  accountForm.email = ''
+  accountForm.oldPassword = ''
+  accountForm.newPassword = ''
+  accountForm.confirmPassword = ''
 }
 
-function dirTrackCountLabel(p) {
-  const row = libraryStats.value?.dirs?.find(d => d.path === p)
-  if (!row) return ''
-  if (!row.readable) return '不可读'
-  return `${row.count} 首`
+function onAccountEmailFocus() {
+  emailInputReadonly.value = false
+  if (currentAuthUser.value?.email) return
+  const username = String(currentAuthUser.value?.username || '').trim()
+  if (username && accountForm.email.trim() === username) {
+    accountForm.email = ''
+  }
+}
+
+async function loadAccountInfo() {
+  emailInputReadonly.value = true
+  syncAccountFormFromUser()
+  try {
+    const res = await api.auth.me()
+    if (res.user) patchLocalUser(res.user)
+    syncAccountFormFromUser()
+  } catch {}
+}
+
+async function saveAccountProfile() {
+  const name = accountForm.displayName.trim()
+  if (!name) {
+    showToast('显示名称不能为空', 'error')
+    return
+  }
+  accountSaving.value = true
+  try {
+    const res = await api.auth.updateProfile(name)
+    if (res.user) patchLocalUser(res.user)
+    showToast('已保存', 'success')
+  } catch (e) {
+    showToast(e.message || '保存失败', 'error')
+  } finally {
+    accountSaving.value = false
+  }
+}
+
+async function bindAccountEmail() {
+  const email = accountForm.email.trim()
+  if (!email) {
+    showToast('请输入邮箱地址', 'error')
+    return
+  }
+  emailBinding.value = true
+  try {
+    const res = await api.auth.bindEmail(email)
+    if (res.user) patchLocalUser(res.user)
+    accountForm.email = ''
+    showToast(res.verificationSent ? '验证邮件已发送，请查收' : '邮箱已绑定', 'success')
+  } catch (e) {
+    showToast(e.message || '绑定失败', 'error')
+  } finally {
+    emailBinding.value = false
+  }
+}
+
+async function resendAccountVerification() {
+  resendingVerify.value = true
+  try {
+    await api.auth.resendVerification()
+    showToast('验证邮件已发送', 'success')
+  } catch (e) {
+    showToast(e.message || '发送失败', 'error')
+  } finally {
+    resendingVerify.value = false
+  }
+}
+
+async function changeAccountPassword() {
+  if (!accountForm.oldPassword || !accountForm.newPassword) {
+    showToast('请填写当前密码和新密码', 'error')
+    return
+  }
+  if (accountForm.newPassword.length < 6) {
+    showToast('新密码至少 6 位', 'error')
+    return
+  }
+  if (accountForm.newPassword !== accountForm.confirmPassword) {
+    showToast('两次输入的新密码不一致', 'error')
+    return
+  }
+  passwordChanging.value = true
+  try {
+    await api.auth.changePassword(accountForm.oldPassword, accountForm.newPassword)
+    accountForm.oldPassword = ''
+    accountForm.newPassword = ''
+    accountForm.confirmPassword = ''
+    showToast('密码已修改', 'success')
+  } catch (e) {
+    showToast(e.message || '修改失败', 'error')
+  } finally {
+    passwordChanging.value = false
+  }
+}
+
+async function loadManagedUsers() {
+  if (!isAdminUser.value) return
+  try {
+    const res = await api.auth.listUsers()
+    managedUsers.value = res.users || []
+  } catch {
+    managedUsers.value = []
+  }
+}
+
+async function createManagedUser() {
+  creatingUser.value = true
+  try {
+    await api.auth.createUser({
+      username: newUser.username,
+      password: newUser.password,
+      displayName: newUser.displayName || newUser.username,
+      email: newUser.email,
+      role: newUser.role,
+    })
+    newUser.username = ''
+    newUser.displayName = ''
+    newUser.email = ''
+    newUser.password = ''
+    newUser.role = 'user'
+    await loadManagedUsers()
+    showToast('用户已创建', 'success')
+  } catch (e) {
+    showToast(e.message || '创建失败', 'error')
+  } finally {
+    creatingUser.value = false
+  }
+}
+
+async function resetManagedUserPassword(user) {
+  openResetPasswordModal(user)
+}
+
+function openResetPasswordModal(user) {
+  resetPasswordUser.value = user
+  resetPasswordForm.password = ''
+  resetPasswordForm.confirm = ''
+}
+
+function closeResetPasswordModal() {
+  resetPasswordUser.value = null
+}
+
+async function submitResetPassword() {
+  if (!resetPasswordUser.value) return
+  if (!resetPasswordForm.password || resetPasswordForm.password.length < 6) {
+    showToast('密码至少 6 位', 'error')
+    return
+  }
+  if (resetPasswordForm.password !== resetPasswordForm.confirm) {
+    showToast('两次输入的密码不一致', 'error')
+    return
+  }
+  resetPasswordSaving.value = true
+  try {
+    await api.auth.resetUserPassword(resetPasswordUser.value.id, resetPasswordForm.password)
+    closeResetPasswordModal()
+    showToast('密码已重置', 'success')
+  } catch (e) {
+    showToast(e.message || '重置失败', 'error')
+  } finally {
+    resetPasswordSaving.value = false
+  }
+}
+
+function startManagedUserEdit(user) {
+  editingUserId.value = user.id
+  editUserForm.displayName = user.displayName || user.username
+  editUserForm.email = user.email || ''
+  editUserForm.role = user.role || 'user'
+}
+
+function cancelManagedUserEdit() {
+  editingUserId.value = null
+}
+
+async function saveManagedUserEdit() {
+  if (!editingUserId.value) return
+  userUpdating.value = true
+  try {
+    const res = await api.auth.updateUser(editingUserId.value, {
+      displayName: editUserForm.displayName.trim(),
+      email: editUserForm.email.trim(),
+      role: editUserForm.role,
+    })
+    const idx = managedUsers.value.findIndex(u => u.id === editingUserId.value)
+    if (idx >= 0 && res.user) managedUsers.value[idx] = res.user
+    if (editingUserId.value === currentAuthUser.value?.id && res.user) {
+      patchLocalUser(res.user)
+    }
+    editingUserId.value = null
+    showToast('已保存', 'success')
+  } catch (e) {
+    showToast(e.message || '保存失败', 'error')
+  } finally {
+    userUpdating.value = false
+  }
+}
+
+function confirmDeleteUser(user) {
+  deleteConfirmUser.value = user
+}
+
+async function submitDeleteUser() {
+  if (!deleteConfirmUser.value) return
+  deletingUser.value = true
+  try {
+    await api.auth.deleteUser(deleteConfirmUser.value.id)
+    deleteConfirmUser.value = null
+    await loadManagedUsers()
+    showToast('用户已删除', 'success')
+  } catch (e) {
+    showToast(e.message || '删除失败', 'error')
+  } finally {
+    deletingUser.value = false
+  }
+}
+
+async function deleteManagedUser(user) {
+  confirmDeleteUser(user)
+}
+
+async function loadScanSettings() {
+  try {
+    const res = await api.library.scanSettings.get()
+    scanAutoMode.value = res.data?.autoMode || 'all'
+    autoScanDirs.value = res.data?.autoDirs || []
+  } catch {}
+}
+
+async function saveScanSettings() {
+  try {
+    const res = await api.library.scanSettings.save({
+      autoMode: scanAutoMode.value,
+      autoDirs: autoScanDirs.value,
+    })
+    autoScanDirs.value = res.data?.autoDirs || []
+    showToast('扫描设置已保存', 'success')
+  } catch (e) {
+    showToast(e.message || '保存失败', 'error')
+  }
+}
+
+
+async function runDirScan(dirs, { scanAll = false } = {}) {
+  if (libraryDirScanning.value) return
+  libraryDirScanning.value = true
+  try {
+    await scanLibrary(api, {
+      force: true,
+      dirs: scanAll ? null : dirs,
+      scanAll,
+      onError: (msg) => showToast(msg, 'error'),
+      onComplete: () => loadLibraryStats(),
+    })
+    const label = scanAll
+      ? '已开始手动扫描全部目录'
+      : `已开始手动扫描 ${dirs.length} 个目录`
+    showToast(label, 'success')
+  } catch (e) {
+    showToast(e.message || '扫描失败', 'error')
+  } finally {
+    libraryDirScanning.value = false
+  }
+}
+
+function scanOneDir(dirPath) {
+  runDirScan([dirPath])
+}
+
+function scanSelectedDirs() {
+  if (!manualScanDirs.value.length) return
+  runDirScan([...manualScanDirs.value])
+}
+
+function scanAllMusicDirs() {
+  runDirScan(null, { scanAll: true })
 }
 
 async function loadLibraryStats() {
@@ -540,6 +1437,10 @@ async function loadLibraryStats() {
 }
 
 onMounted(async () => {
+  const tabFromQuery = String(route.query.tab || '').trim()
+  if (tabFromQuery && tabs.value.some(t => t.id === tabFromQuery)) {
+    activeTab.value = tabFromQuery
+  }
   try {
     fnosAvailable.value = await canPickFolder()
   } catch {}
@@ -556,6 +1457,11 @@ onMounted(async () => {
     applySourceFallbackMode(settings[SOURCE_FALLBACK_MODE_KEY])
     if (!settings[DOWNLOAD_GROUP_BY_KEY]) {
       settings[DOWNLOAD_GROUP_BY_KEY] = settings['download.isSavePathGroupByListName'] === 'true' ? 'album' : 'none'
+    }
+    if (settings[PLAYLIST_REMOTE_SYNC_DAYS_KEY] == null) {
+      settings[PLAYLIST_REMOTE_SYNC_DAYS_KEY] = String(getPlaylistRemoteSyncDays())
+    } else {
+      setPlaylistRemoteSyncDays(settings[PLAYLIST_REMOTE_SYNC_DAYS_KEY])
     }
     applyTheme(settings[THEME_KEY], {
       color: settings[COLOR_SCHEME_KEY],
@@ -589,6 +1495,8 @@ async function loadPaths() {
       mountProbeText.value = ''
     }
     await loadLibraryStats()
+    await loadScanSettings()
+    await initScanTreeExpansion()
   } catch {}
 }
 
@@ -764,6 +1672,17 @@ async function saveDownloadGroupBy() {
   }
 }
 
+async function savePlaylistRemoteSyncDays() {
+  const days = setPlaylistRemoteSyncDays(settings[PLAYLIST_REMOTE_SYNC_DAYS_KEY])
+  settings[PLAYLIST_REMOTE_SYNC_DAYS_KEY] = String(days)
+  try {
+    await api.settings.update({ [PLAYLIST_REMOTE_SYNC_DAYS_KEY]: String(days) })
+    showToast('已保存', 'success')
+  } catch (e) {
+    showToast(e.message || '保存失败', 'error')
+  }
+}
+
 async function saveSetting(key) {
   try {
     await api.settings.update({ [key]: settings[key] })
@@ -779,6 +1698,47 @@ async function saveSetting(key) {
       applyColorScheme(settings[key], settings[THEME_KEY], { customHex: settings[CUSTOM_COLOR_KEY] })
     }
   } catch (e) { showToast(e.message, 'error') }
+}
+
+async function toggleMailEnabled(e) {
+  settings['mail.enabled'] = e.target.checked ? 'true' : 'false'
+  await saveSetting('mail.enabled')
+}
+
+async function saveMailPassword() {
+  if (!mailPasswordInput.value) return
+  try {
+    await api.settings.update({ 'mail.smtp.pass': mailPasswordInput.value })
+    mailPasswordInput.value = ''
+    showToast('SMTP 密码已保存', 'success')
+  } catch (e) {
+    showToast(e.message, 'error')
+  }
+}
+
+async function sendTestMail() {
+  if (!mailTestTo.value) {
+    showToast('请填写测试收件邮箱', 'error')
+    return
+  }
+  mailTesting.value = true
+  try {
+    await api.settings.update({
+      'mail.enabled': settings['mail.enabled'],
+      'mail.smtp.host': settings['mail.smtp.host'],
+      'mail.smtp.port': settings['mail.smtp.port'],
+      'mail.smtp.user': settings['mail.smtp.user'],
+      'mail.from': settings['mail.from'],
+      'mail.appUrl': settings['mail.appUrl'],
+      ...(mailPasswordInput.value ? { 'mail.smtp.pass': mailPasswordInput.value } : {}),
+    })
+    const res = await api.auth.testMail(mailTestTo.value)
+    showToast(res.message || '测试邮件已发送', 'success')
+  } catch (e) {
+    showToast(e.message, 'error')
+  } finally {
+    mailTesting.value = false
+  }
 }
 
 async function saveTheme() {
@@ -957,13 +1917,17 @@ function showToast(text, type = 'info') {
 .settings-page {
   display: flex;
   gap: 24px;
-  max-width: 960px;
+  width: 100%;
+  max-width: none;
   min-height: calc(100vh - 160px);
+  align-items: flex-start;
 }
 
 .settings-nav {
-  width: 180px;
+  width: 200px;
   flex-shrink: 0;
+  position: sticky;
+  top: 0;
 }
 .nav-title { font-size: 22px; font-weight: 600; margin-bottom: 4px; }
 .nav-sub { font-size: 12px; color: var(--text-muted); margin-bottom: 20px; line-height: 1.5; }
@@ -999,9 +1963,69 @@ function showToast(text, type = 'info') {
   border-radius: 0 2px 2px 0;
 }
 
-.settings-panel { flex: 1; min-width: 0; padding: 24px 28px; }
+.settings-panel { flex: 1; min-width: 0; padding: 24px 28px; width: 100%; }
 .panel-title { font-size: 18px; font-weight: 600; margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--border-light); }
-.panel-body { display: flex; flex-direction: column; }
+.panel-body { display: flex; flex-direction: column; gap: 16px; }
+
+.paths-panel-body { gap: 20px; }
+.paths-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+.paths-section {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.paths-section-block {
+  padding: 16px 18px;
+  border-radius: 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+}
+.paths-section-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+.paths-library-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 4px 14px;
+  border-radius: 10px;
+  background: var(--bg-card, var(--bg));
+  border: 1px solid var(--border-light);
+}
+.setting-item-path-row {
+  align-items: flex-start;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border-light);
+  background: transparent;
+}
+.setting-item-path-row-last {
+  border-bottom: none;
+  padding-bottom: 10px;
+}
+.setting-item-path-row .setting-item-action {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.setting-item-path-row .path-scan-toolbar {
+  margin-top: 0;
+}
+.setting-item-flat {
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--bg-card, var(--bg));
+  border: 1px solid var(--border-light);
+  border-bottom: 1px solid var(--border-light);
+}
 
 .setup-alert {
   margin-bottom: 16px;
@@ -1068,6 +2092,7 @@ function showToast(text, type = 'info') {
 .setting-item:last-child { border-bottom: none; }
 .setting-item-info { flex: 1; min-width: 0; }
 .setting-item-label { font-size: 14px; font-weight: 500; margin-bottom: 2px; }
+.setting-item-label-hint { font-weight: 400; color: var(--text-muted); font-size: 12px; }
 .setting-item-desc { font-size: 12px; color: var(--text-muted); line-height: 1.5; }
 .setting-item-action { flex-shrink: 0; }
 .setting-item-action .app-select {
@@ -1075,27 +2100,174 @@ function showToast(text, type = 'info') {
   max-width: min(280px, 38vw);
 }
 
-.path-block { margin-top: 8px; }
-.library-stats {
-  margin: 12px 0 16px;
-  padding: 12px 14px;
-  border-radius: 10px;
-  background: rgba(108, 158, 255, 0.06);
-  border: 1px solid rgba(108, 158, 255, 0.2);
+.path-block { margin-top: 0; }
+.path-block .path-row:not(.path-row-head):not(.path-row-static) {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) 88px auto;
+  align-items: center;
+  gap: 8px;
 }
-.library-stats-head {
+.path-block.has-auto-col .path-row:not(.path-row-head):not(.path-row-static) {
+  grid-template-columns: 36px 44px minmax(0, 1fr) 88px auto;
+}
+.path-block .path-row-head {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) 88px auto;
+  align-items: center;
+  gap: 8px;
+}
+.path-block.has-auto-col .path-row-head {
+  grid-template-columns: 36px 44px minmax(0, 1fr) 88px auto;
+}
+.path-row-head .path-col-actions,
+.path-row-head .path-col-count {
+  text-align: right;
+}
+.path-col-count {
+  flex-shrink: 0;
+  text-align: right;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.path-row-download {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 8px;
+  gap: 8px;
 }
-.library-stats-head .block-label { margin-bottom: 0; }
-.library-stats-text {
-  margin: 0;
+.path-edit-input {
+  grid-column: 1 / -1;
+}
+.path-block-hint {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+.scan-dir-block {
+  margin-top: 4px;
+}
+.scan-tree-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.scan-dir-tree {
+  max-height: 360px;
+  overflow-y: auto;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  padding: 4px;
+  background: var(--bg-elevated);
+}
+.scan-tree-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  min-width: 0;
+}
+.scan-tree-row:hover { background: var(--bg-hover); }
+.scan-tree-row.loading { opacity: 0.85; }
+.scan-tree-label {
+  flex: 1;
+  min-width: 0;
   font-size: 13px;
-  line-height: 1.65;
-  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.scan-tree-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.path-row-edit {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+}
+.path-col-tree { flex: 1; min-width: 0; }
+.scan-tree-head .path-col-tree { padding-left: 36px; }
+.tree-toggle {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.tree-toggle.invisible { visibility: hidden; pointer-events: none; }
+.tree-toggle:disabled { cursor: default; }
+.tree-spin {
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--border-light);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+.tree-folder {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+.path-scan-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.path-row-head {
+  background: transparent;
+  padding: 2px 14px 4px;
+  margin-bottom: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.path-col-check {
+  width: 32px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.path-col-auto {
+  width: 44px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.path-col-path { flex: 1; min-width: 0; }
+.path-col-actions { flex-shrink: 0; }
+.path-check input,
+.path-auto-check input {
+  margin: 0;
+  cursor: pointer;
+}
+.path-auto-check {
+  cursor: pointer;
+  user-select: none;
 }
 .library-stats-warn {
   margin: 8px 0 0;
@@ -1142,7 +2314,7 @@ function showToast(text, type = 'info') {
   background: var(--bg-input);
   margin-bottom: 6px;
 }
-.path-text { flex: 1; min-width: 0; font-size: 13px; font-family: monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.path-text { min-width: 0; font-size: 13px; font-family: monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .path-actions { display: flex; gap: 6px; flex-shrink: 0; }
 .path-manual { display: flex; gap: 8px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border-light); }
 .path-input { flex: 1; min-width: 0; font-size: 13px; }
@@ -1324,6 +2496,18 @@ function showToast(text, type = 'info') {
 
 @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 
+@media (max-width: 1100px) {
+  .setting-item-path-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+  .setting-item-path-row .setting-item-action {
+    width: 100%;
+    justify-content: flex-start;
+  }
+}
+
 @media (max-width: 768px) {
   .settings-page { flex-direction: column; gap: 12px; }
   .settings-nav {
@@ -1362,6 +2546,11 @@ function showToast(text, type = 'info') {
     min-width: 0 !important;
   }
   .path-row { flex-wrap: wrap; }
+  .path-block .path-row:not(.path-row-head):not(.path-row-static),
+  .path-block .path-row-head {
+    display: flex;
+    flex-wrap: wrap;
+  }
   .path-actions { width: 100%; }
   .path-manual { flex-direction: column; }
   .source-item { flex-direction: column; align-items: flex-start; gap: 10px; }
@@ -1373,5 +2562,179 @@ function showToast(text, type = 'info') {
     right: 12px;
     bottom: calc(var(--player-height) + var(--mobile-nav-height) + 16px);
   }
+}
+
+.user-create-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: flex-end;
+  margin-bottom: 20px;
+}
+.field-inline {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.field-inline input {
+  min-width: 140px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+  color: var(--text);
+}
+.user-list { display: flex; flex-direction: column; gap: 10px; }
+.user-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+}
+.user-row-name { font-size: 14px; color: var(--text); }
+.user-row-meta { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+.user-row-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.mail-test-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+.playlist-sync-settings {
+  margin-top: 20px;
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+}
+.playlist-sync-title {
+  margin-bottom: 12px;
+  font-size: 16px;
+}
+
+.account-panel-body { padding-bottom: 8px; }
+.account-layout {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+.account-section { display: flex; flex-direction: column; gap: 12px; }
+.account-info-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+}
+.account-info-key { color: var(--text-muted); min-width: 64px; }
+.account-info-val { color: var(--text); }
+.account-field input { width: 100%; min-width: 0; }
+.account-email-input::placeholder {
+  color: var(--text-muted);
+  opacity: 0.85;
+}
+.account-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.account-tip { font-size: 12px; color: var(--text-muted); margin: 0; line-height: 1.5; }
+.account-email-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text);
+}
+.email-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+}
+.email-badge.verified {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.email-badge.pending {
+  color: var(--text-muted);
+  background: var(--bg-input);
+}
+.users-panel-body { padding-bottom: 8px; }
+.user-table { display: flex; flex-direction: column; gap: 8px; }
+.user-table-head,
+.user-table-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 1.2fr) minmax(160px, 1.4fr) 100px auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+}
+.user-table-head {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding-bottom: 4px;
+}
+.user-table-row {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+}
+.user-cell-email {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  font-size: 13px;
+  word-break: break-all;
+}
+.user-cell-role { font-size: 13px; color: var(--text-secondary); }
+.user-edit-fields {
+  grid-column: 1 / -2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: flex-end;
+}
+.text-muted { color: var(--text-muted); font-size: 12px; }
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.modal-card {
+  width: min(420px, 100%);
+  padding: 20px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-lg);
+}
+.modal-title { margin: 0 0 8px; font-size: 16px; color: var(--text); }
+.modal-desc { margin: 0 0 16px; font-size: 13px; color: var(--text-muted); line-height: 1.5; }
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+@media (max-width: 768px) {
+  .user-table-head { display: none; }
+  .user-table-row {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+  .user-edit-fields { grid-column: auto; }
+  .user-row-actions { width: 100%; flex-wrap: wrap; }
 }
 </style>

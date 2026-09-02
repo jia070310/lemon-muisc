@@ -76,6 +76,56 @@ export function listAudioFiles(rootDir, { maxDepth = Infinity, maxFiles = 50000 
 
 listAudioFiles.lastErrors = []
 
+/**
+ * 列出目录下一层内容（不递归），用于标签编辑目录树
+ */
+export function listDirEntries(dirPath) {
+  const dirs = []
+  const audioFiles = []
+  let error = ''
+
+  if (!dirPath) {
+    return { dirs, audioFiles, error: '路径为空' }
+  }
+
+  let entries
+  try {
+    entries = fs.readdirSync(dirPath, { withFileTypes: true })
+  } catch (e) {
+    return { dirs, audioFiles, error: e.message }
+  }
+
+  for (const entry of entries) {
+    const fullPath = path.join(dirPath, entry.name)
+    if (entry.isDirectory() && !entry.isSymbolicLink()) {
+      dirs.push({ name: entry.name, path: fullPath })
+      continue
+    }
+    if (entry.isSymbolicLink()) {
+      try {
+        const st = fs.statSync(fullPath)
+        if (st.isDirectory()) {
+          dirs.push({ name: entry.name, path: fullPath })
+          continue
+        }
+        if (st.isFile() && isAudioName(entry.name)) {
+          audioFiles.push(fullPath)
+        }
+      } catch (e) {
+        error = error || e.message
+      }
+      continue
+    }
+    if (entryLooksLikeFile(entry, fullPath) && isAudioName(entry.name)) {
+      audioFiles.push(fullPath)
+    }
+  }
+
+  dirs.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
+  audioFiles.sort((a, b) => a.localeCompare(b, 'zh-CN'))
+  return { dirs, audioFiles, error }
+}
+
 /** 探测目录是否真的可读、是否有内容（用于区分「挂载失败」和「没有音频」） */
 export function probeDir(dirPath) {
   const result = {
@@ -112,7 +162,8 @@ export function probeDir(dirPath) {
     result.readable = true
     result.entryCount = entries.length
     result.sampleNames = entries.slice(0, 8).map((e) => e.name + (e.isDirectory() ? '/' : ''))
-    result.audioCount = listAudioFiles(dirPath, { maxFiles: 50000 }).length
+    const listed = listDirEntries(dirPath)
+    result.audioCount = listed.audioFiles.length
   } catch (e) {
     result.error = e.message
   }

@@ -14,7 +14,7 @@ export function platformLabel(key, info = {}) {
   return PLATFORM_LABELS[key] || key
 }
 
-/** 歌单导入/发现页平台选项（内置 SDK 支持的全部平台） */
+/** 歌单导入平台选项（API 无数据时的兜底，应与已激活音源一致） */
 export const PLAYLIST_PLATFORM_OPTIONS = Object.entries(PLATFORM_LABELS).map(([value, label]) => ({
   value,
   label,

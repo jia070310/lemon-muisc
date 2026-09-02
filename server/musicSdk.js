@@ -28,6 +28,8 @@ async function kwSearch(keyword, page = 1, limit = 30) {
         name: cleanHtml(item.SONGNAME),
         singer: formatArtists(item.ARTIST),
         album: cleanHtml(item.ALBUM),
+        albumName: cleanHtml(item.ALBUM),
+        albumId: String(item.ALBUMID || item.albumid || item.AlbumId || ''),
         interval: formatTime(parseInt(item.DURATION) || 0),
         source: 'kw',
         songId: item.MUSICRID?.replace('MUSIC_', '') || item.DC_TARGETID || '',
@@ -99,16 +101,13 @@ async function kgSearchComplex(keyword, page = 1, limit = 30) {
 }
 
 async function kgSearch(keyword, page = 1, limit = 30) {
-  const attempts = [
-    () => kgSearchMobile(keyword, page, limit),
-    () => kgSearchWeb(keyword, page, limit),
-    () => kgSearchComplex(keyword, page, limit),
-  ]
-  for (const attempt of attempts) {
-    try {
-      const result = await attempt()
-      if (result?.list?.length) return result
-    } catch {}
+  const results = await Promise.allSettled([
+    kgSearchMobile(keyword, page, limit),
+    kgSearchWeb(keyword, page, limit),
+    kgSearchComplex(keyword, page, limit),
+  ])
+  for (const result of results) {
+    if (result.status === 'fulfilled' && result.value?.list?.length) return result.value
   }
   return { list: [], allPage: 0, total: 0 }
 }
@@ -148,6 +147,8 @@ async function wySearch(keyword, page = 1, limit = 30) {
         name: cleanHtml(item.name),
         singer: formatArtists((item.ar || item.artists || []).map(a => a.name).join('/')),
         album: cleanHtml(item.al?.name || item.album?.name),
+        albumName: cleanHtml(item.al?.name || item.album?.name),
+        albumId: String(item.al?.id || item.album?.id || ''),
         interval: formatTime(Math.floor((item.dt || item.duration || 0) / 1000)),
         source: 'wy',
         songId: String(item.id),
@@ -179,6 +180,8 @@ async function mgSearch(keyword, page = 1, limit = 30) {
         name: cleanHtml(item.name),
         singer: formatArtists((item.singers || []).map(s => s.name).join('/')),
         album: cleanHtml(item.albums?.[0]?.name),
+        albumName: cleanHtml(item.albums?.[0]?.name),
+        albumId: String(item.albums?.[0]?.id || item.albumId || ''),
         interval: '',
         source: 'mg',
         songId: item.copyrightId || item.id || '',
@@ -629,6 +632,8 @@ async function wyAlbum(id) {
       desc: cleanHtml(album.description || ''),
       author: formatWyAlbumArtists(album.artist, album.artists),
       publishTime: album.publishTime ? new Date(album.publishTime).toISOString().slice(0, 10) : '',
+      genre: cleanHtml(album.tags || album.subType || ''),
+      language: cleanHtml(album.language || ''),
     },
   }
 }
@@ -671,7 +676,10 @@ async function txAlbum(id) {
       img: basic.pic || basic.picUrl || list[0]?.img || '',
       desc: cleanHtml(detail.desc || detail.description || basic.desc || ''),
       author: formatTxSingers(detail.singer || basic.singer),
-      publishTime: basic.aDate || basic.pubTime || basic.time_public || '',
+      publishTime: basic.publishDate || basic.aDate || basic.pubTime || basic.time_public || '',
+      genre: cleanHtml(basic.genreNew || basic.genre || ''),
+      language: cleanHtml(basic.language || ''),
+      albumType: cleanHtml(basic.albumType || ''),
     },
   }
 }
@@ -684,13 +692,16 @@ async function kwAlbum(id) {
     `http://search.kuwo.cn/r.s?client=kt&pn=0&rn=1000&uid=0&ver=kwplayer_ar_9.2.2.1&vipver=1&ft=music&albumid=${id}&encoding=utf8&rformat=json&show_copyright_off=1&newver=1`,
     `http://search.kuwo.cn/r.s?client=kt&rformat=json&encoding=utf8&pcmp4=1&vipver=1&newver=1&pn=0&rn=1000&albumid=${id}&ft=album`,
   ]
+  const settled = await Promise.allSettled(attempts.map(async (url) => {
+    const data = parseKuwoPlaylistBody(await req('get', url))
+    return data.musiclist || data.abslist || []
+  }))
   let musiclist = []
-  for (const url of attempts) {
-    try {
-      const data = parseKuwoPlaylistBody(await req('get', url))
-      musiclist = data.musiclist || data.abslist || []
-      if (musiclist.length) break
-    } catch {}
+  for (const result of settled) {
+    if (result.status === 'fulfilled' && result.value.length) {
+      musiclist = result.value
+      break
+    }
   }
   let list = []
   if (musiclist.length) {
@@ -734,6 +745,7 @@ async function kwAlbum(id) {
       desc: cleanHtml(meta.albuminfo || meta.info || meta.desc || ''),
       author: formatArtists(meta.artist || meta.ARTIST || ''),
       publishTime: meta.releaseDate || meta.pub || meta.RELEASEDATE || '',
+      genre: cleanHtml(meta.lang || meta.content_type || ''),
     },
   }
 }
@@ -767,6 +779,7 @@ async function kgAlbum(id) {
       desc: cleanHtml(albumInfo.intro || albumInfo.description || ''),
       author: formatArtists(albumInfo.singername || albumInfo.author_name || ''),
       publishTime: albumInfo.publishtime || albumInfo.publish_date || '',
+      genre: cleanHtml(albumInfo.language || albumInfo.type || albumInfo.genre || ''),
     },
   }
 }
@@ -843,6 +856,7 @@ async function mgAlbum(id) {
       desc: cleanHtml(albumInfo.summary || albumInfo.desc || ''),
       author: formatArtists((albumInfo.singers || []).map(s => s.name).join('/') || albumInfo.singer || ''),
       publishTime: albumInfo.publishTime || albumInfo.publishDate || '',
+      genre: cleanHtml(albumInfo.genre || albumInfo.language || albumInfo.type || ''),
     },
   }
 }
@@ -962,7 +976,19 @@ function mapWyPlaylistTrack(item, priv, pl) {
   }, types)
 }
 
-async function wyPlaylist({ id, token }) {
+const PLAYLIST_PARTIAL_LIMIT = 100
+
+function buildPlaylistResponse(list, total, source, info, { partial = false, hasMore = false } = {}) {
+  return {
+    list,
+    total: total || list.length,
+    source,
+    info,
+    ...(partial ? { partial: true, hasMore: Boolean(hasMore) } : { partial: false, hasMore: false }),
+  }
+}
+
+async function wyPlaylist({ id, token }, options = {}) {
   const headers = {
     Referer: 'https://music.163.com',
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -978,6 +1004,30 @@ async function wyPlaylist({ id, token }) {
   const pl = data.playlist
   const privMap = new Map((data.privileges || []).map(p => [p.id, p]))
   const trackIdList = (pl.trackIds || []).map(t => (typeof t === 'object' ? t.id : t)).filter(Boolean)
+  const total = pl.trackCount || trackIdList.length || 0
+  const info = {
+    name: cleanHtml(pl.name),
+    img: pl.coverImgUrl || '',
+    desc: cleanHtml(pl.description || ''),
+    author: cleanHtml(pl.creator?.nickname || ''),
+    play_count: formatPlayCount(pl.playCount),
+  }
+
+  if (options.partial) {
+    const partialIds = trackIdList.slice(0, PLAYLIST_PARTIAL_LIMIT)
+    let tracks = (pl.tracks || []).filter(t => partialIds.includes(t.id))
+    if (partialIds.length > tracks.length || trackIdList.length > (pl.tracks || []).length) {
+      const fetched = await wyFetchSongsByIds(partialIds, headers)
+      for (const p of fetched.privileges) privMap.set(p.id, p)
+      const trackMap = new Map(fetched.songs.map(t => [t.id, t]))
+      tracks = partialIds.map(tid => trackMap.get(tid)).filter(Boolean)
+    } else {
+      tracks = tracks.slice(0, PLAYLIST_PARTIAL_LIMIT)
+    }
+    const list = tracks.map(item => mapWyPlaylistTrack(item, privMap.get(item.id), pl))
+    return buildPlaylistResponse(list, total, 'wy', info, { partial: true, hasMore: total > list.length })
+  }
+
   let tracks = pl.tracks || []
 
   if (trackIdList.length > tracks.length) {
@@ -992,22 +1042,10 @@ async function wyPlaylist({ id, token }) {
   }
 
   const list = tracks.map(item => mapWyPlaylistTrack(item, privMap.get(item.id), pl))
-
-  return {
-    list,
-    total: pl.trackCount || list.length,
-    source: 'wy',
-    info: {
-      name: cleanHtml(pl.name),
-      img: pl.coverImgUrl || '',
-      desc: cleanHtml(pl.description || ''),
-      author: cleanHtml(pl.creator?.nickname || ''),
-      play_count: formatPlayCount(pl.playCount),
-    },
-  }
+  return buildPlaylistResponse(list, total, 'wy', info)
 }
 
-async function txPlaylist({ id }) {
+async function txPlaylist({ id }, options = {}) {
   const buf = await req('get',
     `https://c.y.qq.com/qzone/fcg-bin/fcg_ucc_getcdinfo_byids_cp.fcg?type=1&json=1&utf8=1&onlysong=0&new_format=1&disstid=${id}&loginUin=0&hostUin=0&format=json&inCharset=utf8&outCharset=utf-8&notice=0&platform=yqq.json&needNewCode=0`,
     null, {
@@ -1019,20 +1057,21 @@ async function txPlaylist({ id }) {
   const cd = data?.cdlist?.[0]
   if (!cd?.songlist) throw new Error('无法获取 QQ 音乐歌单')
 
-  const list = cd.songlist.map(mapTxSongItem)
-
-  return {
-    list,
-    total: list.length,
-    source: 'tx',
-    info: {
-      name: cleanHtml(cd.dissname),
-      img: cd.logo || '',
-      desc: cleanHtml(cd.desc || ''),
-      author: cleanHtml(cd.nickname || ''),
-      play_count: formatPlayCount(cd.visitnum),
-    },
+  const all = cd.songlist.map(mapTxSongItem)
+  const info = {
+    name: cleanHtml(cd.dissname),
+    img: cd.logo || '',
+    desc: cleanHtml(cd.desc || ''),
+    author: cleanHtml(cd.nickname || ''),
+    play_count: formatPlayCount(cd.visitnum),
   }
+
+  if (options.partial) {
+    const list = all.slice(0, PLAYLIST_PARTIAL_LIMIT)
+    return buildPlaylistResponse(list, all.length, 'tx', info, { partial: true, hasMore: all.length > list.length })
+  }
+
+  return buildPlaylistResponse(all, all.length, 'tx', info)
 }
 
 function parseKuwoPlaylistBody(raw) {
@@ -1044,7 +1083,7 @@ function parseKuwoPlaylistBody(raw) {
   }
 }
 
-async function kwPlaylist({ id, digestId }) {
+async function kwPlaylist({ id, digestId }, options = {}) {
   if (digestId) {
     const match = digestId.match(/^digest-(\d+)__(\d+)$/)
     if (match) {
@@ -1067,7 +1106,8 @@ async function kwPlaylist({ id, digestId }) {
   let total = 0
 
   while (true) {
-    const url = `http://nplserver.kuwo.cn/pl.svc?op=getlistinfo&pid=${id}&pn=${page}&rn=1000&encode=utf8&keyset=pl2012&identity=kuwo&pcmp4=1&vipver=MUSIC_9.0.5.0_W1&newver=1`
+    const pageSize = options.partial && page === 0 ? PLAYLIST_PARTIAL_LIMIT : 1000
+    const url = `http://nplserver.kuwo.cn/pl.svc?op=getlistinfo&pid=${id}&pn=${page}&rn=${pageSize}&encode=utf8&keyset=pl2012&identity=kuwo&pcmp4=1&vipver=MUSIC_9.0.5.0_W1&newver=1`
     const raw = await req('get', url)
     const data = parseKuwoPlaylistBody(raw)
     if (data.result !== 'ok' && !data.musiclist?.length) throw new Error('无法获取酷我歌单')
@@ -1108,20 +1148,31 @@ async function kwPlaylist({ id, digestId }) {
     })
 
     all.push(...batch)
+    if (options.partial) {
+      const t = total || all.length
+      return buildPlaylistResponse(all, t, 'kw', meta, { partial: true, hasMore: all.length < t })
+    }
     if (!batch.length || all.length >= total) break
     page += 1
   }
 
-  return { list: all, total: total || all.length, source: 'kw', info: meta }
+  return buildPlaylistResponse(all, total || all.length, 'kw', meta)
 }
 
-async function mgPlaylist({ id }) {
+async function mgPlaylist({ id }, options = {}) {
   const infoBuf = await req('get', `https://c.musicapp.migu.cn/MIGUM3.0/resource/playlist/v2.0?playlistId=${id}`, null, {
     Referer: 'https://music.migu.cn',
     'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15',
   })
   const infoData = parseJSON(infoBuf)
   const plInfo = infoData?.data || {}
+  const info = {
+    name: cleanHtml(plInfo.title),
+    img: plInfo.imgItem?.img || plInfo.img || '',
+    desc: cleanHtml(plInfo.summary || ''),
+    author: cleanHtml(plInfo.ownerName || ''),
+    play_count: formatPlayCount(plInfo.opNumItem?.playNum),
+  }
 
   const all = []
   let page = 1
@@ -1156,22 +1207,14 @@ async function mgPlaylist({ id }) {
     })
 
     all.push(...batch)
+    if (options.partial) {
+      return buildPlaylistResponse(all, total || all.length, 'mg', info, { partial: true, hasMore: (total || 0) > all.length })
+    }
     if (!batch.length || all.length >= total) break
     page += 1
   }
 
-  return {
-    list: all,
-    total: total || all.length,
-    source: 'mg',
-    info: {
-      name: cleanHtml(plInfo.title),
-      img: plInfo.imgItem?.img || plInfo.img || '',
-      desc: cleanHtml(plInfo.summary || ''),
-      author: cleanHtml(plInfo.ownerName || ''),
-      play_count: formatPlayCount(plInfo.opNumItem?.playNum),
-    },
-  }
+  return buildPlaylistResponse(all, total || all.length, 'mg', info)
 }
 
 function mapKgSongItem(item) {
@@ -1212,6 +1255,7 @@ function mapKgSongItem(item) {
     singer: formatArtists(singer),
     album: cleanHtml(item.album_info?.album_name || item.AlbumName || item.album || item.album_name || ''),
     albumName: cleanHtml(item.album_info?.album_name || item.AlbumName || item.album || item.album_name || ''),
+    albumId: String(item.album_id || item.albumid || item.album_info?.album_id || item.AlbumID || ''),
     interval: formatTime(durationSec),
     source: 'kg',
     songId: hash || albumAudioId,

@@ -12,6 +12,7 @@ export function initDB(configPath) {
   fs.mkdirSync(configPath, { recursive: true })
   db = new Database(path.join(configPath, 'lx-music.db'))
   db.pragma('journal_mode = WAL')
+  db.pragma('busy_timeout = 5000')
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS settings (
@@ -49,7 +50,8 @@ export function initDB(configPath) {
       meta TEXT DEFAULT '{}',
       error TEXT DEFAULT '',
       created_at INTEGER DEFAULT (unixepoch()),
-      updated_at INTEGER DEFAULT (unixepoch())
+      updated_at INTEGER DEFAULT (unixepoch()),
+      user_id TEXT DEFAULT ''
     );
 
     CREATE TABLE IF NOT EXISTS library_index (
@@ -61,7 +63,38 @@ export function initDB(configPath) {
     );
 
     CREATE INDEX IF NOT EXISTS idx_library_index_mtime ON library_index(mtime DESC);
+
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      username TEXT UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL,
+      display_name TEXT DEFAULT '',
+      role TEXT DEFAULT 'user',
+      fnos_uid INTEGER,
+      created_at INTEGER DEFAULT (unixepoch()),
+      updated_at INTEGER DEFAULT (unixepoch())
+    );
+
+    CREATE TABLE IF NOT EXISTS sessions (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      expires_at INTEGER NOT NULL,
+      created_at INTEGER DEFAULT (unixepoch()),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS user_settings (
+      user_id TEXT NOT NULL,
+      key TEXT NOT NULL,
+      value TEXT NOT NULL,
+      PRIMARY KEY (user_id, key),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
   `)
+
+  migrateSchema(db)
 
   const defaultSettings = {
     'download.savePath': '/downloads',
@@ -88,9 +121,14 @@ export function initDB(configPath) {
     'music.paths': '[]',
     'tag.dirs': '[]',
     'tag.matchSource': 'kg',
-    'library.customPlaylists': '[]',
-    'library.favorites': '[]',
-    'library.recentPlays': '[]',
+    'mail.enabled': 'false',
+    'mail.smtp.host': '',
+    'mail.smtp.port': '465',
+    'mail.smtp.secure': 'true',
+    'mail.smtp.user': '',
+    'mail.smtp.pass': '',
+    'mail.from': '',
+    'mail.appUrl': '',
   }
 
   const insert = db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)')
@@ -99,4 +137,32 @@ export function initDB(configPath) {
   }
 
   return db
+}
+
+function migrateSchema(db) {
+  const downloadCols = db.prepare('PRAGMA table_info(download_tasks)').all()
+  if (!downloadCols.some(c => c.name === 'user_id')) {
+    db.exec("ALTER TABLE download_tasks ADD COLUMN user_id TEXT DEFAULT ''")
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS idx_download_tasks_user ON download_tasks(user_id)')
+
+  const userCols = db.prepare('PRAGMA table_info(users)').all()
+  if (!userCols.some(c => c.name === 'email')) {
+    db.exec("ALTER TABLE users ADD COLUMN email TEXT DEFAULT ''")
+  }
+  if (!userCols.some(c => c.name === 'email_verified')) {
+    db.exec('ALTER TABLE users ADD COLUMN email_verified INTEGER DEFAULT 0')
+  }
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS auth_tokens (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      type TEXT NOT NULL,
+      expires_at INTEGER NOT NULL,
+      created_at INTEGER DEFAULT (unixepoch()),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_auth_tokens_user ON auth_tokens(user_id, type);
+  `)
 }
