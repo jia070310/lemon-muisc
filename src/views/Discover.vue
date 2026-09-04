@@ -1,7 +1,7 @@
 <template>
   <div class="discover-page">
     <div class="page-title">发现</div>
-    <div class="page-subtitle">输入各平台歌单链接，浏览并试听、下载；可多选后批量下载，不支持所选音质时将自动降档</div>
+    <div class="page-subtitle">输入各平台歌单链接，浏览并试听、下载；批量下载会一次确认降档策略，多音源时先同音质轮询再降档</div>
 
     <div v-if="playlistPickTarget" class="pick-hint card">
       点击歌曲右侧「加入歌单」添加到「{{ playlistPickTarget.name }}」
@@ -52,10 +52,7 @@
             @click="openRecommendPlaylist(item)"
           >
             <div class="recommend-cover-wrap">
-              <img v-if="item.img" :src="item.img" class="recommend-cover" alt="" loading="lazy" @error="onCoverError" />
-              <div v-else class="recommend-cover placeholder">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
-              </div>
+              <CoverArt :src="item.img" />
             </div>
             <div class="recommend-meta">
               <div class="recommend-name" :title="cleanText(item.name)">{{ cleanText(item.name) }}</div>
@@ -95,16 +92,7 @@
 
     <div v-if="discoverState.viewMode === 'detail' && discoverState.playlistInfo" class="playlist-info card">
       <div class="playlist-cover-wrap">
-        <img
-          v-if="discoverState.playlistInfo.img"
-          :src="discoverState.playlistInfo.img"
-          class="playlist-cover"
-          alt=""
-          @error="onCoverError"
-        />
-        <div v-else class="playlist-cover placeholder">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
-        </div>
+        <CoverArt :src="discoverState.playlistInfo.img" />
       </div>
       <div class="playlist-meta">
         <h2 class="playlist-name">{{ cleanText(discoverState.playlistInfo.name) || '未命名歌单' }}</h2>
@@ -237,12 +225,15 @@
 </template>
 
 <script setup>
+defineOptions({ name: 'Discover' })
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import BatchQualityDialog from '../components/BatchQualityDialog.vue'
+import CoverArt from '../components/CoverArt.vue'
 import TrackResultRow from '../components/TrackResultRow.vue'
 import { useBatchDownload, formatBatchDownloadToast } from '../composables/useBatchDownload.js'
 import { useTrackListView } from '../composables/useTrackListView.js'
 import { api } from '../api.js'
+import { assertActiveSourceForDownload } from '../stores/downloadGuard.js'
 import { discoverState, loadDiscoverSources, reloadDiscoverSources, sourcePlaceholders, recommendSortOptions } from '../stores/discover.js'
 import { loadingPlay, isPaused, isPlayingItem, playItem, addToQueue, isInQueue } from '../stores/player.js'
 import { getQualityLabel } from '../utils/quality.js'
@@ -363,7 +354,7 @@ function isAbortedError(e) {
 }
 
 onMounted(async () => {
-  await loadDiscoverSources(api, { force: true })
+  await loadDiscoverSources(api)
   loadRecommend()
   document.addEventListener('click', closeMenus)
 })
@@ -522,10 +513,6 @@ onUnmounted(() => {
   cancelPlaylistFetch()
   cancelRecommendFetch()
 })
-
-function onCoverError(e) {
-  e.target.style.display = 'none'
-}
 
 function isSelected(item, i) {
   return selectedKeys.value.has(trackSelectKey(item, i))
@@ -697,6 +684,7 @@ async function fetchPlaylist() {
 
 async function downloadOne(item, quality) {
   closeMenus()
+  if (!(await assertActiveSourceForDownload())) return
   try {
     await api.download.add([buildDownloadTask(item, activeSource.value, quality)])
     showToast(`已添加下载: ${item.name} (${getQualityLabel(quality, item.types)})`, 'success')
@@ -882,22 +870,13 @@ function showToast(text, type = 'info') {
   transform: translateY(-1px);
 }
 
-.recommend-cover-wrap { flex-shrink: 0; }
-.recommend-cover {
+.recommend-cover-wrap {
+  flex-shrink: 0;
   width: 72px;
   height: 72px;
   border-radius: 8px;
-  object-fit: cover;
-  background: var(--bg-elevated);
+  overflow: hidden;
 }
-.recommend-cover.placeholder {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-muted);
-  border: 1px solid var(--border-light);
-}
-.recommend-cover.placeholder svg { width: 28px; height: 28px; opacity: 0.5; }
 
 .recommend-meta {
   flex: 1;
@@ -945,23 +924,14 @@ function showToast(text, type = 'info') {
   margin-bottom: 16px;
   align-items: flex-start;
 }
-.playlist-cover-wrap { flex-shrink: 0; }
-.playlist-cover {
+.playlist-cover-wrap {
+  flex-shrink: 0;
   width: 140px;
   height: 140px;
   border-radius: 12px;
-  object-fit: cover;
-  background: var(--bg-elevated);
+  overflow: hidden;
   box-shadow: var(--shadow);
 }
-.playlist-cover.placeholder {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-muted);
-  border: 1px solid var(--border-light);
-}
-.playlist-cover.placeholder svg { width: 48px; height: 48px; opacity: 0.5; }
 
 .playlist-meta { flex: 1; min-width: 0; }
 .playlist-name {

@@ -29,8 +29,9 @@
         <div class="track-pick-list">
           <label v-for="song in paged" :key="song.key" class="pick-row">
             <input type="checkbox" :value="song.key" v-model="selectedKeys" />
-            <img v-if="song.picUrl" :src="song.picUrl" alt="" class="pick-cover" />
-            <div v-else class="pick-cover pick-cover-fallback">{{ song.name.slice(0, 1) }}</div>
+            <div class="pick-cover">
+              <CoverArt :src="song.picUrl" />
+            </div>
             <div class="pick-meta">
               <div class="pick-name">{{ song.name }}</div>
               <div class="pick-tags">{{ formatTrackTags(song) }}</div>
@@ -62,6 +63,7 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import CoverArt from './CoverArt.vue'
 import ClearableInput from './ClearableInput.vue'
 import { libraryTracks, addTracksToPlaylist, startPlaylistPick } from '../stores/library.js'
 import { formatTrackTags } from '../utils/format.js'
@@ -203,16 +205,8 @@ function goDiscover() {
   width: 40px;
   height: 40px;
   border-radius: 8px;
-  object-fit: cover;
+  overflow: hidden;
   flex-shrink: 0;
-}
-.pick-cover-fallback {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--accent-muted);
-  color: var(--accent);
-  font-weight: 700;
 }
 .pick-meta { min-width: 0; flex: 1; }
 .pick-name { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

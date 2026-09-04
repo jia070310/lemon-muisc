@@ -79,6 +79,12 @@
             <span>歌手</span>
             <ClearableInput v-model="fetchArtist" variant="plain" placeholder="歌手名" @enter="doFetchSearch" />
           </label>
+          <button
+            type="button"
+            class="btn-ghost btn-sm fetch-swap-btn"
+            title="对调歌手与歌名"
+            @click="swapFetchArtistTitle"
+          >对调</button>
           <label class="search-field">
             <span>歌名</span>
             <ClearableInput v-model="fetchTitle" variant="plain" placeholder="歌曲名" @enter="doFetchSearch" />
@@ -147,6 +153,7 @@ import { isPlayingItem, playItem, refreshPlayingLocalMeta } from '../stores/play
 import { withStreamAuth } from '../utils/streamAuth.js'
 import AppSelect from './AppSelect.vue'
 import ClearableInput from './ClearableInput.vue'
+import { resolveSearchArtistTitle } from '../utils/filenameParse.js'
 
 const props = defineProps({
   filePath: { type: String, required: true },
@@ -367,13 +374,6 @@ async function togglePlay() {
   }
 }
 
-function parseLocalFilename(fileName) {
-  const base = String(fileName || '').replace(/\.[^.]+$/, '').trim()
-  const m = base.match(/^(.+?)\s*[-–—_]\s*(.+)$/)
-  if (m) return { artist: m[1].trim(), title: m[2].trim() }
-  return { title: base, artist: '' }
-}
-
 async function openFetchModal(intent) {
   if (!editForm.value) return
   fetchIntent.value = intent
@@ -381,14 +381,23 @@ async function openFetchModal(intent) {
   fetchResults.value = []
   fetchPreview.value = null
   fetchPreviewMeta.value = null
-  fetchArtist.value = editForm.value.artist || ''
-  fetchTitle.value = editForm.value.title || ''
-  if (!fetchArtist.value && !fetchTitle.value) {
-    const parsed = parseLocalFilename(props.filePath.split(/[/\\]/).pop())
-    fetchArtist.value = parsed.artist
-    fetchTitle.value = parsed.title
+  const fileName = String(props.filePath || '').split(/[/\\]/).pop() || ''
+  const resolved = resolveSearchArtistTitle({
+    artist: editForm.value.artist || '',
+    title: editForm.value.title || '',
+    fileName,
+  })
+  fetchArtist.value = resolved.artist
+  fetchTitle.value = resolved.title
+  if (fetchArtist.value || fetchTitle.value) {
+    await doFetchSearch()
   }
-  if (fetchArtist.value || fetchTitle.value) await doFetchSearch()
+}
+
+function swapFetchArtistTitle() {
+  const a = fetchArtist.value
+  fetchArtist.value = fetchTitle.value
+  fetchTitle.value = a
 }
 
 function closeFetchModal() {
@@ -621,10 +630,16 @@ defineExpose({ togglePlay })
 .fetch-header h3 { margin: 0; font-size: 16px; }
 .fetch-search {
   display: grid;
-  grid-template-columns: 1fr 1fr auto;
+  grid-template-columns: 1fr auto 1fr auto;
   gap: 10px;
   padding: 16px 20px;
   border-bottom: 1px solid var(--border-light);
+  align-items: end;
+}
+.fetch-swap-btn {
+  margin-bottom: 1px;
+  padding: 8px 10px;
+  white-space: nowrap;
 }
 .search-field { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--text-secondary); }
 .fetch-body { display: grid; grid-template-columns: 1fr 1fr; min-height: 280px; overflow: hidden; }
@@ -676,6 +691,7 @@ defineExpose({ togglePlay })
 .btn-icon { background: none; border: none; color: var(--text-muted); font-size: 18px; cursor: pointer; }
 @media (max-width: 768px) {
   .fetch-search { grid-template-columns: 1fr; }
+  .fetch-swap-btn { justify-self: start; }
   .fetch-body { grid-template-columns: 1fr; }
   .fetch-list { border-right: none; border-bottom: 1px solid var(--border-light); max-height: 220px; }
   .tag-file-editor.is-modal .edit-form input,

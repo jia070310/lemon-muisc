@@ -30,7 +30,18 @@ export function qualityLabel(q) {
  * @param {string} current
  * @param {string[]} [available]
  */
-export function getNextLowerQuality(current, available) {
+export function qualityRank(q) {
+  const idx = QUALITY_LADDER.indexOf(String(q || '').trim())
+  return idx === -1 ? 999 : idx
+}
+
+/** 是否允许使用该音质（不低于最低档；index 越小音质越高） */
+export function isQualityWithinFloor(quality, floor) {
+  if (!floor) return true
+  return qualityRank(quality) <= qualityRank(floor)
+}
+
+export function getNextLowerQuality(current, available, floor = '') {
   const cur = String(current || '').trim()
   if (!cur) return ''
 
@@ -40,28 +51,50 @@ export function getNextLowerQuality(current, available) {
 
   const ordered = QUALITY_LADDER.filter(q => pool.includes(q) || q === cur)
   const idx = ordered.indexOf(cur)
+  let next = ''
   if (idx === -1) {
     // 未知音质：尝试直接落到 320k / 128k
-    if (pool.includes('320k') && cur !== '320k') return '320k'
-    if (pool.includes('128k') && cur !== '128k') return '128k'
-    const ladderIdx = QUALITY_LADDER.indexOf(cur)
-    if (ladderIdx >= 0 && ladderIdx < QUALITY_LADDER.length - 1) {
-      return QUALITY_LADDER[ladderIdx + 1]
+    if (pool.includes('320k') && cur !== '320k') next = '320k'
+    else if (pool.includes('128k') && cur !== '128k') next = '128k'
+    else {
+      const ladderIdx = QUALITY_LADDER.indexOf(cur)
+      if (ladderIdx >= 0 && ladderIdx < QUALITY_LADDER.length - 1) {
+        next = QUALITY_LADDER[ladderIdx + 1]
+      }
     }
-    return ''
+  } else if (idx < ordered.length - 1) {
+    next = ordered[idx + 1] || ''
   }
-  if (idx >= ordered.length - 1) return ''
-  return ordered[idx + 1] || ''
+
+  if (!next) return ''
+  if (floor && !isQualityWithinFloor(next, floor)) return ''
+  return next
+}
+
+export function formatMissingQualityError(preferred, floor = '', reason = '') {
+  const want = qualityLabel(preferred) || preferred || '目标'
+  const floorText = floor ? qualityLabel(floor) || floor : ''
+  const detail = reason ? `（${String(reason).slice(0, 160)}）` : ''
+  if (floorText && floorText !== want) {
+    return `无要求的音质：无法获取 ${want}，且不低于 ${floorText} 的音质也不可用${detail}`
+  }
+  return `无要求的音质：无法获取 ${want}${detail}`
 }
 
 export function isRetryableDownloadError(error) {
   const message = error?.message || String(error || '')
   const code = error?.code || ''
   const text = `${message} ${code}`
+  if (isNoActiveSourceError(error)) return false
   if (/socket hang up|ECONNRESET|ETIMEDOUT|EPIPE|ECONNABORTED|ERR_SOCKET/i.test(text)) return true
   if (/timeout|timed out|请求超时|后端失败/i.test(text) && !/音源初始化超时/i.test(text)) return true
   if (/获取.*音质.*失败|获取播放链接失败|未获取到URL|获取URL失败/i.test(text)) return true
   return false
+}
+
+export function isNoActiveSourceError(error) {
+  const text = `${error?.message || ''} ${error?.code || ''} ${error || ''}`
+  return /没有激活的音源|没有可用的音源|NO_ACTIVE_SOURCE/i.test(text)
 }
 
 export function sleep(ms) {

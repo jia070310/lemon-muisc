@@ -45,7 +45,7 @@ const RULES = [
     message: '音频加载失败，请检查文件或网络后重试',
   },
   {
-    test: /没有激活的音源|没有激活/i,
+    test: /没有激活的音源|没有激活|尚未激活/i,
     message: '请先在设置中导入并激活音源',
   },
   {
@@ -63,6 +63,10 @@ const RULES = [
   {
     test: /获取.*音质.*失败|未获取到URL|获取URL失败|获取播放链接失败/i,
     message: '无法获取该音质链接，请尝试其他音质或歌曲',
+  },
+  {
+    test: /block\s*ip|ip\s*block|blocked?\s*ip|ip\s*banned|封禁.*ip|ip.*被[封拦]/i,
+    message: '当前网络 IP 被音源限制，请稍后或更换网络/音源后再试',
   },
   {
     test: /HTTP\s*403|statusCode[:\s]*403|\b403\b/i,

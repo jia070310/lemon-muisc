@@ -27,14 +27,7 @@
           @click="openAlbum(album)"
         >
           <div class="album-cover">
-            <img
-              v-if="album.cover && !brokenCovers.has(album.id)"
-              :src="album.cover"
-              alt=""
-              loading="lazy"
-              @error="markCoverBroken(album.id)"
-            />
-            <div v-else class="album-cover-fallback">{{ album.name.slice(0, 1) }}</div>
+            <CoverArt :src="album.cover" />
           </div>
           <div class="album-name" :title="album.name">{{ album.name }}</div>
           <div class="album-artist" :title="album.artist">{{ album.artist }}</div>
@@ -50,6 +43,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../api.js'
 import AppSelect from '../components/AppSelect.vue'
+import CoverArt from '../components/CoverArt.vue'
 import { formatAlbumTags } from '../utils/format.js'
 import {
   libraryTracks,
@@ -65,7 +59,6 @@ const ALBUM_SORT_KEY = 'lemon-library-album-sort'
 
 const router = useRouter()
 const albumSort = ref(localStorage.getItem(ALBUM_SORT_KEY) || 'recent')
-const brokenCovers = ref(new Set())
 
 const albumSortOptions = computed(() => ALBUM_SORT_OPTIONS.map(o => ({ value: o.id, label: o.label })))
 const albums = computed(() => sortAlbums(groupAlbums(libraryTracks.value), albumSort.value))
@@ -79,13 +72,6 @@ onMounted(async () => {
     try { await scanLibrary(api) } catch {}
   }
 })
-
-function markCoverBroken(id) {
-  if (!id) return
-  const next = new Set(brokenCovers.value)
-  next.add(id)
-  brokenCovers.value = next
-}
 
 function openAlbum(album) {
   if (!album?.id) return

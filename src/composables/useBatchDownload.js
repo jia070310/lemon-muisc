@@ -1,32 +1,18 @@
 import { ref } from 'vue'
 import { api } from '../api.js'
+import { assertActiveSourceForDownload } from '../stores/downloadGuard.js'
 import {
   prepareBatchDownload,
   buildBatchDownloadTasks,
-  buildBatchQualityMap,
   getBatchQualities,
 } from '../utils/musicPayload.js'
 
-const BATCH_AUTO_QUALITY_KEY = 'lx-music-nas:batch-download-auto-quality'
-
-export function isBatchQualityAutoConfirmEnabled() {
-  try {
-    return localStorage.getItem(BATCH_AUTO_QUALITY_KEY) === '1'
-  } catch {
-    return false
-  }
-}
-
-export function setBatchQualityAutoConfirm(enabled) {
-  try {
-    if (enabled) localStorage.setItem(BATCH_AUTO_QUALITY_KEY, '1')
-    else localStorage.removeItem(BATCH_AUTO_QUALITY_KEY)
-  } catch {}
-}
-
 export function formatBatchDownloadToast(count, summary) {
-  if (!summary?.downgradedCount) return `已添加 ${count} 首到下载队列`
-  return `已添加 ${count} 首到下载队列（${summary.downgradedCount} 首已自动降档）`
+  const skipped = summary?.skippedCount || 0
+  if (skipped > 0) {
+    return `已添加 ${count} 首到下载队列（跳过 ${skipped} 首：无要求音质）`
+  }
+  return `已添加 ${count} 首到下载队列`
 }
 
 export function useBatchDownload({ getSource, onCompleted, onError } = {}) {
@@ -37,34 +23,30 @@ export function useBatchDownload({ getSource, onCompleted, onError } = {}) {
     batchDialog.value = null
   }
 
-  function summarizePlan(plan) {
-    const matchedCount = plan.matched?.length || 0
-    const downgradedCount = plan.rows?.length || 0
-    return {
-      total: matchedCount + downgradedCount,
-      matchedCount,
-      downgradedCount,
-      downgraded: (plan.rows || []).map((row) => ({
-        key: row.key,
-        name: row.item?.name || '',
-        singer: row.item?.singer || '',
-        from: plan.preferred,
-        to: row.selected,
-        available: row.available || [],
-      })),
-    }
-  }
+  const BATCH_CHUNK_SIZE = 20
 
-const BATCH_CHUNK_SIZE = 20
-
-  async function executeBatchDownload(plan, qualityMap) {
+  async function executeBatchDownload(plan, { strategy = 'cascade', floorQuality = '' } = {}) {
+    if (!(await assertActiveSourceForDownload())) return null
     batchDownloading.value = true
     try {
-      const tasks = buildBatchDownloadTasks(plan.entries, getSource(), qualityMap)
+      const { tasks, skippedCount } = buildBatchDownloadTasks(plan.entries, getSource(), {
+        preferredQuality: plan.preferred,
+        strategy,
+        floorQuality,
+      })
+      if (!tasks.length) {
+        onError?.(new Error(skippedCount ? '所选歌曲均无要求音质，未添加下载' : '没有可下载的歌曲'))
+        return null
+      }
       for (let i = 0; i < tasks.length; i += BATCH_CHUNK_SIZE) {
         await api.download.add(tasks.slice(i, i + BATCH_CHUNK_SIZE))
       }
-      const summary = summarizePlan(plan)
+      const summary = {
+        total: tasks.length,
+        skippedCount,
+        strategy,
+        floorQuality,
+      }
       onCompleted?.(tasks.length, summary)
       return tasks
     } catch (e) {
@@ -76,25 +58,19 @@ const BATCH_CHUNK_SIZE = 20
   }
 
   async function startBatchDownload(entries, preferredQuality) {
+    if (!(await assertActiveSourceForDownload())) return null
     const plan = prepareBatchDownload(entries, preferredQuality)
     if (!plan.entries.length) return null
-
-    const qualityMap = buildBatchQualityMap(plan)
-    if (!plan.needsConfirm || isBatchQualityAutoConfirmEnabled()) {
-      return executeBatchDownload(plan, qualityMap)
-    }
-
+    // 批量下载固定只弹一次策略确认窗
     batchDialog.value = plan
     return null
   }
 
-  async function confirmBatchDialog({ remember = false } = {}) {
+  async function confirmBatchDialog({ strategy = 'cascade', floorQuality = '' } = {}) {
     const plan = batchDialog.value
     if (!plan) return null
-    if (remember) setBatchQualityAutoConfirm(true)
-    const qualityMap = buildBatchQualityMap(plan)
     closeBatchDialog()
-    return executeBatchDownload(plan, qualityMap)
+    return executeBatchDownload(plan, { strategy, floorQuality })
   }
 
   return {
@@ -104,7 +80,5 @@ const BATCH_CHUNK_SIZE = 20
     confirmBatchDialog,
     closeBatchDialog,
     getBatchQualities,
-    isBatchQualityAutoConfirmEnabled,
-    setBatchQualityAutoConfirm,
   }
 }

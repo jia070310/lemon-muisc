@@ -171,6 +171,10 @@ export const api = {
     dismissAll: () => request('/download/dismiss-all', { method: 'POST' }),
     confirmDowngrade: (id) => request(`/download/confirm-downgrade/${id}`, { method: 'POST' }),
     rejectDowngrade: (id) => request(`/download/reject-downgrade/${id}`, { method: 'POST' }),
+    confirmExist: (id, applyToRest = false) =>
+      request(`/download/confirm-exist/${id}`, { method: 'POST', body: { applyToRest } }),
+    skipExist: (id, applyToRest = false) =>
+      request(`/download/skip-exist/${id}`, { method: 'POST', body: { applyToRest } }),
     confirmSource: (id, sourceApiId) => request(`/download/confirm-source/${id}`, { method: 'POST', body: { sourceApiId } }),
     rejectSource: (id) => request(`/download/reject-source/${id}`, { method: 'POST' }),
     clearCompleted: () => request('/download/clear-completed', { method: 'POST' }),

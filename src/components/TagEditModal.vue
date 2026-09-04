@@ -71,7 +71,8 @@ function onPreview() {
 .tag-edit-overlay {
   position: fixed;
   inset: 0;
-  z-index: 2800;
+  /* 须高于 FullscreenPlayer(10000)，否则大屏/全屏里点标签编辑会「无反应」 */
+  z-index: 11000;
   display: flex;
   justify-content: flex-end;
   background: rgba(0, 0, 0, 0.5);

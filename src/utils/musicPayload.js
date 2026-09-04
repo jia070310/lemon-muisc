@@ -13,7 +13,7 @@ export function getItemQualities(item) {
   return sortQualities(list)
 }
 
-/** 批量下载：取所选歌曲可用音质的并集；下载时按单曲自动降档 */
+/** 批量下载：取所选歌曲可用音质的并集 */
 export function getBatchQualities(items) {
   if (!items?.length) return [...DEFAULT_QUALITIES]
   const union = new Set()
@@ -24,53 +24,73 @@ export function getBatchQualities(items) {
   return [...DEFAULT_QUALITIES]
 }
 
-/** 分析批量下载：区分支持目标音质与需另选音质的歌曲 */
+function qualityRank(q) {
+  const idx = QUALITY_ORDER.indexOf(String(q || ''))
+  return idx === -1 ? 999 : idx
+}
+
+/** 列表是否声明了不低于 floor 的音质（未知列表视为可能可用） */
+export function itemMeetsQualityFloor(item, preferred, floor) {
+  const available = getItemQualities(item)
+  if (!available.length) return true
+  const floorRank = qualityRank(floor || preferred)
+  return available.some((q) => qualityRank(q) <= floorRank)
+}
+
+/** 分析批量下载：统计未标明支持目标音质的歌曲 */
 export function prepareBatchDownload(entries, preferred) {
   const list = Array.isArray(entries) ? entries : []
-  const matched = []
-  const rows = []
-  for (const entry of list) {
-    const item = entry?.item ?? entry
-    const key = entry?.key ?? trackSelectKey(item)
+  const normalized = list.map((entry) => ({
+    item: entry?.item ?? entry,
+    key: entry?.key ?? trackSelectKey(entry?.item ?? entry),
+  }))
+  let unsupportedCount = 0
+  for (const { item } of normalized) {
     const available = getItemQualities(item)
-    if (preferred && available.includes(preferred)) {
-      matched.push({ key, item, quality: preferred })
-    } else {
-      rows.push({
-        key,
-        item,
-        available,
-        selected: available.length
-          ? resolveItemQuality(item, preferred)
-          : (preferred || '128k'),
-      })
-    }
+    if (available.length && preferred && !available.includes(preferred)) unsupportedCount += 1
   }
   return {
-    preferred,
-    entries: list.map(e => ({ item: e?.item ?? e, key: e?.key ?? trackSelectKey(e?.item ?? e) })),
-    matched,
-    rows,
-    needsConfirm: rows.length > 0,
+    preferred: preferred || '320k',
+    entries: normalized,
+    unsupportedCount,
   }
 }
 
-/** 根据批量计划生成每首歌的实际下载音质 */
-export function buildBatchQualityMap(plan) {
-  const qualityMap = {}
-  for (const m of plan?.matched || []) qualityMap[m.key] = m.quality
-  for (const row of plan?.rows || []) qualityMap[row.key] = row.selected
-  return qualityMap
-}
-
-export function buildBatchDownloadTasks(entries, source, qualityMap) {
+/**
+ * 按策略生成批量下载任务
+ * @returns {{ tasks: object[], skippedCount: number }}
+ */
+export function buildBatchDownloadTasks(entries, source, {
+  preferredQuality = '320k',
+  strategy = 'cascade',
+  floorQuality = '',
+} = {}) {
   const list = Array.isArray(entries) ? entries : []
-  return list.map((entry) => {
+  const preferred = preferredQuality || '320k'
+  const policy = ['cascade', 'floor', 'none'].includes(strategy) ? strategy : 'cascade'
+  const floor = policy === 'floor' ? (floorQuality || preferred) : ''
+
+  const tasks = []
+  let skippedCount = 0
+  const batchId = `batch_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+
+  for (const entry of list) {
     const item = entry?.item ?? entry
-    const key = entry?.key ?? trackSelectKey(item)
-    const quality = qualityMap?.[key] ?? '128k'
-    return buildDownloadTask(item, source, quality)
-  })
+    if (policy === 'floor' && !itemMeetsQualityFloor(item, preferred, floor)) {
+      skippedCount += 1
+      continue
+    }
+    tasks.push(buildDownloadTask(item, source, preferred, {
+      qualityPolicy: policy,
+      qualityFloor: floor,
+      preferredQuality: preferred,
+      autoCascade: policy === 'cascade',
+      deferExistAsk: true,
+      batchId,
+    }))
+  }
+
+  return { tasks, skippedCount }
 }
 
 /** 为单曲解析实际音质：优先指定，否则顺延更低档，再否则取可用最高 */
@@ -94,8 +114,10 @@ export function trackSelectKey(item, index = 0) {
 }
 
 /** 构建下载任务 payload */
-export function buildDownloadTask(item, source, quality) {
-  const q = resolveItemQuality(item, quality)
+export function buildDownloadTask(item, source, quality, extra = {}) {
+  const preferred = quality || '320k'
+  // 批量策略任务固定用目标音质入队，由服务端按策略再降档；单曲仍可按列表可用音质就近
+  const q = extra.qualityPolicy ? preferred : resolveItemQuality(item, preferred)
   const albumMid = pickField(item.albumMid, item.albummid, item.albumId)
   return {
     name: item.name,
@@ -122,6 +144,12 @@ export function buildDownloadTask(item, source, quality) {
     picUrl: item.picUrl || item.img || item.meta?.picUrl || '',
     types: item.types || [],
     qualitys: item.qualitys || item.types?.map(t => t.type) || item.meta?.qualitys || [],
+    qualityPolicy: extra.qualityPolicy || '',
+    qualityFloor: extra.qualityFloor || '',
+    preferredQuality: extra.preferredQuality || preferred,
+    autoCascade: Boolean(extra.autoCascade),
+    deferExistAsk: Boolean(extra.deferExistAsk),
+    batchId: extra.batchId || '',
   }
 }
 

@@ -1,4 +1,4 @@
-const MOBILE_UA_RE = /Android|iPhone|iPad|iPod|Mobile|webOS|BlackBerry|IEMobile|Opera Mini/i
+const MOBILE_UA_RE = /Android|iPhone|iPad|iPod|Mobile|webOS|BlackBerry|IEMobile|Opera Mini|HarmonyOS|OpenHarmony/i
 const IOS_UA_RE = /iPhone|iPad|iPod/i
 
 /** iOS / iPadOS 浏览器（Safari/Chrome 等均无元素全屏 API） */
@@ -20,7 +20,7 @@ export function supportsElementFullscreen() {
   )
 }
 
-/** 触摸为主的手机/平板（不依赖视口宽度，横屏大屏手机也能识别） */
+/** 触摸为主的手机/平板（不依赖视口宽度） */
 export function isTouchMobileDevice() {
   if (typeof window === 'undefined') return false
   try {

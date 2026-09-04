@@ -19,6 +19,31 @@ export const libraryLoadProgress = ref('')
 export const libraryScanPhase = ref('')
 export const libraryScanCurrent = ref(0)
 export const libraryScanTotal = ref(0)
+/** 音乐库歌曲网格列数：2 | 3 | 4 */
+export const librarySongColumns = ref(2)
+
+export const LIBRARY_SONG_COLUMNS_KEY = 'ui.librarySongColumns'
+
+export function normalizeLibrarySongColumns(value) {
+  const n = Number(value)
+  if (n === 3 || n === 4) return n
+  return 2
+}
+
+export function setLibrarySongColumns(value) {
+  librarySongColumns.value = normalizeLibrarySongColumns(value)
+  return librarySongColumns.value
+}
+
+export async function loadLibrarySongColumns(apiClient) {
+  try {
+    const settings = await apiClient.settings.get()
+    setLibrarySongColumns(settings?.[LIBRARY_SONG_COLUMNS_KEY])
+  } catch {
+    setLibrarySongColumns(2)
+  }
+  return librarySongColumns.value
+}
 
 export const libraryScanning = computed(() => libraryLoading.value || libraryMetaLoading.value)
 
@@ -573,7 +598,9 @@ export function countPlaylistTrackOrigins(tracks = []) {
 }
 
 export function buildPlaylistCards(allTracks, { limit } = {}) {
-  const recentAdded = [...allTracks].sort((a, b) => (b.mtime || 0) - (a.mtime || 0))
+  const recentAdded = [...allTracks]
+    .sort((a, b) => (b.mtime || 0) - (a.mtime || 0))
+    .map((t) => ({ ...enrichLocalCover(t), isLocal: true }))
   const smart = SMART_CARDS.map(card => {
     let tracks = []
     if (card.id === 'recent-added') tracks = recentAdded
@@ -1039,15 +1066,19 @@ export function resolveTracksByKeys(keys, allTracks, snapshots = []) {
   const map = new Map(allTracks.map(t => [getLibraryTrackKey(t), t]))
   const snapMap = new Map(snapshots.map(s => [s.key, s]))
   return keys.map((k) => {
-    if (map.has(k)) return enrichLocalCover(map.get(k))
+    if (map.has(k)) {
+      const track = enrichLocalCover(map.get(k))
+      return { ...track, isLocal: true }
+    }
     const snap = snapMap.get(k)
     if (!snap) return null
-    return enrichLocalCover({
+    const track = enrichLocalCover({
       ...snap,
       key: k,
       singer: snap.singer || '未知艺术家',
       album: snap.album || '未知专辑',
     })
+    return { ...track, isLocal: isLocalPlaylistTrack(track) }
   }).filter(Boolean)
 }
 
@@ -1070,6 +1101,7 @@ export function fileToLibraryTrack(file) {
     singer: file.artist || file.parsedArtist || '未知艺术家',
     album: album || '未知专辑',
     source: 'local',
+    isLocal: true,
     picUrl: pic,
     img: pic,
     hasPicture: Boolean(file.hasPicture || pic),

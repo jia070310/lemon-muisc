@@ -42,8 +42,13 @@
           />
         </svg>
         <div class="bar-cover" :class="coverStyle === 'disc' ? 'cover-disc' : 'cover-card'">
-          <img v-if="coverUrl" :src="coverUrl" alt="" :class="{ spinning: coverStyle === 'disc' && !isPaused && currentPlaying }" />
-          <div v-else class="cover-placeholder" :class="{ spinning: coverStyle === 'disc' && !isPaused && currentPlaying }">♪</div>
+          <CoverArt
+            :src="coverUrl"
+            :round="coverStyle === 'disc'"
+            :spin="coverStyle === 'disc' && !isPaused && !!currentPlaying"
+            loading="eager"
+            @error="onCoverError"
+          />
         </div>
       </div>
       <div class="player-info">
@@ -226,11 +231,12 @@ import {
   togglePause, stopPlay, seekTo, setVolume, toggleMute, fmtTime, initPlayer,
   playNext, playPrev, togglePlayMode, resumeOrTogglePause, unlockAudioFromGesture,
   removeFromQueue, clearQueue, playTrackAt, openFullscreenPlayer,
-  currentLocalTrackPath,
+  currentLocalTrackPath, tryFillCoverFromNetwork,
 } from '../stores/player.js'
 import { onMounted, onUnmounted, ref, computed, watch } from 'vue'
 import { cleanText, formatArtists } from '../utils/text.js'
 import SpectrumVisualizer from './SpectrumVisualizer.vue'
+import CoverArt from './CoverArt.vue'
 import { isFavorite, toggleFavorite } from '../stores/library.js'
 import { openTagEditTrack } from '../utils/tagEdit.js'
 import { isMobileUiContext } from '../utils/device.js'
@@ -242,6 +248,10 @@ const volumeWrapRef = ref(null)
 const isCompact = ref(false)
 const mobileLayoutTick = ref(0)
 const showVolumePanel = ref(false)
+
+function onCoverError() {
+  tryFillCoverFromNetwork()
+}
 
 const isMobilePlayer = computed(() => {
   mobileLayoutTick.value
@@ -534,23 +544,21 @@ async function onQueuePlayClick(index) {
   overflow: hidden;
   z-index: 1;
 }
-.bar-cover img,
-.cover-placeholder {
+.bar-cover img {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  display: block;
 }
 .cover-disc { border-radius: 50%; }
-.cover-disc img, .cover-disc .cover-placeholder { border-radius: 50%; }
+.cover-disc img { border-radius: 50%; }
 .cover-card { border-radius: 8px; }
-.cover-card img, .cover-card .cover-placeholder { border-radius: 8px; }
-.cover-placeholder {
+.cover-card img { border-radius: 8px; }
+.cover-img.fallback {
+  object-fit: contain;
+  padding: 18%;
+  box-sizing: border-box;
   background: var(--bg-input);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-muted);
-  font-size: 18px;
 }
 .spinning { animation: disc-spin 4s linear infinite; }
 @keyframes disc-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }

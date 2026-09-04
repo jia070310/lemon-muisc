@@ -60,7 +60,7 @@
         </div>
       </div>
       <div class="horizontal-scroll playlist-scroll">
-        <div class="playlist-row">
+        <div ref="playlistGridEl" class="playlist-row">
           <button
             v-for="card in visiblePlaylistCards"
             :key="card.id"
@@ -152,8 +152,7 @@
           @click="openAlbum(album)"
         >
           <div class="album-cover">
-            <img v-if="album.cover && !brokenCovers.has('album:' + album.id)" :src="album.cover" alt="" loading="lazy" @error="markCoverBroken('album:' + album.id)" />
-            <div v-else class="album-cover-fallback">{{ album.name.slice(0, 1) }}</div>
+            <CoverArt :src="album.cover" />
           </div>
           <div class="album-name" :title="album.name">{{ album.name }}</div>
           <div class="album-artist" :title="album.artist">{{ album.artist }}</div>
@@ -187,7 +186,7 @@
           <span>{{ loadProgress || '正在更新标签…' }}</span>
           <span v-if="libraryScanTotal > 0" class="library-meta-loading-pct">{{ libraryScanPercent }}%</span>
         </div>
-        <div class="song-grid">
+        <div class="song-grid" :class="'song-cols-' + songColumns">
           <div
             v-for="song in pagedSongs"
             :key="song.key"
@@ -203,8 +202,7 @@
               @click="onSongCoverClick(song)"
             >
               <div class="song-cover-media">
-                <img v-if="song.picUrl && !brokenCovers.has(song.key)" :src="song.picUrl" alt="" loading="lazy" @error="markCoverBroken(song.key)" />
-                <div v-else class="song-cover-fallback">{{ song.name.slice(0, 1) }}</div>
+                <CoverArt :src="song.picUrl" />
               </div>
               <span class="song-cover-ripple" aria-hidden="true" />
               <span
@@ -225,7 +223,11 @@
               <div class="song-artist" :title="song.singer">{{ song.singer }}</div>
               <div class="song-tags" :title="formatTrackTags(song)">{{ formatTrackTags(song) }}</div>
             </div>
-            <div class="song-actions">
+            <MobileRowActions
+              :open="actionsOpenKey === song.key"
+              @toggle="toggleRowActions(song.key)"
+              @close="actionsOpenKey = ''"
+            >
               <button
                 type="button"
                 class="icon-action-btn"
@@ -251,7 +253,7 @@
               >
                 <svg viewBox="0 0 24 24" width="16" height="16" :fill="isFavorite(song) ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8z"/></svg>
               </button>
-            </div>
+            </MobileRowActions>
           </div>
         </div>
         <div class="pager" v-if="totalPages > 1">
@@ -283,16 +285,20 @@
 </template>
 
 <script setup>
+defineOptions({ name: 'Library' })
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../api.js'
 import PlaylistCover from '../components/PlaylistCover.vue'
+import CoverArt from '../components/CoverArt.vue'
+import MobileRowActions from '../components/MobileRowActions.vue'
 import CreatePlaylistModal from '../components/CreatePlaylistModal.vue'
 import PickPlaylistModal from '../components/PickPlaylistModal.vue'
 import AppSelect from '../components/AppSelect.vue'
 import ClearableInput from '../components/ClearableInput.vue'
 import { formatTrackTags, formatAlbumTags } from '../utils/format.js'
 import { getTrackFilePath } from '../utils/trackPath.js'
+import { countAutoFillColumns } from '../utils/grid.js'
 import { playItem, addToQueue, isInQueue, isPlayingItem, isPaused } from '../stores/player.js'
 import {
   libraryTracks, libraryLoading, libraryMetaLoading, libraryLoadProgress,
@@ -301,6 +307,7 @@ import {
   sortAlbums, sortLibrarySongs,
   PLAYLIST_SORT_OPTIONS, ALBUM_SORT_OPTIONS, SONG_SORT_OPTIONS,
   scanLibrary, isFavorite, toggleFavorite,
+  librarySongColumns, loadLibrarySongColumns,
 } from '../stores/library.js'
 
 const PLAYLIST_SORT_KEY = 'lemon-library-playlist-sort'
@@ -313,10 +320,16 @@ const appliedKeyword = ref('')
 const page = ref(1)
 const pageSize = 20
 const hoverKey = ref('')
+const actionsOpenKey = ref('')
+
+function toggleRowActions(key) {
+  actionsOpenKey.value = actionsOpenKey.value === key ? '' : key
+}
 const tappingSongKey = ref('')
 const coverPendingPauseKey = ref('')
 const toast = ref(null)
 const loadProgress = libraryLoadProgress
+const songColumns = computed(() => librarySongColumns.value)
 const scanButtonLabel = computed(() => {
   if (!libraryScanning.value) return '刷新库'
   if (libraryScanPhase.value === 'tags' && libraryScanTotal.value > 0) {
@@ -345,10 +358,12 @@ function notifyScanComplete(result, { force = false } = {}) {
 }
 const showCreateModal = ref(false)
 const pickPlaylistTrack = ref(null)
-const brokenCovers = ref(new Set())
 const scanSummary = ref('')
 const showAllPlaylistCards = ref(false)
-const playlistPreviewLimit = 9
+const playlistGridEl = ref(null)
+const playlistCols = ref(4)
+const PLAYLIST_GRID_ROWS = 2
+const playlistPreviewLimit = computed(() => Math.max(PLAYLIST_GRID_ROWS, playlistCols.value * PLAYLIST_GRID_ROWS))
 const playlistSort = ref(localStorage.getItem(PLAYLIST_SORT_KEY) || 'default')
 const albumPreviewLimit = 12
 const albumPreviewLimitMobile = 4
@@ -356,16 +371,15 @@ const albumSort = ref(localStorage.getItem(ALBUM_SORT_KEY) || 'recent')
 const songSort = ref(localStorage.getItem(SONG_SORT_KEY) || 'recent')
 const isNarrow = ref(false)
 let narrowMq = null
+let playlistGridRo = null
+
+function updatePlaylistCols() {
+  const w = playlistGridEl.value?.clientWidth || 0
+  playlistCols.value = countAutoFillColumns(w, { minSize: 260, gap: 18 })
+}
 
 function updateNarrow() {
   isNarrow.value = narrowMq?.matches ?? window.innerWidth <= 768
-}
-
-function markCoverBroken(key) {
-  if (!key) return
-  const next = new Set(brokenCovers.value)
-  next.add(key)
-  brokenCovers.value = next
 }
 
 const genrePreviewLimit = 16
@@ -385,10 +399,10 @@ const visiblePlaylistCards = computed(() => {
   if (isNarrow.value) return sortedPlaylistCards.value
   return showAllPlaylistCards.value
     ? sortedPlaylistCards.value
-    : sortedPlaylistCards.value.slice(0, playlistPreviewLimit)
+    : sortedPlaylistCards.value.slice(0, playlistPreviewLimit.value)
 })
 const showPlaylistMoreBtn = computed(() => (
-  !isNarrow.value && sortedPlaylistCards.value.length > playlistPreviewLimit
+  !isNarrow.value && sortedPlaylistCards.value.length > playlistPreviewLimit.value
 ))
 
 const displayAlbums = computed(() => {
@@ -473,6 +487,12 @@ onMounted(() => {
   narrowMq = window.matchMedia('(max-width: 768px)')
   updateNarrow()
   narrowMq.addEventListener('change', updateNarrow)
+  if (typeof ResizeObserver !== 'undefined') {
+    playlistGridRo = new ResizeObserver(() => updatePlaylistCols())
+    if (playlistGridEl.value) playlistGridRo.observe(playlistGridEl.value)
+  }
+  updatePlaylistCols()
+  loadLibrarySongColumns(api).catch(() => {})
   loadScanSummary()
   scanLibrary(api, {
     onError: (msg) => showToast(msg, 'error'),
@@ -485,6 +505,8 @@ onMounted(() => {
 
 onUnmounted(() => {
   narrowMq?.removeEventListener('change', updateNarrow)
+  playlistGridRo?.disconnect()
+  playlistGridRo = null
 })
 
 async function refreshLibrary() {
@@ -915,6 +937,12 @@ function showToast(text, type = 'info') {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px 18px;
 }
+.song-grid.song-cols-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.song-grid.song-cols-4 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
 .song-item {
   display: flex;
   align-items: center;
@@ -1012,10 +1040,12 @@ function showToast(text, type = 'info') {
   transform: scale(1.28);
 }
 .song-meta { min-width: 0; flex: 1; }
-.song-actions {
+.song-actions,
+.mobile-row-actions {
   display: flex;
   gap: 6px;
   flex-shrink: 0;
+  align-items: center;
 }
 
 .pager {
@@ -1063,8 +1093,17 @@ function showToast(text, type = 'info') {
 .toast.error { background: var(--error); color: #fff; }
 .toast.info { background: var(--bg-card); border: 1px solid var(--border); }
 
+@media (max-width: 1200px) {
+  .song-grid.song-cols-4 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 1100px) {
-  .song-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .song-grid.song-cols-3,
+  .song-grid.song-cols-4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 768px) {
@@ -1159,7 +1198,9 @@ function showToast(text, type = 'info') {
   .album-artist { font-size: 12px; margin-top: 2px; }
   .album-tags { display: none; }
 
-  .song-grid {
+  .song-grid,
+  .song-grid.song-cols-3,
+  .song-grid.song-cols-4 {
     grid-template-columns: 1fr;
     gap: 0;
     border-radius: 12px;
@@ -1187,8 +1228,10 @@ function showToast(text, type = 'info') {
   .song-title { font-size: 15px; }
   .song-artist { font-size: 12px; }
   .song-tags { display: none; }
-  .song-actions { gap: 2px; }
-  .song-actions .icon-action-btn {
+  .song-actions,
+  .mobile-row-actions { gap: 2px; }
+  .song-actions .icon-action-btn,
+  .mobile-row-actions .icon-action-btn {
     width: 34px;
     height: 34px;
     padding: 0;

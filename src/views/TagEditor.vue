@@ -304,6 +304,12 @@
             <span>歌手</span>
             <ClearableInput v-model="fetchArtist" variant="plain" placeholder="歌手名" @enter="doFetchSearch" />
           </label>
+          <button
+            type="button"
+            class="btn-ghost btn-sm fetch-swap-btn"
+            title="对调歌手与歌名"
+            @click="swapFetchArtistTitle"
+          >对调</button>
           <label class="search-field">
             <span>歌名</span>
             <ClearableInput v-model="fetchTitle" variant="plain" placeholder="歌曲名" @enter="doFetchSearch" />
@@ -383,6 +389,7 @@
 </template>
 
 <script setup>
+defineOptions({ name: 'Tag' })
 import { ref, computed, reactive, onMounted, onBeforeUnmount, watch } from 'vue'
 import { api } from '../api.js'
 import {
@@ -407,6 +414,7 @@ import {
 import AppSelect from '../components/AppSelect.vue'
 import ClearableInput from '../components/ClearableInput.vue'
 import { collectDefaultExpandedPaths } from '../utils/dirTreeExpand.js'
+import { resolveSearchArtistTitle } from '../utils/filenameParse.js'
 
 const sourceOptions = [
   { value: 'tx', label: 'QQ音乐' },
@@ -414,9 +422,7 @@ const sourceOptions = [
 ]
 const missingFilterOptions = [
   { value: 'all', label: '全部文件' },
-  { value: 'album', label: '缺专辑' },
-  { value: 'cover', label: '缺封面' },
-  { value: 'lyric', label: '缺歌词' },
+  { value: 'any', label: '缺失信息' },
 ]
 
 const matching = tagMatchRunning
@@ -1096,24 +1102,23 @@ async function openFetchModal(intent) {
   fetchPreviewMeta.value = null
 
   const f = editingFile.value
-  fetchArtist.value = editForm.value?.artist || f?.parsedArtist || ''
-  fetchTitle.value = editForm.value?.title || f?.parsedTitle || ''
-
-  if (!fetchArtist.value && !fetchTitle.value && f?.fileName) {
-    const parsed = parseLocalFilename(f.fileName)
-    fetchArtist.value = parsed.artist
-    fetchTitle.value = parsed.title
-  }
+  const resolved = resolveSearchArtistTitle({
+    artist: editForm.value?.artist || '',
+    title: editForm.value?.title || '',
+    fileName: f?.fileName || '',
+    parsedArtist: f?.parsedArtist || '',
+    parsedTitle: f?.parsedTitle || '',
+  })
+  fetchArtist.value = resolved.artist
+  fetchTitle.value = resolved.title
 
   if (fetchArtist.value || fetchTitle.value) await doFetchSearch()
 }
 
-function parseLocalFilename(fileName) {
-  const base = fileName.replace(/\.[^.]+$/, '').trim()
-  const m = base.match(/^(.+?)\s*[-–—_]\s*(.+)$/)
-  // 与后端一致：歌手 - 歌名
-  if (m) return { artist: m[1].trim(), title: m[2].trim() }
-  return { title: base, artist: '' }
+function swapFetchArtistTitle() {
+  const a = fetchArtist.value
+  fetchArtist.value = fetchTitle.value
+  fetchTitle.value = a
 }
 
 function closeFetchModal() {
@@ -1769,6 +1774,11 @@ tr.playing .play-btn {
   min-width: 140px;
 }
 .search-field span { font-size: 12px; color: var(--text-muted); }
+.fetch-swap-btn {
+  flex-shrink: 0;
+  padding: 8px 10px;
+  white-space: nowrap;
+}
 .search-field :deep(input) {
   font-size: 13px;
   border-radius: var(--radius);

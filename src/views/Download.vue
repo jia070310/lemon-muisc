@@ -48,12 +48,14 @@
       <span class="c-warning">等待中 {{ countByStatus('waiting') }}</span>
       <span class="sep" v-if="countByStatus('paused')">|</span>
       <span class="c-warning" v-if="countByStatus('paused')">已暂停 {{ countByStatus('paused') }}</span>
-      <span class="sep" v-if="countByStatus('error') || countByStatus('await_confirm') || countByStatus('await_source')">|</span>
+      <span class="sep" v-if="countByStatus('error') || countByStatus('await_confirm') || countByStatus('await_source') || countByStatus('await_exist')">|</span>
       <span class="c-error" v-if="countByStatus('error')">失败 {{ countByStatus('error') }}</span>
-      <span class="sep" v-if="countByStatus('error') && (countByStatus('await_confirm') || countByStatus('await_source'))">|</span>
+      <span class="sep" v-if="countByStatus('error') && (countByStatus('await_confirm') || countByStatus('await_source') || countByStatus('await_exist'))">|</span>
       <span class="c-warning" v-if="countByStatus('await_confirm')">待确认降质 {{ countByStatus('await_confirm') }}</span>
-      <span class="sep" v-if="countByStatus('await_confirm') && countByStatus('await_source')">|</span>
+      <span class="sep" v-if="countByStatus('await_confirm') && (countByStatus('await_source') || countByStatus('await_exist'))">|</span>
       <span class="c-warning" v-if="countByStatus('await_source')">待切换音源 {{ countByStatus('await_source') }}</span>
+      <span class="sep" v-if="countByStatus('await_source') && countByStatus('await_exist')">|</span>
+      <span class="c-error" v-if="countByStatus('await_exist')">同名失败 {{ countByStatus('await_exist') }}</span>
     </div>
 
     <div class="task-list card" v-if="tasks.length">
@@ -71,8 +73,8 @@
           <div class="task-meta">{{ task.singer }} · {{ task.quality }} · {{ statusText(task.status) }}</div>
           <div
             class="task-error"
-            :class="{ warn: task.status === 'await_confirm' || task.status === 'await_source' }"
-            v-if="task.status === 'error' || task.status === 'await_confirm' || task.status === 'await_source'"
+            :class="{ warn: task.status === 'await_confirm' || task.status === 'await_source', errorish: task.status === 'await_exist' }"
+            v-if="task.status === 'error' || task.status === 'await_confirm' || task.status === 'await_source' || task.status === 'await_exist'"
           >
             <span class="task-error-text">{{ formatTaskError(task) }}</span>
             <button
@@ -129,6 +131,10 @@
             :title="downgradeTitle(task)"
           >降质下载</button>
           <button v-if="task.status === 'await_confirm'" class="btn-sm btn-ghost" @click="rejectDowngrade(task)" title="标记为失败，不再自动处理">放弃</button>
+          <template v-if="task.status === 'await_exist'">
+            <button class="btn-sm btn-ghost" @click="skipExist(task)" title="保留本地文件，跳过本次下载">跳过</button>
+            <button class="btn-sm btn-primary" @click="confirmExist(task)" :title="existOverwriteTitle(task)">仍下载当前音质</button>
+          </template>
           <template v-if="task.status === 'await_source'">
             <button
               v-for="alt in sourceFallbackAlternatives(task)"
@@ -159,6 +165,7 @@
 </template>
 
 <script setup>
+defineOptions({ name: 'Download' })
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { api } from '../api.js'
 import { onWS } from '../ws.js'
@@ -226,6 +233,10 @@ unsubs.push(onWS('download:status', (d) => {
     if (d.downgradeOffer !== undefined) {
       t.meta = { ...(t.meta || {}), downgradeOffer: d.downgradeOffer }
     }
+    if (d.existFileOffer !== undefined) {
+      t.meta = { ...(t.meta || {}), existFileOffer: d.existFileOffer }
+    }
+    if (d.filePath) t.file_path = d.filePath
   }
 }))
 unsubs.push(onWS('download:removed', (d) => {
@@ -411,6 +422,10 @@ async function loadList() {
 function countByStatus(s) { return tasks.value.filter(t => t.status === s).length }
 
 function formatTaskError(task) {
+  const exist = task.meta?.existFileOffer
+  if (task.status === 'await_exist' && exist) {
+    return `本地已有「${exist.fileName || '同名文件'}」（${exist.localLabel || '未知音质'}），当前要下 ${exist.requestedLabel || task.quality}`
+  }
   return formatUserError(
     task.error || task.meta?.downgradeOffer?.reason || task.meta?.sourceFallbackOffer?.reason,
     '下载失败，请稍后重试',
@@ -452,11 +467,12 @@ function statusText(s) {
     error: '失败',
     await_confirm: '待确认降质',
     await_source: '待切换音源',
+    await_exist: '下载失败（同名）',
   }
   return m[s] || s
 }
 function statusIcon(s) {
-  const m = { completed: '✓', paused: '⏸', waiting: '⏳', error: '✕', await_confirm: '?', await_source: '↪' }
+  const m = { completed: '✓', paused: '⏸', waiting: '⏳', error: '✕', await_confirm: '?', await_source: '↪', await_exist: '✕' }
   return m[s] || ''
 }
 
@@ -615,7 +631,7 @@ async function removeSelected() {
 async function confirmDowngrade(task) {
   try {
     await api.download.confirmDowngrade(task.id)
-    showToast('已确认降质，重新排队下载', 'success')
+    showToast('已确认降档，将自动逐档下降', 'success')
   } catch (e) {
     showToast(e.message || '确认失败', 'error')
   }
@@ -644,6 +660,28 @@ async function rejectDowngrade(task) {
   } catch (e) {
     showToast(e.message || '操作失败', 'error')
   }
+}
+async function skipExist(task) {
+  try {
+    await api.download.skipExist(task.id)
+    showToast('已跳过，使用本地文件', 'success')
+  } catch (e) {
+    showToast(e.message || '跳过失败', 'error')
+  }
+}
+async function confirmExist(task) {
+  try {
+    await api.download.confirmExist(task.id)
+    showToast('将覆盖同名文件并下载当前音质', 'success')
+  } catch (e) {
+    showToast(e.message || '确认失败', 'error')
+  }
+}
+function existOverwriteTitle(task) {
+  const offer = task.meta?.existFileOffer
+  const local = offer?.localLabel || '未知'
+  const want = offer?.requestedLabel || task.quality || '当前音质'
+  return `本地 ${local}，仍下载 ${want}（会覆盖同名文件）`
 }
 async function dismiss(id) {
   try {
@@ -782,6 +820,7 @@ function showToast(text, type = 'info') {
 .task-meta { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
 .task-error { font-size: 12px; color: var(--error); margin-top: 2px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .task-error.warn { color: var(--warning); }
+.task-error.errorish { color: var(--error); }
 .task-error-text { flex: 1; min-width: 0; }
 .task-error-retry {
   flex-shrink: 0;
@@ -801,6 +840,7 @@ function showToast(text, type = 'info') {
 .task-error-retry:disabled { opacity: 0.6; cursor: not-allowed; }
 .status-await_confirm,
 .status-await_source { color: var(--warning); }
+.status-await_exist { color: var(--error); }
 
 .task-progress {
   width: 140px;

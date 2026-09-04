@@ -13,13 +13,7 @@
     <section v-else class="detail card">
       <div class="detail-hero">
         <div class="album-cover-lg">
-          <img
-            v-if="album.cover && !coverBroken"
-            :src="album.cover"
-            alt=""
-            @error="coverBroken = true"
-          />
-          <div v-else class="album-cover-fallback">{{ album.name.slice(0, 1) }}</div>
+          <CoverArt :src="album.cover" />
         </div>
         <div class="detail-info">
           <h1 class="album-title">{{ album.name }}</h1>
@@ -53,14 +47,7 @@
               @click="onTrackCoverClick(song)"
             >
               <div class="song-cover-media">
-                <img
-                  v-if="song.picUrl && !brokenCovers.has(song.key)"
-                  :src="song.picUrl"
-                  alt=""
-                  loading="lazy"
-                  @error="markCoverBroken(song.key)"
-                />
-                <div v-else class="song-cover-fallback">{{ song.name.slice(0, 1) }}</div>
+                <CoverArt :src="song.picUrl" />
               </div>
               <span class="song-cover-ripple" aria-hidden="true" />
               <span
@@ -81,7 +68,11 @@
               <div class="track-artist">{{ song.singer }}</div>
               <div class="track-tags">{{ formatTrackTags(song) }}</div>
             </div>
-            <div class="track-row-actions">
+            <MobileRowActions
+              :open="actionsOpenKey === song.key"
+              @toggle="toggleRowActions(song.key)"
+              @close="actionsOpenKey = ''"
+            >
               <button type="button" class="icon-action-btn" title="加入试听列表" @click.stop="queueOne(song)">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
               </button>
@@ -97,7 +88,7 @@
               >
                 <svg viewBox="0 0 24 24" width="16" height="16" :fill="isFavorite(song) ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8z"/></svg>
               </button>
-            </div>
+            </MobileRowActions>
           </div>
         </div>
         <div v-if="totalPages > 1" class="pager">
@@ -127,6 +118,8 @@ import { api } from '../api.js'
 import { formatTrackTags, formatAlbumTags } from '../utils/format.js'
 import { getTrackFilePath } from '../utils/trackPath.js'
 import PickPlaylistModal from '../components/PickPlaylistModal.vue'
+import CoverArt from '../components/CoverArt.vue'
+import MobileRowActions from '../components/MobileRowActions.vue'
 import { playItem, addToQueue, isInQueue, isPlayingItem, isPaused } from '../stores/player.js'
 import {
   libraryTracks,
@@ -142,9 +135,12 @@ const route = useRoute()
 const albumId = ref('')
 const page = ref(1)
 const pageSize = 30
-const coverBroken = ref(false)
-const brokenCovers = ref(new Set())
 const hoverKey = ref('')
+const actionsOpenKey = ref('')
+
+function toggleRowActions(key) {
+  actionsOpenKey.value = actionsOpenKey.value === key ? '' : key
+}
 const tappingSongKey = ref('')
 const coverPendingPauseKey = ref('')
 const isNarrow = ref(false)
@@ -168,20 +164,11 @@ const pagedTracks = computed(() => {
 watch(() => route.query.id, (id) => {
   albumId.value = id ? String(id) : ''
   page.value = 1
-  coverBroken.value = false
 })
 
 watch(albumId, () => {
   page.value = 1
-  coverBroken.value = false
 })
-
-function markCoverBroken(key) {
-  if (!key) return
-  const next = new Set(brokenCovers.value)
-  next.add(key)
-  brokenCovers.value = next
-}
 
 onMounted(async () => {
   narrowMq = window.matchMedia('(max-width: 768px)')
@@ -487,7 +474,8 @@ function showToast(text, type = 'info') {
 .track-name { font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .track-artist { font-size: 13px; color: var(--text-muted); }
 .track-tags { font-size: 12px; color: var(--text-muted); margin-top: 3px; }
-.track-row-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.track-row-actions,
+.mobile-row-actions { display: flex; gap: 6px; flex-shrink: 0; align-items: center; }
 .pager {
   display: flex;
   align-items: center;

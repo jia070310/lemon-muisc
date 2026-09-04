@@ -6,6 +6,7 @@ import { requestSourceWithMeta, hasActiveSource } from '../sourceManager.js'
 import { buildMusicInfo } from '../utils/musicInfo.js'
 import { fetchTrackLyric, fetchTrackCover } from '../utils/trackMeta.js'
 import { resolveCoverUrl } from '../utils/cover.js'
+import { detectImageMime, fetchPicBuffer } from '../utils/fetchPic.js'
 import { isAllowedMediaPath } from '../utils/filePaths.js'
 import { formatUserError } from '../utils/userError.js'
 import { buildPlayUrlCacheKey, getCachedPlayUrl, getOrFetchPlayUrl } from '../utils/playUrlCache.js'
@@ -316,17 +317,18 @@ playRouter.post('/lyric', async (req, res) => {
     if (typeof lyric === 'string' && lyric) {
       return res.json({ ok: true, lyric, tlyric: '', rlyric: '' })
     }
-    if (!songId || !source || source === 'local') {
+    const musicInfo = buildMusicInfo(req.body)
+    const lookupSource = source === 'local' ? '' : (source || '')
+    if (!songId && !musicInfo.name) {
       return res.json({ ok: true, lyric: '', tlyric: '', rlyric: '' })
     }
 
-    const musicInfo = buildMusicInfo(req.body)
     const result = await playMetaLimiter(() => withTimeout(
       fetchTrackLyric({
-        source,
+        source: lookupSource,
         songId,
-        musicInfo,
-        meta: req.body,
+        musicInfo: { ...musicInfo, source: lookupSource || musicInfo.source },
+        meta: { ...req.body, source: lookupSource },
         useOtherSource: true,
       }),
       PLAY_META_TIMEOUT_MS,
@@ -345,18 +347,18 @@ playRouter.post('/lyric', async (req, res) => {
 playRouter.post('/cover', async (req, res) => {
   try {
     const { source } = req.body
-    if (!source || source === 'local') {
-      return res.json({ ok: true, url: req.body.picUrl || req.body.img || '' })
-    }
     const musicInfo = buildMusicInfo(req.body)
-    const direct = resolveCoverUrl(musicInfo)
-    if (direct) return res.json({ ok: true, url: direct })
+    const lookupSource = source === 'local' ? '' : (source || '')
+    if (lookupSource) {
+      const direct = resolveCoverUrl({ ...musicInfo, source: lookupSource })
+      if (direct) return res.json({ ok: true, url: direct })
+    }
 
     const url = await playMetaLimiter(() => withTimeout(
       fetchTrackCover({
-        source,
-        musicInfo,
-        meta: req.body,
+        source: lookupSource,
+        musicInfo: { ...musicInfo, source: lookupSource || musicInfo.source },
+        meta: { ...req.body, source: lookupSource },
         asBuffer: false,
         useOtherSource: true,
       }),
@@ -366,5 +368,25 @@ playRouter.post('/cover', async (req, res) => {
     res.json({ ok: true, url: url || '' })
   } catch {
     res.json({ ok: true, url: '' })
+  }
+})
+
+playRouter.get('/cover-img', async (req, res) => {
+  const url = req.query.url
+  if (!url || typeof url !== 'string' || !isAllowedRemoteUrl(url)) {
+    return res.status(400).json({ error: '无效封面链接' })
+  }
+  try {
+    const buf = await playMetaLimiter(() => withTimeout(
+      fetchPicBuffer(url),
+      PLAY_META_TIMEOUT_MS,
+      '获取封面超时，请稍后重试',
+    ))
+    if (!buf?.length) return res.status(404).json({ error: '封面不可用' })
+    res.setHeader('Content-Type', detectImageMime(buf))
+    res.setHeader('Cache-Control', 'private, max-age=86400')
+    res.send(buf)
+  } catch {
+    if (!res.headersSent) res.status(502).json({ error: '封面加载失败' })
   }
 })

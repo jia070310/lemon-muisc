@@ -3,7 +3,7 @@ import fs from 'fs'
 import path from 'path'
 import { getDB } from '../db.js'
 import { broadcast } from '../ws.js'
-import { requestSourceWithMeta } from '../sourceManager.js'
+import { requestSourceWithMeta, hasActiveSource } from '../sourceManager.js'
 import { writeMeta } from '../meta.js'
 import { buildMusicInfoFromTask } from '../utils/musicInfo.js'
 import { buildEmbedLyrics } from '../utils/lyric.js'
@@ -11,26 +11,39 @@ import { getDownloadSavePath } from '../utils/filePaths.js'
 import { fetchTrackLyric, fetchTrackCover } from '../utils/trackMeta.js'
 import {
   getNextLowerQuality,
+  isNoActiveSourceError,
   isRetryableDownloadError,
   qualityLabel,
+  formatMissingQualityError,
   sleep,
 } from '../utils/downloadQuality.js'
 import { formatUserError } from '../utils/userError.js'
-import { buildSourceFallbackOffer, getSourceFallbackMode } from '../utils/sourceFallback.js'
+import { buildSourceFallbackOffer } from '../utils/sourceFallback.js'
 import { extractMusicUrl } from '../utils/sourceResult.js'
 import { notifyLibraryChanged } from '../utils/libraryNotify.js'
 import { scanBatchAndCache } from '../utils/libraryCache.js'
 import { resolveDownloadGroupDir } from '../utils/downloadPath.js'
+import {
+  resolveExistFileMode,
+  findExistingSameNameFiles,
+  pickBestExistingFile,
+  buildExistFileOffer,
+} from '../utils/downloadExist.js'
 
 export const downloadRouter = Router()
 
 const activeDownloads = new Map()
 let runningCount = 0
+/** 用户对本批同名文件的默认处理：skip | overwrite */
+const autoExistActionByUser = new Map()
+/** 防抖：队列空闲后汇总同名待处理提醒 */
+const existSummaryTimers = new Map()
+const existSummaryNotifiedKeys = new Set()
 
 export function getDownloadQueueStats() {
   try {
     const row = getDB().prepare(`
-      SELECT COUNT(*) AS c FROM download_tasks WHERE status IN ('waiting', 'downloading', 'await_confirm', 'await_source')
+      SELECT COUNT(*) AS c FROM download_tasks WHERE status IN ('waiting', 'downloading', 'await_confirm', 'await_source', 'await_exist')
     `).get()
     return {
       running: runningCount,
@@ -88,8 +101,22 @@ downloadRouter.get('/list', (req, res) => {
   res.json(rows.map(r => ({ ...r, meta: JSON.parse(r.meta) })))
 })
 
+function getNoActiveSourcePayload() {
+  let imported = 0
+  try {
+    imported = Number(getDB().prepare('SELECT COUNT(*) AS c FROM user_apis').get()?.c) || 0
+  } catch {}
+  const error = imported > 0
+    ? '已导入音源但尚未激活，请先在设置中激活音源'
+    : '请先在设置中导入并激活音源'
+  return { error, code: 'NO_ACTIVE_SOURCE', imported }
+}
+
 downloadRouter.post('/add', async (req, res) => {
   try {
+    if (!hasActiveSource()) {
+      return res.status(400).json(getNoActiveSourcePayload())
+    }
     const { tasks } = req.body
     if (!Array.isArray(tasks) || !tasks.length) return res.status(400).json({ error: '没有下载任务' })
     if (tasks.length > 50) return res.status(400).json({ error: '单次最多添加 50 个下载任务' })
@@ -123,7 +150,13 @@ downloadRouter.post('/add', async (req, res) => {
           source: t.source,
           types: t.types || [],
           qualitys: t.qualitys || [],
-          requestedQuality: t.quality || '320k',
+          requestedQuality: t.preferredQuality || t.quality || '320k',
+          preferredQuality: t.preferredQuality || t.quality || '320k',
+          qualityPolicy: t.qualityPolicy || '',
+          qualityFloor: t.qualityFloor || '',
+          autoCascade: Boolean(t.autoCascade) || t.qualityPolicy === 'cascade',
+          deferExistAsk: Boolean(t.deferExistAsk),
+          batchId: t.batchId || '',
         })
         insert.run(id, t.name, t.singer || '', t.source || '', t.album || '', t.interval || '', t.quality || '320k', meta, req.user.id)
         added.push(id)
@@ -168,42 +201,21 @@ downloadRouter.post('/resume-all', (req, res) => {
   res.json({ ok: true, count })
 })
 
-/** 用户确认：以降一档音质重新下载（仅在同音质重试失败后出现） */
+/** 用户确认：以降一档音质重新下载；确认后本批任务自动逐档下降，不再逐首询问 */
 downloadRouter.post('/confirm-downgrade/:id', (req, res) => {
   try {
     const row = getTaskForUser(req.user, req.params.id)
     if (!row) return res.status(404).json({ error: '任务不存在' })
-    let meta = {}
-    try { meta = JSON.parse(row.meta || '{}') } catch { meta = {} }
+    const meta = parseTaskMeta(row)
     const offer = meta.downgradeOffer
     if (!offer?.toQuality) {
       return res.status(400).json({ error: '没有待确认的降质选项' })
     }
-    const toQuality = offer.toQuality
-    delete meta.downgradeOffer
-    meta.lastDowngrade = {
-      from: offer.fromQuality,
-      to: toQuality,
-      at: new Date().toISOString(),
-      reason: offer.reason || '',
-    }
-    cleanupTaskDownloadArtifacts(row, meta, getSettings())
-    clearTaskStoredFilePath(row.id)
-    meta.forceRedownload = true
-    getDB().prepare(`
-      UPDATE download_tasks
-      SET quality = ?, meta = ?, status = 'waiting', error = NULL, progress = 0, downloaded_size = 0, file_path = NULL
-      WHERE id = ?
-    `).run(toQuality, JSON.stringify(meta), req.params.id)
-    dlBroadcast('download:status', {
-      id: req.params.id,
-      status: 'waiting',
-      quality: toQuality,
-      error: '',
-      downgradeOffer: null,
-    })
+    enableAutoCascadeForUser(req.user.id)
+    applyQualityDowngrade(row, offer.toQuality, { autoCascade: true, reason: offer.reason || '' })
+    confirmPendingDowngradesForUser(req.user.id, { exceptId: row.id })
     processQueue()
-    res.json({ ok: true, quality: toQuality })
+    res.json({ ok: true, quality: offer.toQuality })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
@@ -227,6 +239,52 @@ downloadRouter.post('/reject-downgrade/:id', (req, res) => {
       error: reason,
       downgradeOffer: null,
     })
+    res.json({ ok: true })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+/** 同名文件已存在：仍下载当前音质（覆盖本地同名文件） */
+downloadRouter.post('/confirm-exist/:id', (req, res) => {
+  try {
+    const row = getTaskForUser(req.user, req.params.id)
+    if (!row) return res.status(404).json({ error: '任务不存在' })
+    if (row.status !== 'await_exist') {
+      return res.status(400).json({ error: '该任务没有待确认的同名文件' })
+    }
+    const applyToRest = Boolean(req.body?.applyToRest)
+    if (applyToRest && req.user?.id) {
+      autoExistActionByUser.set(req.user.id, 'overwrite')
+    }
+    confirmExistOverwrite(row)
+    if (applyToRest && req.user?.id) {
+      confirmPendingExistForUser(req.user.id, { exceptId: row.id, action: 'overwrite' })
+    }
+    processQueue()
+    res.json({ ok: true })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+/** 同名文件已存在：跳过下载，沿用本地文件 */
+downloadRouter.post('/skip-exist/:id', (req, res) => {
+  try {
+    const row = getTaskForUser(req.user, req.params.id)
+    if (!row) return res.status(404).json({ error: '任务不存在' })
+    if (row.status !== 'await_exist') {
+      return res.status(400).json({ error: '该任务没有待确认的同名文件' })
+    }
+    const applyToRest = Boolean(req.body?.applyToRest)
+    if (applyToRest && req.user?.id) {
+      autoExistActionByUser.set(req.user.id, 'skip')
+    }
+    completeTaskWithExistingFile(row)
+    if (applyToRest && req.user?.id) {
+      confirmPendingExistForUser(req.user.id, { exceptId: row.id, action: 'skip' })
+    }
+    processQueue()
     res.json({ ok: true })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -420,21 +478,101 @@ function pauseTasks(ids = null) {
   return count
 }
 
-function requeueTask(id, { allowedStatuses = ['paused', 'error', 'await_confirm'], cleanupFiles = true } = {}) {
+function requeueTask(id, { allowedStatuses = ['paused', 'error', 'await_confirm', 'await_exist'], cleanupFiles = true } = {}) {
   const row = getDB().prepare('SELECT * FROM download_tasks WHERE id = ?').get(id)
   if (!row || !allowedStatuses.includes(row.status)) return false
 
-  const forceRedownload = ['error', 'await_confirm'].includes(row.status)
+  const forceRedownload = ['error', 'await_confirm', 'await_exist'].includes(row.status)
   const { meta } = prepareTaskForRetry(row, { cleanupFiles, forceRedownload })
+  if (row.status === 'await_exist') {
+    meta.existFileConfirmed = true
+    delete meta.existFileOffer
+  }
 
   getDB().prepare(`
     UPDATE download_tasks
     SET status = 'waiting', error = NULL, progress = 0, downloaded_size = 0, file_path = NULL, meta = ?
     WHERE id = ?
   `).run(JSON.stringify(meta), id)
-  dlBroadcast('download:status', { id, status: 'waiting', error: '', progress: 0, downgradeOffer: null })
+  dlBroadcast('download:status', {
+    id,
+    status: 'waiting',
+    error: '',
+    progress: 0,
+    downgradeOffer: null,
+    existFileOffer: null,
+  })
   processQueue()
   return true
+}
+
+function confirmExistOverwrite(row) {
+  const meta = parseTaskMeta(row)
+  delete meta.existFileOffer
+  meta.existFileConfirmed = true
+  meta.forceRedownload = true
+  cleanupTaskDownloadArtifacts(row, meta, getSettings())
+  clearTaskStoredFilePath(row.id)
+  getDB().prepare(`
+    UPDATE download_tasks
+    SET status = 'waiting', error = NULL, progress = 0, downloaded_size = 0, file_path = NULL, meta = ?
+    WHERE id = ?
+  `).run(JSON.stringify(meta), row.id)
+  dlBroadcast('download:status', {
+    id: row.id,
+    status: 'waiting',
+    error: '',
+    progress: 0,
+    existFileOffer: null,
+  })
+}
+
+function completeTaskWithExistingFile(row) {
+  const settings = getSettings()
+  const meta = parseTaskMeta(row)
+  const offer = meta.existFileOffer
+  const filePath = offer?.filePath || findExistingSameNameFiles(row, settings)[0] || ''
+  delete meta.existFileOffer
+  meta.existFileSkipped = true
+  if (!filePath) {
+    getDB().prepare(`
+      UPDATE download_tasks SET status = 'error', error = ?, meta = ? WHERE id = ?
+    `).run('未找到本地同名文件', JSON.stringify(meta), row.id)
+    dlBroadcast('download:status', {
+      id: row.id,
+      status: 'error',
+      error: '未找到本地同名文件',
+      existFileOffer: null,
+    })
+    return
+  }
+  cleanupTaskDownloadArtifacts(row, meta, settings, { exceptPath: filePath })
+  getDB().prepare(`
+    UPDATE download_tasks SET status = 'completed', file_path = ?, progress = 1, error = NULL, meta = ? WHERE id = ?
+  `).run(filePath, JSON.stringify(meta), row.id)
+  dlBroadcast('download:status', {
+    id: row.id,
+    status: 'completed',
+    progress: 1,
+    filePath,
+    quality: row.quality,
+    existFileOffer: null,
+    skippedExist: true,
+  })
+  scanBatchAndCache([{ filePath }]).catch(() => {})
+  notifyLibraryChanged([filePath], { reason: 'download-skip-exist' })
+}
+
+function confirmPendingExistForUser(userId, { exceptId, action } = {}) {
+  if (!userId || !action) return
+  const rows = getDB().prepare(`
+    SELECT * FROM download_tasks WHERE user_id = ? AND status = 'await_exist'
+  `).all(userId)
+  for (const row of rows) {
+    if (row.id === exceptId) continue
+    if (action === 'overwrite') confirmExistOverwrite(row)
+    else if (action === 'skip') completeTaskWithExistingFile(row)
+  }
 }
 
 function resumeTask(id) {
@@ -476,6 +614,64 @@ function saveTaskMeta(taskId, meta) {
   getDB().prepare('UPDATE download_tasks SET meta = ? WHERE id = ?').run(JSON.stringify(meta), taskId)
 }
 
+function applyQualityDowngrade(row, toQuality, { autoCascade = false, reason = '' } = {}) {
+  const meta = parseTaskMeta(row)
+  delete meta.downgradeOffer
+  // 换音质后重新按激活音源顺序尝试，不锁死在上一档用过的音源
+  delete meta.sourceApiId
+  delete meta.skipSourceIds
+  meta.autoCascade = autoCascade || Boolean(meta.autoCascade)
+  meta.lastDowngrade = {
+    from: row.quality,
+    to: toQuality,
+    at: new Date().toISOString(),
+    reason: String(reason || '').slice(0, 300),
+  }
+  cleanupTaskDownloadArtifacts(row, meta, getSettings())
+  clearTaskStoredFilePath(row.id)
+  meta.forceRedownload = true
+  getDB().prepare(`
+    UPDATE download_tasks
+    SET quality = ?, meta = ?, status = 'waiting', error = NULL, progress = 0, downloaded_size = 0, file_path = NULL
+    WHERE id = ?
+  `).run(toQuality, JSON.stringify(meta), row.id)
+  dlBroadcast('download:status', {
+    id: row.id,
+    status: 'waiting',
+    quality: toQuality,
+    error: '',
+    downgradeOffer: null,
+  })
+}
+
+function enableAutoCascadeForUser(userId) {
+  if (!userId) return
+  const rows = getDB().prepare(`
+    SELECT * FROM download_tasks
+    WHERE user_id = ? AND status IN ('waiting', 'downloading', 'await_confirm')
+  `).all(userId)
+  for (const row of rows) {
+    const meta = parseTaskMeta(row)
+    if (meta.autoCascade) continue
+    meta.autoCascade = true
+    saveTaskMeta(row.id, meta)
+  }
+}
+
+function confirmPendingDowngradesForUser(userId, { exceptId } = {}) {
+  if (!userId) return
+  const rows = getDB().prepare(`
+    SELECT * FROM download_tasks WHERE user_id = ? AND status = 'await_confirm'
+  `).all(userId)
+  for (const row of rows) {
+    if (row.id === exceptId) continue
+    const meta = parseTaskMeta(row)
+    const toQuality = meta.downgradeOffer?.toQuality
+    if (!toQuality) continue
+    applyQualityDowngrade(row, toQuality, { autoCascade: true, reason: meta.downgradeOffer?.reason || '' })
+  }
+}
+
 async function processQueue() {
   const settings = getSettings()
   const maxDl = parseInt(settings['download.maxDownloadNum']) || 3
@@ -491,19 +687,20 @@ async function processQueue() {
     downloadTask(task, settings).finally(() => {
       runningCount--
       activeDownloads.delete(task.id)
+      if (task.user_id) scheduleExistSummary(task.user_id)
       processQueue()
     })
   }
 }
 
 async function resolveDownloadUrl(source, quality, musicInfo, settings, meta = {}) {
+  // 下载：每一档音质都按激活音源顺序全量尝试，再交给降档策略
   const result = await requestSourceWithMeta(source, 'musicUrl', {
     type: quality,
     quality,
     musicInfo,
   }, {
-    fallbackMode: getSourceFallbackMode(settings),
-    preferredSourceId: meta.sourceApiId || undefined,
+    fallbackMode: 'auto',
     skipSourceIds: meta.skipSourceIds || [],
   })
   const url = extractMusicUrl(result.data)
@@ -642,6 +839,136 @@ function markAwaitConfirm(task, meta, fromQuality, toQuality, reason) {
   })
 }
 
+async function markAwaitExist(task, meta, offer, { deferred = false } = {}) {
+  meta.existFileOffer = offer
+  if (deferred) meta.deferExistAsk = true
+  // 批量场景显示为失败文案；单曲仍提示可处理
+  const tip = deferred
+    ? `下载失败：本地已有同名文件（${offer.localLabel}），当前要下 ${offer.requestedLabel}`
+    : `本地已有同名文件（${offer.localLabel}），可跳过或下载 ${offer.requestedLabel}`
+  getDB().prepare(`
+    UPDATE download_tasks SET status = 'await_exist', error = ?, meta = ?, progress = 0 WHERE id = ?
+  `).run(tip, JSON.stringify(meta), task.id)
+  dlBroadcast('download:status', {
+    id: task.id,
+    status: 'await_exist',
+    error: tip,
+    quality: task.quality,
+    name: task.name,
+    singer: task.singer,
+    existFileOffer: offer,
+    deferredExist: deferred,
+  })
+  if (deferred && task.user_id) {
+    scheduleExistSummary(task.user_id)
+  }
+}
+
+/**
+ * 下载前检测同名文件。返回 true 表示已处理完毕（跳过/等待确认），调用方应直接 return。
+ */
+async function handleExistingSameNameFile(task, meta, settings) {
+  if (meta.forceRedownload || meta.existFileConfirmed) return false
+
+  const existingPaths = findExistingSameNameFiles(task, settings)
+  if (!existingPaths.length) return false
+
+  const mode = resolveExistFileMode(settings)
+  const picked = await pickBestExistingFile(existingPaths)
+  const offer = buildExistFileOffer({
+    task,
+    requestedQuality: task.quality || meta.preferredQuality || '320k',
+    best: picked?.best,
+    all: picked?.all || [],
+  })
+
+  const autoAction = task.user_id ? autoExistActionByUser.get(task.user_id) : ''
+  const effectiveMode = autoAction || mode
+
+  if (effectiveMode === 'overwrite') {
+    meta.existFileConfirmed = true
+    meta.forceRedownload = true
+    cleanupTaskDownloadArtifacts(task, meta, settings)
+    clearTaskStoredFilePath(task.id)
+    saveTaskMeta(task.id, meta)
+    return false
+  }
+
+  if (effectiveMode === 'skip') {
+    meta.existFileOffer = offer
+    saveTaskMeta(task.id, meta)
+    completeTaskWithExistingFile({ ...task, meta: JSON.stringify(meta) })
+    return true
+  }
+
+  // ask：批量延后统一提醒；单曲立即询问
+  const deferred = Boolean(meta.deferExistAsk)
+  await markAwaitExist(task, meta, offer, { deferred })
+  return true
+}
+
+function scheduleExistSummary(userId) {
+  if (!userId) return
+  const prev = existSummaryTimers.get(userId)
+  if (prev) clearTimeout(prev)
+  const timer = setTimeout(() => {
+    existSummaryTimers.delete(userId)
+    notifyExistSummaryIfIdle(userId)
+  }, 900)
+  timer.unref?.()
+  existSummaryTimers.set(userId, timer)
+}
+
+function notifyExistSummaryIfIdle(userId) {
+  if (!userId) return
+  try {
+    const active = getDB().prepare(`
+      SELECT COUNT(*) AS c FROM download_tasks
+      WHERE user_id = ? AND status IN ('waiting', 'downloading')
+    `).get(userId)
+    if (Number(active?.c) > 0) {
+      scheduleExistSummary(userId)
+      return
+    }
+
+    const rows = getDB().prepare(`
+      SELECT * FROM download_tasks WHERE user_id = ? AND status = 'await_exist' ORDER BY created_at ASC
+    `).all(userId)
+    const pending = []
+    for (const row of rows) {
+      const meta = parseTaskMeta(row)
+      if (!meta.existFileOffer?.filePath) continue
+      if (!meta.deferExistAsk) continue
+      pending.push({ row, meta })
+    }
+    if (!pending.length) return
+
+    const key = `${userId}:${pending.map(p => p.row.id).join(',')}`
+    if (existSummaryNotifiedKeys.has(key)) return
+    existSummaryNotifiedKeys.add(key)
+    // 限制集合大小，避免无限增长
+    if (existSummaryNotifiedKeys.size > 200) {
+      const first = existSummaryNotifiedKeys.values().next().value
+      existSummaryNotifiedKeys.delete(first)
+    }
+
+    dlBroadcast('download:exist-summary', {
+      count: pending.length,
+      items: pending.slice(0, 30).map(({ row, meta }) => ({
+        id: row.id,
+        name: row.name,
+        singer: row.singer,
+        quality: row.quality,
+        localLabel: meta.existFileOffer?.localLabel || '未知音质',
+        requestedLabel: meta.existFileOffer?.requestedLabel || row.quality,
+        fileName: meta.existFileOffer?.fileName || '',
+      })),
+    }, userId)
+  } catch (e) {
+    console.warn('[download] exist summary failed:', e.message)
+  }
+}
+
 function markError(taskId, message, meta) {
   const friendly = formatUserError(message, '下载失败，请稍后重试')
   const row = getDB().prepare('SELECT * FROM download_tasks WHERE id = ?').get(taskId)
@@ -653,7 +980,8 @@ function markError(taskId, message, meta) {
   taskMeta.downloadArtifacts = []
   saveTaskMeta(taskId, taskMeta)
   getDB().prepare("UPDATE download_tasks SET status = 'error', error = ?, file_path = NULL WHERE id = ?").run(friendly, taskId)
-  dlBroadcast('download:status', { id: taskId, status: 'error', error: friendly, downgradeOffer: null })
+  dlBroadcast('download:status', { id: taskId, status: 'error', error: friendly, downgradeOffer: null, existFileOffer: null })
+  if (row?.user_id) scheduleExistSummary(row.user_id)
 }
 
 function partPathFor(filePath) {
@@ -750,6 +1078,7 @@ function prepareTaskForRetry(taskRow, { cleanupFiles = true, forceRedownload = f
   }
   if (forceRedownload) meta.forceRedownload = true
   if (meta.downgradeOffer) delete meta.downgradeOffer
+  if (meta.existFileOffer) delete meta.existFileOffer
   if (meta.sourceFallbackOffer) delete meta.sourceFallbackOffer
   return { meta, settings }
 }
@@ -779,6 +1108,9 @@ async function downloadTask(task, settings) {
   let lastAttemptPath = ''
 
   try {
+    // 取链前先按「主文件名」检测本地同名（扩展名不同也算），避免无效请求
+    if (await handleExistingSameNameFile(task, meta, settings)) return
+
     for (let attempt = 1; attempt <= SAME_QUALITY_ATTEMPTS; attempt++) {
       // 任务可能已被暂停
       const latest = getDB().prepare('SELECT status FROM download_tasks WHERE id = ?').get(task.id)
@@ -835,15 +1167,12 @@ async function downloadTask(task, settings) {
           saveTaskMeta(task.id, meta)
         }
 
-        if (!forceRedownload && settings['download.skipExistFile'] === 'true' && fs.existsSync(filePath)) {
-          cleanupTaskDownloadArtifacts(task, meta, settings, { exceptPath: filePath })
-          getDB().prepare("UPDATE download_tasks SET status = 'completed', file_path = ?, progress = 1 WHERE id = ?")
-            .run(filePath, task.id)
-          await writeMetaIfNeeded(task, meta, filePath, ext, settings)
-          dlBroadcast('download:status', { id: task.id, status: 'completed', progress: 1, filePath, quality })
-          scanBatchAndCache([{ filePath }]).catch(() => {})
-          notifyLibraryChanged([filePath], { reason: 'download' })
-          return
+        // 取链后再次按目标路径兜底（极少：同名但不同目录策略变更等）
+        if (!forceRedownload && !meta.existFileConfirmed) {
+          const sameNameAgain = findExistingSameNameFiles(task, settings)
+          if (sameNameAgain.length) {
+            if (await handleExistingSameNameFile(task, meta, settings)) return
+          }
         }
 
         cleanupTaskDownloadArtifacts(task, meta, settings, { exceptPath: filePath })
@@ -853,6 +1182,7 @@ async function downloadTask(task, settings) {
         cleanupTaskDownloadArtifacts(task, meta, settings, { exceptPath: filePath })
         rememberDownloadArtifact(meta, filePath)
         meta.downloadArtifacts = [filePath]
+        delete meta.existFileConfirmed
         saveTaskMeta(task.id, meta)
 
         getDB().prepare("UPDATE download_tasks SET status = 'completed', file_path = ?, progress = 1, error = NULL WHERE id = ?")
@@ -866,7 +1196,6 @@ async function downloadTask(task, settings) {
         cleanupDownloadPath(partPath || filePath)
         if (filePath) rememberDownloadArtifact(meta, filePath)
         if (e.name === 'AbortError') return
-        if (e.code === 'SOURCE_FALLBACK_REQUIRED' && markSourceFallbackOffer(task, meta, e)) return
         lastError = e
         const retryable = isRetryableDownloadError(e)
         console.warn(`[下载] ${task.name} ${quality} 第 ${attempt}/${SAME_QUALITY_ATTEMPTS} 次失败: ${e.message}`)
@@ -879,13 +1208,49 @@ async function downloadTask(task, settings) {
       clearTaskStoredFilePath(task.id)
     }
     const reason = lastError?.message || '下载失败'
+    if (isNoActiveSourceError(lastError) || isNoActiveSourceError(reason)) {
+      markError(task.id, reason, meta)
+      return
+    }
+
+    const preferred = meta.preferredQuality || meta.requestedQuality || quality
+    const policy = meta.qualityPolicy || (meta.autoCascade ? 'cascade' : '')
+    const floor = policy === 'floor' ? (meta.qualityFloor || preferred) : ''
     const available = [
       ...(Array.isArray(meta.qualitys) ? meta.qualitys : []),
       ...(Array.isArray(meta.types) ? meta.types.map(t => t?.type || t).filter(Boolean) : []),
     ]
-    const nextQuality = getNextLowerQuality(quality, available)
+
+    if (policy === 'none') {
+      markError(task.id, formatMissingQualityError(preferred, '', reason), meta)
+      return
+    }
+
+    const nextQuality = getNextLowerQuality(
+      quality,
+      available,
+      policy === 'floor' ? floor : '',
+    )
+
     if (nextQuality) {
+      const latestMeta = parseTaskMeta(getDB().prepare('SELECT meta FROM download_tasks WHERE id = ?').get(task.id) || {})
+      const shouldCascade = policy === 'cascade'
+        || policy === 'floor'
+        || meta.autoCascade
+        || latestMeta.autoCascade
+      if (shouldCascade) {
+        applyQualityDowngrade({ ...task, quality }, nextQuality, {
+          autoCascade: policy !== 'floor',
+          reason,
+        })
+        return
+      }
       markAwaitConfirm(task, meta, quality, nextQuality, reason)
+      return
+    }
+
+    if (policy === 'floor' || policy === 'cascade') {
+      markError(task.id, formatMissingQualityError(preferred, floor, reason), meta)
       return
     }
     markError(task.id, reason, meta)

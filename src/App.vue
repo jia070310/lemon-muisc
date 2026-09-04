@@ -1,7 +1,11 @@
 <template>
   <div class="app">
-    <router-view v-if="isPublicPage" class="public-page" />
-    <template v-else>
+    <div v-if="showAuthSplash" class="auth-splash" aria-busy="true">
+      <img src="/icon.png" alt="" class="auth-splash-logo" />
+      <p>柠檬音乐下载</p>
+    </div>
+    <router-view v-else-if="isPublicPage" class="public-page" />
+    <template v-else-if="showAppShell">
     <aside class="sidebar">
       <div class="logo">
         <img src="/icon.png" alt="柠檬音乐下载" class="logo-img" />
@@ -119,8 +123,14 @@
       </div>
     </div>
 
-    <main class="content" :class="{ 'content-fixed': isTagPage }">
-      <router-view />
+    <main class="content" :class="{ 'content-fixed': isTagPage, 'content-navigating': isRouteLoading }">
+      <div v-if="isRouteLoading" class="route-loading-bar" aria-hidden="true" />
+      <PageSkeleton v-if="showRouteSkeleton" class="route-skeleton" :page="pendingRoutePage" />
+      <router-view v-slot="{ Component }">
+        <keep-alive :include="MAIN_TAB_NAMES">
+          <component :is="Component" v-show="!showRouteSkeleton" />
+        </keep-alive>
+      </router-view>
     </main>
 
     <PlayerBar />
@@ -149,6 +159,17 @@
       </div>
     </div>
 
+    <div v-if="noActiveSourcePrompt" class="modal-overlay downgrade-overlay" @click.self="clearNoActiveSourcePrompt">
+      <div class="downgrade-modal">
+        <h3>无法下载</h3>
+        <p class="downgrade-desc">{{ noActiveSourcePrompt.message }}</p>
+        <div class="downgrade-actions">
+          <button class="btn-ghost" type="button" @click="clearNoActiveSourcePrompt">关闭</button>
+          <router-link to="/settings?tab=source" class="btn-primary fault-settings-btn" @click="clearNoActiveSourcePrompt">前往设置 → 音源管理</router-link>
+        </div>
+      </div>
+    </div>
+
     <div v-if="downgradePrompt" class="modal-overlay downgrade-overlay" @click.self="dismissDowngradePrompt">
       <div class="downgrade-modal">
         <h3>下载失败，请选择下一步</h3>
@@ -163,9 +184,9 @@
         </div>
         <div class="downgrade-hint">
           <p><strong>重试原音质：</strong>失败多半是音源服务或网络短暂中断，稍后再用同一音质常能成功。</p>
-          <p><strong>降质下载：</strong>改用
+          <p><strong>确认降档并自动继续：</strong>从
             <em>{{ downgradePrompt.offer?.toLabel || downgradePrompt.offer?.toQuality }}</em>
-            ，取链通常更稳，但音质会低于你最初的选择。
+            开始自动逐档下降。此确认仅针对未在批量下载时选定策略的任务。
           </p>
         </div>
         <div class="downgrade-actions">
@@ -173,8 +194,8 @@
           <button class="btn-ghost" :disabled="downgradeBusy" @click="retrySameQualityPrompt" title="保持原音质再试一次（适合临时网络抖动）">
             {{ downgradeBusy === 'retry' ? '重试中…' : '重试原音质' }}
           </button>
-          <button class="btn-primary" :disabled="downgradeBusy" @click="acceptDowngradePrompt" title="改用更低音质重新下载">
-            {{ downgradeBusy === 'downgrade' ? '处理中…' : '确认降质下载' }}
+          <button class="btn-primary" :disabled="downgradeBusy" @click="acceptDowngradePrompt" title="确认后自动逐档下降，本批其余歌曲同样处理">
+            {{ downgradeBusy === 'downgrade' ? '处理中…' : '确认降档并自动继续' }}
           </button>
         </div>
       </div>
@@ -230,32 +251,107 @@
       </div>
     </div>
 
+    <div v-if="existFilePrompt" class="modal-overlay downgrade-overlay" @click.self="dismissExistFilePrompt">
+      <div class="downgrade-modal">
+        <h3>本地已有同名文件</h3>
+        <p class="downgrade-desc">
+          「{{ existFilePrompt.name }}」{{ existFilePrompt.singer ? ` - ${existFilePrompt.singer}` : '' }}
+        </p>
+        <div class="downgrade-reason">
+          <div class="downgrade-reason-label">本地文件</div>
+          <div>
+            {{ existFilePrompt.offer?.fileName || '未知文件' }}
+            <template v-if="existFilePrompt.offer?.fileCount > 1">
+              （另有 {{ existFilePrompt.offer.fileCount - 1 }} 个同名扩展名）
+            </template>
+          </div>
+          <div style="margin-top: 6px">
+            本地音质：<strong>{{ existFilePrompt.offer?.localLabel || '未知' }}</strong>
+          </div>
+          <div style="margin-top: 4px">
+            当前要下载：<strong>{{ existFilePrompt.offer?.requestedLabel || existFilePrompt.offer?.requestedQuality }}</strong>
+          </div>
+        </div>
+        <p v-if="existFilePrompt.offer?.localBetterOrEqual" class="downgrade-desc" style="margin-top: 8px">
+          本地音质已不低于当前选择，通常无需重复下载。
+        </p>
+        <label class="exist-apply-rest" style="display:flex;align-items:center;gap:8px;margin:12px 0 4px;font-size:13px;opacity:.9">
+          <input v-model="existApplyToRest" type="checkbox" />
+          后续同名文件同样处理
+        </label>
+        <div class="downgrade-actions">
+          <button class="btn-ghost" :disabled="existFileBusy" @click="dismissExistFilePrompt">稍后决定</button>
+          <button class="btn-ghost" :disabled="existFileBusy" @click="skipExistFilePrompt">
+            {{ existFileBusy === 'skip' ? '处理中…' : '跳过（用本地文件）' }}
+          </button>
+          <button class="btn-primary" :disabled="existFileBusy" @click="confirmExistFilePrompt">
+            {{ existFileBusy === 'overwrite' ? '处理中…' : '仍下载当前音质' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="existSummaryPrompt" class="modal-overlay downgrade-overlay" @click.self="dismissExistSummary">
+      <div class="downgrade-modal">
+        <h3>有同名文件需要处理</h3>
+        <p class="downgrade-desc">
+          批量下载已结束，其中 <strong>{{ existSummaryPrompt.count }}</strong> 首因本地已有同名文件未下载成功。
+        </p>
+        <div v-if="existSummaryPrompt.items?.length" class="downgrade-reason" style="max-height:180px;overflow:auto">
+          <div class="downgrade-reason-label">待处理列表</div>
+          <div
+            v-for="item in existSummaryPrompt.items.slice(0, 12)"
+            :key="item.id"
+            style="margin-top:6px;font-size:13px;line-height:1.4"
+          >
+            {{ item.name }}{{ item.singer ? ` - ${item.singer}` : '' }}
+            <span style="opacity:.75">（本地 {{ item.localLabel }} / 要下 {{ item.requestedLabel }}）</span>
+          </div>
+          <div v-if="existSummaryPrompt.count > 12" style="margin-top:6px;opacity:.7">
+            …还有 {{ existSummaryPrompt.count - 12 }} 首
+          </div>
+        </div>
+        <div class="downgrade-actions">
+          <button class="btn-ghost" :disabled="existSummaryBusy" @click="dismissExistSummary">稍后处理</button>
+          <button class="btn-ghost" :disabled="existSummaryBusy" @click="skipAllExistFromSummary">
+            {{ existSummaryBusy === 'skip' ? '处理中…' : '全部跳过' }}
+          </button>
+          <button class="btn-ghost" :disabled="existSummaryBusy" @click="overwriteAllExistFromSummary">
+            {{ existSummaryBusy === 'overwrite' ? '处理中…' : '全部重新下载' }}
+          </button>
+          <button class="btn-primary" :disabled="existSummaryBusy" @click="startExistHandlingFromSummary">
+            逐首处理
+          </button>
+        </div>
+      </div>
+    </div>
+
     <nav v-if="!showFullscreenPlayer" class="mobile-tabbar" aria-label="主导航">
-      <router-link to="/search" class="tab-item" active-class="active">
+      <router-link to="/search" class="tab-item" active-class="active" @touchstart.passive="onTabPrefetch('/search')" @mousedown="onTabPrefetch('/search')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
         <span>搜索</span>
       </router-link>
-      <router-link to="/discover" class="tab-item" active-class="active">
+      <router-link to="/discover" class="tab-item" active-class="active" @touchstart.passive="onTabPrefetch('/discover')" @mousedown="onTabPrefetch('/discover')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
         <span>发现</span>
       </router-link>
-      <router-link to="/library" class="tab-item" active-class="active">
+      <router-link to="/library" class="tab-item" active-class="active" @touchstart.passive="onTabPrefetch('/library')" @mousedown="onTabPrefetch('/library')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
         <span>音乐库</span>
       </router-link>
-      <router-link to="/download" class="tab-item" active-class="active">
+      <router-link to="/download" class="tab-item" active-class="active" @touchstart.passive="onTabPrefetch('/download')" @mousedown="onTabPrefetch('/download')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
         <span>下载</span>
       </router-link>
-      <router-link to="/tag" class="tab-item" active-class="active">
+      <router-link to="/tag" class="tab-item" active-class="active" @touchstart.passive="onTabPrefetch('/tag')" @mousedown="onTabPrefetch('/tag')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
         <span>标签</span>
       </router-link>
-      <router-link to="/settings" class="tab-item" active-class="active">
+      <router-link to="/settings" class="tab-item" active-class="active" @touchstart.passive="onTabPrefetch('/settings')" @mousedown="onTabPrefetch('/settings')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
         <span>设置</span>
       </router-link>
-      <router-link to="/about" class="tab-item" active-class="active">
+      <router-link to="/about" class="tab-item" active-class="active" @touchstart.passive="onTabPrefetch('/about')" @mousedown="onTabPrefetch('/about')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
         <span>关于</span>
         <span v-if="hasUpdate" class="tab-dot"></span>
@@ -272,13 +368,17 @@ import { connectWS, connected as wsConnected, onWS, disconnectWS } from './ws.js
 import { initPlayer } from './stores/player.js'
 import { checkForUpdate, hasUpdate } from './composables/useUpdateCheck.js'
 import { api } from './api.js'
-import { currentUser, logout as authLogout, isAuthReady, isSessionValid, getToken } from './utils/auth.js'
+import {
+  currentUser, logout as authLogout, isAuthReady, isSessionValid, getToken,
+  isAuthenticated, needsSetup,
+} from './utils/auth.js'
 import { useRouter } from 'vue-router'
 import { applyTheme, theme, THEME_KEY, COLOR_SCHEME_KEY, CUSTOM_COLOR_KEY } from './utils/theme.js'
 import { formatUserError } from './utils/userError.js'
 import {
   playlistPickTarget, stopPlaylistPick,
   initLibraryHotReload, initLibraryUserData, libraryHotNotice, clearLibraryHotNotice,
+  loadLibrarySongColumns,
 } from './stores/library.js'
 import {
   tagMatchRunning, tagMatchProgress, tagMatchResult, clearTagMatchResult,
@@ -295,12 +395,36 @@ import {
 import PlayerBar from './components/PlayerBar.vue'
 import TagEditModal from './components/TagEditModal.vue'
 import FullscreenPlayer from './components/FullscreenPlayer.vue'
+import PageSkeleton from './components/PageSkeleton.vue'
 import { showFullscreenPlayer } from './stores/player.js'
+import {
+  noActiveSourcePrompt,
+  clearNoActiveSourcePrompt,
+} from './stores/downloadGuard.js'
+import {
+  isRouteLoading, pendingRoutePage, MAIN_TAB_NAMES,
+  prefetchRoute, startRouteLoading,
+} from './stores/navigation.js'
+import { isMobileUiContext } from './utils/device.js'
 
 const route = useRoute()
 const router = useRouter()
 const isPublicPage = computed(() => ['Login', 'Setup', 'AuthCallback', 'ResetPassword', 'VerifyEmail'].includes(route.name))
+const showAppShell = computed(() => (
+  isAuthReady.value
+  && !isPublicPage.value
+  && !needsSetup.value
+  && isAuthenticated.value
+))
+const showAuthSplash = computed(() => !isPublicPage.value && !showAppShell.value)
 const isTagPage = computed(() => route.path === '/tag' || route.path.startsWith('/tag/'))
+const showRouteSkeleton = computed(() => isRouteLoading.value && isMobileUiContext(768))
+
+function onTabPrefetch(path) {
+  if (route.path === path) return
+  prefetchRoute(path)
+  startRouteLoading(path)
+}
 
 const hasAppNotices = computed(() => Boolean(
   setupBanner.value
@@ -320,6 +444,7 @@ let offSourceFaultWS = null
 const downgradePrompt = ref(null)
 /** @type {import('vue').Ref<false | 'retry' | 'downgrade' | 'reject'>} */
 const downgradeBusy = ref(false)
+const autoConfirmDowngrade = ref(false)
 let offDowngradeWS = null
 /** @type {Array<{ id: string, name?: string, singer?: string, offer?: object, downgradeOffer?: object }>} */
 const downgradeQueue = []
@@ -329,6 +454,16 @@ const downloadSourceBusy = ref('')
 const downloadSourceQueue = []
 let offDownloadSourceWS = null
 let offLibraryHotReload = null
+
+const existFilePrompt = ref(null)
+/** @type {import('vue').Ref<false | 'skip' | 'overwrite'>} */
+const existFileBusy = ref(false)
+const existApplyToRest = ref(false)
+const existFileQueue = []
+const existSummaryPrompt = ref(null)
+/** @type {import('vue').Ref<false | 'skip' | 'overwrite'>} */
+const existSummaryBusy = ref(false)
+let offExistSummaryWS = null
 
 function enqueueDownloadSourcePrompt(payload) {
   const offer = payload?.sourceFallbackOffer
@@ -408,9 +543,207 @@ async function loadPendingDownloadSourcePrompts() {
   } catch {}
 }
 
+function enqueueExistFilePrompt(payload) {
+  const offer = payload?.existFileOffer || payload?.offer
+  if (!payload?.id || !offer?.filePath) return
+  // 批量延后项不在中途弹窗
+  if (payload.deferredExist || payload.deferred) return
+  const item = {
+    id: payload.id,
+    name: payload.name || '未知歌曲',
+    singer: payload.singer || '',
+    offer,
+  }
+  if (existFilePrompt.value?.id === item.id) {
+    existFilePrompt.value = item
+    return
+  }
+  if (existFilePrompt.value) {
+    if (!existFileQueue.some(q => q.id === item.id)) existFileQueue.push(item)
+    return
+  }
+  existApplyToRest.value = false
+  existFilePrompt.value = item
+}
+
+function showExistSummary(payload) {
+  const count = Number(payload?.count) || 0
+  if (count <= 0) return
+  // 正在逐首处理时不打断
+  if (existFilePrompt.value) return
+  existSummaryPrompt.value = {
+    count,
+    items: Array.isArray(payload?.items) ? payload.items : [],
+  }
+}
+
+function dismissExistSummary() {
+  if (existSummaryBusy.value) return
+  existSummaryPrompt.value = null
+}
+
+async function skipAllExistFromSummary() {
+  const firstId = existSummaryPrompt.value?.items?.[0]?.id
+  if (!firstId) {
+    // 无列表时从接口取
+    try {
+      const list = await api.download.list()
+      const pending = (list || []).filter(t => t.status === 'await_exist' && t.meta?.existFileOffer?.filePath)
+      if (!pending.length) {
+        existSummaryPrompt.value = null
+        return
+      }
+      existSummaryBusy.value = 'skip'
+      await api.download.skipExist(pending[0].id, true)
+      existSummaryPrompt.value = null
+    } catch (e) {
+      alert(e.message || '全部跳过失败')
+    } finally {
+      existSummaryBusy.value = false
+    }
+    return
+  }
+  existSummaryBusy.value = 'skip'
+  try {
+    await api.download.skipExist(firstId, true)
+    existSummaryPrompt.value = null
+    existFileQueue.length = 0
+  } catch (e) {
+    alert(e.message || '全部跳过失败')
+  } finally {
+    existSummaryBusy.value = false
+  }
+}
+
+async function overwriteAllExistFromSummary() {
+  const firstId = existSummaryPrompt.value?.items?.[0]?.id
+  existSummaryBusy.value = 'overwrite'
+  try {
+    let id = firstId
+    if (!id) {
+      const list = await api.download.list()
+      id = (list || []).find(t => t.status === 'await_exist' && t.meta?.existFileOffer?.filePath)?.id
+    }
+    if (!id) {
+      existSummaryPrompt.value = null
+      return
+    }
+    await api.download.confirmExist(id, true)
+    existSummaryPrompt.value = null
+    existFileQueue.length = 0
+  } catch (e) {
+    alert(e.message || '全部重新下载失败')
+  } finally {
+    existSummaryBusy.value = false
+  }
+}
+
+async function startExistHandlingFromSummary() {
+  existSummaryBusy.value = 'overwrite'
+  try {
+    const list = await api.download.list()
+    const pending = (list || []).filter(t => t.status === 'await_exist' && t.meta?.existFileOffer?.filePath)
+    existSummaryPrompt.value = null
+    existFileQueue.length = 0
+    for (const task of pending) {
+      enqueueExistFilePrompt({
+        id: task.id,
+        name: task.name,
+        singer: task.singer,
+        existFileOffer: task.meta.existFileOffer,
+        deferredExist: false,
+      })
+    }
+  } catch (e) {
+    alert(e.message || '加载待处理列表失败')
+  } finally {
+    existSummaryBusy.value = false
+  }
+}
+
+function showNextExistFilePrompt() {
+  existApplyToRest.value = false
+  existFilePrompt.value = existFileQueue.shift() || null
+}
+
+function dismissExistFilePrompt() {
+  if (existFileBusy.value) return
+  existFilePrompt.value = null
+  showNextExistFilePrompt()
+}
+
+async function skipExistFilePrompt() {
+  const cur = existFilePrompt.value
+  if (!cur?.id) return
+  existFileBusy.value = 'skip'
+  try {
+    await api.download.skipExist(cur.id, existApplyToRest.value)
+    if (existApplyToRest.value) existFileQueue.length = 0
+    existFilePrompt.value = null
+    showNextExistFilePrompt()
+  } catch (e) {
+    alert(e.message || '跳过失败')
+  } finally {
+    existFileBusy.value = false
+  }
+}
+
+async function confirmExistFilePrompt() {
+  const cur = existFilePrompt.value
+  if (!cur?.id) return
+  existFileBusy.value = 'overwrite'
+  try {
+    await api.download.confirmExist(cur.id, existApplyToRest.value)
+    if (existApplyToRest.value) existFileQueue.length = 0
+    existFilePrompt.value = null
+    showNextExistFilePrompt()
+  } catch (e) {
+    alert(e.message || '确认下载失败')
+  } finally {
+    existFileBusy.value = false
+  }
+}
+
+async function loadPendingExistFilePrompts() {
+  try {
+    const list = await api.download.list()
+    const pending = (list || []).filter(t => t.status === 'await_exist' && t.meta?.existFileOffer?.filePath)
+    if (!pending.length) return
+    const active = (list || []).some(t => t.status === 'waiting' || t.status === 'downloading')
+    const immediate = pending.filter(t => !t.meta?.deferExistAsk)
+    const deferred = pending.filter(t => t.meta?.deferExistAsk)
+    for (const task of immediate) {
+      enqueueExistFilePrompt({
+        id: task.id,
+        name: task.name,
+        singer: task.singer,
+        existFileOffer: task.meta.existFileOffer,
+      })
+    }
+    if (!active && deferred.length && !existFilePrompt.value) {
+      showExistSummary({
+        count: deferred.length,
+        items: deferred.map(t => ({
+          id: t.id,
+          name: t.name,
+          singer: t.singer,
+          quality: t.quality,
+          localLabel: t.meta.existFileOffer?.localLabel || '未知音质',
+          requestedLabel: t.meta.existFileOffer?.requestedLabel || t.quality,
+          fileName: t.meta.existFileOffer?.fileName || '',
+        })),
+      })
+    }
+  } catch {}
+}
+
 function enqueueDowngradePrompt(payload) {
   const offer = payload?.downgradeOffer || payload?.offer
   if (!payload?.id || !offer?.toQuality) return
+  if (autoConfirmDowngrade.value) {
+    api.download.confirmDowngrade(payload.id).catch(() => {})
+    return
+  }
   const item = {
     id: payload.id,
     name: payload.name || '未知歌曲',
@@ -450,8 +783,9 @@ async function acceptDowngradePrompt() {
   downgradeBusy.value = 'downgrade'
   try {
     await api.download.confirmDowngrade(cur.id)
+    autoConfirmDowngrade.value = true
+    downgradeQueue.length = 0
     downgradePrompt.value = null
-    showNextDowngradePrompt()
   } catch (e) {
     alert(e.message || '确认降质失败')
   } finally {
@@ -587,11 +921,13 @@ watch([isAuthReady, isSessionValid], ([ready, valid]) => {
 onMounted(() => {
   initPlayer()
   initLibraryUserData(api).catch(() => {})
+  loadLibrarySongColumns(api).catch(() => {})
   offLibraryHotReload = initLibraryHotReload(api, { onWS })
   checkForUpdate()
   loadSourceFault()
   loadPendingDowngradePrompts()
   loadPendingDownloadSourcePrompts()
+  loadPendingExistFilePrompts()
   offSourceFaultWS = onWS('source.fault', (fault) => {
     sourceFault.value = fault?.id ? fault : null
     faultResult.value = null
@@ -601,14 +937,34 @@ onMounted(() => {
       enqueueDowngradePrompt(d)
     } else if (d?.status === 'await_source' && d.sourceFallbackOffer?.alternatives?.length) {
       enqueueDownloadSourcePrompt(d)
-    } else if (d?.id && downgradePrompt.value?.id === d.id && d.status !== 'await_confirm') {
-      // 已在下载页点确认/放弃时，关掉对应弹窗
-      downgradePrompt.value = null
-      showNextDowngradePrompt()
-    } else if (d?.id && downloadSourcePrompt.value?.id === d.id && d.status !== 'await_source') {
-      downloadSourcePrompt.value = null
-      showNextDownloadSourcePrompt()
+    } else if (d?.status === 'await_exist' && d.existFileOffer?.filePath) {
+      // 批量延后：不中途弹窗；单曲立即询问
+      if (!d.deferredExist) enqueueExistFilePrompt(d)
+    } else if (d?.id && d.status !== 'await_confirm') {
+      if (downgradePrompt.value?.id === d.id) {
+        downgradePrompt.value = null
+        showNextDowngradePrompt()
+      } else {
+        const idx = downgradeQueue.findIndex(q => q.id === d.id)
+        if (idx >= 0) downgradeQueue.splice(idx, 1)
+      }
+      if (d.status !== 'await_source' && downloadSourcePrompt.value?.id === d.id) {
+        downloadSourcePrompt.value = null
+        showNextDownloadSourcePrompt()
+      }
+      if (d.status !== 'await_exist') {
+        if (existFilePrompt.value?.id === d.id) {
+          existFilePrompt.value = null
+          showNextExistFilePrompt()
+        } else {
+          const eidx = existFileQueue.findIndex(q => q.id === d.id)
+          if (eidx >= 0) existFileQueue.splice(eidx, 1)
+        }
+      }
     }
+  })
+  offExistSummaryWS = onWS('download:exist-summary', (d) => {
+    showExistSummary(d)
   })
   offDownloadSourceWS = onWS('download:source-switched', (d) => {
     if (d?.toName) {
@@ -637,6 +993,7 @@ onUnmounted(() => {
   offSourceFaultWS?.()
   offDowngradeWS?.()
   offDownloadSourceWS?.()
+  offExistSummaryWS?.()
   offLibraryHotReload?.()
 })
 </script>
@@ -656,6 +1013,25 @@ onUnmounted(() => {
   width: 100%;
   min-width: 0;
   align-self: stretch;
+}
+
+.auth-splash {
+  flex: 1;
+  width: 100%;
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: radial-gradient(circle at 50% 0%, rgba(240, 112, 24, 0.14), transparent 52%), var(--bg);
+  color: var(--text-secondary);
+  font-size: 15px;
+}
+.auth-splash-logo {
+  width: 56px;
+  height: 56px;
 }
 
 .sidebar {
@@ -825,6 +1201,27 @@ onUnmounted(() => {
   min-height: 100dvh;
   width: calc(100% - var(--sidebar-width));
   max-width: calc(100% - var(--sidebar-width));
+  position: relative;
+}
+.route-loading-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  z-index: 60;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  animation: route-bar-slide 0.9s ease-in-out infinite;
+  pointer-events: none;
+}
+.route-skeleton {
+  position: relative;
+  z-index: 40;
+}
+@keyframes route-bar-slide {
+  0% { transform: translateX(-100%); opacity: 0.4; }
+  50% { opacity: 1; }
+  100% { transform: translateX(100%); opacity: 0.4; }
 }
 .content-fixed {
   height: 100vh;
@@ -1071,6 +1468,13 @@ onUnmounted(() => {
     position: relative;
     min-width: 0;
     padding: 6px 2px;
+    transition: transform 0.12s ease, opacity 0.12s ease, color 0.15s ease;
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+  }
+  .tab-item:active {
+    transform: scale(0.9);
+    opacity: 0.65;
   }
   .tab-item svg {
     width: 22px;

@@ -15,6 +15,7 @@ import { parseLyric } from '../utils/lrc.js'
 import { formatArtists } from '../utils/text.js'
 import { getTrackFilePath, isLocalTrack, isSameTrackPath } from '../utils/trackPath.js'
 import { withStreamAuth, stripStreamAuth } from '../utils/streamAuth.js'
+import { toPlayableCoverUrl } from '../utils/coverDisplay.js'
 
 export const currentPlaying = ref(null)
 export const loadingPlay = ref(null)
@@ -26,6 +27,11 @@ export const duration = ref(0)
 export const volume = ref(0.8)
 export const isMuted = ref(false)
 export const coverUrl = ref('')
+
+function setCoverUrl(url) {
+  coverUrl.value = toPlayableCoverUrl(url || '')
+}
+
 export const lyricLines = ref([])
 export const activeLyricIdx = ref(-1)
 export const coverStyle = ref('disc')
@@ -81,6 +87,7 @@ let volumeBeforeMute = 0.8
 let lyricFetchToken = 0
 let coverFetchToken = 0
 let localMetaFetchToken = 0
+const coverNetworkTried = new Set()
 /** 当前 lyricLines 对应的曲目 key，用于避免切歌/重试后残留上一首歌词 */
 let lyricTrackKey = ''
 let analyserBoundSrc = ''
@@ -338,6 +345,7 @@ function resetLyricState() {
   lyricLines.value = []
   activeLyricIdx.value = -1
   lyricTrackKey = ''
+  coverNetworkTried.clear()
 }
 
 function bindLyricsToTrack(trackKey, lyric) {
@@ -373,7 +381,7 @@ function applyLocalMetaToPlaying(data, filePath) {
   }
 
   if (updates.picUrl !== undefined || updates.img !== undefined) {
-    coverUrl.value = updates.picUrl || updates.img || ''
+    setCoverUrl(updates.picUrl || updates.img || '')
   }
   applyLyricStateFromTagMeta(data)
 
@@ -406,14 +414,56 @@ async function fetchLocalMeta(item) {
   const filePath = getTrackFilePath(item)
   if (!filePath) return
   const token = ++localMetaFetchToken
+  coverNetworkTried.delete(getTrackKey(item, item.source || 'local'))
   try {
     const res = await api.tag.read(filePath)
     if (token !== localMetaFetchToken) return
     const playingPath = getTrackFilePath(currentPlaying.value)
     if (!playingPath || !isSameTrackPath(playingPath, filePath)) return
     applyLocalMetaToPlaying(res?.data || res, filePath)
+    await fillLocalGapsFromNetwork(filePath)
   } catch {}
 }
+
+function hasFileCover(item) {
+  const pic = String(item?.picUrl || item?.img || coverUrl.value || '')
+  return pic.startsWith('data:') || pic.includes('/api/tag/cover')
+}
+
+function hasPlayableLyric(item) {
+  return Boolean(String(item?.lyric || '').trim()) || lyricLines.value.length > 0
+}
+
+async function fillLocalGapsFromNetwork(filePath) {
+  const playing = currentPlaying.value
+  if (!playing || !filePath) return
+  if (!isSameTrackPath(getTrackFilePath(playing), filePath)) return
+
+  if (!hasFileCover(playing)) {
+    await fetchCover(playing, playing.source)
+  }
+  const after = currentPlaying.value
+  if (!after || !isSameTrackPath(getTrackFilePath(after), filePath)) return
+  if (!hasPlayableLyric(after)) {
+    await fetchLyric(after, after.source)
+  }
+}
+
+/** 内嵌封面加载失败时，按网络试听逻辑补封面 */
+export function tryFillCoverFromNetwork() {
+  const item = currentPlaying.value
+  if (!item) return false
+  const key = getTrackKey(item, item.source)
+  if (coverNetworkTried.has(key)) return false
+  const src = String(coverUrl.value || '')
+  const fileCoverFailed = src.includes('/api/tag/cover') || src.startsWith('data:')
+  if (!isLocalTrack(item, item.source) && !fileCoverFailed) return false
+  if (!fileCoverFailed && src) return false
+  coverNetworkTried.add(key)
+  fetchCover(item, item.source, { force: true })
+  return true
+}
+
 function beginPlaybackBuffer() {
   isBuffering.value = true
   isPaused.value = false
@@ -868,7 +918,7 @@ function syncCurrentPlayingFromQueue(forcePaused = false) {
   const { item, source } = playQueue.value[currentQueueIndex.value]
   const cleaned = cleanTrackItem({ ...item, source: item.source || source })
   currentPlaying.value = cleaned
-  coverUrl.value = cleaned.picUrl || cleaned.img || ''
+  setCoverUrl(cleaned.picUrl || cleaned.img || '')
   bindLyricsToTrack(getTrackKey(cleaned, source), cleaned.lyric || '')
   applyDurationFallback(cleaned)
   if (forcePaused) isPaused.value = true
@@ -881,7 +931,7 @@ function restoreSessionState() {
       const data = JSON.parse(raw)
       if (data.currentPlaying?.name) {
         currentPlaying.value = cleanTrackItem(data.currentPlaying)
-        coverUrl.value = data.currentPlaying.picUrl || data.currentPlaying.img || ''
+        setCoverUrl(data.currentPlaying.picUrl || data.currentPlaying.img || '')
         bindLyricsToTrack(
           getTrackKey(currentPlaying.value, currentPlaying.value.source),
           data.currentPlaying.lyric || '',
@@ -893,7 +943,7 @@ function restoreSessionState() {
         } else if (!lyricLines.value.length) {
           fetchLyric(currentPlaying.value, currentPlaying.value.source)
         }
-        if (!currentPlaying.value.localPath && !coverUrl.value) {
+        if (!currentPlaying.value.localPath) {
           fetchCover(currentPlaying.value, currentPlaying.value.source)
         }
         // 刷新后默认暂停，用户可点播放继续
@@ -1416,10 +1466,10 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 }
     enrichedItem.localPath = trackKey.slice(6)
   }
   currentPlaying.value = cleanTrackItem(enrichedItem)
-  coverUrl.value = item.picUrl || item.img || ''
+  setCoverUrl(item.picUrl || item.img || '')
   const filePath = getTrackFilePath(item)
   if (!coverUrl.value && filePath && item.hasPicture !== false) {
-    coverUrl.value = localCoverUrl(filePath)
+    setCoverUrl(localCoverUrl(filePath))
   }
 
   beginPlaybackBuffer()
@@ -1476,16 +1526,17 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 }
         currentPlaying.value = cleanTrackItem(enrichedItem)
         isPaused.value = false
         recordRecentPlay({ ...currentPlaying.value, source })
-        coverUrl.value = item.picUrl || item.img || ''
+        setCoverUrl(item.picUrl || item.img || '')
         if (isLocal) {
+          if (item.lyric) bindLyricsToTrack(trackKey, item.lyric)
           if (!coverUrl.value && filePath && item.hasPicture !== false) {
-            coverUrl.value = item.picUrl || item.img || localCoverUrl(filePath)
+            setCoverUrl(item.picUrl || item.img || localCoverUrl(filePath))
           }
           fetchLocalMeta(item)
-        } else if (!coverUrl.value) {
+        } else {
           fetchCover(item, source)
+          ensureLyricsForTrack(item, source, trackKey)
         }
-        ensureLyricsForTrack(item, source, trackKey)
         updateActiveLyric(audio?.currentTime || 0)
         saveQueueState()
         updateMediaSession()
@@ -1708,7 +1759,7 @@ export function stopPlay() {
   isPaused.value = true
   currentTime.value = 0
   duration.value = 0
-  coverUrl.value = ''
+  setCoverUrl('')
   resetLyricState()
   playerError.value = ''
   clearMediaSession()
@@ -1770,7 +1821,6 @@ function ensureLyricsForTrack(item, source, trackKey) {
     bindLyricsToTrack(trackKey, item.lyric)
     return
   }
-  if (isLocalTrack(item, source)) return
   fetchLyric(item, source)
 }
 
@@ -1810,9 +1860,10 @@ async function fetchLyric(item, activeSource) {
   }
 }
 
-async function fetchCover(item, activeSource) {
+async function fetchCover(item, activeSource, { force = false } = {}) {
   const source = item.source || activeSource
   const trackKey = getTrackKey(item, source)
+  if (!force && hasFileCover(item)) return
   const token = ++coverFetchToken
   try {
     const res = await api.play.getCover(buildPlayPayload(item, source, '128k'))
@@ -1820,12 +1871,16 @@ async function fetchCover(item, activeSource) {
     if (res.url && currentPlaying.value) {
       const same = getTrackKey(currentPlaying.value, currentPlaying.value.source) === trackKey
       if (same) {
-        coverUrl.value = res.url
+        setCoverUrl(res.url)
         currentPlaying.value = { ...currentPlaying.value, picUrl: res.url, img: res.url }
         patchQueueItem(trackKey, { picUrl: res.url, img: res.url })
         saveQueueState()
         updateMediaSession()
       }
+    } else if (force && token === coverFetchToken) {
+      const same = currentPlaying.value
+        && getTrackKey(currentPlaying.value, currentPlaying.value.source) === trackKey
+      if (same && hasFileCover(currentPlaying.value)) setCoverUrl('')
     }
   } catch {}
 }

@@ -1,46 +1,47 @@
 <template>
   <div v-if="plan" class="batch-quality-overlay" @click.self="$emit('cancel')">
     <div class="batch-quality-modal" role="dialog" aria-modal="true" aria-labelledby="batch-quality-title">
-      <h3 id="batch-quality-title">确认批量下载音质</h3>
+      <h3 id="batch-quality-title">批量下载确认</h3>
       <p class="batch-quality-desc">
-        你选择了 <strong>{{ preferredLabel }}</strong>。
-        <template v-if="matchedCount > 0">{{ matchedCount }} 首将按该音质下载。</template>
-        <template v-if="downgradedCount > 0">
-          <span v-if="matchedCount > 0"> </span>
-          另有 <strong>{{ downgradedCount }}</strong> 首不支持该音质，将自动降为最接近的可用音质。
-        </template>
+        已选 <strong>{{ totalCount }}</strong> 首，目标音质
+        <strong>{{ preferredLabel }}</strong>。
+        多音源激活时会先按音源顺序尝试同一音质，再按下方策略处理。
+      </p>
+      <p v-if="unsupportedCount" class="batch-quality-hint">
+        其中约 {{ unsupportedCount }} 首在当前列表中未标明支持该音质，实际能否下载以取链结果为准。
       </p>
 
-      <div v-if="downgradedCount" class="batch-summary-box">
-        <button
-          type="button"
-          class="batch-summary-toggle"
-          @click="showDetails = !showDetails"
-        >
-          <span>{{ showDetails ? '收起详情' : '查看降档歌曲' }}（{{ downgradedCount }} 首）</span>
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" :class="{ open: showDetails }">
-            <polyline points="6 9 12 15 18 9"/>
-          </svg>
-        </button>
-        <div v-if="showDetails" class="batch-quality-list">
-          <div v-for="row in downgradedRows" :key="row.key" class="batch-quality-row">
-            <div class="batch-quality-meta">
-              <div class="batch-quality-name" :title="cleanText(row.name)">{{ cleanText(row.name) }}</div>
-              <div class="batch-quality-singer" :title="formatArtists(row.singer)">{{ formatArtists(row.singer) }}</div>
-            </div>
-            <div class="batch-quality-result">
-              <span class="batch-quality-from">{{ formatQuality(row.from) }}</span>
-              <span class="batch-quality-arrow">→</span>
-              <span class="batch-quality-to">{{ formatQuality(row.to) }}</span>
+      <div class="batch-strategy-list" role="radiogroup" aria-label="降档策略">
+        <label class="batch-strategy" :class="{ active: strategy === 'cascade' }">
+          <input v-model="strategy" type="radio" value="cascade" />
+          <div class="batch-strategy-body">
+            <div class="batch-strategy-title">自动逐档降级</div>
+            <div class="batch-strategy-desc">同一音质会先换其他已激活音源；仍失败则自动降一档继续，直到成功或没有更低音质。</div>
+          </div>
+        </label>
+
+        <label class="batch-strategy" :class="{ active: strategy === 'floor' }">
+          <input v-model="strategy" type="radio" value="floor" />
+          <div class="batch-strategy-body">
+            <div class="batch-strategy-title">最多降到指定音质</div>
+            <div class="batch-strategy-desc">只允许降到下面选择的音质；再低则不下载该曲（列表中标记为无要求音质）。</div>
+            <div class="batch-floor-row" @click.stop>
+              <span>最低音质</span>
+              <select v-model="floorQuality" :disabled="strategy !== 'floor'">
+                <option v-for="q in floorOptions" :key="q" :value="q">{{ formatQuality(q) }}</option>
+              </select>
             </div>
           </div>
-        </div>
-      </div>
+        </label>
 
-      <label class="batch-remember">
-        <input v-model="rememberChoice" type="checkbox" />
-        <span>以后不再提示，不支持所选音质时自动按最接近音质下载</span>
-      </label>
+        <label class="batch-strategy" :class="{ active: strategy === 'none' }">
+          <input v-model="strategy" type="radio" value="none" />
+          <div class="batch-strategy-body">
+            <div class="batch-strategy-title">不降档</div>
+            <div class="batch-strategy-desc">拿不到目标音质则直接失败，并在下载列表写明原因；仍可手动重试。</div>
+          </div>
+        </label>
+      </div>
 
       <div class="batch-quality-actions">
         <button type="button" class="btn-ghost" :disabled="busy" @click="$emit('cancel')">取消</button>
@@ -54,8 +55,7 @@
 
 <script setup>
 import { computed, ref, watch } from 'vue'
-import { getQualityLabel } from '../utils/quality.js'
-import { cleanText, formatArtists } from '../utils/text.js'
+import { getQualityLabel, QUALITY_ORDER } from '../utils/quality.js'
 
 const props = defineProps({
   plan: { type: Object, default: null },
@@ -65,26 +65,30 @@ const props = defineProps({
 
 const emit = defineEmits(['cancel', 'confirm'])
 
-const showDetails = ref(false)
-const rememberChoice = ref(false)
+const strategy = ref('cascade')
+const floorQuality = ref('320k')
 
-const matchedCount = computed(() => props.plan?.matched?.length || 0)
-const downgradedRows = computed(() => {
-  const preferred = props.plan?.preferred
-  return (props.plan?.rows || []).map((row) => ({
-    key: row.key,
-    name: row.item?.name || '',
-    singer: row.item?.singer || '',
-    from: preferred,
-    to: row.selected,
-  }))
+const totalCount = computed(() => props.plan?.entries?.length || 0)
+const unsupportedCount = computed(() => props.plan?.unsupportedCount || 0)
+const preferred = computed(() => props.plan?.preferred || '320k')
+
+const floorOptions = computed(() => {
+  const start = QUALITY_ORDER.indexOf(preferred.value)
+  if (start === -1) return [...QUALITY_ORDER]
+  return QUALITY_ORDER.slice(start)
 })
-const downgradedCount = computed(() => downgradedRows.value.length)
-const totalCount = computed(() => matchedCount.value + downgradedCount.value)
 
 watch(() => props.plan, () => {
-  showDetails.value = false
-  rememberChoice.value = false
+  strategy.value = 'cascade'
+  const opts = floorOptions.value
+  floorQuality.value = opts.includes('320k') ? '320k' : (opts[0] || preferred.value)
+})
+
+watch(preferred, () => {
+  const opts = floorOptions.value
+  if (!opts.includes(floorQuality.value)) {
+    floorQuality.value = opts.includes('320k') ? '320k' : (opts[0] || preferred.value)
+  }
 })
 
 function formatQuality(q) {
@@ -92,7 +96,10 @@ function formatQuality(q) {
 }
 
 function onConfirm() {
-  emit('confirm', { remember: rememberChoice.value })
+  emit('confirm', {
+    strategy: strategy.value,
+    floorQuality: strategy.value === 'floor' ? floorQuality.value : '',
+  })
 }
 </script>
 
@@ -109,8 +116,8 @@ function onConfirm() {
 }
 
 .batch-quality-modal {
-  width: min(480px, 100%);
-  max-height: min(80vh, 640px);
+  width: min(520px, 100%);
+  max-height: min(85vh, 720px);
   display: flex;
   flex-direction: column;
   background: var(--bg-elevated);
@@ -118,6 +125,7 @@ function onConfirm() {
   border-radius: 12px;
   padding: 22px 22px 18px;
   box-shadow: var(--shadow);
+  overflow: auto;
 }
 
 .batch-quality-modal h3 {
@@ -127,7 +135,7 @@ function onConfirm() {
 }
 
 .batch-quality-desc {
-  margin: 0 0 14px;
+  margin: 0 0 8px;
   font-size: 14px;
   line-height: 1.6;
   color: var(--text-secondary);
@@ -137,121 +145,77 @@ function onConfirm() {
   color: var(--accent);
 }
 
-.batch-summary-box {
-  margin-bottom: 14px;
-  border: 1px solid var(--border-light);
-  border-radius: var(--radius);
-  overflow: hidden;
-}
-
-.batch-summary-toggle {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 10px 12px;
-  border: none;
-  background: var(--bg-card, var(--bg));
-  color: var(--text-secondary);
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.batch-summary-toggle:hover {
-  background: var(--bg-hover);
-  color: var(--text);
-}
-
-.batch-summary-toggle svg {
-  flex-shrink: 0;
-  transition: transform 0.2s ease;
-}
-
-.batch-summary-toggle svg.open {
-  transform: rotate(180deg);
-}
-
-.batch-quality-list {
-  max-height: min(36vh, 280px);
-  overflow-y: auto;
-  border-top: 1px solid var(--border-light);
-}
-
-.batch-quality-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--border-light);
-}
-
-.batch-quality-row:last-child {
-  border-bottom: none;
-}
-
-.batch-quality-meta {
-  min-width: 0;
-  flex: 1;
-}
-
-.batch-quality-name {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.batch-quality-singer {
-  margin-top: 2px;
+.batch-quality-hint {
+  margin: 0 0 14px;
   font-size: 12px;
-  color: var(--text-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.batch-quality-result {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
-
-.batch-quality-from {
-  color: var(--text-muted);
-  text-decoration: line-through;
-}
-
-.batch-quality-arrow {
-  color: var(--text-muted);
-}
-
-.batch-quality-to {
-  color: var(--accent);
-  font-weight: 600;
-}
-
-.batch-remember {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  margin-bottom: 16px;
-  font-size: 13px;
   line-height: 1.5;
-  color: var(--text-secondary);
+  color: var(--text-muted);
+}
+
+.batch-strategy-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.batch-strategy {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 12px;
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  background: var(--bg-card, var(--bg));
   cursor: pointer;
   user-select: none;
 }
 
-.batch-remember input {
+.batch-strategy.active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.batch-strategy input {
   margin-top: 3px;
   flex-shrink: 0;
+}
+
+.batch-strategy-body {
+  min-width: 0;
+  flex: 1;
+}
+
+.batch-strategy-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.batch-strategy-desc {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.batch-floor-row {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.batch-floor-row select {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border-light);
+  background: var(--bg-input, var(--bg));
+  color: var(--text);
 }
 
 .batch-quality-actions {
@@ -268,17 +232,8 @@ function onConfirm() {
   }
 
   .batch-quality-modal {
-    max-height: 85vh;
+    max-height: 88vh;
     padding: 18px 16px 14px;
-  }
-
-  .batch-quality-row {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-
-  .batch-quality-result {
-    width: 100%;
   }
 }
 </style>

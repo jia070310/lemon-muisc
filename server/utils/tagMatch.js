@@ -244,10 +244,14 @@ export async function matchByFilename(fileName, source = 'wy', limit = 8) {
 
 export async function matchByArtistTitle(artist = '', title = '', source = 'wy', limit = 8, parsedOverride = null) {
   const sdkSource = normalizeTagSource(source)
+  const a = String(artist || '').trim()
+  const t = String(title || '').trim()
   const parsed = parsedOverride || {
-    title: (title || '').trim(),
-    artist: (artist || '').trim(),
-    keyword: [artist, title].filter(Boolean).join(' '),
+    title: t,
+    artist: a,
+    keyword: [a, t].filter(Boolean).join(' '),
+    altKeyword: a && t ? `${t} ${a}` : '',
+    swapped: a && t ? { title: a, artist: t, keyword: `${t} ${a}` } : null,
   }
 
   const keywords = []
@@ -258,13 +262,12 @@ export async function matchByArtistTitle(artist = '', title = '', source = 'wy',
   }
   if (parsed.artist && !parsed.title) keywords.push(parsed.artist)
   if (!keywords.length && parsed.keyword) keywords.push(parsed.keyword)
-
-  const uniqueKeywords = [...new Set(keywords.filter(Boolean))]
-  if (parsed.altKeyword) uniqueKeywords.push(parsed.altKeyword)
+  if (parsed.altKeyword) keywords.push(parsed.altKeyword)
+  if (parsed.swapped?.keyword) keywords.push(parsed.swapped.keyword)
 
   let best = []
   let fallback = []
-  for (const keyword of [...new Set(uniqueKeywords.filter(Boolean))]) {
+  for (const keyword of [...new Set(keywords.filter(Boolean))]) {
     const result = await searchMusic(keyword, sdkSource, 1, 20)
     const list = result.list || []
     fallback = fallback.concat(list.map(item => ({ ...item, _score: 0, _source: sdkSource })))

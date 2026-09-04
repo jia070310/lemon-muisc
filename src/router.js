@@ -2,14 +2,15 @@ import { createRouter, createWebHistory } from 'vue-router'
 import {
   getToken,
   initAuth,
-  isAuthReady,
   isSessionValid,
   needsSetup,
 } from './utils/auth.js'
+import { finishRouteLoading, startRouteLoading } from './stores/navigation.js'
+import Login from './views/Login.vue'
 
 const routes = [
-  { path: '/login', name: 'Login', component: () => import('./views/Login.vue'), meta: { public: true } },
-  { path: '/setup', name: 'Setup', component: () => import('./views/Login.vue'), meta: { public: true } },
+  { path: '/login', name: 'Login', component: Login, meta: { public: true } },
+  { path: '/setup', name: 'Setup', component: Login, meta: { public: true } },
   { path: '/reset-password', name: 'ResetPassword', component: () => import('./views/ResetPassword.vue'), meta: { public: true } },
   { path: '/verify-email', name: 'VerifyEmail', component: () => import('./views/VerifyEmail.vue'), meta: { public: true } },
   { path: '/', redirect: '/search' },
@@ -41,10 +42,11 @@ function ensureAuthInit() {
   return authInitPromise
 }
 
-router.beforeEach(async (to) => {
+router.beforeEach(async (to, from) => {
   await ensureAuthInit()
 
   if (to.meta.public) {
+    finishRouteLoading()
     if (needsSetup.value) {
       if (to.name === 'Login') {
         return { name: 'Setup', query: to.query }
@@ -59,15 +61,28 @@ router.beforeEach(async (to) => {
     return true
   }
 
-  if (!isAuthReady.value) return true
-
   if (needsSetup.value) {
+    finishRouteLoading()
     return { name: 'Setup', query: { redirect: to.fullPath } }
   }
 
   if (!getToken()) {
+    finishRouteLoading()
     return { name: 'Login', query: { redirect: to.fullPath } }
   }
 
+  if (to.path !== from.path) startRouteLoading(to)
   return true
+})
+
+router.afterEach((to, from) => {
+  if (to.meta.public || to.path === from.path) {
+    finishRouteLoading()
+    return
+  }
+  requestAnimationFrame(() => finishRouteLoading())
+})
+
+router.onError(() => {
+  finishRouteLoading()
 })

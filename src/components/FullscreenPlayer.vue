@@ -5,6 +5,10 @@
         v-if="showFullscreenPlayer"
         ref="playerRootRef"
         class="fs-player"
+        :class="{
+          'mobile-screen-expanded': isScreenExpanded,
+          'fs-has-sheet': showQueuePanel || showTagEditModal,
+        }"
         @click.self="closeFullscreenPlayer"
       >
         <div class="fs-bg" :style="bgStyle"></div>
@@ -18,7 +22,6 @@
 
         <div class="fs-top-left">
           <button
-            v-if="showScreenFullBtn"
             class="fs-screen-full"
             type="button"
             :title="isScreenExpanded ? '退出屏幕全屏' : '屏幕全屏'"
@@ -43,9 +46,15 @@
 
         <div class="fs-body">
           <div class="fs-cover-col">
-            <div class="fs-cover" :class="{ spinning: coverStyle === 'disc' && !isPaused && currentPlaying }">
-              <img v-if="coverUrl" :src="coverUrl" alt="" />
-              <div v-else class="fs-cover-placeholder">♪</div>
+            <div class="fs-cover" :class="{ disc: coverStyle === 'disc' }">
+              <CoverArt
+                :src="coverUrl"
+                :round="coverStyle === 'disc'"
+                :spin="coverStyle === 'disc' && !isPaused && !!currentPlaying"
+                slow
+                loading="eager"
+                @error="onCoverError"
+              />
             </div>
             <div class="fs-meta">
               <div class="fs-title">{{ cleanText(currentPlaying?.name) || '未知歌曲' }}</div>
@@ -223,18 +232,20 @@ import {
   showFullscreenPlayer, visualizerEnabled, volume, isMuted, playerError,
   togglePause, seekTo, setVolume, toggleMute, fmtTime, playNext, playPrev, togglePlayMode,
   closeFullscreenPlayer, showQueuePanel, playTrackAt, removeFromQueue, clearQueue,
-  resumeOrTogglePause, unlockAudioFromGesture, currentLocalTrackPath,
+  resumeOrTogglePause, unlockAudioFromGesture, currentLocalTrackPath, tryFillCoverFromNetwork,
 } from '../stores/player.js'
 import { cleanText, formatArtists } from '../utils/text.js'
 import { openTagEditTrack } from '../utils/tagEdit.js'
-import { isMobileUiContext, supportsElementFullscreen } from '../utils/device.js'
+import { showTagEditModal } from '../stores/tagEditModal.js'
+import { isMobileUiContext } from '../utils/device.js'
+import { isAppIconUrl } from '../utils/appIcon.js'
 import SpectrumVisualizer from './SpectrumVisualizer.vue'
+import CoverArt from './CoverArt.vue'
 
 const lyricPanelRef = ref(null)
 const lyricListRef = ref(null)
 const playerRootRef = ref(null)
 const isNativeFullscreen = ref(false)
-const nativeFullscreenSupported = ref(false)
 const mobileScreenExpanded = ref(false)
 const mobileLayoutTick = ref(0)
 let mobileViewportMq = null
@@ -245,20 +256,33 @@ const isMobileViewport = computed(() => {
 })
 
 const isScreenExpanded = computed(() => isNativeFullscreen.value || mobileScreenExpanded.value)
-const showScreenFullBtn = computed(() => nativeFullscreenSupported.value || isMobileViewport.value)
+
 /** @type {import('vue').Ref<(HTMLElement | null)[]>} */
 const lyricLineEls = ref([])
+const coverBroken = ref(false)
+
+const isFallbackCover = computed(() => !coverUrl.value || coverBroken.value)
 
 const volumePercent = computed(() => Math.round((volume.value || 0) * 100))
 
 const currentLocalPath = currentLocalTrackPath
 
 const bgStyle = computed(() => {
-  if (!coverUrl.value) return {}
+  if (isFallbackCover.value) return {}
   return {
     backgroundImage: `url(${coverUrl.value})`,
   }
 })
+
+watch(coverUrl, () => {
+  coverBroken.value = false
+})
+
+function onCoverError() {
+  if (isAppIconUrl(coverUrl.value)) return
+  if (tryFillCoverFromNetwork()) return
+  coverBroken.value = true
+}
 
 function setLyricLineRef(el, i) {
   if (el) lyricLineEls.value[i] = el
@@ -395,14 +419,6 @@ function updateMobileViewport() {
   bumpMobileLayout()
 }
 
-function onVisualViewportResize() {
-  bumpMobileLayout()
-}
-
-function onOrientationChange() {
-  bumpMobileLayout()
-}
-
 function onKeydown(e) {
   if (!showFullscreenPlayer.value) return
   if (e.key === 'Escape') {
@@ -454,10 +470,7 @@ onMounted(() => {
   mobileViewportMq = window.matchMedia('(max-width: 860px)')
   updateMobileViewport()
   mobileViewportMq.addEventListener('change', updateMobileViewport)
-  window.addEventListener('orientationchange', onOrientationChange)
   window.addEventListener('resize', bumpMobileLayout)
-  window.visualViewport?.addEventListener('resize', onVisualViewportResize)
-  nativeFullscreenSupported.value = supportsElementFullscreen()
   document.addEventListener('fullscreenchange', syncNativeFullscreenState)
   document.addEventListener('webkitfullscreenchange', syncNativeFullscreenState)
   document.addEventListener('keydown', onKeydown)
@@ -465,9 +478,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   mobileViewportMq?.removeEventListener('change', updateMobileViewport)
-  window.removeEventListener('orientationchange', onOrientationChange)
   window.removeEventListener('resize', bumpMobileLayout)
-  window.visualViewport?.removeEventListener('resize', onVisualViewportResize)
   document.removeEventListener('fullscreenchange', syncNativeFullscreenState)
   document.removeEventListener('webkitfullscreenchange', syncNativeFullscreenState)
   document.removeEventListener('keydown', onKeydown)
@@ -514,6 +525,7 @@ onUnmounted(() => {
   position: absolute;
   top: calc(14px + env(safe-area-inset-top, 0px));
   right: 18px;
+  /* 与大屏主层同级，须低于试听列表等二级浮层 */
   z-index: 5;
   width: 46px;
   height: 46px;
@@ -563,7 +575,14 @@ onUnmounted(() => {
 .fs-player:-webkit-full-screen .fs-top-left,
 .fs-player:fullscreen .fs-close,
 .fs-player:-webkit-full-screen .fs-close {
-  z-index: 20;
+  z-index: 5;
+}
+
+/* 打开二级浮层时，隐藏大屏角标控件，避免挡操作 */
+.fs-player.fs-has-sheet .fs-close,
+.fs-player.fs-has-sheet .fs-top-left {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .fs-body {
@@ -592,24 +611,8 @@ onUnmounted(() => {
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
   background: rgba(255, 255, 255, 0.06);
 }
-.fs-cover.spinning {
+.fs-cover.disc {
   border-radius: 50%;
-  animation: fs-spin 16s linear infinite;
-}
-.fs-cover img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-}
-.fs-cover-placeholder {
-  width: 100%;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 64px;
-  color: rgba(255, 255, 255, 0.35);
 }
 .fs-meta { text-align: center; max-width: 320px; }
 .fs-title {
@@ -841,8 +844,8 @@ onUnmounted(() => {
 .fs-queue-mask {
   position: absolute;
   inset: 0;
-  z-index: 8;
-  background: rgba(0, 0, 0, 0.45);
+  z-index: 40;
+  background: rgba(0, 0, 0, 0.5);
   display: flex;
   justify-content: flex-end;
 }
@@ -977,11 +980,6 @@ onUnmounted(() => {
 }
 .fs-btn-main:hover { transform: scale(1.04); }
 
-@keyframes fs-spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
-
 .fs-fade-enter-active,
 .fs-fade-leave-active {
   transition: opacity 0.22s ease;
@@ -1009,7 +1007,6 @@ onUnmounted(() => {
   .fs-cover {
     width: min(140px, 34vw);
   }
-  .fs-cover.spinning { animation-duration: 18s; }
   .fs-meta { max-width: 100%; }
   .fs-title { font-size: 17px; margin-bottom: 4px; }
   .fs-artist { font-size: 13px; }
@@ -1044,6 +1041,16 @@ onUnmounted(() => {
   .fs-close {
     width: 44px;
     height: 44px;
+    z-index: 5;
+  }
+  .fs-top-left {
+    z-index: 5;
+  }
+  .fs-screen-full {
+    width: 44px;
+    height: 44px;
+    background: rgba(0, 0, 0, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.12);
   }
   .fs-btn {
     width: 44px;
@@ -1067,8 +1074,26 @@ onUnmounted(() => {
   .fs-volume {
     display: none;
   }
+  /* 手机：试听列表做成居中二级矩形窗口，盖住大屏角标 */
+  .fs-queue-mask {
+    z-index: 40;
+    align-items: center;
+    justify-content: center;
+    padding: calc(12px + env(safe-area-inset-top, 0px)) 14px calc(12px + env(safe-area-inset-bottom, 0px));
+    background: rgba(0, 0, 0, 0.58);
+  }
   .fs-queue {
     width: min(100%, 420px);
+    height: auto;
+    max-height: min(78dvh, 640px);
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-left: 1px solid rgba(255, 255, 255, 0.12);
+    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+    overflow: hidden;
+  }
+  .fs-queue-header {
+    padding: 14px 16px 12px;
   }
 }
 

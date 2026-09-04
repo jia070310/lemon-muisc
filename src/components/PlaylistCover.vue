@@ -24,16 +24,7 @@
           <span class="playlist-compact-icon" v-html="icon"></span>
         </div>
         <template v-else>
-          <img
-            v-if="displayCoverUrl && !coverBroken"
-            :src="displayCoverUrl"
-            alt=""
-            loading="lazy"
-            @error="coverBroken = true"
-          />
-          <div v-else class="playlist-compact-fallback" :style="{ background: gradient }">
-            <span v-html="icon"></span>
-          </div>
+          <CoverArt :src="displayCoverUrl" />
         </template>
       </div>
       <div class="playlist-compact-meta">
@@ -57,16 +48,7 @@
 
     <!-- 歌曲封面风格 -->
     <template v-else>
-      <img
-        v-if="displayCoverUrl && !coverBroken"
-        :src="displayCoverUrl"
-        alt=""
-        loading="lazy"
-        @error="coverBroken = true"
-      />
-      <div v-else class="playlist-cover-fallback" :style="{ background: gradient }">
-        <span class="playlist-cover-icon" v-html="icon"></span>
-      </div>
+      <CoverArt :src="displayCoverUrl" />
       <div v-if="displayCoverUrl && showMeta" class="playlist-cover-shade"></div>
       <div v-if="showMeta" class="playlist-cover-meta">
         <span class="playlist-cover-name" :title="name">{{ name }}</span>
@@ -77,7 +59,8 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed } from 'vue'
+import CoverArt from './CoverArt.vue'
 
 const props = defineProps({
   coverUrl: { type: String, default: '' },
@@ -92,11 +75,6 @@ const props = defineProps({
 
 const isGradientStyle = computed(() => props.coverStyle === 'gradient')
 const displayCoverUrl = computed(() => (isGradientStyle.value ? '' : props.coverUrl))
-const coverBroken = ref(false)
-
-watch(() => props.coverUrl, () => {
-  coverBroken.value = false
-})
 </script>
 
 <style scoped>
@@ -117,6 +95,12 @@ watch(() => props.coverUrl, () => {
   min-height: 0;
   border-radius: 12px;
   background: transparent;
+}
+.playlist-cover:not(.size-compact) > :deep(.cover-art) {
+  position: absolute;
+  inset: 0;
+  width: auto;
+  height: auto;
 }
 
 .playlist-compact-cover {

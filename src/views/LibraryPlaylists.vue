@@ -3,12 +3,20 @@
     <div class="page-header-row">
       <button class="btn-ghost btn-sm" @click="$router.back()">← 返回</button>
       <div class="page-title">全部歌单</div>
+      <button
+        v-if="showPlaylistMoreBtn"
+        type="button"
+        class="btn-ghost btn-sm"
+        @click="showAllPlaylistCards = !showAllPlaylistCards"
+      >
+        {{ showAllPlaylistCards ? '收起' : '更多' }}
+      </button>
       <button class="btn-primary btn-sm" @click="openCreate">创建歌单</button>
     </div>
 
-    <div class="playlist-grid">
+    <div ref="playlistGridEl" class="playlist-grid">
       <button
-        v-for="card in allCards"
+        v-for="card in gridCards"
         :key="card.id"
         class="playlist-card-btn"
         :class="{ active: selectedId === card.id }"
@@ -30,6 +38,7 @@
     <section v-if="selectedCard" class="detail card">
       <div class="detail-hero">
         <PlaylistCover
+          v-if="!isNarrow"
           size="lg"
           :cover-style="selectedCard.coverStyle"
           :cover-url="selectedCard.coverUrl"
@@ -140,14 +149,7 @@
               @click="onTrackCoverClick(song)"
             >
               <div class="song-cover-media">
-                <img
-                  v-if="song.picUrl && !brokenCovers.has(song.key)"
-                  :src="song.picUrl"
-                  alt=""
-                  loading="lazy"
-                  @error="markCoverBroken(song.key)"
-                />
-                <div v-else class="song-cover-fallback">{{ song.name.slice(0, 1) }}</div>
+                <CoverArt :src="song.picUrl" />
               </div>
               <span class="song-cover-ripple" aria-hidden="true" />
               <span
@@ -172,7 +174,11 @@
               <div class="track-artist">{{ song.singer }}</div>
               <div class="track-tags">{{ formatTrackTags(song) }}</div>
             </div>
-            <div class="track-row-actions">
+            <MobileRowActions
+              :open="actionsOpenKey === song.key"
+              @toggle="toggleRowActions(song.key)"
+              @close="actionsOpenKey = ''"
+            >
               <button type="button" class="icon-action-btn" title="加入试听列表" @click.stop="queueOne(song)">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
               </button>
@@ -219,7 +225,7 @@
                   <div v-else class="quality-empty">暂无可用音质</div>
                 </div>
               </div>
-            </div>
+            </MobileRowActions>
           </div>
         </div>
         <div class="pager" v-if="trackTotalPages > 1">
@@ -291,6 +297,8 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import PlaylistCover from '../components/PlaylistCover.vue'
+import CoverArt from '../components/CoverArt.vue'
+import MobileRowActions from '../components/MobileRowActions.vue'
 import PlaylistEditModal from '../components/PlaylistEditModal.vue'
 import CreatePlaylistModal from '../components/CreatePlaylistModal.vue'
 import AddToPlaylistModal from '../components/AddToPlaylistModal.vue'
@@ -303,10 +311,12 @@ import { buildDownloadTask, getItemQualities } from '../utils/musicPayload.js'
 import { useQualityMenuPosition } from '../utils/qualityMenu.js'
 import { playItem, addToQueue, isInQueue, isPlayingItem, isPaused } from '../stores/player.js'
 import { formatTrackTags } from '../utils/format.js'
+import { countAutoFillColumns } from '../utils/grid.js'
 import {
   libraryTracks,
   libraryScanned,
   buildPlaylistCards,
+  SMART_PLAYLIST_IDS,
   updatePlaylist,
   removeTrackFromPlaylist,
   deletePlaylist,
@@ -322,6 +332,7 @@ import {
   toggleFavorite,
 } from '../stores/library.js'
 import { api } from '../api.js'
+import { assertActiveSourceForDownload } from '../stores/downloadGuard.js'
 
 const route = useRoute()
 const router = useRouter()
@@ -333,11 +344,21 @@ const showEditModal = ref(false)
 const showAddModal = ref(false)
 const showDeleteModal = ref(false)
 const toast = ref(null)
-const brokenCovers = ref(new Set())
 const hoverKey = ref('')
+const actionsOpenKey = ref('')
 const tappingSongKey = ref('')
+
+function toggleRowActions(key) {
+  actionsOpenKey.value = actionsOpenKey.value === key ? '' : key
+}
 const coverPendingPauseKey = ref('')
 const isNarrow = ref(false)
+const showAllPlaylistCards = ref(false)
+const playlistGridEl = ref(null)
+const playlistCols = ref(4)
+/** 全部歌单页桌面端只预览一行；音乐库首页仍为两行 */
+const PLAYLIST_GRID_ROWS = 1
+const playlistPreviewLimit = computed(() => Math.max(PLAYLIST_GRID_ROWS, playlistCols.value * PLAYLIST_GRID_ROWS))
 const pickPlaylistTrack = ref(null)
 const pickPlaylistSource = ref('local')
 const pickPlaylistExcludeId = ref('')
@@ -349,6 +370,12 @@ const selectedDownloadKeys = ref(new Set())
 const { menuStyle, positionMenu, clearMenuPosition } = useQualityMenuPosition()
 const { menuStyle: batchMenuStyle, positionMenu: positionBatchMenu, clearMenuPosition: clearBatchMenuPosition } = useQualityMenuPosition()
 let narrowMq = null
+let playlistGridRo = null
+
+function updatePlaylistCols() {
+  const w = playlistGridEl.value?.clientWidth || 0
+  playlistCols.value = countAutoFillColumns(w, { minSize: 260, gap: 18 })
+}
 
 const playlistSource = computed(() => editingPlaylist.value?.importSource || '')
 
@@ -372,14 +399,20 @@ function updateNarrow() {
   isNarrow.value = narrowMq?.matches ?? window.innerWidth <= 768
 }
 
-function markCoverBroken(key) {
-  if (!key) return
-  const next = new Set(brokenCovers.value)
-  next.add(key)
-  brokenCovers.value = next
-}
-
 const allCards = computed(() => buildPlaylistCards(libraryTracks.value))
+const customCards = computed(() => allCards.value.filter((c) => !SMART_PLAYLIST_IDS.has(c.id)))
+const smartCards = computed(() => allCards.value.filter((c) => SMART_PLAYLIST_IDS.has(c.id)))
+/** 有自定义/导入歌单时只展示这些；没有时才展示最近添加 / 收藏 / 最近播放 */
+const sourceCards = computed(() => (
+  customCards.value.length ? customCards.value : smartCards.value
+))
+const gridCards = computed(() => {
+  if (isNarrow.value || showAllPlaylistCards.value) return sourceCards.value
+  return sourceCards.value.slice(0, playlistPreviewLimit.value)
+})
+const showPlaylistMoreBtn = computed(() => (
+  !isNarrow.value && sourceCards.value.length > playlistPreviewLimit.value
+))
 const selectedCard = computed(() => allCards.value.find(c => c.id === selectedId.value) || null)
 const canEditSelected = computed(() => isCustomPlaylist(selectedId.value))
 const isImportedSelected = computed(() => isImportedPlaylist(editingPlaylist.value))
@@ -445,11 +478,22 @@ watch(() => route.query.id, (id) => {
   selectedId.value = id ? String(id) : ''
 })
 
+watch([selectedId, playlistPreviewLimit, sourceCards], () => {
+  if (isNarrow.value || showAllPlaylistCards.value || !selectedId.value) return
+  const idx = sourceCards.value.findIndex((c) => c.id === selectedId.value)
+  if (idx >= playlistPreviewLimit.value) showAllPlaylistCards.value = true
+})
+
 onMounted(async () => {
   narrowMq = window.matchMedia('(max-width: 768px)')
   updateNarrow()
   narrowMq.addEventListener('change', updateNarrow)
   document.addEventListener('click', closeMenus)
+  if (typeof ResizeObserver !== 'undefined') {
+    playlistGridRo = new ResizeObserver(() => updatePlaylistCols())
+    if (playlistGridEl.value) playlistGridRo.observe(playlistGridEl.value)
+  }
+  updatePlaylistCols()
   const q = route.query.id
   if (q) selectedId.value = String(q)
   if (!libraryScanned.value) {
@@ -460,6 +504,8 @@ onMounted(async () => {
 onUnmounted(() => {
   narrowMq?.removeEventListener('change', updateNarrow)
   document.removeEventListener('click', closeMenus)
+  playlistGridRo?.disconnect()
+  playlistGridRo = null
 })
 
 function selectCard(card) {
@@ -530,6 +576,7 @@ async function downloadOne(song, quality) {
   closeMenus()
   const item = trackPayload(song)
   const source = songDownloadSource(song)
+  if (!(await assertActiveSourceForDownload())) return
   try {
     await api.download.add([buildDownloadTask(item, source, quality)])
     showToast(`已添加下载: ${song.name}`, 'success')
@@ -931,7 +978,8 @@ function showToast(text, type = 'info') {
 }
 .track-artist { font-size: 13px; color: var(--text-muted); }
 .track-tags { font-size: 12px; color: var(--text-muted); margin-top: 3px; }
-.track-row-actions { display: flex; gap: 6px; flex-shrink: 0; align-items: center; }
+.track-row-actions,
+.mobile-row-actions { display: flex; gap: 6px; flex-shrink: 0; align-items: center; }
 .dl-wrap { position: relative; display: inline-block; }
 .dl-btn:hover { color: var(--success); }
 .quality-menu {
@@ -1018,6 +1066,10 @@ function showToast(text, type = 'info') {
 }
 
 @media (max-width: 768px) {
+  .detail { padding: 12px; }
+  .detail-hero { gap: 0; margin-bottom: 14px; }
+  .detail-info h2 { font-size: 20px; margin-bottom: 6px; }
+  .detail-meta { margin-bottom: 12px; font-size: 13px; }
   .song-cover-btn {
     width: 48px;
     height: 48px;

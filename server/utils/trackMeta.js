@@ -21,7 +21,14 @@ function lyricSearchKeywords(merged = {}, task = {}) {
   const keywords = []
   if (rawName && singer) keywords.push(`${rawName} ${singer}`)
   if (normalized && singer) keywords.push(`${normalized} ${singer}`)
+  if (rawName) keywords.push(rawName)
+  if (normalized) keywords.push(normalized)
   return [...new Set(keywords.filter(Boolean))]
+}
+
+function isOnlineSource(source) {
+  const src = String(source || '')
+  return Boolean(src && src !== 'local')
 }
 
 /** 各平台获取歌词时优先使用的 ID */
@@ -58,7 +65,7 @@ export async function fetchTrackLyric({
   useOtherSource = true,
 } = {}) {
   const merged = { ...musicInfo, ...meta, ...task, source: source || musicInfo.source || meta.source }
-  const src = merged.source || source
+  const src = isOnlineSource(merged.source || source) ? (merged.source || source) : ''
   const id = pickLyricSongId(src, songId || merged.songId || merged.songmid || merged.hash || merged.copyrightId, merged)
   const extra = lyricLookupExtra(merged)
 
@@ -92,8 +99,8 @@ export async function fetchTrackLyric({
   try {
     const keywords = lyricSearchKeywords(merged, task)
     if (!keywords.length) return null
-    const allowOther = useOtherSource && settings?.['download.isUseOtherSource'] !== 'false'
-    const fallbackSources = allowOther ? ['wy', 'tx', 'kw', 'kg', 'mg'] : [src].filter(Boolean)
+    const allowOther = !src || (useOtherSource && settings?.['download.isUseOtherSource'] !== 'false')
+    const fallbackSources = (allowOther ? ['wy', 'tx', 'kw', 'kg', 'mg'] : [src]).filter(isOnlineSource)
     const seen = new Set()
     for (const keyword of keywords) {
       for (const trySrc of fallbackSources) {
@@ -134,7 +141,7 @@ export async function fetchTrackCover({
   useOtherSource = true,
 } = {}) {
   const merged = { ...musicInfo, ...meta, ...task, source: source || musicInfo.source || meta.source }
-  const src = merged.source || source
+  const src = isOnlineSource(merged.source || source) ? (merged.source || source) : ''
   const candidates = resolveCoverCandidates(merged)
 
   if (asBuffer) {
@@ -166,8 +173,8 @@ export async function fetchTrackCover({
   try {
     const keyword = [merged.name || task?.name, merged.singer || task?.singer].filter(Boolean).join(' ')
     if (!keyword) return asBuffer ? null : ''
-    const allowOther = useOtherSource
-    const fallbackSources = allowOther ? [src, 'wy', 'tx', 'kw', 'kg', 'mg'].filter(Boolean) : [src].filter(Boolean)
+    const allowOther = !src || useOtherSource
+    const fallbackSources = (allowOther ? [src, 'wy', 'tx', 'kw', 'kg', 'mg'] : [src]).filter(isOnlineSource)
     const seen = new Set()
     for (const trySrc of fallbackSources) {
       if (seen.has(trySrc)) continue

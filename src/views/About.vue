@@ -204,6 +204,7 @@
 </template>
 
 <script setup>
+defineOptions({ name: 'About' })
 import { ref, onMounted } from 'vue'
 import { api } from '../api.js'
 import { checkForUpdate, hasUpdate } from '../composables/useUpdateCheck.js'

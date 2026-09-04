@@ -246,14 +246,14 @@
                     <label class="path-col-check path-check" @click.stop>
                       <input
                         type="checkbox"
-                        :checked="manualScanDirs.includes(row.path)"
+                        :checked="isManualScanChecked(row.path)"
                         @change="toggleManualScanDir(row.path)"
                       />
                     </label>
                     <label v-if="scanAutoMode === 'selected'" class="path-col-auto path-auto-check" @click.stop>
                       <input
                         type="checkbox"
-                        :checked="autoScanDirs.includes(row.path)"
+                        :checked="isAutoScanChecked(row.path)"
                         @change="toggleAutoScanDir(row.path)"
                       />
                     </label>
@@ -261,7 +261,6 @@
                       type="button"
                       class="tree-toggle"
                       :class="{ invisible: row.loaded && !row.hasChildren }"
-                      :disabled="row.loading"
                       @click.stop="toggleScanTreeNode(row.path)"
                       :title="row.expanded ? '收起' : '展开'"
                     >
@@ -485,6 +484,20 @@
         </div>
         <div class="setting-item">
           <div class="setting-item-info">
+            <div class="setting-item-label">音乐库歌曲列数</div>
+            <div class="setting-item-desc">音乐库「歌曲」页网格列数，默认两列；窄屏下会自动减少列数</div>
+          </div>
+          <div class="setting-item-action">
+            <AppSelect
+              v-model="settings[LIBRARY_SONG_COLUMNS_KEY]"
+              :options="librarySongColumnsOptions"
+              min-width="140px"
+              @change="saveLibrarySongColumns"
+            />
+          </div>
+        </div>
+        <div class="setting-item">
+          <div class="setting-item-info">
             <div class="setting-item-label">封面样式</div>
             <div class="setting-item-desc">播放栏封面显示方式</div>
           </div>
@@ -553,10 +566,17 @@
         </div>
         <div class="setting-item">
           <div class="setting-item-info">
-            <div class="setting-item-label">跳过已存在文件</div>
-            <div class="setting-item-desc">目标路径已有同名文件时跳过下载</div>
+            <div class="setting-item-label">同名文件处理</div>
+            <div class="setting-item-desc">按文件名（忽略扩展名）检测本地已有文件；询问时会显示本地音质</div>
           </div>
-          <label class="toggle"><input type="checkbox" :checked="settings['download.skipExistFile'] === 'true'" @change="toggleSetting('download.skipExistFile')" /><span class="slider"></span></label>
+          <div class="setting-item-action">
+            <AppSelect
+              v-model="settings['download.existFileMode']"
+              :options="existFileModeOptions"
+              min-width="140px"
+              @change="saveExistFileMode"
+            />
+          </div>
         </div>
         <div class="setting-item">
           <div class="setting-item-info">
@@ -792,11 +812,12 @@
 </template>
 
 <script setup>
+defineOptions({ name: 'Settings' })
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from '../api.js'
 import { loadCoverStyle, loadPlayerSettings } from '../stores/player.js'
-import { scanLibrary, libraryScanning, PLAYLIST_REMOTE_SYNC_DAYS_KEY, setPlaylistRemoteSyncDays, getPlaylistRemoteSyncDays } from '../stores/library.js'
+import { scanLibrary, libraryScanning, PLAYLIST_REMOTE_SYNC_DAYS_KEY, setPlaylistRemoteSyncDays, getPlaylistRemoteSyncDays, LIBRARY_SONG_COLUMNS_KEY, setLibrarySongColumns, normalizeLibrarySongColumns } from '../stores/library.js'
 import { reloadSearchSources } from '../stores/search.js'
 import { reloadDiscoverSources } from '../stores/discover.js'
 import { applySourceFallbackMode, SOURCE_FALLBACK_MODE_KEY } from '../stores/sourceFallback.js'
@@ -805,7 +826,7 @@ import { canPickFolder, pickFolder } from '../utils/fnos.js'
 import { applyTheme, theme as currentTheme, THEME_KEY, COLOR_SCHEME_KEY, CUSTOM_COLOR_KEY, COLOR_SCHEME_OPTIONS, applyColorScheme, setCustomColor, normalizeHex, colorScheme as currentColorScheme, customColor as currentCustomColor } from '../utils/theme.js'
 import AppSelect from '../components/AppSelect.vue'
 import MailConfigGuide from '../components/MailConfigGuide.vue'
-import { collectDefaultExpandedPaths, collectAllDescendantDirPaths, removeDirPathAndDescendants } from '../utils/dirTreeExpand.js'
+import { applyDirToggle, isDirChecked, isDirPathUnder, normalizeDirPath } from '../utils/dirTreeExpand.js'
 
 const route = useRoute()
 
@@ -831,6 +852,16 @@ const downloadGroupOptions = [
   { value: 'artist', label: '按歌手' },
   { value: 'album', label: '按专辑' },
   { value: 'artist-album', label: '按歌手/专辑' },
+]
+const existFileModeOptions = [
+  { value: 'ask', label: '询问确认' },
+  { value: 'skip', label: '自动跳过' },
+  { value: 'overwrite', label: '直接覆盖' },
+]
+const librarySongColumnsOptions = [
+  { value: '2', label: '两列' },
+  { value: '3', label: '三列' },
+  { value: '4', label: '四列' },
 ]
 const DOWNLOAD_GROUP_BY_KEY = 'download.savePathGroupBy'
 const lrcFormatOptions = [
@@ -909,6 +940,8 @@ const manualScanDirs = ref([])
 const scanTreeCache = ref({})
 const scanExpandedPaths = ref(new Set())
 const libraryDirScanning = ref(false)
+/** @type {Map<string, Promise<void>>} */
+const scanTreeLoaders = new Map()
 
 function folderDisplayName(dirPath, depth) {
   if (!dirPath) return ''
@@ -918,14 +951,27 @@ function folderDisplayName(dirPath, depth) {
 }
 
 function getScanTreeEntry(dirPath) {
-  return scanTreeCache.value[dirPath] || { dirs: [], loaded: false, loading: false }
+  const key = normalizeDirPath(dirPath)
+  return scanTreeCache.value[key] || scanTreeCache.value[dirPath] || { dirs: [], loaded: false, loading: false }
+}
+
+function getLoadedScanChildren(dirPath) {
+  return getScanTreeEntry(dirPath).dirs || []
+}
+
+function isManualScanChecked(dirPath) {
+  return isDirChecked(dirPath, manualScanDirs.value)
+}
+
+function isAutoScanChecked(dirPath) {
+  return isDirChecked(dirPath, autoScanDirs.value)
 }
 
 const visibleScanTreeRows = computed(() => {
   const rows = []
   const visit = (dirPath, depth) => {
     const cached = getScanTreeEntry(dirPath)
-    const expanded = scanExpandedPaths.value.has(dirPath)
+    const expanded = scanExpandedPaths.value.has(normalizeDirPath(dirPath)) || scanExpandedPaths.value.has(dirPath)
     rows.push({
       path: dirPath,
       name: folderDisplayName(dirPath, depth),
@@ -945,64 +991,94 @@ const visibleScanTreeRows = computed(() => {
 })
 
 async function ensureScanTreeChildren(dirPath) {
+  const key = normalizeDirPath(dirPath)
   const cached = getScanTreeEntry(dirPath)
-  if (cached.loaded || cached.loading) return
-  scanTreeCache.value = {
-    ...scanTreeCache.value,
-    [dirPath]: { ...cached, loading: true },
+  if (cached.loaded) return
+  const pending = scanTreeLoaders.get(key)
+  if (pending) {
+    await pending
+    return
   }
+
+  const promise = (async () => {
+    scanTreeCache.value = {
+      ...scanTreeCache.value,
+      [key]: { ...cached, loading: true },
+    }
+    try {
+      const res = await api.tag.listDir(dirPath)
+      const data = res.data || {}
+      scanTreeCache.value = {
+        ...scanTreeCache.value,
+        [key]: {
+          dirs: data.dirs || [],
+          loaded: true,
+          loading: false,
+        },
+      }
+    } catch (e) {
+      scanTreeCache.value = {
+        ...scanTreeCache.value,
+        [key]: { dirs: [], loaded: true, loading: false },
+      }
+      showToast(e.message, 'error')
+    }
+  })()
+
+  scanTreeLoaders.set(key, promise)
   try {
-    const res = await api.tag.listDir(dirPath)
-    const data = res.data || {}
-    scanTreeCache.value = {
-      ...scanTreeCache.value,
-      [dirPath]: {
-        dirs: data.dirs || [],
-        loaded: true,
-        loading: false,
-      },
-    }
-  } catch (e) {
-    scanTreeCache.value = {
-      ...scanTreeCache.value,
-      [dirPath]: { dirs: [], loaded: true, loading: false },
-    }
-    showToast(e.message, 'error')
+    await promise
+  } finally {
+    scanTreeLoaders.delete(key)
   }
 }
 
-async function initScanTreeExpansion() {
-  scanTreeCache.value = {}
+function initScanTreeExpansion() {
   if (!musicPaths.value.length) {
+    scanTreeCache.value = {}
+    scanTreeLoaders.clear()
     scanExpandedPaths.value = new Set()
     return
   }
-  scanExpandedPaths.value = await collectDefaultExpandedPaths(
-    musicPaths.value,
-    getScanTreeEntry,
-    ensureScanTreeChildren,
-  )
+
+  const roots = musicPaths.value.map(normalizeDirPath)
+  const hasCache = roots.some((root) => getScanTreeEntry(root).loaded || getScanTreeEntry(root).loading)
+  if (hasCache && scanExpandedPaths.value.size) return
+
+  scanTreeCache.value = {}
+  scanTreeLoaders.clear()
+  scanExpandedPaths.value = new Set(roots)
+  void (async () => {
+    for (const root of musicPaths.value) {
+      await ensureScanTreeChildren(root)
+      const children = getLoadedScanChildren(root)
+      const next = new Set([...scanExpandedPaths.value].map(normalizeDirPath))
+      for (const child of children) next.add(normalizeDirPath(child.path))
+      scanExpandedPaths.value = next
+      for (const child of children) ensureScanTreeChildren(child.path)
+    }
+  })()
 }
 
 async function toggleScanTreeNode(dirPath) {
-  if (scanExpandedPaths.value.has(dirPath)) {
-    const next = new Set(scanExpandedPaths.value)
-    next.delete(dirPath)
+  const key = normalizeDirPath(dirPath)
+  const next = new Set([...scanExpandedPaths.value].map(normalizeDirPath))
+  if (next.has(key)) {
+    next.delete(key)
     scanExpandedPaths.value = next
     return
   }
-  await ensureScanTreeChildren(dirPath)
-  const next = new Set(scanExpandedPaths.value)
-  next.add(dirPath)
+  next.add(key)
   scanExpandedPaths.value = next
+  await ensureScanTreeChildren(dirPath)
 }
 
 function pruneScanDirSelections() {
   const keep = (dirPath) => {
-    const norm = String(dirPath).replace(/\\/g, '/')
+    const norm = normalizeDirPath(dirPath)
     return musicPaths.value.some((root) => {
-      const r = String(root).replace(/\\/g, '/')
-      return norm === r || norm.startsWith(`${r}/`)
+      const r = normalizeDirPath(root)
+      return norm === r || isDirPathUnder(norm, r)
     })
   }
   const nextManual = manualScanDirs.value.filter(keep)
@@ -1014,30 +1090,24 @@ function pruneScanDirSelections() {
   }
 }
 
-async function toggleManualScanDir(dirPath) {
-  const set = new Set(manualScanDirs.value)
-  const checking = !set.has(dirPath)
-  if (checking) {
-    set.add(dirPath)
-    const descendants = await collectAllDescendantDirPaths(dirPath, getScanTreeEntry, ensureScanTreeChildren)
-    for (const p of descendants) set.add(p)
-  } else {
-    removeDirPathAndDescendants(set, dirPath)
-  }
-  manualScanDirs.value = [...set]
+function expandScanTreeNode(dirPath) {
+  const key = normalizeDirPath(dirPath)
+  const next = new Set([...scanExpandedPaths.value].map(normalizeDirPath))
+  next.add(key)
+  scanExpandedPaths.value = next
+  ensureScanTreeChildren(dirPath)
 }
 
-async function toggleAutoScanDir(dirPath) {
-  const set = new Set(autoScanDirs.value)
-  const checking = !set.has(dirPath)
-  if (checking) {
-    set.add(dirPath)
-    const descendants = await collectAllDescendantDirPaths(dirPath, getScanTreeEntry, ensureScanTreeChildren)
-    for (const p of descendants) set.add(p)
-  } else {
-    removeDirPathAndDescendants(set, dirPath)
-  }
-  autoScanDirs.value = [...set]
+function toggleManualScanDir(dirPath) {
+  const checking = !isDirChecked(dirPath, manualScanDirs.value)
+  manualScanDirs.value = applyDirToggle(manualScanDirs.value, dirPath, getLoadedScanChildren)
+  if (checking) expandScanTreeNode(dirPath)
+}
+
+function toggleAutoScanDir(dirPath) {
+  const checking = !isDirChecked(dirPath, autoScanDirs.value)
+  autoScanDirs.value = applyDirToggle(autoScanDirs.value, dirPath, getLoadedScanChildren)
+  if (checking) expandScanTreeNode(dirPath)
   saveScanSettings()
 }
 
@@ -1120,16 +1190,18 @@ watch(activeTab, async (tab) => {
   if (tab === 'paths' && musicPaths.value.length) {
     loadLibraryStats()
     await loadScanSettings()
-    await initScanTreeExpansion()
+    initScanTreeExpansion()
   }
   if (tab === 'users') loadManagedUsers()
   if (tab === 'account') loadAccountInfo()
 })
 
-watch(musicPaths, async () => {
+watch(musicPaths, () => {
   pruneScanDirSelections()
   if (activeTab.value === 'paths') {
-    await initScanTreeExpansion()
+    scanTreeCache.value = {}
+    scanTreeLoaders.clear()
+    initScanTreeExpansion()
   }
 }, { deep: true })
 
@@ -1436,6 +1508,11 @@ async function loadLibraryStats() {
   }
 }
 
+watch(() => route.query.tab, (tab) => {
+  const id = String(tab || '').trim()
+  if (id && tabs.value.some(t => t.id === id)) activeTab.value = id
+})
+
 onMounted(async () => {
   const tabFromQuery = String(route.query.tab || '').trim()
   if (tabFromQuery && tabs.value.some(t => t.id === tabFromQuery)) {
@@ -1458,6 +1535,11 @@ onMounted(async () => {
     if (!settings[DOWNLOAD_GROUP_BY_KEY]) {
       settings[DOWNLOAD_GROUP_BY_KEY] = settings['download.isSavePathGroupByListName'] === 'true' ? 'album' : 'none'
     }
+    if (!['ask', 'skip', 'overwrite'].includes(settings['download.existFileMode'])) {
+      settings['download.existFileMode'] = settings['download.skipExistFile'] === 'false' ? 'overwrite' : 'ask'
+    }
+    settings[LIBRARY_SONG_COLUMNS_KEY] = String(normalizeLibrarySongColumns(settings[LIBRARY_SONG_COLUMNS_KEY]))
+    setLibrarySongColumns(settings[LIBRARY_SONG_COLUMNS_KEY])
     if (settings[PLAYLIST_REMOTE_SYNC_DAYS_KEY] == null) {
       settings[PLAYLIST_REMOTE_SYNC_DAYS_KEY] = String(getPlaylistRemoteSyncDays())
     } else {
@@ -1496,7 +1578,7 @@ async function loadPaths() {
     }
     await loadLibraryStats()
     await loadScanSettings()
-    await initScanTreeExpansion()
+    initScanTreeExpansion()
   } catch {}
 }
 
@@ -1667,6 +1749,34 @@ async function saveDownloadGroupBy() {
       [DOWNLOAD_GROUP_BY_KEY]: mode,
       'download.isSavePathGroupByListName': settings['download.isSavePathGroupByListName'],
     })
+  } catch (e) {
+    showToast(e.message, 'error')
+  }
+}
+
+async function saveExistFileMode() {
+  const mode = ['ask', 'skip', 'overwrite'].includes(settings['download.existFileMode'])
+    ? settings['download.existFileMode']
+    : 'ask'
+  settings['download.existFileMode'] = mode
+  // 同步旧开关，兼容尚未升级的逻辑
+  settings['download.skipExistFile'] = mode === 'overwrite' ? 'false' : 'true'
+  try {
+    await api.settings.update({
+      'download.existFileMode': mode,
+      'download.skipExistFile': settings['download.skipExistFile'],
+    })
+  } catch (e) {
+    showToast(e.message, 'error')
+  }
+}
+
+async function saveLibrarySongColumns() {
+  const cols = String(normalizeLibrarySongColumns(settings[LIBRARY_SONG_COLUMNS_KEY]))
+  settings[LIBRARY_SONG_COLUMNS_KEY] = cols
+  setLibrarySongColumns(cols)
+  try {
+    await api.settings.update({ [LIBRARY_SONG_COLUMNS_KEY]: cols })
   } catch (e) {
     showToast(e.message, 'error')
   }

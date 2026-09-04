@@ -22,6 +22,55 @@ export function removeDirPathAndDescendants(pathSet, dirPath) {
   }
 }
 
+/** 目录自身或任一上级被勾选时，视为已选中 */
+export function isDirChecked(dirPath, selectedList) {
+  const target = normalizeDirPath(dirPath)
+  if (!target) return false
+  return (selectedList || []).some((p) => {
+    const n = normalizeDirPath(p)
+    return n === target || isDirPathUnder(target, n)
+  })
+}
+
+function explodeExcept(set, parent, exceptPath, getChildren) {
+  const children = getChildren?.(parent) || []
+  for (const child of children) {
+    const cp = normalizeDirPath(child.path || child)
+    if (!cp || cp === exceptPath) continue
+    if (isDirPathUnder(exceptPath, cp)) {
+      explodeExcept(set, cp, exceptPath, getChildren)
+      continue
+    }
+    set.add(cp)
+  }
+}
+
+/**
+ * 勾选/取消勾选：父级覆盖子级，无需预先加载整棵树。
+ * 取消父级时会去掉其下所有勾选；取消已被父级覆盖的子级时，会拆成其余兄弟勾选。
+ */
+export function applyDirToggle(selectedList, dirPath, getChildren) {
+  const set = new Set((selectedList || []).map(normalizeDirPath).filter(Boolean))
+  const target = normalizeDirPath(dirPath)
+  if (!target) return [...set]
+
+  const checked = [...set].some((p) => p === target || isDirPathUnder(target, p))
+  if (checked) {
+    const covering = [...set].filter((p) => p === target || isDirPathUnder(target, p))
+    for (const parent of covering) {
+      set.delete(parent)
+      if (parent !== target) explodeExcept(set, parent, target, getChildren)
+    }
+    removeDirPathAndDescendants(set, target)
+  } else {
+    set.add(target)
+    for (const p of [...set]) {
+      if (isDirPathUnder(p, target)) set.delete(p)
+    }
+  }
+  return [...set]
+}
+
 /**
  * 递归收集某目录下所有子文件夹路径（不含自身）。
  */
