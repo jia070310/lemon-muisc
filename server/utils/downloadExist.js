@@ -31,7 +31,24 @@ function sanitizeFileBase(name) {
   return String(name || '').replace(/[\\/:*?"<>|]/g, '_').trim() || 'untitled'
 }
 
-/** 在分组目录下按「主文件名」查找已有音频（忽略扩展名差异） */
+/**
+ * 是否视为同一首歌的主文件名（忽略网盘/系统同名副本后缀）
+ * 例：歌名、歌名(1)、歌名 (1)、歌名（1）
+ */
+export function isSameAudioBaseName(entryBase, canonicalBase) {
+  const entry = String(entryBase || '').trim().toLowerCase()
+  const canonical = String(canonicalBase || '').trim().toLowerCase()
+  if (!entry || !canonical) return false
+  if (entry === canonical) return true
+  const stripped = entry
+    .replace(/\s*[\(（]\s*\d+\s*[\)）]\s*$/u, '')
+    .replace(/\s+[-\u2013]\s*副本\s*\d*$/u, '')
+    .replace(/\s+copy(?:\s*\d+)?$/iu, '')
+    .trim()
+  return stripped === canonical
+}
+
+/** 在分组目录下按「主文件名」查找已有音频（忽略扩展名差异，含 name(1) 等副本） */
 export function findExistingSameNameFiles(task, settings = {}) {
   const baseName = resolveTaskBaseName(task, settings)
   if (!baseName) return []
@@ -41,9 +58,8 @@ export function findExistingSameNameFiles(task, settings = {}) {
   const found = []
   const seen = new Set()
 
-  for (const ext of EXIST_AUDIO_EXTS) {
-    const fullPath = path.join(groupDir, baseName + ext)
-    if (seen.has(fullPath)) continue
+  const pushIfFile = (fullPath) => {
+    if (!fullPath || seen.has(fullPath)) return
     try {
       if (fs.existsSync(fullPath) && fs.statSync(fullPath).isFile()) {
         seen.add(fullPath)
@@ -52,30 +68,24 @@ export function findExistingSameNameFiles(task, settings = {}) {
     } catch {}
   }
 
-  // 兜底：扫描目录，兼容大小写不同的扩展名
-  if (!found.length) {
-    let entries = []
-    try {
-      entries = fs.readdirSync(groupDir)
-    } catch {
-      return []
-    }
-    const baseLower = baseName.toLowerCase()
-    for (const entry of entries) {
-      if (entry.endsWith('.part') || entry.toLowerCase().endsWith('.lrc')) continue
-      const ext = path.extname(entry).toLowerCase()
-      if (!EXIST_AUDIO_EXTS.includes(ext)) continue
-      const nameOnly = entry.slice(0, -ext.length)
-      if (nameOnly.toLowerCase() !== baseLower) continue
-      const fullPath = path.join(groupDir, entry)
-      if (seen.has(fullPath)) continue
-      try {
-        if (fs.statSync(fullPath).isFile()) {
-          seen.add(fullPath)
-          found.push(fullPath)
-        }
-      } catch {}
-    }
+  for (const ext of EXIST_AUDIO_EXTS) {
+    pushIfFile(path.join(groupDir, baseName + ext))
+  }
+
+  let entries = []
+  try {
+    entries = fs.readdirSync(groupDir)
+  } catch {
+    return found
+  }
+
+  for (const entry of entries) {
+    if (entry.endsWith('.part') || entry.toLowerCase().endsWith('.lrc')) continue
+    const ext = path.extname(entry).toLowerCase()
+    if (!EXIST_AUDIO_EXTS.includes(ext)) continue
+    const nameOnly = entry.slice(0, -ext.length)
+    if (!isSameAudioBaseName(nameOnly, baseName)) continue
+    pushIfFile(path.join(groupDir, entry))
   }
 
   return found

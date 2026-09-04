@@ -28,6 +28,7 @@ import {
   findExistingSameNameFiles,
   pickBestExistingFile,
   buildExistFileOffer,
+  isSameAudioBaseName,
 } from '../utils/downloadExist.js'
 
 export const downloadRouter = Router()
@@ -121,15 +122,24 @@ downloadRouter.post('/add', async (req, res) => {
     if (!Array.isArray(tasks) || !tasks.length) return res.status(400).json({ error: '没有下载任务' })
     if (tasks.length > 50) return res.status(400).json({ error: '单次最多添加 50 个下载任务' })
 
-    const settings = getSettings()
     const insert = getDB().prepare(`
       INSERT INTO download_tasks (id, name, singer, source, album, interval, quality, meta, status, user_id)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'waiting', ?)
     `)
 
+    const activeKeys = loadActiveDownloadIdentityKeys(req.user.id)
     const added = []
+    let skipped = 0
     const tx = getDB().transaction(() => {
       for (const t of tasks) {
+        const quality = t.quality || '320k'
+        const key = buildDownloadIdentityKey(t, quality)
+        if (key && activeKeys.has(key)) {
+          skipped += 1
+          continue
+        }
+        if (key) activeKeys.add(key)
+
         const id = `dl_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
         const meta = JSON.stringify({
           songId: t.songId || t.id,
@@ -158,14 +168,14 @@ downloadRouter.post('/add', async (req, res) => {
           deferExistAsk: Boolean(t.deferExistAsk),
           batchId: t.batchId || '',
         })
-        insert.run(id, t.name, t.singer || '', t.source || '', t.album || '', t.interval || '', t.quality || '320k', meta, req.user.id)
+        insert.run(id, t.name, t.singer || '', t.source || '', t.album || '', t.interval || '', quality, meta, req.user.id)
         added.push(id)
       }
     })
     tx()
 
     processQueue()
-    res.json({ ok: true, ids: added })
+    res.json({ ok: true, ids: added, skipped })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
@@ -992,6 +1002,89 @@ function lrcPathFor(audioPath) {
   return audioPath ? audioPath.replace(/\.[^.]+$/, '.lrc') : ''
 }
 
+function getDownloadStagingRoot() {
+  return path.join(process.env.CONFIG_PATH || '/config', 'download-staging')
+}
+
+function getDownloadStagingDir(taskId) {
+  return path.join(getDownloadStagingRoot(), String(taskId || 'unknown'))
+}
+
+function cleanupStagingDir(taskId) {
+  const dir = getDownloadStagingDir(taskId)
+  try {
+    fs.rmSync(dir, { recursive: true, force: true })
+  } catch {}
+}
+
+/** 本机落盘完成后再一次性发布到下载目录，减少网盘挂载上的 .part/改名/二次写入冲突 */
+function publishStagedFile(stagedPath, destPath) {
+  if (!stagedPath || !destPath) return
+  fs.mkdirSync(path.dirname(destPath), { recursive: true })
+  safeUnlink(destPath)
+  try {
+    fs.renameSync(stagedPath, destPath)
+    return
+  } catch {}
+  fs.copyFileSync(stagedPath, destPath)
+  safeUnlink(stagedPath)
+}
+
+function publishStagedDownload(stagedPath, destPath) {
+  publishStagedFile(stagedPath, destPath)
+  const stagedLrc = lrcPathFor(stagedPath)
+  if (stagedLrc && fs.existsSync(stagedLrc)) {
+    publishStagedFile(stagedLrc, lrcPathFor(destPath))
+  }
+}
+
+function buildDownloadIdentityKey(taskLike = {}, quality = '') {
+  const source = String(taskLike.source || '').trim().toLowerCase()
+  const q = String(quality || taskLike.quality || '320k').trim().toLowerCase()
+  const id = String(
+    taskLike.songId
+    || taskLike.songmid
+    || taskLike.hash
+    || taskLike.copyrightId
+    || taskLike.musicId
+    || taskLike.rid
+    || taskLike.dcTargetId
+    || '',
+  ).trim()
+  if (id) return `${source}:${id}:${q}`
+  const name = String(taskLike.name || '').trim().toLowerCase()
+  const singer = String(taskLike.singer || '').trim().toLowerCase()
+  if (!name && !singer) return ''
+  return `${source}:${name}|${singer}:${q}`
+}
+
+function loadActiveDownloadIdentityKeys(userId) {
+  const keys = new Set()
+  if (!userId) return keys
+  const rows = getDB().prepare(`
+    SELECT name, singer, source, quality, meta FROM download_tasks
+    WHERE user_id = ?
+      AND status IN ('waiting', 'downloading', 'paused', 'await_confirm', 'await_source', 'await_exist')
+  `).all(userId)
+  for (const row of rows) {
+    const meta = parseTaskMeta(row)
+    const key = buildDownloadIdentityKey({
+      name: row.name,
+      singer: row.singer,
+      source: meta.source || row.source,
+      songId: meta.songId,
+      songmid: meta.songmid,
+      hash: meta.hash,
+      copyrightId: meta.copyrightId,
+      musicId: meta.musicId,
+      rid: meta.rid,
+      dcTargetId: meta.dcTargetId,
+    }, row.quality)
+    if (key) keys.add(key)
+  }
+  return keys
+}
+
 function safeUnlink(filePath) {
   if (!filePath) return
   try {
@@ -1057,10 +1150,18 @@ function cleanupGroupDirArtifacts(task, settings, except = new Set()) {
     return
   }
   for (const entry of entries) {
-    if (entry !== baseName && !entry.startsWith(`${baseName}.`)) continue
+    const ext = path.extname(entry)
+    const nameOnly = ext ? entry.slice(0, -ext.length) : entry
+    const isPart = entry.endsWith('.part')
+    const partBase = isPart ? entry.slice(0, -'.part'.length).replace(/\.[^.]+$/, '') : ''
+    const matched = isSameAudioBaseName(nameOnly, baseName)
+      || (isPart && isSameAudioBaseName(partBase || nameOnly, baseName))
+      || entry === baseName
+      || entry.startsWith(`${baseName}.`)
+    if (!matched) continue
     const fullPath = path.join(groupDir, entry)
     if (except.has(fullPath)) continue
-    if (entry.endsWith('.part')) safeUnlink(fullPath)
+    if (isPart) safeUnlink(fullPath)
     else cleanupDownloadPath(fullPath)
   }
 }
@@ -1153,7 +1254,10 @@ async function downloadTask(task, settings) {
 
         const ext = guessExt(url, quality)
         filePath = resolveTaskFilePath(task, settings, ext)
-        partPath = partPathFor(filePath)
+        const stagingDir = getDownloadStagingDir(task.id)
+        fs.mkdirSync(stagingDir, { recursive: true })
+        const stagedPath = path.join(stagingDir, path.basename(filePath))
+        partPath = partPathFor(stagedPath)
         lastAttemptPath = filePath
         rememberDownloadArtifact(meta, filePath)
         saveTaskMeta(task.id, meta)
@@ -1177,8 +1281,12 @@ async function downloadTask(task, settings) {
 
         cleanupTaskDownloadArtifacts(task, meta, settings, { exceptPath: filePath })
 
+        // 先在应用配置目录内写完（含标签），再一次性发布到下载目录，降低夸克等网盘挂载产生 name(1) 的概率
         await streamToFile(url, partPath, task.id, abort)
-        finalizePartFile(partPath, filePath)
+        finalizePartFile(partPath, stagedPath)
+        await writeMetaIfNeeded(task, meta, stagedPath, ext, settings)
+        publishStagedDownload(stagedPath, filePath)
+        cleanupStagingDir(task.id)
         cleanupTaskDownloadArtifacts(task, meta, settings, { exceptPath: filePath })
         rememberDownloadArtifact(meta, filePath)
         meta.downloadArtifacts = [filePath]
@@ -1187,14 +1295,17 @@ async function downloadTask(task, settings) {
 
         getDB().prepare("UPDATE download_tasks SET status = 'completed', file_path = ?, progress = 1, error = NULL WHERE id = ?")
           .run(filePath, task.id)
-        await writeMetaIfNeeded(task, meta, filePath, ext, settings)
         dlBroadcast('download:status', { id: task.id, status: 'completed', progress: 1, filePath, quality })
         scanBatchAndCache([{ filePath }]).catch(() => {})
         notifyLibraryChanged([filePath], { reason: 'download' })
         return
       } catch (e) {
-        cleanupDownloadPath(partPath || filePath)
-        if (filePath) rememberDownloadArtifact(meta, filePath)
+        cleanupDownloadPath(partPath)
+        cleanupStagingDir(task.id)
+        if (filePath) {
+          cleanupDownloadPath(filePath)
+          rememberDownloadArtifact(meta, filePath)
+        }
         if (e.name === 'AbortError') return
         lastError = e
         const retryable = isRetryableDownloadError(e)
@@ -1207,6 +1318,7 @@ async function downloadTask(task, settings) {
       cleanupDownloadPath(lastAttemptPath)
       clearTaskStoredFilePath(task.id)
     }
+    cleanupStagingDir(task.id)
     const reason = lastError?.message || '下载失败'
     if (isNoActiveSourceError(lastError) || isNoActiveSourceError(reason)) {
       markError(task.id, reason, meta)

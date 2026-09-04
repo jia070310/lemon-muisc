@@ -99,6 +99,7 @@
         <strong>首次使用请先配置数据目录</strong>
         <span>请到「应用设置 → 访问权限」添加音乐库与下载目录，保存后停用再启用。</span>
         <router-link to="/settings" class="setup-link">打开设置</router-link>
+        <button type="button" class="btn-ghost btn-sm" @click="dismissSetupBanner">关闭</button>
       </div>
       <div v-if="playlistPickTarget" class="app-notice playlist-pick-banner">
         <span>正在添加歌曲到歌单「{{ playlistPickTarget.name }}」</span>
@@ -435,6 +436,22 @@ const hasAppNotices = computed(() => Boolean(
   || libraryHotNotice.value,
 ))
 const setupBanner = ref(false)
+const SETUP_BANNER_DISMISS_KEY = 'lemon-setup-banner-dismissed'
+
+function isSetupBannerDismissed() {
+  try {
+    return sessionStorage.getItem(SETUP_BANNER_DISMISS_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+function dismissSetupBanner() {
+  setupBanner.value = false
+  try {
+    sessionStorage.setItem(SETUP_BANNER_DISMISS_KEY, '1')
+  } catch {}
+}
 const sourceFault = ref(null)
 const faultBusy = ref(false)
 const faultResult = ref(null)
@@ -976,7 +993,11 @@ onMounted(() => {
     }
   })
   api.paths.list().then((res) => {
-    setupBanner.value = Boolean(res.setup?.needsPathConfig)
+    const needs = Boolean(res.setup?.needsPathConfig)
+    setupBanner.value = needs && !isSetupBannerDismissed()
+    if (!needs) {
+      try { sessionStorage.removeItem(SETUP_BANNER_DISMISS_KEY) } catch {}
+    }
   }).catch(() => {})
   api.settings.get().then((s) => {
     if (s?.[THEME_KEY] || s?.[COLOR_SCHEME_KEY] || s?.[CUSTOM_COLOR_KEY]) {
