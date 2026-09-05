@@ -103,11 +103,11 @@
 
       <!-- 文件路径 -->
       <div v-if="activeTab === 'paths'" class="panel-body paths-panel-body">
-        <div v-if="needsPathSetup" class="setup-alert">
+        <div v-if="isAdminUser && needsPathSetup" class="setup-alert">
           <strong>尚未配置数据目录</strong>
           <p>请到飞牛「应用设置 → <b>访问权限</b>」用文件夹选择器添加音乐库与下载目录（会自动授权），保存后停用再启用应用。也可在「运行设置」填写绝对路径。</p>
         </div>
-        <div v-else class="config-summary card-inner">
+        <div v-else-if="isAdminUser" class="config-summary card-inner">
           <div class="block-label">已配置的数据目录</div>
           <div class="summary-row">
             <span class="summary-key">音乐库</span>
@@ -125,7 +125,7 @@
         </div>
 
         <div class="paths-layout">
-          <section class="paths-section paths-section-block">
+          <section v-if="isAdminUser" class="paths-section paths-section-block">
             <h4 class="paths-section-title">音乐库</h4>
             <div class="setting-item setting-item-flat">
               <div class="setting-item-info">
@@ -309,41 +309,85 @@
 
           <section class="paths-section paths-section-block">
             <h4 class="paths-section-title">下载保存</h4>
+            <p class="source-tip download-path-tip">
+              可使用管理员配置的共用目录，也可为当前账号设置专属目录（默认在共用目录下按用户名建子文件夹）。
+            </p>
+
             <div class="setting-item setting-item-flat">
               <div class="setting-item-info">
-                <div class="setting-item-label">下载保存路径</div>
-                <div class="setting-item-desc">
-                  下载歌曲的默认保存目录，与音乐库路径相互独立。
-                  {{ fnosAvailable ? '可点击下方按钮重新选择。' : '' }}
-                </div>
+                <div class="setting-item-label">下载目录模式</div>
+                <div class="setting-item-desc">共用：所有用户同一目录；个人：仅当前账号，按用户名独立存储</div>
               </div>
               <div class="setting-item-action">
-                <button v-if="fnosAvailable" class="btn-primary btn-sm" @click="browseDownloadPath" :disabled="pickingFolder">
-                  {{ pickingFolder ? '选择中...' : '选择文件夹' }}
-                </button>
+                <AppSelect
+                  v-model="downloadPathMode"
+                  :options="downloadPathModeOptions"
+                  min-width="160px"
+                  @change="onDownloadPathModeChange"
+                />
               </div>
             </div>
 
             <div class="path-block">
-              <div class="block-label">当前下载目录</div>
+              <div class="block-label">共用下载目录{{ isAdminUser ? '' : '（只读）' }}</div>
               <div class="path-row path-row-static path-row-download">
-                <template v-if="editingDownload">
+                <template v-if="isAdminUser && editingDownload">
                   <input v-model="editDownloadValue" class="path-input" @keydown.enter="saveDownloadPathEdit" />
                   <button class="btn-sm btn-primary" @click="saveDownloadPathEdit">保存</button>
                   <button class="btn-sm btn-ghost" @click="cancelDownloadEdit">取消</button>
                 </template>
                 <template v-else>
-                  <span class="path-text path-col-path" :title="downloadPath">{{ downloadPath || '未设置' }}</span>
+                  <span class="path-text path-col-path" :title="sharedDownloadPath">{{ sharedDownloadPath || '未设置' }}</span>
                   <div class="path-actions">
-                    <button v-if="!fnosAvailable" class="btn-sm btn-ghost" @click="startDownloadEdit">修改</button>
+                    <button v-if="isAdminUser && !fnosAvailable" class="btn-sm btn-ghost" @click="startDownloadEdit">修改</button>
+                    <button
+                      v-if="isAdminUser && fnosAvailable"
+                      class="btn-sm btn-primary"
+                      @click="browseDownloadPath"
+                      :disabled="pickingFolder"
+                    >{{ pickingFolder ? '选择中...' : '选择' }}</button>
                   </div>
                 </template>
               </div>
             </div>
 
-            <div v-if="!fnosAvailable" class="path-manual path-manual-download">
-              <input v-model="newDownloadPath" placeholder="手动输入下载目录绝对路径" class="path-input" @keydown.enter="setDownloadPathManual" />
-              <button class="btn-primary btn-sm" @click="setDownloadPathManual">应用</button>
+            <div v-if="isAdminUser && !fnosAvailable" class="path-manual path-manual-download">
+              <input v-model="newDownloadPath" placeholder="手动输入共用下载目录绝对路径" class="path-input" @keydown.enter="setDownloadPathManual" />
+              <button class="btn-primary btn-sm" @click="setDownloadPathManual">应用共用路径</button>
+            </div>
+
+            <div v-if="downloadPathMode === 'personal'" class="path-block" style="margin-top: 12px">
+              <div class="block-label">我的专属下载目录</div>
+              <div class="path-row path-row-static path-row-download">
+                <template v-if="editingPersonalDownload">
+                  <input v-model="editPersonalDownloadValue" class="path-input" @keydown.enter="savePersonalDownloadEdit" />
+                  <button class="btn-sm btn-primary" @click="savePersonalDownloadEdit">保存</button>
+                  <button class="btn-sm btn-ghost" @click="cancelPersonalDownloadEdit">取消</button>
+                </template>
+                <template v-else>
+                  <span class="path-text path-col-path" :title="personalDownloadPath">{{ personalDownloadPath || '未设置' }}</span>
+                  <div class="path-actions">
+                    <button v-if="!fnosAvailable" class="btn-sm btn-ghost" @click="startPersonalDownloadEdit">修改</button>
+                    <button
+                      v-if="fnosAvailable"
+                      class="btn-sm btn-primary"
+                      @click="browsePersonalDownloadPath"
+                      :disabled="pickingFolder"
+                    >{{ pickingFolder ? '选择中...' : '选择' }}</button>
+                  </div>
+                </template>
+              </div>
+              <div v-if="!fnosAvailable" class="path-manual path-manual-download" style="margin-top: 8px">
+                <input v-model="newPersonalDownloadPath" placeholder="手动输入个人下载目录，如 /vol1/1000/Music/用户名" class="path-input" @keydown.enter="setPersonalDownloadManual" />
+                <button class="btn-primary btn-sm" @click="setPersonalDownloadManual">应用个人路径</button>
+              </div>
+            </div>
+
+            <div class="path-block" style="margin-top: 12px">
+              <div class="block-label">当前生效目录</div>
+              <div class="path-row path-row-static">
+                <span class="path-text path-col-path" :title="downloadPath">{{ downloadPath || '未设置' }}</span>
+              </div>
             </div>
           </section>
         </div>
@@ -351,8 +395,8 @@
 
       <!-- 音源管理 -->
       <div v-if="activeTab === 'source'" class="panel-body">
-        <p v-if="isAdminUser" class="source-tip">支持同时激活多个音源。试听 / 下载时按平台匹配，同一平台有多个音源时优先使用最近激活的；当前音源失败时可自动或询问后切换到其他已激活音源。</p>
-        <p v-else class="source-tip">音源由管理员统一配置，你可以查看当前可用音源并使用搜索、试听、下载功能。</p>
+        <p v-if="isAdminUser" class="source-tip">支持同时激活多个音源（落雪兼容 / 澜音原生 .js）。每个账号的激活状态相互独立；试听 / 下载时按平台匹配，同一平台有多个音源时优先使用最近激活的。</p>
+        <p v-else class="source-tip">音源脚本由管理员导入。你可以自行激活或停用音源，状态仅对自己生效，不影响其他用户。</p>
         <div v-if="isAdminUser" class="setting-item">
           <div class="setting-item-info">
             <div class="setting-item-label">音源切换方式</div>
@@ -373,10 +417,10 @@
               <span class="source-name">{{ s.name }}</span>
               <span class="source-meta">{{ s.author || '未知作者' }} · v{{ s.version || '?' }}{{ isSourceActive(s.id) ? ' · 已激活' : '' }}</span>
             </div>
-            <div class="source-actions" v-if="isAdminUser">
+            <div class="source-actions">
               <button v-if="!isSourceActive(s.id)" class="btn-sm btn-primary" @click="activateSource(s.id)">激活</button>
               <button v-else class="btn-sm btn-ghost" @click="deactivateSource(s.id)">停用</button>
-              <button class="btn-sm btn-danger" @click="removeSource(s.id)">删除</button>
+              <button v-if="isAdminUser" class="btn-sm btn-danger" @click="removeSource(s.id)">删除</button>
             </div>
           </div>
         </div>
@@ -389,7 +433,7 @@
         <div class="import-area" v-if="isAdminUser && importMode === 'file'">
           <input type="file" ref="fileInput" accept=".js" @change="importFile" style="display:none" />
           <button class="btn-primary btn-sm" @click="$refs.fileInput.click()">选择文件</button>
-          <span class="hint">支持 .js 格式的自定义音源脚本</span>
+          <span class="hint">支持落雪兼容与澜音（CeruMusic）原生 .js 音源</span>
         </div>
         <div class="import-area" v-else-if="isAdminUser">
           <input v-model="importUrl" placeholder="输入音源脚本链接" class="url-input" />
@@ -919,12 +963,22 @@ const importUrl = ref('')
 const importingUrl = ref(false)
 const musicPaths = ref([])
 const downloadPath = ref('')
+const sharedDownloadPath = ref('')
+const personalDownloadPath = ref('')
+const downloadPathMode = ref('shared')
 const newPath = ref('')
 const newDownloadPath = ref('')
+const newPersonalDownloadPath = ref('')
 const editingPath = ref('')
 const editPathValue = ref('')
 const editingDownload = ref(false)
 const editDownloadValue = ref('')
+const editingPersonalDownload = ref(false)
+const editPersonalDownloadValue = ref('')
+const downloadPathModeOptions = [
+  { value: 'shared', label: '共用目录' },
+  { value: 'personal', label: '我的专属目录' },
+]
 const fnosAvailable = ref(false)
 const pickingFolder = ref(false)
 const editFromPicker = ref(false)
@@ -1153,7 +1207,7 @@ const tabs = computed(() => {
     { id: 'mail', label: '邮件服务' },
   ]
   if (isAdminUser.value) return all
-  return all.filter(t => ['account', 'source', 'appearance'].includes(t.id))
+  return all.filter(t => ['account', 'paths', 'source', 'appearance'].includes(t.id))
 })
 
 const embedItems = [
@@ -1562,7 +1616,7 @@ async function loadPaths() {
   try {
     const res = await api.paths.list()
     musicPaths.value = res.musicPaths || res.data || []
-    downloadPath.value = res.downloadPath || ''
+    applyDownloadPathInfo(res)
     needsPathSetup.value = Boolean(res.setup?.needsPathConfig)
     mountInfo.value = res.setup?.mountInfo || null
     const mp = res.setup?.musicProbe
@@ -1588,7 +1642,7 @@ async function addPath(fromPicker = false) {
   try {
     const res = await api.paths.add(val, fromPicker)
     musicPaths.value = res.musicPaths || res.data || []
-    downloadPath.value = res.downloadPath || downloadPath.value
+    applyDownloadPathInfo(res)
     newPath.value = ''
     showToast(fromPicker ? '音乐库路径已添加' : '音乐库路径已添加', 'success')
     await loadLibraryStats()
@@ -1618,7 +1672,7 @@ async function browseReplacePath(oldPath) {
     if (!path) return
     const res = await api.paths.update(oldPath, path, true)
     musicPaths.value = res.musicPaths || res.data || []
-    downloadPath.value = res.downloadPath || downloadPath.value
+    applyDownloadPathInfo(res)
     showToast('路径已更新', 'success')
     await loadLibraryStats()
   } catch (e) {
@@ -1663,7 +1717,7 @@ async function saveEditPath(oldPath) {
   try {
     const res = await api.paths.update(oldPath, val, editFromPicker.value)
     musicPaths.value = res.musicPaths || res.data || []
-    downloadPath.value = res.downloadPath || downloadPath.value
+    applyDownloadPathInfo(res)
     cancelEditPath()
     showToast('路径已更新', 'success')
     await loadLibraryStats()
@@ -1676,7 +1730,7 @@ async function removePath(dirPath) {
   try {
     const res = await api.paths.remove(dirPath)
     musicPaths.value = res.musicPaths || res.data || []
-    downloadPath.value = res.downloadPath || downloadPath.value
+    applyDownloadPathInfo(res)
     showToast('音乐库路径已删除', 'success')
     await loadLibraryStats()
   } catch (e) {
@@ -1686,7 +1740,7 @@ async function removePath(dirPath) {
 
 function startDownloadEdit() {
   editingDownload.value = true
-  editDownloadValue.value = downloadPath.value
+  editDownloadValue.value = sharedDownloadPath.value || downloadPath.value
 }
 
 function cancelDownloadEdit() {
@@ -1694,14 +1748,83 @@ function cancelDownloadEdit() {
   editDownloadValue.value = ''
 }
 
+function applyDownloadPathInfo(res = {}) {
+  downloadPath.value = res.downloadPath || ''
+  sharedDownloadPath.value = res.sharedDownloadPath || res.downloadPath || ''
+  personalDownloadPath.value = res.personalDownloadPath || ''
+  downloadPathMode.value = res.downloadPathMode === 'personal' ? 'personal' : 'shared'
+}
+
+async function onDownloadPathModeChange() {
+  try {
+    const res = await api.paths.setDownloadMode(downloadPathMode.value)
+    applyDownloadPathInfo(res)
+    showToast(downloadPathMode.value === 'personal' ? '已切换为专属下载目录' : '已切换为共用下载目录', 'success')
+  } catch (e) {
+    showToast(e.message || '切换失败', 'error')
+    await loadPaths()
+  }
+}
+
+function startPersonalDownloadEdit() {
+  editingPersonalDownload.value = true
+  editPersonalDownloadValue.value = personalDownloadPath.value
+}
+
+function cancelPersonalDownloadEdit() {
+  editingPersonalDownload.value = false
+  editPersonalDownloadValue.value = ''
+}
+
+async function savePersonalDownloadEdit() {
+  const val = editPersonalDownloadValue.value.trim()
+  if (!val) return
+  try {
+    const res = await api.paths.setPersonalDownload(val, false, true)
+    applyDownloadPathInfo(res)
+    cancelPersonalDownloadEdit()
+    showToast('个人下载路径已更新', 'success')
+  } catch (e) {
+    showToast(e.message, 'error')
+  }
+}
+
+async function setPersonalDownloadManual() {
+  const val = newPersonalDownloadPath.value.trim()
+  if (!val) return
+  try {
+    const res = await api.paths.setPersonalDownload(val, false, true)
+    applyDownloadPathInfo(res)
+    newPersonalDownloadPath.value = ''
+    showToast('个人下载路径已更新', 'success')
+  } catch (e) {
+    showToast(e.message, 'error')
+  }
+}
+
+async function browsePersonalDownloadPath() {
+  pickingFolder.value = true
+  try {
+    const path = await pickFolder({ title: '选择我的专属下载目录' })
+    if (!path) return
+    const res = await api.paths.setPersonalDownload(path, true, true)
+    applyDownloadPathInfo(res)
+    showToast('个人下载路径已更新', 'success')
+  } catch (e) {
+    if (e.message && !e.message.includes('未选择')) showToast(e.message, 'error')
+  } finally {
+    pickingFolder.value = false
+  }
+}
+
 async function saveDownloadPathEdit() {
   const val = editDownloadValue.value.trim()
   if (!val) return
   try {
     const res = await api.paths.setDownload(val, false)
-    downloadPath.value = res.downloadPath || val
+    applyDownloadPathInfo(res)
     cancelDownloadEdit()
-    showToast('下载路径已更新', 'success')
+    showToast('共用下载路径已更新', 'success')
   } catch (e) {
     showToast(e.message, 'error')
   }
@@ -1712,9 +1835,9 @@ async function setDownloadPathManual() {
   if (!val) return
   try {
     const res = await api.paths.setDownload(val, false)
-    downloadPath.value = res.downloadPath || val
+    applyDownloadPathInfo(res)
     newDownloadPath.value = ''
-    showToast('下载路径已更新', 'success')
+    showToast('共用下载路径已更新', 'success')
   } catch (e) {
     showToast(e.message, 'error')
   }
@@ -1723,11 +1846,11 @@ async function setDownloadPathManual() {
 async function browseDownloadPath() {
   pickingFolder.value = true
   try {
-    const path = await pickFolder({ title: '选择下载保存目录' })
+    const path = await pickFolder({ title: '选择共用下载保存目录' })
     if (!path) return
     const res = await api.paths.setDownload(path, true)
-    downloadPath.value = res.downloadPath || path
-    showToast('下载路径已更新', 'success')
+    applyDownloadPathInfo(res)
+    showToast('共用下载路径已更新', 'success')
   } catch (e) {
     if (e.message && !e.message.includes('未选择')) showToast(e.message, 'error')
   } finally {

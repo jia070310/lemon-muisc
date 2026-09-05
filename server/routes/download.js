@@ -4,10 +4,12 @@ import path from 'path'
 import { getDB } from '../db.js'
 import { broadcast } from '../ws.js'
 import { requestSourceWithMeta, hasActiveSource } from '../sourceManager.js'
+import { getStoredActiveSourceIds } from '../utils/activeSources.js'
 import { writeMeta } from '../meta.js'
 import { buildMusicInfoFromTask } from '../utils/musicInfo.js'
 import { buildEmbedLyrics } from '../utils/lyric.js'
 import { getDownloadSavePath } from '../utils/filePaths.js'
+import { getMergedSettings } from '../utils/userSettings.js'
 import { fetchTrackLyric, fetchTrackCover } from '../utils/trackMeta.js'
 import {
   getNextLowerQuality,
@@ -17,6 +19,12 @@ import {
   formatMissingQualityError,
   sleep,
 } from '../utils/downloadQuality.js'
+import {
+  parseDurationSeconds,
+  probeFileDurationSeconds,
+  probeRemoteAudioDurationSeconds,
+  assertNotPreviewClip,
+} from '../utils/audioDuration.js'
 import { formatUserError } from '../utils/userError.js'
 import { buildSourceFallbackOffer } from '../utils/sourceFallback.js'
 import { extractMusicUrl } from '../utils/sourceResult.js'
@@ -115,7 +123,7 @@ function getNoActiveSourcePayload() {
 
 downloadRouter.post('/add', async (req, res) => {
   try {
-    if (!hasActiveSource()) {
+    if (!hasActiveSource(getStoredActiveSourceIds(req.user?.id))) {
       return res.status(400).json(getNoActiveSourcePayload())
     }
     const { tasks } = req.body
@@ -329,7 +337,7 @@ downloadRouter.post('/confirm-source/:id', (req, res) => {
     }
     delete meta.sourceFallbackOffer
 
-    cleanupTaskDownloadArtifacts(row, meta, getSettings())
+    cleanupTaskDownloadArtifacts(row, meta, taskSettings(row))
     clearTaskStoredFilePath(row.id)
     meta.forceRedownload = true
     getDB().prepare(`
@@ -449,7 +457,7 @@ function removeDownloadTask(id, { deleteFile = false } = {}) {
   if (!row) throw new Error('任务不存在')
 
   if (deleteFile) {
-    const settings = getSettings()
+    const settings = taskSettings(row)
     const meta = parseTaskMeta(row)
     cleanupTaskDownloadArtifacts(row, meta, settings)
   }
@@ -521,7 +529,7 @@ function confirmExistOverwrite(row) {
   delete meta.existFileOffer
   meta.existFileConfirmed = true
   meta.forceRedownload = true
-  cleanupTaskDownloadArtifacts(row, meta, getSettings())
+  cleanupTaskDownloadArtifacts(row, meta, taskSettings(row))
   clearTaskStoredFilePath(row.id)
   getDB().prepare(`
     UPDATE download_tasks
@@ -538,7 +546,7 @@ function confirmExistOverwrite(row) {
 }
 
 function completeTaskWithExistingFile(row) {
-  const settings = getSettings()
+  const settings = taskSettings(row)
   const meta = parseTaskMeta(row)
   const offer = meta.existFileOffer
   const filePath = offer?.filePath || findExistingSameNameFiles(row, settings)[0] || ''
@@ -605,11 +613,26 @@ export function initDownloadQueue() {
   processQueue()
 }
 
-function getSettings() {
+function getSettings(userId = null) {
+  if (userId) {
+    try {
+      return getMergedSettings(userId)
+    } catch {}
+  }
   const rows = getDB().prepare('SELECT key, value FROM settings').all()
   const s = {}
   for (const r of rows) s[r.key] = r.value
   return s
+}
+
+function taskSettings(task) {
+  const s = getSettings(task?.user_id || null)
+  s.__savePath = getDownloadSavePath(task?.user_id || null)
+  return s
+}
+
+function taskSavePath(task) {
+  return getDownloadSavePath(task?.user_id || null)
 }
 
 function parseTaskMeta(task) {
@@ -637,7 +660,7 @@ function applyQualityDowngrade(row, toQuality, { autoCascade = false, reason = '
     at: new Date().toISOString(),
     reason: String(reason || '').slice(0, 300),
   }
-  cleanupTaskDownloadArtifacts(row, meta, getSettings())
+  cleanupTaskDownloadArtifacts(row, meta, taskSettings(row))
   clearTaskStoredFilePath(row.id)
   meta.forceRedownload = true
   getDB().prepare(`
@@ -683,8 +706,8 @@ function confirmPendingDowngradesForUser(userId, { exceptId } = {}) {
 }
 
 async function processQueue() {
-  const settings = getSettings()
-  const maxDl = parseInt(settings['download.maxDownloadNum']) || 3
+  const globalSettings = getSettings()
+  const maxDl = parseInt(globalSettings['download.maxDownloadNum']) || 3
 
   while (runningCount < maxDl) {
     const task = getDB().prepare("SELECT * FROM download_tasks WHERE status = 'waiting' ORDER BY created_at ASC LIMIT 1").get()
@@ -694,7 +717,7 @@ async function processQueue() {
     getDB().prepare("UPDATE download_tasks SET status = 'downloading' WHERE id = ?").run(task.id)
     dlBroadcast('download:status', { id: task.id, status: 'downloading', quality: task.quality })
 
-    downloadTask(task, settings).finally(() => {
+    downloadTask(task, taskSettings(task)).finally(() => {
       runningCount--
       activeDownloads.delete(task.id)
       if (task.user_id) scheduleExistSummary(task.user_id)
@@ -703,8 +726,8 @@ async function processQueue() {
   }
 }
 
-async function resolveDownloadUrl(source, quality, musicInfo, settings, meta = {}) {
-  // 下载：每一档音质都按激活音源顺序全量尝试，再交给降档策略
+async function resolveDownloadUrl(source, quality, musicInfo, settings, meta = {}, userId = null) {
+  // 下载：每一档音质都按该用户激活音源顺序全量尝试，再交给降档策略
   const result = await requestSourceWithMeta(source, 'musicUrl', {
     type: quality,
     quality,
@@ -712,6 +735,7 @@ async function resolveDownloadUrl(source, quality, musicInfo, settings, meta = {
   }, {
     fallbackMode: 'auto',
     skipSourceIds: meta.skipSourceIds || [],
+    allowedSourceIds: getStoredActiveSourceIds(userId),
   })
   const url = extractMusicUrl(result.data)
   if (!url) throw new Error(`获取 ${qualityLabel(quality)} 音质下载链接失败，请尝试其他音质`)
@@ -799,7 +823,7 @@ async function streamToFile(url, partPath, taskId, abort) {
 function markSourceFallbackOffer(task, meta, error) {
   const offer = buildSourceFallbackOffer(error)
   if (!offer) return false
-  cleanupTaskDownloadArtifacts(task, meta, getSettings())
+  cleanupTaskDownloadArtifacts(task, meta, taskSettings(task))
   clearTaskStoredFilePath(task.id)
   meta.sourceFallbackOffer = {
     ...offer,
@@ -822,7 +846,7 @@ function markSourceFallbackOffer(task, meta, error) {
 
 function markAwaitConfirm(task, meta, fromQuality, toQuality, reason) {
   const friendlyReason = formatUserError(reason, '音源取链失败，请稍后重试')
-  cleanupTaskDownloadArtifacts(task, meta, getSettings())
+  cleanupTaskDownloadArtifacts(task, meta, taskSettings(task))
   clearTaskStoredFilePath(task.id)
   meta.downloadArtifacts = []
   meta.downgradeOffer = {
@@ -984,7 +1008,7 @@ function markError(taskId, message, meta) {
   const row = getDB().prepare('SELECT * FROM download_tasks WHERE id = ?').get(taskId)
   const taskMeta = meta || parseTaskMeta(row)
   if (row) {
-    cleanupTaskDownloadArtifacts(row, taskMeta, getSettings())
+    cleanupTaskDownloadArtifacts(row, taskMeta, taskSettings(row))
     clearTaskStoredFilePath(taskId)
   }
   taskMeta.downloadArtifacts = []
@@ -1141,7 +1165,7 @@ function resolveTaskFileBaseName(task, settings) {
 function cleanupGroupDirArtifacts(task, settings, except = new Set()) {
   const baseName = resolveTaskFileBaseName(task, settings)
   if (!baseName) return
-  const groupDir = resolveDownloadGroupDir(getDownloadSavePath(), settings, task)
+  const groupDir = resolveDownloadGroupDir(taskSavePath(task), settings, task)
   if (!fs.existsSync(groupDir)) return
   let entries = []
   try {
@@ -1171,7 +1195,7 @@ function clearTaskStoredFilePath(taskId) {
 }
 
 function prepareTaskForRetry(taskRow, { cleanupFiles = true, forceRedownload = false } = {}) {
-  const settings = getSettings()
+  const settings = taskSettings(taskRow)
   let meta = parseTaskMeta(taskRow)
   if (cleanupFiles) {
     cleanupTaskDownloadArtifacts(taskRow, meta, settings)
@@ -1186,7 +1210,7 @@ function prepareTaskForRetry(taskRow, { cleanupFiles = true, forceRedownload = f
 
 function resolveTaskFilePath(task, settings, ext) {
   const fileName = buildFileName(settings['download.fileName'] || '{name} - {singer}', task, ext)
-  const savePath = getDownloadSavePath()
+  const savePath = taskSavePath(task)
   const groupDir = resolveDownloadGroupDir(savePath, settings, task)
   return path.join(groupDir, fileName)
 }
@@ -1231,7 +1255,7 @@ async function downloadTask(task, settings) {
           await sleep(RETRY_DELAY_MS * (attempt - 1))
         }
 
-        const { url, sourceInfo } = await resolveDownloadUrl(source, quality, musicInfo, settings, meta)
+        const { url, sourceInfo } = await resolveDownloadUrl(source, quality, musicInfo, settings, meta, task.user_id)
         if (sourceInfo?.sourceId && sourceInfo.sourceId !== meta.sourceApiId) {
           meta.sourceApiId = sourceInfo.sourceId
           if (sourceInfo.switched) {
@@ -1281,9 +1305,42 @@ async function downloadTask(task, settings) {
 
         cleanupTaskDownloadArtifacts(task, meta, settings, { exceptPath: filePath })
 
+        const expectedSec = parseDurationSeconds(
+          task.interval || meta.duration || meta.interval || musicInfo.interval || musicInfo.duration,
+        )
+
+        // 落盘前：用音源音频自带的总时长判断（试听源常直接标成 10～30 秒）
+        const remoteSec = await probeRemoteAudioDurationSeconds(url)
+        const preErr = assertNotPreviewClip(remoteSec, expectedSec, { forDownload: true })
+        if (preErr) {
+          if (meta.sourceApiId) {
+            const skipped = new Set([...(meta.skipSourceIds || []), meta.sourceApiId].filter(Boolean))
+            meta.skipSourceIds = [...skipped]
+            saveTaskMeta(task.id, meta)
+          }
+          throw preErr
+        }
+
         // 先在应用配置目录内写完（含标签），再一次性发布到下载目录，降低夸克等网盘挂载产生 name(1) 的概率
         await streamToFile(url, partPath, task.id, abort)
         finalizePartFile(partPath, stagedPath)
+
+        // 远程探测失败时，落盘后再校验一次（兜底）
+        if (!(remoteSec > 0)) {
+          const actualSec = await probeFileDurationSeconds(stagedPath)
+          const postErr = assertNotPreviewClip(actualSec, expectedSec, { forDownload: true })
+          if (postErr) {
+            cleanupDownloadPath(stagedPath)
+            cleanupStagingDir(task.id)
+            if (meta.sourceApiId) {
+              const skipped = new Set([...(meta.skipSourceIds || []), meta.sourceApiId].filter(Boolean))
+              meta.skipSourceIds = [...skipped]
+              saveTaskMeta(task.id, meta)
+            }
+            throw postErr
+          }
+        }
+
         await writeMetaIfNeeded(task, meta, stagedPath, ext, settings)
         publishStagedDownload(stagedPath, filePath)
         cleanupStagingDir(task.id)
@@ -1321,6 +1378,11 @@ async function downloadTask(task, settings) {
     cleanupStagingDir(task.id)
     const reason = lastError?.message || '下载失败'
     if (isNoActiveSourceError(lastError) || isNoActiveSourceError(reason)) {
+      markError(task.id, reason, meta)
+      return
+    }
+    // 各音源均为试听片段：不再降档，直接失败提示
+    if (lastError?.code === 'PREVIEW_CLIP' || /仅提供约.*试听片段|时长不完整/i.test(reason)) {
       markError(task.id, reason, meta)
       return
     }
@@ -1397,6 +1459,7 @@ async function writeMetaIfNeeded(task, meta, filePath, ext, settings) {
         task,
         asBuffer: true,
         useOtherSource: true,
+        userId: task.user_id,
       })
     } catch (e) {
       console.warn('获取封面失败:', task.name, e.message)
@@ -1415,6 +1478,7 @@ async function writeMetaIfNeeded(task, meta, filePath, ext, settings) {
         task,
         settings,
         useOtherSource: true,
+        userId: task.user_id,
       })
     } catch (e) {
       console.warn('获取歌词失败:', task.name, e.message)

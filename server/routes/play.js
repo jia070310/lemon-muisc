@@ -3,6 +3,7 @@ import fs from 'fs'
 import path from 'path'
 import needle from 'needle'
 import { requestSourceWithMeta, hasActiveSource } from '../sourceManager.js'
+import { getStoredActiveSourceIds } from '../utils/activeSources.js'
 import { buildMusicInfo } from '../utils/musicInfo.js'
 import { fetchTrackLyric, fetchTrackCover } from '../utils/trackMeta.js'
 import { resolveCoverUrl } from '../utils/cover.js'
@@ -117,7 +118,9 @@ playRouter.post('/url', async (req, res) => {
 
     if (!songId || !source) return res.status(400).json({ error: '缺少歌曲信息' })
 
-    if (!hasActiveSource()) return res.status(400).json({ error: '没有激活的音源，请先在设置中激活音源' })
+    if (!hasActiveSource(getStoredActiveSourceIds(req.user?.id))) {
+      return res.status(400).json({ error: '没有激活的音源，请先在设置中激活音源' })
+    }
 
     const type = quality || req.body.quality || '128k'
     const musicInfo = buildMusicInfo({ ...req.body, source, quality: type })
@@ -128,6 +131,7 @@ playRouter.post('/url', async (req, res) => {
     }
 
     let wrappedSourceInfo = null
+    const allowedSourceIds = getStoredActiveSourceIds(req.user?.id)
     const wrapped = await playUrlLimiter(() => getOrFetchPlayUrl(cacheKey, async () => {
       const result = await withTimeout(
         requestSourceWithMeta(source, 'musicUrl', {
@@ -138,6 +142,7 @@ playRouter.post('/url', async (req, res) => {
           fallbackMode: getSourceFallbackMode(readSettings()),
           preferredSourceId: sourceApiId || undefined,
           skipSourceIds: skipSourceIds || [],
+          allowedSourceIds,
         }),
         PLAY_URL_TIMEOUT_MS,
         '获取播放链接超时，请稍后重试',
@@ -330,6 +335,7 @@ playRouter.post('/lyric', async (req, res) => {
         musicInfo: { ...musicInfo, source: lookupSource || musicInfo.source },
         meta: { ...req.body, source: lookupSource },
         useOtherSource: true,
+        userId: req.user?.id,
       }),
       PLAY_META_TIMEOUT_MS,
       '获取歌词超时，请稍后重试',
@@ -361,6 +367,7 @@ playRouter.post('/cover', async (req, res) => {
         meta: { ...req.body, source: lookupSource },
         asBuffer: false,
         useOtherSource: true,
+        userId: req.user?.id,
       }),
       PLAY_META_TIMEOUT_MS,
       '获取封面超时，请稍后重试',

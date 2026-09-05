@@ -25,6 +25,10 @@ const RULES = [
     message: '安全连接失败，请稍后重试',
   },
   {
+    test: /仅提供约.*试听片段|仅支持试听约|时长不完整/i,
+    keepRaw: true,
+  },
+  {
     test: /本地文件不可用|不在允许目录|缺少本地文件路径/i,
     message: '本地文件路径无效，请在设置中检查音乐库/下载目录',
   },
@@ -158,10 +162,13 @@ export function formatUserError(error, fallback = '操作失败，请稍后重�
   raw = raw.replace(/^(?:后端失败|请求失败|下载失败|错误)[:：]\s*/i, '').trim() || raw
 
   for (const rule of RULES) {
-    if (rule.test.test(raw)) return rule.message
+    if (rule.test.test(raw)) {
+      if (rule.keepRaw) return raw.slice(0, 200)
+      return rule.message
+    }
   }
 
-  if (looksLikeChineseMessage(raw)) return raw.slice(0, 120)
+  if (looksLikeChineseMessage(raw)) return raw.slice(0, 160)
 
   if (/[A-Za-z]{6,}/.test(raw) || raw.length > 100) {
     return fallback

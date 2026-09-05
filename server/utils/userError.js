@@ -104,6 +104,10 @@ const RULES = [
     test: /^后端失败$/i,
     message: '音源后端暂时不可用，请稍后重试或换较低音质',
   },
+  {
+    test: /仅提供约.*试听片段|仅支持试听约|时长不完整/i,
+    keepRaw: true,
+  },
 ]
 
 function stripNoise(text) {
@@ -139,10 +143,15 @@ export function formatUserError(error, fallback = '操作失败，请稍后重�
   raw = raw.replace(/^(?:后端失败|请求失败|下载失败|错误)[:：]\s*/i, '').trim() || raw
 
   for (const rule of RULES) {
-    if (rule.test.test(raw)) return rule.message
+    if (rule.test.test(raw)) {
+      if (rule.keepRaw) return raw.slice(0, 200)
+      return rule.message
+    }
   }
 
-  if (looksLikeChineseMessage(raw)) return raw.slice(0, 120)
+  if (looksLikeChineseMessage(raw) || (/[\u4e00-\u9fff]/.test(raw) && raw.length <= 200 && !/[A-Za-z]{6,}/.test(raw))) {
+    return raw.slice(0, 200)
+  }
 
   if (/[A-Za-z]{6,}/.test(raw) || raw.length > 100) {
     return fallback

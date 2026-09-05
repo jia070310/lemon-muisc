@@ -1,4 +1,4 @@
-import { Router } from 'express'
+﻿import { Router } from 'express'
 import { searchMusic, searchAlbums, fetchAlbum } from '../musicSdk.js'
 import { getDisplaySources } from '../utils/displaySources.js'
 import { formatUserError } from '../utils/userError.js'
@@ -7,7 +7,7 @@ import { buildAlbumCacheKey, getCachedAlbum, getOrFetchAlbum } from '../utils/al
 
 export const searchRouter = Router()
 
-const availableSources = () => getDisplaySources()
+const availableSources = (req) => getDisplaySources(req.user?.id)
 const searchLimiter = createLimiter(4)
 const SEARCH_TIMEOUT_MS = 20000
 const ALBUM_TIMEOUT_MS = 45000
@@ -28,7 +28,7 @@ searchRouter.get('/album', async (req, res) => {
   try {
     const { keyword, source = 'kw', page = 1, limit = 30 } = req.query
     if (!keyword) return res.status(400).json({ error: '缺少搜索关键词' })
-    if (!availableSources()[source]) {
+    if (!availableSources(req)[source]) {
       return res.status(400).json({ error: `不支持的搜索源: ${source}` })
     }
     const result = await searchLimiter(() => withTimeout(
@@ -46,7 +46,7 @@ searchRouter.get('/album/detail', async (req, res) => {
   try {
     const { source = 'kw', id, page = 1, limit = 0 } = req.query
     if (!id) return res.status(400).json({ error: '缺少专辑 ID' })
-    if (!availableSources()[source]) {
+    if (!availableSources(req)[source]) {
       return res.status(400).json({ error: `不支持的平台: ${source}` })
     }
     const cacheKey = buildAlbumCacheKey(source, id)
@@ -72,7 +72,7 @@ searchRouter.get('/', async (req, res) => {
     const { keyword, source = 'kw', page = 1, limit = 30 } = req.query
     if (!keyword) return res.status(400).json({ error: '缺少搜索关键词' })
 
-    if (!availableSources()[source]) {
+    if (!availableSources(req)[source]) {
       return res.status(400).json({ error: `不支持的搜索源: ${source}` })
     }
 
@@ -87,6 +87,6 @@ searchRouter.get('/', async (req, res) => {
   }
 })
 
-searchRouter.get('/sources', (_req, res) => {
-  res.json({ sources: getDisplaySources() })
+searchRouter.get('/sources', (req, res) => {
+  res.json({ sources: getDisplaySources(req.user?.id) })
 })

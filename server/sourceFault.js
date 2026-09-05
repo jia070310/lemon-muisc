@@ -1,6 +1,6 @@
 import { getDB } from './db.js'
 import { unloadSource, getActiveSources } from './sourceManager.js'
-import { removeActiveSourceId } from './utils/activeSources.js'
+import { removeActiveSourceIdFromAllUsers } from './utils/activeSources.js'
 import { broadcast } from './ws.js'
 import { formatUserError } from './utils/userError.js'
 
@@ -48,9 +48,9 @@ export function recordSourceFault(sourceId, error) {
   const message = formatUserError(error, error?.message || String(error) || '音源运行出错')
   const row = getDB().prepare('SELECT id, name, homepage FROM user_apis WHERE id = ?').get(sourceId)
 
-  // 仅停用故障音源，保留其他已激活音源
+  // 故障音源：从所有用户停用并卸载沙箱
   unloadSource(sourceId)
-  removeActiveSourceId(sourceId)
+  removeActiveSourceIdFromAllUsers(sourceId)
 
   const fault = {
     id: sourceId,

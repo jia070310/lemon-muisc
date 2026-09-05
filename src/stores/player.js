@@ -16,6 +16,11 @@ import { formatArtists } from '../utils/text.js'
 import { getTrackFilePath, isLocalTrack, isSameTrackPath } from '../utils/trackPath.js'
 import { withStreamAuth, stripStreamAuth } from '../utils/streamAuth.js'
 import { toPlayableCoverUrl } from '../utils/coverDisplay.js'
+import {
+  parseDurationSeconds as parseClipDuration,
+  detectPreviewClip,
+  formatPreviewClipMessage,
+} from '../utils/audioDuration.js'
 
 export const currentPlaying = ref(null)
 export const loadingPlay = ref(null)
@@ -40,6 +45,29 @@ export const visualizerEnabled = ref(true)
 export const backgroundPlayEnabled = computed(() => !visualizerEnabled.value)
 export const showFullscreenPlayer = ref(false)
 export const playerError = ref('')
+/** 非致命提示（如试听片段时长警告） */
+export const playerNotice = ref('')
+let playerNoticeTimer = null
+let previewWarnedTrackKey = ''
+
+export function clearPlayerNotice() {
+  if (playerNoticeTimer) {
+    clearTimeout(playerNoticeTimer)
+    playerNoticeTimer = null
+  }
+  playerNotice.value = ''
+}
+
+export function showPlayerNotice(text, ms = 10000) {
+  const msg = String(text || '').trim()
+  if (!msg) return
+  playerNotice.value = msg
+  if (playerNoticeTimer) clearTimeout(playerNoticeTimer)
+  playerNoticeTimer = setTimeout(() => {
+    if (playerNotice.value === msg) playerNotice.value = ''
+    playerNoticeTimer = null
+  }, ms)
+}
 
 /** 试听列表 @type {import('vue').Ref<Array<{ key: string, item: object, source: string }>>} */
 export const playQueue = ref([])
@@ -550,13 +578,19 @@ function bindAudioElementEvents(el) {
     }
   })
   el.addEventListener('loadedmetadata', () => {
-    if (audio === el) syncDurationFromAudio()
+    if (audio !== el) return
+    syncDurationFromAudio()
+    maybeWarnPreviewClip(currentPlaying.value, currentPlaying.value?.source)
   })
   el.addEventListener('durationchange', () => {
-    if (audio === el) syncDurationFromAudio()
+    if (audio !== el) return
+    syncDurationFromAudio()
+    maybeWarnPreviewClip(currentPlaying.value, currentPlaying.value?.source)
   })
   el.addEventListener('canplay', () => {
-    if (audio === el) syncDurationFromAudio()
+    if (audio !== el) return
+    syncDurationFromAudio()
+    maybeWarnPreviewClip(currentPlaying.value, currentPlaying.value?.source)
   })
   el.addEventListener('playing', () => {
     if (audio !== el) return
@@ -1037,6 +1071,20 @@ function applyDurationFallback(item) {
   if (fallback > 0) duration.value = fallback
 }
 
+function maybeWarnPreviewClip(item, source) {
+  if (!item || isLocalTrack(item, source)) return
+  const trackKey = getTrackKey(item, source)
+  if (!trackKey || previewWarnedTrackKey === trackKey) return
+  // 只用真实音频元数据时长，避免被曲目标注时长回退污染
+  const actual = audio?.duration
+  if (!(actual > 0 && isFinite(actual))) return
+  const expected = parseClipDuration(item.interval || item.duration)
+  const info = detectPreviewClip(actual, expected)
+  if (!info) return
+  previewWarnedTrackKey = trackKey
+  showPlayerNotice(formatPreviewClipMessage(info))
+}
+
 function pickRandomIndex(exclude = -1) {
   const len = playQueue.value.length
   if (len <= 0) return -1
@@ -1481,6 +1529,8 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 }
 
   loadingPlay.value = item.id
   playerError.value = ''
+  clearPlayerNotice()
+  previewWarnedTrackKey = ''
   const isLocal = isLocalTrack(item, source)
   const quality = DEFAULT_PLAY_QUALITY
   const maxAttempts = isLocal ? 2 : 1
@@ -1522,6 +1572,7 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 }
 
         syncDurationFromAudio()
         applyDurationFallback(item)
+        maybeWarnPreviewClip(enrichedItem, source)
 
         currentPlaying.value = cleanTrackItem(enrichedItem)
         isPaused.value = false

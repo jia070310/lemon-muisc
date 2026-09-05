@@ -1,4 +1,5 @@
 import { requestSource, hasActiveSource } from '../sourceManager.js'
+import { getStoredActiveSourceIds } from './activeSources.js'
 import { getLyric, searchMusic } from '../musicSdk.js'
 import { lyricLookupExtra } from './musicInfo.js'
 import { resolveCoverCandidates } from './cover.js'
@@ -63,11 +64,14 @@ export async function fetchTrackLyric({
   task = {},
   settings = {},
   useOtherSource = true,
+  userId = null,
+  allowedSourceIds = null,
 } = {}) {
   const merged = { ...musicInfo, ...meta, ...task, source: source || musicInfo.source || meta.source }
   const src = isOnlineSource(merged.source || source) ? (merged.source || source) : ''
   const id = pickLyricSongId(src, songId || merged.songId || merged.songmid || merged.hash || merged.copyrightId, merged)
   const extra = lyricLookupExtra(merged)
+  const allowIds = allowedSourceIds || (userId ? getStoredActiveSourceIds(userId) : null)
 
   if (id && src) {
     try {
@@ -81,9 +85,9 @@ export async function fetchTrackLyric({
     }
   }
 
-  if (src && hasActiveSource()) {
+  if (src && hasActiveSource(allowIds)) {
     try {
-      const fromSource = await requestSource(src, 'lyric', { musicInfo: merged })
+      const fromSource = await requestSource(src, 'lyric', { musicInfo: merged }, { allowedSourceIds: allowIds })
       if (fromSource?.lyric) {
         return {
           lyric: src === 'kg' ? fixKgLyric(fromSource.lyric) : fromSource.lyric,
@@ -139,10 +143,13 @@ export async function fetchTrackCover({
   task = {},
   asBuffer = false,
   useOtherSource = true,
+  userId = null,
+  allowedSourceIds = null,
 } = {}) {
   const merged = { ...musicInfo, ...meta, ...task, source: source || musicInfo.source || meta.source }
   const src = isOnlineSource(merged.source || source) ? (merged.source || source) : ''
   const candidates = resolveCoverCandidates(merged)
+  const allowIds = allowedSourceIds || (userId ? getStoredActiveSourceIds(userId) : null)
 
   if (asBuffer) {
     for (const url of candidates) {
@@ -153,9 +160,9 @@ export async function fetchTrackCover({
     return candidates[0]
   }
 
-  if (src && hasActiveSource()) {
+  if (src && hasActiveSource(allowIds)) {
     try {
-      const picResult = await requestSource(src, 'pic', { musicInfo: merged })
+      const picResult = await requestSource(src, 'pic', { musicInfo: merged }, { allowedSourceIds: allowIds })
       const picUrl = typeof picResult === 'string' ? picResult : (picResult?.url || picResult?.picUrl)
       if (picUrl) {
         if (asBuffer) {

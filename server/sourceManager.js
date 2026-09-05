@@ -3,6 +3,12 @@ import needle from 'needle'
 import { getDB } from './db.js'
 import { parseScriptMeta } from './utils/parseScriptMeta.js'
 import { createLxUtils, createSandboxRequire } from './utils/lxSourceRuntime.js'
+import {
+  createCerumusicApi,
+  isCeruNativePlugin,
+  normalizeCeruSources,
+  createCeruHandler,
+} from './utils/ceruSourceRuntime.js'
 import { formatUserError } from './utils/userError.js'
 import { assertMusicUrl } from './utils/sourceResult.js'
 
@@ -79,8 +85,10 @@ export async function loadSource(id, script) {
       utils: createLxUtils(),
     }
 
+    const moduleExports = {}
     const sandbox = {
       lx: lxApi,
+      cerumusic: createCerumusicApi(),
       console: {
         log: () => {},
         warn: () => {},
@@ -144,8 +152,8 @@ export async function loadSource(id, script) {
       escape,
       unescape,
       require: createSandboxRequire(),
-      module: { exports: {} },
-      exports: {},
+      module: { exports: moduleExports },
+      exports: moduleExports,
       process: {
         env: {},
         version: process.version,
@@ -166,6 +174,21 @@ export async function loadSource(id, script) {
         timeout: 15000,
         displayErrors: true,
       })
+      // 澜音原生音源：不调用 lx.send('inited')，而是 module.exports = { pluginInfo, sources, musicUrl, ... }
+      if (!settled) {
+        const exported = sandbox.module?.exports
+        if (isCeruNativePlugin(exported)) {
+          sources = validateSources(normalizeCeruSources(exported))
+          if (!Object.keys(sources).length) {
+            finish(new Error('澜音音源未声明支持的平台（kw/kg/tx/wy/mg）'))
+            return
+          }
+          requestHandler = createCeruHandler(exported)
+          entry = { id, handler: requestHandler, sources, pendingRequests, runtime: 'ceru' }
+          activeSources.set(id, entry)
+          finish(null, sources)
+        }
+      }
     } catch (e) {
       finish(new Error(`音源脚本执行失败: ${e.message}`))
     }
@@ -254,14 +277,23 @@ export function getActiveSourceIds() {
   return [...activeSources.keys()]
 }
 
-export function hasActiveSource() {
+export function hasActiveSource(allowedSourceIds = null) {
+  if (Array.isArray(allowedSourceIds)) {
+    if (!allowedSourceIds.length) return false
+    const allow = new Set(allowedSourceIds.map(String))
+    return [...activeSources.values()].some((s) => s?.handler && allow.has(s.id))
+  }
   return [...activeSources.values()].some(s => s?.handler)
 }
 
-/** 合并所有已激活脚本声明的平台能力（音质取并集） */
-export function getMergedSources() {
+/** 合并已激活脚本声明的平台能力；可按用户允许的音源 ID 过滤 */
+export function getMergedSources(allowedSourceIds = null) {
+  const allow = Array.isArray(allowedSourceIds)
+    ? new Set(allowedSourceIds.map(String))
+    : null
   const merged = {}
   for (const entry of activeSources.values()) {
+    if (allow && !allow.has(entry.id)) continue
     for (const [key, info] of Object.entries(entry.sources || {})) {
       if (!merged[key]) {
         merged[key] = {
@@ -284,12 +316,16 @@ export function getMergedSources() {
   return merged
 }
 
-function candidatesFor(source, action) {
+function candidatesFor(source, action, allowedSourceIds = null) {
   const list = [...activeSources.values()]
   // 最近激活优先
   list.reverse()
+  const allow = Array.isArray(allowedSourceIds)
+    ? new Set(allowedSourceIds.map(String))
+    : null
   return list.filter((entry) => {
     if (!entry?.handler) return false
+    if (allow && !allow.has(entry.id)) return false
     const info = entry.sources?.[source]
     if (!info) return false
     if (action && Array.isArray(info.actions) && info.actions.length && !info.actions.includes(action)) {
@@ -359,11 +395,16 @@ export function clearSourceNameCache(id) {
   else sourceNameCache.clear()
 }
 
-function resolveCandidates(source, action) {
-  let candidates = candidatesFor(source, action)
-  if (!candidates.length) candidates = candidatesFor(source, null)
+function resolveCandidates(source, action, allowedSourceIds = null) {
+  let candidates = candidatesFor(source, action, allowedSourceIds)
+  if (!candidates.length) candidates = candidatesFor(source, null, allowedSourceIds)
   if (!candidates.length) {
-    candidates = [...activeSources.values()].filter(s => s?.handler).reverse()
+    const allow = Array.isArray(allowedSourceIds)
+      ? new Set(allowedSourceIds.map(String))
+      : null
+    candidates = [...activeSources.values()]
+      .filter((s) => s?.handler && (!allow || allow.has(s.id)))
+      .reverse()
   }
   return candidates
 }
@@ -379,19 +420,24 @@ function actionLabel(action) {
  * @returns {Promise<{ data: any, sourceId: string, sourceName: string, switched: boolean, fromSourceId: string|null, fromSourceName: string|null }>}
  */
 export async function requestSourceWithMeta(source, action, info, options = {}) {
-  if (!hasActiveSource()) throw new Error('没有激活的音源')
+  const allowedSourceIds = Array.isArray(options.allowedSourceIds)
+    ? options.allowedSourceIds.map(String).filter(Boolean)
+    : null
+
+  if (!hasActiveSource(allowedSourceIds)) throw new Error('没有激活的音源')
 
   const fallbackMode = options.fallbackMode === 'ask' ? 'ask' : 'auto'
   const preferredSourceId = options.preferredSourceId || null
   const skipSourceIds = new Set((options.skipSourceIds || []).filter(Boolean))
 
-  let candidates = resolveCandidates(source, action)
+  let candidates = resolveCandidates(source, action, allowedSourceIds)
   if (preferredSourceId) {
     const preferred = candidates.find((entry) => entry.id === preferredSourceId)
     if (preferred) candidates = [preferred]
     else {
       const entry = activeSources.get(preferredSourceId)
-      candidates = entry?.handler ? [entry] : []
+      const allowed = !allowedSourceIds || allowedSourceIds.includes(preferredSourceId)
+      candidates = entry?.handler && allowed ? [entry] : []
     }
   }
   candidates = candidates.filter((entry) => !skipSourceIds.has(entry.id))

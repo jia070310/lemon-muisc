@@ -122,6 +122,10 @@
         <span>{{ libraryHotNotice }}</span>
         <button type="button" class="btn-ghost btn-sm" @click="clearLibraryHotNotice">知道了</button>
       </div>
+      <div v-if="playerNotice" class="app-notice preview-clip-banner">
+        <span>{{ playerNotice }}</span>
+        <button type="button" class="btn-ghost btn-sm" @click="clearPlayerNotice">知道了</button>
+      </div>
     </div>
 
     <main class="content" :class="{ 'content-fixed': isTagPage, 'content-navigating': isRouteLoading }">
@@ -366,7 +370,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { connectWS, connected as wsConnected, onWS, disconnectWS } from './ws.js'
-import { initPlayer } from './stores/player.js'
+import { initPlayer, showFullscreenPlayer, playerNotice, clearPlayerNotice } from './stores/player.js'
 import { checkForUpdate, hasUpdate } from './composables/useUpdateCheck.js'
 import { api } from './api.js'
 import {
@@ -378,7 +382,7 @@ import { applyTheme, theme, THEME_KEY, COLOR_SCHEME_KEY, CUSTOM_COLOR_KEY } from
 import { formatUserError } from './utils/userError.js'
 import {
   playlistPickTarget, stopPlaylistPick,
-  initLibraryHotReload, initLibraryUserData, libraryHotNotice, clearLibraryHotNotice,
+  initLibraryHotReload, initLibraryUserData, resetLibraryUserData, libraryHotNotice, clearLibraryHotNotice,
   loadLibrarySongColumns,
 } from './stores/library.js'
 import {
@@ -397,7 +401,6 @@ import PlayerBar from './components/PlayerBar.vue'
 import TagEditModal from './components/TagEditModal.vue'
 import FullscreenPlayer from './components/FullscreenPlayer.vue'
 import PageSkeleton from './components/PageSkeleton.vue'
-import { showFullscreenPlayer } from './stores/player.js'
 import {
   noActiveSourcePrompt,
   clearNoActiveSourcePrompt,
@@ -433,7 +436,8 @@ const hasAppNotices = computed(() => Boolean(
   || (tagMatchRunning.value && !isTagPage.value)
   || (tagMatchResult.value && !isTagPage.value)
   || sourceSwitchNotice.value
-  || libraryHotNotice.value,
+  || libraryHotNotice.value
+  || playerNotice.value,
 ))
 const setupBanner = ref(false)
 const SETUP_BANNER_DISMISS_KEY = 'lemon-setup-banner-dismissed'
@@ -925,6 +929,7 @@ function toggleTheme() {
 
 async function handleLogout() {
   disconnectWS()
+  resetLibraryUserData()
   await authLogout()
   router.replace('/login')
 }
@@ -935,10 +940,22 @@ watch([isAuthReady, isSessionValid], ([ready, valid]) => {
   else disconnectWS()
 }, { immediate: true })
 
+watch(
+  () => [isAuthReady.value, isSessionValid.value, currentUser.value?.id],
+  ([ready, valid, userId]) => {
+    if (!ready) return
+    if (valid && userId) {
+      initLibraryUserData(api, currentUser.value).catch(() => {})
+      loadLibrarySongColumns(api).catch(() => {})
+    } else {
+      resetLibraryUserData()
+    }
+  },
+  { immediate: true },
+)
+
 onMounted(() => {
   initPlayer()
-  initLibraryUserData(api).catch(() => {})
-  loadLibrarySongColumns(api).catch(() => {})
   offLibraryHotReload = initLibraryHotReload(api, { onWS })
   checkForUpdate()
   loadSourceFault()
@@ -1685,5 +1702,18 @@ onUnmounted(() => {
   background: rgba(34, 197, 94, 0.1);
   border: 1px solid rgba(34, 197, 94, 0.28);
   color: var(--text-secondary);
+}
+
+.preview-clip-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+  background: rgba(217, 119, 6, 0.12);
+  border: 1px solid rgba(217, 119, 6, 0.35);
+  color: var(--text);
+  max-width: min(560px, calc(100vw - 32px));
+  text-align: center;
 }
 </style>

@@ -86,6 +86,8 @@ export function isRetryableDownloadError(error) {
   const code = error?.code || ''
   const text = `${message} ${code}`
   if (isNoActiveSourceError(error)) return false
+  // 试听片段：换其他激活音源再试同一音质
+  if (code === 'PREVIEW_CLIP' || /仅提供约.*试听片段|时长不完整/i.test(message)) return true
   if (/socket hang up|ECONNRESET|ETIMEDOUT|EPIPE|ECONNABORTED|ERR_SOCKET/i.test(text)) return true
   if (/timeout|timed out|请求超时|后端失败/i.test(text) && !/音源初始化超时/i.test(text)) return true
   if (/获取.*音质.*失败|获取播放链接失败|未获取到URL|获取URL失败/i.test(text)) return true

@@ -38,7 +38,8 @@ export async function loadSearchSources(api, { force = false } = {}) {
     searchState.sources = {}
   }
   syncActiveSourceKey(searchState)
-  sourcesLoaded.value = true
+  // 只有拿到平台列表才标记已加载，避免空结果被永久缓存
+  sourcesLoaded.value = Object.keys(searchState.sources).length > 0
 }
 
 export function reloadSearchSources(api) {

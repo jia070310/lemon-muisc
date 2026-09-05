@@ -52,7 +52,8 @@ export function isSameAudioBaseName(entryBase, canonicalBase) {
 export function findExistingSameNameFiles(task, settings = {}) {
   const baseName = resolveTaskBaseName(task, settings)
   if (!baseName) return []
-  const groupDir = resolveDownloadGroupDir(getDownloadSavePath(), settings, task)
+  const savePath = settings.__savePath || getDownloadSavePath(task?.user_id || null)
+  const groupDir = resolveDownloadGroupDir(savePath, settings, task)
   if (!groupDir || !fs.existsSync(groupDir)) return []
 
   const found = []

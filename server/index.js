@@ -11,7 +11,11 @@ import { apiRouter } from './routes/index.js'
 import { initDownloadQueue } from './routes/download.js'
 import { setupWebSocket } from './ws.js'
 import { loadSource } from './sourceManager.js'
-import { getStoredActiveSourceIds, saveActiveSourceIds } from './utils/activeSources.js'
+import {
+  getUnionActiveSourceIds,
+  migrateGlobalActiveSourcesToUsers,
+  removeActiveSourceIdFromAllUsers,
+} from './utils/activeSources.js'
 import { refreshStoredSourceMeta } from './routes/source.js'
 import { installSourceFaultHandlers, recordSourceFault, getSourceFault } from './sourceFault.js'
 import { startMemoryGuard } from './utils/memoryGuard.js'
@@ -50,32 +54,33 @@ if (fs.existsSync(publicIndex)) {
 const wss = new WebSocketServer({ server, path: '/ws' })
 setupWebSocket(wss)
 
-/** 自动恢复上次激活的音源（可多个；故障音源跳过），须在对外服务前完成 */
+/** 自动加载各用户激活音源的并集（故障音源跳过），须在对外服务前完成 */
 async function restoreActiveSources() {
   try {
+    migrateGlobalActiveSourcesToUsers()
     const fault = getSourceFault()
-    let ids = getStoredActiveSourceIds().filter(Boolean)
+    let ids = getUnionActiveSourceIds().filter(Boolean)
     if (fault?.id) {
       if (ids.includes(fault.id)) {
         console.warn(`跳过自动激活故障音源: ${fault.name} (${fault.id})`)
       }
-      ids = ids.filter(id => id !== fault.id)
+      ids = ids.filter((id) => id !== fault.id)
+      removeActiveSourceIdFromAllUsers(fault.id)
     }
-    saveActiveSourceIds(ids)
 
-    const okIds = []
     for (const id of ids) {
       try {
         const api = getDB().prepare('SELECT id, script FROM user_apis WHERE id = ?').get(id)
-        if (!api) continue
+        if (!api) {
+          removeActiveSourceIdFromAllUsers(id)
+          continue
+        }
         const sources = await loadSource(api.id, api.script)
-        okIds.push(api.id)
-        console.log(`已自动激活音源: ${api.id}`, Object.keys(sources))
+        console.log(`已自动加载音源: ${api.id}`, Object.keys(sources))
       } catch (e) {
         recordSourceFault(id, e)
       }
     }
-    saveActiveSourceIds(okIds)
   } catch (e) {
     console.error('自动激活音源失败:', e.message)
   }

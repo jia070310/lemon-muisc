@@ -18,7 +18,6 @@ export const GLOBAL_SETTING_KEYS = new Set([
   'download.isUseOtherSource',
   'download.isSavePathGroupByListName',
   'download.savePathGroupBy',
-  'source.active',
   'source.fault',
   'source.fallbackMode',
   'file.paths',
@@ -47,6 +46,9 @@ export const USER_SETTING_KEYS = new Set([
   'player.coverStyle',
   'player.visualizer',
   'playlist.remoteSyncDays',
+  'download.usePersonalSavePath',
+  'download.savePathPersonal',
+  'source.active',
 ])
 
 export function isGlobalSettingKey(key) {

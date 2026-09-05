@@ -53,8 +53,8 @@
       </div>
       <div class="player-info">
         <span class="player-name">{{ currentPlaying ? `${cleanText(currentPlaying.name)} - ${formatArtists(currentPlaying.singer)}` : '未选择歌曲' }}</span>
-        <span class="player-lyric" :class="{ empty: currentPlaying && !currentLyricText && !playerError, error: !!playerError }">
-          {{ playerError || (currentPlaying ? (currentLyricText || '暂无歌词') : '未知艺术家') }}
+        <span class="player-lyric" :class="{ empty: currentPlaying && !currentLyricText && !playerError && !playerNotice, error: !!playerError, notice: !playerError && !!playerNotice }">
+          {{ playerError || playerNotice || (currentPlaying ? (currentLyricText || '暂无歌词') : '未知艺术家') }}
         </span>
         <span v-if="currentPlaying" class="player-time-mobile">{{ fmtTime(currentTime) }} / {{ fmtTime(displayDuration) }}</span>
       </div>
@@ -227,7 +227,7 @@
 import {
   currentPlaying, isPaused, isBuffering, currentTime, displayDuration, volume, isMuted,
   coverUrl, coverStyle, currentLyricText, visualizerEnabled, showFullscreenPlayer,
-  playQueue, currentQueueIndex, playMode, playModeLabel, showQueuePanel, playerError,
+  playQueue, currentQueueIndex, playMode, playModeLabel, showQueuePanel, playerError, playerNotice,
   togglePause, stopPlay, seekTo, setVolume, toggleMute, fmtTime, initPlayer,
   playNext, playPrev, togglePlayMode, resumeOrTogglePause, unlockAudioFromGesture,
   removeFromQueue, clearQueue, playTrackAt, openFullscreenPlayer,
@@ -584,6 +584,9 @@ async function onQueuePlayClick(index) {
 }
 .player-lyric.error {
   color: var(--error, #ef4444);
+}
+.player-lyric.notice {
+  color: #d97706;
 }
 
 .player-time-mobile {

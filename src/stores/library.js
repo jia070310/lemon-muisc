@@ -1,15 +1,28 @@
 import { ref, computed } from 'vue'
 import { findLocalMatchForTrack, isLocalPlaylistTrack } from '../utils/trackMatch.js'
 import { withStreamAuth } from '../utils/streamAuth.js'
+import { currentUser } from '../utils/auth.js'
 
-const FAVORITES_KEY = 'lemon-library-favorites'
-const RECENT_KEY = 'lemon-library-recent'
-const PLAYLISTS_KEY = 'lemon-library-playlists'
-const USER_DATA_REV_KEY = 'lemon-library-user-data-rev'
+const FAVORITES_KEY_BASE = 'lemon-library-favorites'
+const RECENT_KEY_BASE = 'lemon-library-recent'
+const PLAYLISTS_KEY_BASE = 'lemon-library-playlists'
+const USER_DATA_REV_KEY_BASE = 'lemon-library-user-data-rev'
+const LEGACY_MIGRATED_KEY = 'lemon-library-legacy-migrated-user'
 const RECENT_LIMIT = 200
 const SESSION_TRACKS_KEY = 'lemon-library-tracks-v1'
 const SESSION_TRACKS_LIMIT = 8000
 const coverVersions = new Map()
+
+let activeUserId = ''
+
+function storageKey(base) {
+  return activeUserId ? `${base}:${activeUserId}` : base
+}
+
+function favoritesKey() { return storageKey(FAVORITES_KEY_BASE) }
+function recentKey() { return storageKey(RECENT_KEY_BASE) }
+function playlistsKey() { return storageKey(PLAYLISTS_KEY_BASE) }
+function userDataRevKey() { return storageKey(USER_DATA_REV_KEY_BASE) }
 
 export const libraryTracks = ref([])
 export const libraryLoading = ref(false)
@@ -184,11 +197,11 @@ function writeJson(key, value) {
 }
 
 function readLocalRevision() {
-  return Number(readJson(USER_DATA_REV_KEY, 0)) || 0
+  return Number(readJson(userDataRevKey(), 0)) || 0
 }
 
 function writeLocalRevision(rev) {
-  writeJson(USER_DATA_REV_KEY, Number(rev) || 0)
+  writeJson(userDataRevKey(), Number(rev) || 0)
 }
 
 function bumpLocalRevision() {
@@ -224,15 +237,15 @@ function pickNewerPlaylists(local, server) {
 function applyLocalUserData({ playlists, favorites: favs, recentPlays: recent, revision } = {}) {
   if (Array.isArray(playlists)) {
     customPlaylists.value = playlists.map(normalizePlaylist)
-    writeJson(PLAYLISTS_KEY, customPlaylists.value)
+    writeJson(playlistsKey(), customPlaylists.value)
   }
   if (Array.isArray(favs)) {
     favorites.value = favs
-    writeJson(FAVORITES_KEY, favs)
+    writeJson(favoritesKey(), favs)
   }
   if (Array.isArray(recent)) {
     recentPlays.value = recent
-    writeJson(RECENT_KEY, recent)
+    writeJson(recentKey(), recent)
   }
   if (revision !== undefined) writeLocalRevision(revision)
 }
@@ -270,17 +283,17 @@ function persistUserDataNow() {
 }
 
 function persistPlaylists() {
-  writeJson(PLAYLISTS_KEY, customPlaylists.value)
+  writeJson(playlistsKey(), customPlaylists.value)
   scheduleUserDataPersist()
 }
 
 function persistFavorites() {
-  writeJson(FAVORITES_KEY, favorites.value)
+  writeJson(favoritesKey(), favorites.value)
   scheduleUserDataPersist()
 }
 
 function persistRecent() {
-  writeJson(RECENT_KEY, recentPlays.value)
+  writeJson(recentKey(), recentPlays.value)
   scheduleUserDataPersist()
 }
 
@@ -298,15 +311,15 @@ function applyRemoteUserData({ playlists, favorites: favs, recentPlays: recent, 
   skipNextUserDataPersist = true
   if (Array.isArray(playlists)) {
     customPlaylists.value = playlists.map(normalizePlaylist)
-    writeJson(PLAYLISTS_KEY, customPlaylists.value)
+    writeJson(playlistsKey(), customPlaylists.value)
   }
   if (Array.isArray(favs)) {
     favorites.value = favs
-    writeJson(FAVORITES_KEY, favs)
+    writeJson(favoritesKey(), favs)
   }
   if (Array.isArray(recent)) {
     recentPlays.value = recent
-    writeJson(RECENT_KEY, recent)
+    writeJson(recentKey(), recent)
   }
   if (revision !== undefined) writeLocalRevision(revision)
 }
@@ -333,9 +346,74 @@ function flushPendingUserDataPersist() {
   scheduleUserDataPersist()
 }
 
-/** 从服务端加载歌单、收藏、最近播放；本地仅有数据时自动上传迁移 */
-export async function initLibraryUserData(api) {
+function clearInMemoryUserData() {
+  customPlaylists.value = []
+  favorites.value = []
+  recentPlays.value = []
+  playlistPickTarget.value = null
+}
+
+function migrateLegacyLocalUserData(userId) {
+  if (!userId) return
+  try {
+    if (localStorage.getItem(LEGACY_MIGRATED_KEY)) return
+    const hasScoped = hasItems(readJson(`${PLAYLISTS_KEY_BASE}:${userId}`, []))
+      || hasItems(readJson(`${FAVORITES_KEY_BASE}:${userId}`, []))
+      || hasItems(readJson(`${RECENT_KEY_BASE}:${userId}`, []))
+    if (hasScoped) {
+      localStorage.setItem(LEGACY_MIGRATED_KEY, userId)
+      return
+    }
+    const legacyPl = readJson(PLAYLISTS_KEY_BASE, [])
+    const legacyFav = readJson(FAVORITES_KEY_BASE, [])
+    const legacyRecent = readJson(RECENT_KEY_BASE, [])
+    const legacyRev = Number(readJson(USER_DATA_REV_KEY_BASE, 0)) || 0
+    if (!hasItems(legacyPl) && !hasItems(legacyFav) && !hasItems(legacyRecent)) {
+      localStorage.setItem(LEGACY_MIGRATED_KEY, userId)
+      return
+    }
+    writeJson(`${PLAYLISTS_KEY_BASE}:${userId}`, legacyPl)
+    writeJson(`${FAVORITES_KEY_BASE}:${userId}`, legacyFav)
+    writeJson(`${RECENT_KEY_BASE}:${userId}`, legacyRecent)
+    writeJson(`${USER_DATA_REV_KEY_BASE}:${userId}`, legacyRev)
+    localStorage.removeItem(PLAYLISTS_KEY_BASE)
+    localStorage.removeItem(FAVORITES_KEY_BASE)
+    localStorage.removeItem(RECENT_KEY_BASE)
+    localStorage.removeItem(USER_DATA_REV_KEY_BASE)
+    localStorage.setItem(LEGACY_MIGRATED_KEY, userId)
+  } catch {}
+}
+
+/** 退出登录时清空内存中的个人数据，避免泄漏到下一用户 */
+export function resetLibraryUserData() {
+  userDataSyncReady = false
+  skipNextUserDataPersist = true
+  pendingUserDataPersist = false
+  if (userDataPersistTimer) {
+    clearTimeout(userDataPersistTimer)
+    userDataPersistTimer = null
+  }
+  activeUserId = ''
+  clearInMemoryUserData()
+}
+
+/** 从服务端加载当前用户的歌单、收藏、最近播放（按用户隔离） */
+export async function initLibraryUserData(api, user = null) {
   libraryApi = api
+  userDataSyncReady = false
+  const nextUser = user || currentUser.value
+  const nextId = String(nextUser?.id || '')
+  if (!nextId) {
+    resetLibraryUserData()
+    return
+  }
+
+  if (activeUserId && activeUserId !== nextId) {
+    clearInMemoryUserData()
+  }
+  activeUserId = nextId
+  migrateLegacyLocalUserData(nextId)
+
   try {
     const res = await api.library.userData.get()
     const data = res.data || {}
@@ -344,9 +422,9 @@ export async function initLibraryUserData(api) {
     const serverRecent = data.recentPlays || []
     const serverRev = Number(data.revision) || 0
 
-    const localPl = readJson(PLAYLISTS_KEY, []).map(normalizePlaylist)
-    const localFav = readJson(FAVORITES_KEY, [])
-    const localRecent = readJson(RECENT_KEY, [])
+    const localPl = readJson(playlistsKey(), []).map(normalizePlaylist)
+    const localFav = readJson(favoritesKey(), [])
+    const localRecent = readJson(recentKey(), [])
     const localRev = readLocalRevision()
 
     let needUpload = false
@@ -366,21 +444,23 @@ export async function initLibraryUserData(api) {
         recentPlays: serverRecent,
         revision: serverRev,
       })
-    } else {
-      const pickedPl = pickNewerPlaylists(localPl, serverPl)
-      const pickedFav = hasItems(serverFav) ? serverFav : localFav
-      const pickedRecent = hasItems(serverRecent) ? serverRecent : localRecent
-      applyLocalUserData({
-        playlists: pickedPl,
-        favorites: pickedFav,
-        recentPlays: pickedRecent,
-        revision: localRev || serverRev,
+    } else if (serverRev > 0 || hasItems(serverPl) || hasItems(serverFav) || hasItems(serverRecent)) {
+      // 优先服务端（该用户权威数据），避免串用其他账号的浏览器缓存
+      applyRemoteUserData({
+        playlists: serverPl,
+        favorites: serverFav,
+        recentPlays: serverRecent,
+        revision: serverRev || localRev,
       })
-      needUpload = (
-        playlistIdsSignature(pickedPl) !== playlistIdsSignature(serverPl)
-        || (!hasItems(serverFav) && hasItems(localFav))
-        || (!hasItems(serverRecent) && hasItems(localRecent))
-      )
+    } else {
+      // 服务端为空：仅使用「本用户」本地缓存做首次迁移上传
+      applyLocalUserData({
+        playlists: localPl,
+        favorites: localFav,
+        recentPlays: localRecent,
+        revision: localRev || (hasItems(localPl) || hasItems(localFav) || hasItems(localRecent) ? Date.now() : 0),
+      })
+      needUpload = hasItems(localPl) || hasItems(localFav) || hasItems(localRecent)
     }
 
     if (needUpload) {
@@ -388,9 +468,9 @@ export async function initLibraryUserData(api) {
       await saveUserDataToServer()
     }
   } catch {
-    customPlaylists.value = readJson(PLAYLISTS_KEY, []).map(normalizePlaylist)
-    favorites.value = readJson(FAVORITES_KEY, [])
-    recentPlays.value = readJson(RECENT_KEY, [])
+    customPlaylists.value = readJson(playlistsKey(), []).map(normalizePlaylist)
+    favorites.value = readJson(favoritesKey(), [])
+    recentPlays.value = readJson(recentKey(), [])
   }
   try {
     const settingsRes = await api.settings.get()
@@ -454,9 +534,9 @@ export function getLibraryTrackKey(track) {
   return id ? `${source}:${id}` : ''
 }
 
-export const favorites = ref(readJson(FAVORITES_KEY, []))
-export const recentPlays = ref(readJson(RECENT_KEY, []))
-export const customPlaylists = ref(readJson(PLAYLISTS_KEY, []).map(normalizePlaylist))
+export const favorites = ref([])
+export const recentPlays = ref([])
+export const customPlaylists = ref([])
 
 export const favoriteKeys = computed(() => new Set(favorites.value.map(f => f.key)))
 
@@ -792,23 +872,26 @@ export function deletePlaylist(id) {
   return true
 }
 
-export function addTracksToPlaylist(playlistId, tracks, sourceOverride) {
+export function addTracksToPlaylist(playlistId, tracks, sourceOverride, options = {}) {
   const idx = customPlaylists.value.findIndex(p => p.id === playlistId)
   if (idx < 0) return { added: 0, playlist: null }
   const pl = normalizePlaylist(customPlaylists.value[idx])
   const keys = [...pl.trackKeys]
   const snapshots = { ...pl.trackSnapshots }
+  const prepend = options.position === 'start'
+  const incoming = []
   let added = 0
   for (const track of tracks) {
     const snap = trackToSnapshot(track, sourceOverride)
-    if (!snap || keys.includes(snap.key)) continue
-    keys.push(snap.key)
+    if (!snap || keys.includes(snap.key) || incoming.includes(snap.key)) continue
+    incoming.push(snap.key)
     if (!snap.localPath || !libraryTracks.value.some(t => getLibraryTrackKey(t) === snap.key)) {
       snapshots[snap.key] = snap
     }
     added++
   }
-  const next = updatePlaylist(playlistId, { trackKeys: keys, trackSnapshots: snapshots })
+  const nextKeys = prepend ? [...incoming, ...keys] : [...keys, ...incoming]
+  const next = updatePlaylist(playlistId, { trackKeys: nextKeys, trackSnapshots: snapshots })
   return { added, playlist: next }
 }
 
@@ -956,7 +1039,8 @@ export async function refreshImportedPlaylistFromNetwork(api, playlistId, { onPr
 
   let added = 0
   if (newTracks.length) {
-    const res = addTracksToPlaylist(playlistId, newTracks, pl.importSource)
+    // 网络更新：新增歌曲插到歌单最前（保持平台列表中的相对顺序）
+    const res = addTracksToPlaylist(playlistId, newTracks, pl.importSource, { position: 'start' })
     added = res.added
   }
 

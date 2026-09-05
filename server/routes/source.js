@@ -4,7 +4,6 @@ import { getDB } from '../db.js'
 import {
   loadSource,
   unloadSource,
-  getActiveSource,
   getActiveSources,
   getActiveSourceIds,
   getMergedSources,
@@ -14,6 +13,8 @@ import {
   getStoredActiveSourceIds,
   addActiveSourceId,
   removeActiveSourceId,
+  removeActiveSourceIdFromAllUsers,
+  isSourceActiveForAnyUser,
   saveActiveSourceIds,
 } from '../utils/activeSources.js'
 import { getSourceFault, clearSourceFault, recordSourceFault } from '../sourceFault.js'
@@ -43,9 +44,9 @@ async function fetchScriptFromUrl(url) {
   return script
 }
 
-sourceRouter.get('/list', (_req, res) => {
+sourceRouter.get('/list', (req, res) => {
   refreshStoredSourceMeta()
-  const activeIds = new Set(getActiveSourceIds().length ? getActiveSourceIds() : getStoredActiveSourceIds())
+  const activeIds = new Set(getStoredActiveSourceIds(req.user?.id))
   const rows = getDB().prepare('SELECT id, name, description, author, version, homepage, sources FROM user_apis').all()
   res.json(rows.map(r => ({
     ...r,
@@ -81,7 +82,7 @@ sourceRouter.post('/import-url', requireAdmin, async (req, res) => {
 
 sourceRouter.delete('/:id', requireAdmin, (req, res) => {
   unloadSource(req.params.id)
-  removeActiveSourceId(req.params.id)
+  removeActiveSourceIdFromAllUsers(req.params.id)
   getDB().prepare('DELETE FROM user_apis WHERE id = ?').run(req.params.id)
   const fault = getSourceFault()
   if (fault?.id === req.params.id) clearSourceFault()
@@ -105,7 +106,7 @@ sourceRouter.post('/fault/delete', requireAdmin, (_req, res) => {
       return res.json({ ok: true })
     }
     unloadSource(fault.id)
-    removeActiveSourceId(fault.id)
+    removeActiveSourceIdFromAllUsers(fault.id)
     getDB().prepare('DELETE FROM user_apis WHERE id = ?').run(fault.id)
     clearSourceFault()
     res.json({ ok: true, deletedId: fault.id })
@@ -124,7 +125,7 @@ sourceRouter.post('/fault/reimport', requireAdmin, async (_req, res) => {
     const homepage = row?.homepage || fault.homepage
 
     unloadSource(fault.id)
-    removeActiveSourceId(fault.id)
+    removeActiveSourceIdFromAllUsers(fault.id)
     getDB().prepare('DELETE FROM user_apis WHERE id = ?').run(fault.id)
     clearSourceFault()
 
@@ -160,7 +161,7 @@ sourceRouter.post('/fault/reimport', requireAdmin, async (_req, res) => {
   }
 })
 
-sourceRouter.post('/activate/:id', requireAdmin, async (req, res) => {
+sourceRouter.post('/activate/:id', async (req, res) => {
   try {
     const row = getDB().prepare('SELECT * FROM user_apis WHERE id = ?').get(req.params.id)
     if (!row) return res.status(404).json({ error: '音源不存在' })
@@ -174,8 +175,13 @@ sourceRouter.post('/activate/:id', requireAdmin, async (req, res) => {
       homepage: row.homepage,
     })
 
-    const sources = await loadSource(row.id, row.script)
-    const ids = addActiveSourceId(row.id)
+    // 沙箱按进程共享加载；激活状态按用户独立保存
+    const alreadyLoaded = getActiveSourceIds().includes(row.id)
+    const sources = alreadyLoaded
+      ? (getActiveSources().find((s) => s.id === row.id)?.sources || JSON.parse(row.sources || '{}'))
+      : await loadSource(row.id, row.script)
+
+    const ids = addActiveSourceId(row.id, req.user.id)
     getDB().prepare(`
       UPDATE user_apis SET name = ?, description = ?, author = ?, version = ?, homepage = ?, sources = ? WHERE id = ?
     `).run(fields.name, fields.description, fields.author, fields.version, fields.homepage, JSON.stringify(sources), row.id)
@@ -188,7 +194,7 @@ sourceRouter.post('/activate/:id', requireAdmin, async (req, res) => {
       sources,
       name: fields.name,
       activeIds: ids,
-      mergedSources: getMergedSources(),
+      mergedSources: getMergedSources(ids),
     })
   } catch (e) {
     const { formatUserError } = await import('../utils/userError.js')
@@ -201,30 +207,38 @@ sourceRouter.post('/activate/:id', requireAdmin, async (req, res) => {
   }
 })
 
-sourceRouter.post('/deactivate/:id', requireAdmin, (req, res) => {
-  unloadSource(req.params.id)
-  const ids = removeActiveSourceId(req.params.id)
+sourceRouter.post('/deactivate/:id', (req, res) => {
+  const ids = removeActiveSourceId(req.params.id, req.user.id)
+  // 仅当没有任何用户再激活时才卸载沙箱
+  if (!isSourceActiveForAnyUser(req.params.id)) {
+    unloadSource(req.params.id)
+  }
   res.json({ ok: true, activeIds: ids })
 })
 
-sourceRouter.post('/deactivate', requireAdmin, (_req, res) => {
-  unloadSource()
-  saveActiveSourceIds([])
+sourceRouter.post('/deactivate', (req, res) => {
+  const prev = getStoredActiveSourceIds(req.user.id)
+  saveActiveSourceIds([], req.user.id)
+  for (const id of prev) {
+    if (!isSourceActiveForAnyUser(id)) unloadSource(id)
+  }
   res.json({ ok: true, activeIds: [] })
 })
 
-sourceRouter.get('/active', (_req, res) => {
-  const list = getActiveSources().map(s => ({ id: s.id, sources: s.sources }))
-  const ids = getActiveSourceIds()
+sourceRouter.get('/active', (req, res) => {
+  const ids = getStoredActiveSourceIds(req.user?.id)
+  const loaded = new Set(getActiveSourceIds())
+  const list = getActiveSources()
+    .filter((s) => ids.includes(s.id))
+    .map((s) => ({ id: s.id, sources: s.sources }))
   if (!list.length) {
-    return res.json({ id: null, ids: [], sources: {}, list: [] })
+    return res.json({ id: null, ids, sources: {}, list: [] })
   }
-  // 兼容旧前端：保留 id / sources 字段（取最近激活）
-  const latest = getActiveSource()
+  const latest = [...ids].reverse().find((id) => loaded.has(id)) || ids[ids.length - 1] || null
   res.json({
-    id: latest?.id || ids[ids.length - 1] || null,
+    id: latest,
     ids,
-    sources: getMergedSources(),
+    sources: getMergedSources(ids),
     list,
   })
 })
@@ -232,7 +246,9 @@ sourceRouter.get('/active', (_req, res) => {
 sourceRouter.post('/request', async (req, res) => {
   try {
     const { source, action, info } = req.body
-    const result = await requestSource(source, action, info)
+    const result = await requestSource(source, action, info, {
+      allowedSourceIds: getStoredActiveSourceIds(req.user?.id),
+    })
     res.json({ ok: true, data: result })
   } catch (e) {
     const { formatUserError } = await import('../utils/userError.js')
@@ -260,10 +276,10 @@ export function refreshStoredSourceMeta() {
   }
 }
 
-sourceRouter.post('/refresh-meta', requireAdmin, (_req, res) => {
+sourceRouter.post('/refresh-meta', requireAdmin, (req, res) => {
   try {
     refreshStoredSourceMeta()
-    const activeIds = new Set(getActiveSourceIds().length ? getActiveSourceIds() : getStoredActiveSourceIds())
+    const activeIds = new Set(getStoredActiveSourceIds(req.user?.id))
     const rows = getDB().prepare('SELECT id, name, description, author, version, homepage, sources FROM user_apis').all()
     res.json(rows.map(r => ({
       ...r,

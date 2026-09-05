@@ -208,6 +208,11 @@ export const api = {
     update: (oldPath, newPath, fromPicker) => request('/paths', { method: 'PUT', body: { oldPath, newPath, fromPicker } }),
     remove: (dirPath) => request('/paths', { method: 'DELETE', body: { dirPath } }),
     setDownload: (dirPath, fromPicker) => request('/paths/download', { method: 'PUT', body: { dirPath, fromPicker } }),
+    setDownloadMode: (mode) => request('/paths/download/mode', { method: 'PUT', body: { mode } }),
+    setPersonalDownload: (dirPath, fromPicker, enable = true) => request('/paths/download/personal', {
+      method: 'PUT',
+      body: { dirPath, fromPicker, enable },
+    }),
   },
   library: {
     tracks: () => request('/library/tracks', { timeout: 60000 }),

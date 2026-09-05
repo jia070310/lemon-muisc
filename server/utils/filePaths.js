@@ -2,10 +2,13 @@ import fs from 'fs'
 import path from 'path'
 import { getDB } from '../db.js'
 import { probeDir } from './audioScan.js'
+import { getUserSettings, setUserSettings } from './userSettings.js'
 
 const FILE_PATHS_KEY = 'file.paths'
 const MUSIC_PATHS_KEY = 'music.paths'
 const DOWNLOAD_PATH_KEY = 'download.savePath'
+const DOWNLOAD_PERSONAL_PATH_KEY = 'download.savePathPersonal'
+const DOWNLOAD_USE_PERSONAL_KEY = 'download.usePersonalSavePath'
 const TAG_DIRS_KEY = 'tag.dirs'
 const DEFAULT_DOWNLOAD_DIR = '/downloads'
 const DEFAULT_MUSIC_DIR = '/music'
@@ -244,7 +247,12 @@ function validateDirectoryPath(dirPath, { fromPicker = false } = {}) {
   return p
 }
 
-export function getDownloadSavePath() {
+export function getDownloadSavePath(userId = null) {
+  return resolveDownloadSavePath(userId).savePath
+}
+
+/** 全局共用下载目录（管理员配置） */
+export function getSharedDownloadSavePath() {
   const saved = getSetting(DOWNLOAD_PATH_KEY)
   if (saved) return mapToContainerPath(saved) || saved
   const nativeDownloads = process.env.DOWNLOADS_HOST_PATH || ''
@@ -260,6 +268,102 @@ export function getDownloadSavePath() {
   const fallback = process.env.DOWNLOAD_PATH || DEFAULT_DOWNLOAD_DIR
   if (fallback) setSetting(DOWNLOAD_PATH_KEY, mapToContainerPath(fallback) || fallback)
   return mapToContainerPath(fallback) || fallback
+}
+
+function sanitizeUsernameForPath(username) {
+  return String(username || 'user')
+    .trim()
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')
+    .replace(/\.+$/g, '')
+    .slice(0, 64) || 'user'
+}
+
+function getUsernameById(userId) {
+  if (!userId) return ''
+  try {
+    return getDB().prepare('SELECT username FROM users WHERE id = ?').get(userId)?.username || ''
+  } catch {
+    return ''
+  }
+}
+
+/** 解析当前用户生效的下载目录（共用 / 个人） */
+export function resolveDownloadSavePath(userId = null) {
+  const shared = getSharedDownloadSavePath()
+  if (!userId) {
+    return {
+      savePath: shared,
+      sharedPath: shared,
+      personalPath: '',
+      usePersonal: false,
+      mode: 'shared',
+    }
+  }
+
+  const userSettings = getUserSettings(userId)
+  const usePersonal = userSettings[DOWNLOAD_USE_PERSONAL_KEY] === 'true'
+  const username = getUsernameById(userId)
+  const suggestedPersonal = path.join(shared, sanitizeUsernameForPath(username))
+  const storedPersonal = (userSettings[DOWNLOAD_PERSONAL_PATH_KEY] || '').trim()
+  const personalRaw = storedPersonal || suggestedPersonal
+  const personalPath = mapToContainerPath(personalRaw) || personalRaw
+
+  if (usePersonal && personalPath) {
+    try {
+      if (!fs.existsSync(personalPath)) fs.mkdirSync(personalPath, { recursive: true })
+    } catch {}
+    return {
+      savePath: personalPath,
+      sharedPath: shared,
+      personalPath,
+      usePersonal: true,
+      mode: 'personal',
+      username,
+    }
+  }
+
+  return {
+    savePath: shared,
+    sharedPath: shared,
+    personalPath: storedPersonal ? personalPath : suggestedPersonal,
+    usePersonal: false,
+    mode: 'shared',
+    username,
+  }
+}
+
+export function getDownloadPathInfo(userId = null) {
+  return resolveDownloadSavePath(userId)
+}
+
+export function setPersonalDownloadSavePath(userId, dirPath, { fromPicker = false, enable = true } = {}) {
+  if (!userId) throw new Error('未登录')
+  const p = validateDirectoryPath(dirPath, { fromPicker })
+  const entries = {
+    [DOWNLOAD_PERSONAL_PATH_KEY]: p,
+  }
+  if (enable) entries[DOWNLOAD_USE_PERSONAL_KEY] = 'true'
+  setUserSettings(userId, entries)
+  try {
+    if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true })
+  } catch {}
+  return resolveDownloadSavePath(userId)
+}
+
+export function setDownloadPathMode(userId, mode = 'shared') {
+  if (!userId) throw new Error('未登录')
+  const usePersonal = mode === 'personal'
+  const entries = { [DOWNLOAD_USE_PERSONAL_KEY]: usePersonal ? 'true' : 'false' }
+  if (usePersonal) {
+    const userSettings = getUserSettings(userId)
+    if (!userSettings[DOWNLOAD_PERSONAL_PATH_KEY]) {
+      const shared = getSharedDownloadSavePath()
+      const username = getUsernameById(userId)
+      entries[DOWNLOAD_PERSONAL_PATH_KEY] = path.join(shared, sanitizeUsernameForPath(username))
+    }
+  }
+  setUserSettings(userId, entries)
+  return resolveDownloadSavePath(userId)
 }
 
 /** 判断路径是否位于已配置的音乐库/下载目录内（防任意文件读取） */
@@ -288,16 +392,26 @@ export function isAllowedMediaPath(filePath) {
   }
   if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) return false
 
+  let personalPaths = []
+  try {
+    personalPaths = getDB()
+      .prepare('SELECT value FROM user_settings WHERE key = ?')
+      .all(DOWNLOAD_PERSONAL_PATH_KEY)
+      .map((r) => r.value)
+      .filter(Boolean)
+  } catch {}
+
   const roots = new Set([
     ...getMusicPaths(),
-    getDownloadSavePath(),
+    getSharedDownloadSavePath(),
+    ...personalPaths,
     process.env.DOWNLOAD_PATH,
     process.env.MUSIC_HOST_PATH,
     process.env.DOWNLOADS_HOST_PATH,
     process.env.MUSIC_PATH,
     ...(isNativeHostMode() ? [] : [DEFAULT_MUSIC_DIR, DEFAULT_DOWNLOAD_DIR]),
   ].filter(Boolean).map(p => {
-    try { return path.resolve(p) } catch { return null }
+    try { return path.resolve(mapToContainerPath(p) || p) } catch { return null }
   }).filter(Boolean))
 
   for (const root of roots) {
