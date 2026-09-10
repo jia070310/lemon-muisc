@@ -117,6 +117,38 @@
       </div>
     </section>
 
+    <section class="artist-section" v-if="visibleArtists.length">
+      <div class="section-head">
+        <h2>歌手</h2>
+        <button
+          v-if="allArtists.length > visibleArtists.length"
+          type="button"
+          class="section-more-btn"
+          @click="openAllArtists"
+        >
+          <span>全部</span>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+      </div>
+      <div class="horizontal-scroll artist-scroll">
+        <div class="artist-pill-row">
+          <button
+            v-for="artist in visibleArtists"
+            :key="artist.id"
+            type="button"
+            class="artist-pill"
+            @click="openArtist(artist)"
+          >
+            <span class="artist-pill-name">{{ artist.name }}</span>
+            <span class="artist-pill-meta">{{ artist.trackCount }} 首</span>
+            <span class="artist-pill-play" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><polygon points="8,5 19,12 8,19"/></svg>
+            </span>
+          </button>
+        </div>
+      </div>
+    </section>
+
     <section class="album-section" v-if="sortedDisplayAlbums.length">
       <div class="section-head">
         <h2>最近添加专辑</h2>
@@ -338,16 +370,18 @@ import ClearableInput from '../components/ClearableInput.vue'
 import { formatTrackTags, formatAlbumTags } from '../utils/format.js'
 import { getTrackFilePath } from '../utils/trackPath.js'
 import { countAutoFillColumns } from '../utils/grid.js'
-import { playItem, addToQueue, isInQueue, isPlayingItem, isPaused } from '../stores/player.js'
+import { playItem, addToQueue, isInQueue, isPlayingItem, isPaused, startPlayTracks } from '../stores/player.js'
 import { appConfirm } from '../stores/appDialog.js'
 import {
   libraryTracks, libraryLoading, libraryMetaLoading, libraryLoadProgress,
   libraryScanning, libraryScanPhase, libraryScanCurrent, libraryScanTotal, libraryScanPercent,
-  groupAlbums, groupGenres, getGenreTheme, buildPlaylistCards, sortPlaylistCards,
+  groupAlbums, groupGenres, getGenreTheme, groupArtists, buildPlaylistCards, sortPlaylistCards,
   sortAlbums, sortLibrarySongs,
   PLAYLIST_SORT_OPTIONS, ALBUM_SORT_OPTIONS, SONG_SORT_OPTIONS,
   scanLibrary, isFavorite, toggleFavorite,
   librarySongColumns, loadLibrarySongColumns,
+  randomPickLibraryTracks, setRoamTracks,
+  ROAM_PICK_SIZE,
 } from '../stores/library.js'
 
 const PLAYLIST_SORT_KEY = 'lemon-library-playlist-sort'
@@ -368,6 +402,8 @@ function toggleRowActions(key) {
 const tappingSongKey = ref('')
 const coverPendingPauseKey = ref('')
 const toast = ref(null)
+/** 随机播放进行中标记，防止重复触发 */
+const randomPlaying = ref(false)
 const dupScanning = ref(false)
 const showDupModal = ref(false)
 const dupResult = ref({ groupCount: 0, fileCount: 0, groups: [] })
@@ -433,12 +469,18 @@ const allGenres = computed(() => (
 ))
 const visibleGenres = computed(() => allGenres.value.slice(0, genrePreviewLimit))
 
+const artistPreviewLimit = 20
+const allArtists = computed(() => groupArtists(libraryTracks.value))
+const visibleArtists = computed(() => allArtists.value.slice(0, artistPreviewLimit))
+
 const allAlbums = computed(() => groupAlbums(libraryTracks.value))
 const playlistSortOptions = computed(() => PLAYLIST_SORT_OPTIONS.map(o => ({ value: o.id, label: o.label })))
 const albumSortOptions = computed(() => ALBUM_SORT_OPTIONS.map(o => ({ value: o.id, label: o.label })))
 const songSortOptions = computed(() => SONG_SORT_OPTIONS.map(o => ({ value: o.id, label: o.label })))
 const allPlaylistCards = computed(() => buildPlaylistCards(libraryTracks.value))
-const sortedPlaylistCards = computed(() => sortPlaylistCards(allPlaylistCards.value, playlistSort.value))
+const sortedPlaylistCards = computed(() =>
+  sortPlaylistCards(allPlaylistCards.value, playlistSort.value).filter((c) => !c.hidden)
+)
 const visiblePlaylistCards = computed(() => {
   if (isNarrow.value) return sortedPlaylistCards.value
   return showAllPlaylistCards.value
@@ -650,6 +692,15 @@ function openAllGenres() {
   router.push({ path: '/library/genres' })
 }
 
+function openArtist(artist) {
+  if (!artist?.id) return
+  router.push({ path: '/library/artist', query: { id: artist.id } })
+}
+
+function openAllArtists() {
+  router.push({ path: '/library/artists' })
+}
+
 function openAllAlbums() {
   router.push({ path: '/library/albums' })
 }
@@ -684,7 +735,36 @@ function onAddedToPlaylist({ playlist, duplicate }) {
 }
 
 function openPlaylist(card) {
+  if (card.id === 'random-start') {
+    startRandomPlay()
+    return
+  }
   router.push({ path: '/library/playlists', query: { id: card.id } })
+}
+
+/** 随机播放入口：从音乐库随机抽 ROAM_PICK_SIZE 首 → 覆盖漫游歌单 → 立即播放 */
+async function startRandomPlay() {
+  if (!libraryTracks.value.length) {
+    showToast('音乐库暂无歌曲，请先添加音乐', 'info')
+    return
+  }
+  if (randomPlaying.value) return
+  randomPlaying.value = true
+  try {
+    const picked = randomPickLibraryTracks(ROAM_PICK_SIZE)
+    if (!picked.length) {
+      showToast('音乐库暂无歌曲，无法随机播放', 'info')
+      return
+    }
+    setRoamTracks(picked)
+    await startPlayTracks(picked)
+    showToast(`已开始随机播放 ${picked.length} 首，可在随机歌单查看`, 'success')
+    router.push({ path: '/library/playlists', query: { id: 'roam' } })
+  } catch (e) {
+    showToast(e?.message || '随机播放失败', 'error')
+  } finally {
+    randomPlaying.value = false
+  }
 }
 
 function openAllPlaylists() {
@@ -969,6 +1049,52 @@ async function deleteDupFile(group, file) {
 }
 
 .album-section { margin-bottom: 32px; }
+
+.artist-section { margin-bottom: 28px; }
+.artist-scroll { overflow: visible; }
+.artist-pill-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.artist-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 14px;
+  border-radius: 999px;
+  border: 1.5px solid var(--border-light);
+  background: var(--bg-card, var(--bg-elevated));
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+}
+.artist-pill:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+  border-color: var(--accent);
+}
+.artist-pill-name {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.artist-pill-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+.artist-pill-play {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  opacity: 0.9;
+  line-height: 0;
+}
 .album-row {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(156px, 1fr));
@@ -1381,6 +1507,23 @@ async function deleteDupFile(group, file) {
     min-width: 100%;
   }
   .genre-pill-name { max-width: 120px; }
+
+  .artist-scroll {
+    margin: 0 -14px;
+    padding: 0 14px 4px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+  .artist-scroll::-webkit-scrollbar { display: none; }
+  .artist-pill-row {
+    flex-wrap: nowrap;
+    width: max-content;
+    min-width: 100%;
+  }
+  .artist-pill-name { max-width: 110px; }
 
   .album-row {
     grid-template-columns: repeat(2, minmax(0, 1fr));

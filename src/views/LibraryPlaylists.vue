@@ -312,7 +312,7 @@ import { platformLabel } from '../utils/platforms.js'
 import { getQualityLabel, getQualityDisplay } from '../utils/quality.js'
 import { buildDownloadTask, getItemQualities } from '../utils/musicPayload.js'
 import { useQualityMenuPosition } from '../utils/qualityMenu.js'
-import { playItem, addToQueue, isInQueue, isPlayingItem, isPaused } from '../stores/player.js'
+import { playItem, addToQueue, isInQueue, isPlayingItem, isPaused, startPlayTracks, setActiveDynamicList } from '../stores/player.js'
 import { formatTrackTags } from '../utils/format.js'
 import { countAutoFillColumns } from '../utils/grid.js'
 import {
@@ -333,6 +333,10 @@ import {
   scanLibrary,
   isFavorite,
   toggleFavorite,
+  randomPickLibraryTracks,
+  setRoamTracks,
+  ROAM_PICK_SIZE,
+  ROAM_PLAYLIST_ID,
 } from '../stores/library.js'
 import { api } from '../api.js'
 import { assertActiveSourceForDownload } from '../stores/downloadGuard.js'
@@ -347,6 +351,8 @@ const showEditModal = ref(false)
 const showAddModal = ref(false)
 const showDeleteModal = ref(false)
 const toast = ref(null)
+/** 随机播放进行中标记，防止重复触发 */
+const randomPlaying = ref(false)
 const hoverKey = ref('')
 const actionsOpenKey = ref('')
 const tappingSongKey = ref('')
@@ -403,8 +409,10 @@ function updateNarrow() {
 }
 
 const allCards = computed(() => buildPlaylistCards(libraryTracks.value))
-const customCards = computed(() => allCards.value.filter((c) => !SMART_PLAYLIST_IDS.has(c.id)))
-const smartCards = computed(() => allCards.value.filter((c) => SMART_PLAYLIST_IDS.has(c.id)))
+/** 含隐藏卡（如漫游歌单），仅用于详情页查找；展示列表过滤 hidden */
+const visibleCards = computed(() => allCards.value.filter((c) => !c.hidden))
+const customCards = computed(() => visibleCards.value.filter((c) => !SMART_PLAYLIST_IDS.has(c.id)))
+const smartCards = computed(() => visibleCards.value.filter((c) => SMART_PLAYLIST_IDS.has(c.id)))
 /** 有自定义/导入歌单时只展示这些；没有时才展示最近添加 / 收藏 / 最近播放 */
 const sourceCards = computed(() => (
   customCards.value.length ? customCards.value : smartCards.value
@@ -512,7 +520,37 @@ onUnmounted(() => {
 })
 
 function selectCard(card) {
+  // 随机播放入口卡：点击直接触发随机播放并跳到随机歌单
+  if (card.id === 'random-start') {
+    startRandomPlay()
+    return
+  }
   selectedId.value = card.id
+}
+
+/** 随机播放入口：抽 10 首覆盖漫游歌单并立即播放 */
+async function startRandomPlay() {
+  if (!libraryTracks.value.length) {
+    showToast('音乐库暂无歌曲，请先添加音乐', 'info')
+    return
+  }
+  if (randomPlaying.value) return
+  randomPlaying.value = true
+  try {
+    const picked = randomPickLibraryTracks(ROAM_PICK_SIZE)
+    if (!picked.length) {
+      showToast('音乐库暂无歌曲，无法随机播放', 'info')
+      return
+    }
+    setRoamTracks(picked)
+    await startPlayTracks(picked)
+    showToast(`已开始随机播放 ${picked.length} 首，可在随机歌单查看`, 'success')
+    selectedId.value = ROAM_PLAYLIST_ID
+  } catch (e) {
+    showToast(e?.message || '随机播放失败', 'error')
+  } finally {
+    randomPlaying.value = false
+  }
 }
 
 function trackPayload(song) {
@@ -649,6 +687,15 @@ async function onTrackCoverClick(song) {
 async function playAll() {
   const list = selectedCard.value?.tracks || []
   if (!list.length) return
+  // 漫游歌单：走动态播放（自动续播 + 已播清理）
+  if (selectedCard.value?.id === 'roam') {
+    try {
+      await startPlayTracks(list)
+    } catch (e) {
+      showToast(e.message || '播放失败', 'error')
+    }
+    return
+  }
   for (const s of list) {
     const source = s.source || (s.localPath ? 'local' : '')
     addToQueue(trackPayload(s), source)

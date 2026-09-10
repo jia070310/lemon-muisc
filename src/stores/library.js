@@ -154,12 +154,33 @@ function saveSessionTracks(tracks) {
 /** 从搜索/发现页挑选歌曲加入歌单时设置 */
 export const playlistPickTarget = ref(null)
 
-export const SMART_PLAYLIST_IDS = new Set(['recent-added', 'recent-played', 'favorites'])
+export const SMART_PLAYLIST_IDS = new Set(['random-start', 'roam', 'recent-added', 'recent-played', 'favorites'])
+
+/** 漫游歌单：由随机播放动态生成，仅随机/漫游模式用于自动续播 */
+export const ROAM_PLAYLIST_ID = 'roam'
+export const ROAM_PLAYLIST_KEY = 'lemon-library-roam-tracks'
+/** 随机抽取时每次追加的曲目数量 */
+export const ROAM_PICK_SIZE = 10
+/** 漫游歌单剩余不足该数量时自动补充 */
+export const ROAM_REFILL_THRESHOLD = 3
 
 /** 固定渐变图标样式，不使用歌曲封面 */
-export const GRADIENT_CARD_IDS = new Set(['recent-added', 'recent-played'])
+export const GRADIENT_CARD_IDS = new Set(['roam', 'random-start', 'recent-added', 'recent-played'])
 
 export const SMART_CARDS = [
+  {
+    id: 'random-start',
+    name: '随机播放',
+    gradient: 'linear-gradient(135deg, #f59e0b 0%, #ef4444 100%)',
+    icon: '<svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M22 2 11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>',
+  },
+  {
+    id: 'roam',
+    name: '随机歌单',
+    hidden: true,
+    gradient: 'linear-gradient(135deg, #06b6d4 0%, #3b82f6 100%)',
+    icon: '<svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M22 2 11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>',
+  },
   {
     id: 'recent-added',
     name: '最新添加',
@@ -350,6 +371,7 @@ function clearInMemoryUserData() {
   customPlaylists.value = []
   favorites.value = []
   recentPlays.value = []
+  roamTracks.value = []
   playlistPickTarget.value = null
 }
 
@@ -413,6 +435,8 @@ export async function initLibraryUserData(api, user = null) {
   }
   activeUserId = nextId
   migrateLegacyLocalUserData(nextId)
+  // 漫游歌单是纯本地动态数据，不参与云同步，按用户加载
+  roamTracks.value = loadRoamTracks()
 
   try {
     const res = await api.library.userData.get()
@@ -471,6 +495,7 @@ export async function initLibraryUserData(api, user = null) {
     customPlaylists.value = readJson(playlistsKey(), []).map(normalizePlaylist)
     favorites.value = readJson(favoritesKey(), [])
     recentPlays.value = readJson(recentKey(), [])
+    roamTracks.value = loadRoamTracks()
   }
   try {
     const settingsRes = await api.settings.get()
@@ -537,6 +562,8 @@ export function getLibraryTrackKey(track) {
 export const favorites = ref([])
 export const recentPlays = ref([])
 export const customPlaylists = ref([])
+/** 漫游歌单：随机播放动态生成的本地曲目快照列表（仅保留未播完的） */
+export const roamTracks = ref([])
 
 export const favoriteKeys = computed(() => new Set(favorites.value.map(f => f.key)))
 
@@ -716,13 +743,15 @@ export function buildPlaylistCards(allTracks, { limit } = {}) {
     if (card.id === 'recent-added') tracks = recentAdded
     else if (card.id === 'recent-played') tracks = resolveTracksByKeys(recentPlays.value.map(r => r.key), allTracks, recentPlays.value)
     else if (card.id === 'favorites') tracks = resolveTracksByKeys(favorites.value.map(f => f.key), allTracks, favorites.value)
+    else if (card.id === 'roam') tracks = resolveRoamTracks(allTracks)
+    // random-start 入口卡：无固定曲目
     const useGradientStyle = GRADIENT_CARD_IDS.has(card.id)
     const coverUrl = useGradientStyle ? '' : getPlaylistCover({ coverMode: 'auto' }, tracks)
     return {
       ...card,
       isSmart: true,
       coverStyle: useGradientStyle ? 'gradient' : 'cover',
-      count: tracks.length,
+      count: card.id === 'random-start' ? ROAM_PICK_SIZE : tracks.length,
       tracks,
       coverUrl,
     }
@@ -755,7 +784,7 @@ export const PLAYLIST_SORT_OPTIONS = [
   { id: 'created', label: '创建时间' },
 ]
 
-const SMART_CARD_ORDER = ['recent-added', 'favorites', 'recent-played']
+const SMART_CARD_ORDER = ['random-start', 'roam', 'recent-added', 'favorites', 'recent-played']
 
 function pinSmartPlaylistCards(cards) {
   const smartMap = new Map(cards.filter(c => c.isSmart).map(c => [c.id, c]))
@@ -1275,6 +1304,95 @@ export function resolveTracksByKeys(keys, allTracks, snapshots = []) {
   }).filter(Boolean)
 }
 
+/* ---------------- 漫游歌单（随机播放） ---------------- */
+
+function roamTracksKey() {
+  return storageKey(ROAM_PLAYLIST_KEY)
+}
+
+function persistRoamTracks() {
+  try {
+    const slim = roamTracks.value
+      .map(t => trackToSnapshot(t))
+      .filter(Boolean)
+    localStorage.setItem(roamTracksKey(), JSON.stringify(slim))
+  } catch {}
+}
+
+function loadRoamTracks() {
+  try {
+    const raw = localStorage.getItem(roamTracksKey())
+    if (!raw) return []
+    const list = JSON.parse(raw)
+    if (!Array.isArray(list)) return []
+    return list.map(t => ({ ...t, isLocal: isLocalPlaylistTrack(t) }))
+  } catch {
+    return []
+  }
+}
+
+/** 从音乐库中随机抽取 n 首（不重复），返回曲目列表 */
+export function randomPickLibraryTracks(count = ROAM_PICK_SIZE) {
+  const pool = libraryTracks.value.filter(t => t?.filePath || t?.localPath || t?.key)
+  if (!pool.length) return []
+  const n = Math.min(count, pool.length)
+  const picked = []
+  const used = new Set()
+  while (picked.length < n) {
+    const idx = Math.floor(Math.random() * pool.length)
+    if (used.has(idx)) continue
+    used.add(idx)
+    picked.push(enrichLocalCover(pool[idx]))
+  }
+  return picked
+}
+
+/** 替换整个漫游歌单（供随机播放入口使用） */
+export function setRoamTracks(tracks) {
+  roamTracks.value = (tracks || []).slice()
+  persistRoamTracks()
+  return roamTracks.value.length
+}
+
+/** 追加若干曲目到漫游歌单（供自动续播使用） */
+export function appendRoamTracks(tracks) {
+  const existing = new Map(roamTracks.value.map(t => [getLibraryTrackKey(t), t]))
+  const added = []
+  for (const t of tracks || []) {
+    const key = getLibraryTrackKey(t)
+    if (!key || existing.has(key)) continue
+    existing.set(key, t)
+    added.push(t)
+  }
+  if (added.length) {
+    roamTracks.value = [...roamTracks.value, ...added]
+    persistRoamTracks()
+  }
+  return added
+}
+
+/** 从漫游歌单移除已播放完成的曲目 */
+export function removeRoamTrack(track) {
+  const key = getLibraryTrackKey(track)
+  if (!key) return false
+  const before = roamTracks.value.length
+  roamTracks.value = roamTracks.value.filter(t => getLibraryTrackKey(t) !== key)
+  if (roamTracks.value.length !== before) {
+    persistRoamTracks()
+    return true
+  }
+  return false
+}
+
+/** 漫游歌单曲目列表解析（供卡片展示/播放） */
+export function resolveRoamTracks(allTracks = libraryTracks.value) {
+  return resolveTracksByKeys(
+    roamTracks.value.map(t => getLibraryTrackKey(t)),
+    allTracks,
+    roamTracks.value,
+  )
+}
+
 export function fileToLibraryTrack(file) {
   const picFromData = file.pictureBase64
     ? (String(file.pictureBase64).startsWith('data:')
@@ -1327,7 +1445,9 @@ export function removeLibraryTracks(filePaths) {
   if (!removed.size) return 0
   const before = libraryTracks.value.length
   libraryTracks.value = libraryTracks.value.filter(t => !removed.has(t.filePath) && !removed.has(t.localPath))
-  return before - libraryTracks.value.length
+  const n = before - libraryTracks.value.length
+  if (n > 0) saveSessionTracks(libraryTracks.value)
+  return n
 }
 
 let scanPromise = null
@@ -1622,6 +1742,63 @@ export function findGenreById(tracks, id) {
   return groupGenres(tracks).find(g => g.id === id || g.name === name) || null
 }
 
+export function artistToId(name) {
+  return encodeURIComponent(String(name || ''))
+}
+
+export function artistFromId(id) {
+  if (!id) return ''
+  try {
+    return decodeURIComponent(String(id))
+  } catch {
+    return String(id)
+  }
+}
+
+/** 按歌手分组（一首歌通常一位歌手；如有多歌手以第一个作为主歌手） */
+export function groupArtists(tracks) {
+  const map = new Map()
+  for (const track of tracks) {
+    const singer = String(track.singer || '').trim()
+    const names = singer ? singer.split(/[、,，/;；&]/).map(s => s.trim()).filter(Boolean) : ['未知艺术家']
+    for (const name of names) {
+      const id = artistToId(name)
+      if (!map.has(id)) {
+        map.set(id, {
+          id,
+          name,
+          cover: track.picUrl || '',
+          tracks: [],
+          latestMtime: track.mtime || 0,
+          albumSet: new Set(),
+        })
+      }
+      const entry = map.get(id)
+      entry.tracks.push(track)
+      if (track.album && track.album !== '未知专辑') entry.albumSet.add(track.album)
+      if (!entry.cover && track.picUrl) entry.cover = track.picUrl
+      if ((track.mtime || 0) > entry.latestMtime) entry.latestMtime = track.mtime || 0
+    }
+  }
+  return [...map.values()].map((a) => ({
+    id: a.id,
+    name: a.name,
+    cover: a.cover,
+    tracks: sortLibrarySongs(a.tracks, 'recent'),
+    trackCount: a.tracks.length,
+    albumCount: a.albumSet.size,
+    latestMtime: a.latestMtime,
+  }))
+    .filter(a => a.name !== '未知艺术家')
+    .sort((a, b) => b.trackCount - a.trackCount || b.latestMtime - a.latestMtime)
+}
+
+export function findArtistById(tracks, id) {
+  if (!id) return null
+  const name = artistFromId(id)
+  return groupArtists(tracks).find(a => a.id === id || a.name === name) || null
+}
+
 function syncStoredSnapshotsForTrack(track) {
   const snap = trackToSnapshot(track)
   if (!snap) return
@@ -1720,6 +1897,23 @@ export async function refreshLibraryTracks(api, filePaths) {
   return updated
 }
 
+/** 从服务端缓存全量重载音乐库（整理/删除等结构性变更后调用，保证新旧记录一致） */
+export async function reloadLibraryTracksFromServer(apiClient = null) {
+  const client = apiClient || libraryApi
+  if (!client?.library?.tracks) return null
+  try {
+    const cachedRes = await client.library.tracks()
+    const cachedList = cachedRes.data || []
+    if (cachedList.length) {
+      libraryTracks.value = sortTracksByMtime(cachedList.map(fileToLibraryTrack))
+      libraryScanned.value = true
+      saveSessionTracks(libraryTracks.value)
+      return libraryTracks.value.length
+    }
+  } catch {}
+  return null
+}
+
 function basenameFromPath(filePath) {
   const raw = String(filePath || '')
   const parts = raw.split(/[/\\]/)
@@ -1788,6 +1982,7 @@ export async function ingestLibraryTracks(api, filePaths) {
 
   libraryTracks.value = sortTracksByMtime(next)
   libraryScanned.value = true
+  if (added > 0 || updated > 0) saveSessionTracks(libraryTracks.value)
   return { added, updated }
 }
 

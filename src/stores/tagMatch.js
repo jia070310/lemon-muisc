@@ -29,17 +29,19 @@ export const tagMatchResult = ref(null)
 let tagMatchStopRequested = false
 
 /** 离开标签页时保留列表状态，便于匹配进行中返回查看 */
-export const tagEditorSession = ref({ activeDir: '', files: [] })
+export const tagEditorSession = ref({ mode: 'dir', activeDir: '', activeArtist: '', files: [] })
 
-export function saveTagEditorSession(activeDir, files) {
+export function saveTagEditorSession({ mode = 'dir', activeDir = '', activeArtist = '', files = [] } = {}) {
   tagEditorSession.value = {
+    mode: mode === 'artist' ? 'artist' : 'dir',
     activeDir: activeDir || '',
+    activeArtist: activeArtist || '',
     files: Array.isArray(files) ? files : [],
   }
 }
 
 export function clearTagEditorSession() {
-  tagEditorSession.value = { activeDir: '', files: [] }
+  tagEditorSession.value = { mode: 'dir', activeDir: '', activeArtist: '', files: [] }
 }
 
 export const tagMatchPercent = computed(() => {

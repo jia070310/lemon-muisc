@@ -10,7 +10,17 @@ import {
   isSourceFallbackError,
   notifySourceSwitch,
 } from './sourceFallback.js'
-import { recordRecentPlay, localCoverUrl, bumpLibraryCoverVersion } from './library.js'
+import {
+  recordRecentPlay,
+  localCoverUrl,
+  bumpLibraryCoverVersion,
+  removeRoamTrack,
+  appendRoamTracks,
+  randomPickLibraryTracks,
+  ROAM_PLAYLIST_ID,
+  ROAM_PICK_SIZE,
+  ROAM_REFILL_THRESHOLD,
+} from './library.js'
 import { parseLyric } from '../utils/lrc.js'
 import { formatArtists } from '../utils/text.js'
 import { getTrackFilePath, isLocalTrack, isSameTrackPath } from '../utils/trackPath.js'
@@ -83,6 +93,13 @@ export const currentQueueIndex = ref(-1)
 /** @type {import('vue').Ref<'list'|'loop'|'single'|'random'>} */
 export const playMode = ref('list')
 export const showQueuePanel = ref(false)
+
+/**
+ * 动态歌单模式：当前播放列表是否属于「漫游歌单」。
+ * 仅漫游/随机播放场景置为 roam；其余歌单保持 null，不做自动续播/清已播。
+ * @type {import('vue').Ref<string|null>}
+ */
+export const activeDynamicList = ref(null)
 
 export const playModeLabel = computed(() => {
   const labels = { list: '列表播放', loop: '列表循环', single: '单曲循环', random: '随机播放' }
@@ -516,9 +533,98 @@ async function fetchLocalMeta(item) {
     if (token !== localMetaFetchToken) return
     const playingPath = getTrackFilePath(currentPlaying.value)
     if (!playingPath || !isSameTrackPath(playingPath, filePath)) return
-    applyLocalMetaToPlaying(res?.data || res, filePath)
+    const meta = res?.data || res
+    applyLocalMetaToPlaying(meta, filePath)
     await fillLocalGapsFromNetwork(filePath)
+    autoMatchMissingOnPlay(meta, filePath)
   } catch {}
+}
+
+/* ===== 播放自动匹配：文件标签缺失时，播放时自动联网匹配并保存 ===== */
+
+/** 记录已自动匹配过的本地文件，避免同一首歌反复触发 */
+const autoMatchedOnPlay = new Set()
+
+const AUTO_MATCH_ON_PLAY_KEY = 'player.autoMatchOnPlay'
+/** 播放自动匹配设置项 key（Settings 页 / App 启动同步用） */
+export const PLAYER_AUTO_MATCH_ON_PLAY_KEY = AUTO_MATCH_ON_PLAY_KEY
+let autoMatchOnPlayEnabled = false
+
+/** 设置开启/关闭播放自动匹配（Settings 页切换时调用） */
+export function setAutoMatchOnPlay(enabled) {
+  autoMatchOnPlayEnabled = Boolean(enabled)
+  if (!enabled) autoMatchedOnPlay.clear()
+}
+
+/** 播放本地文件后调用：若开关打开且标签缺失，自动联网匹配并保存 */
+async function autoMatchMissingOnPlay(meta, filePath) {
+  if (!autoMatchOnPlayEnabled || !filePath) return
+  if (autoMatchedOnPlay.has(filePath)) return
+  if (!isMissingLocalTag(meta)) return
+
+  autoMatchedOnPlay.add(filePath)
+  const fileName = getTrackFilePath(currentPlaying.value)
+    ? ((currentPlaying.value && currentPlaying.value.name) || filePath.split(/[\\/]/).pop())
+    : filePath.split(/[\\/]/).pop()
+
+  try {
+    const res = await api.tag.matchBatch([{ filePath, fileName }])
+    const item = (res.data || [])[0]
+    if (!item?.ok || !item.meta) {
+      showPlayerNotice('自动匹配未找到该曲信息', 4000)
+      return
+    }
+    const meta2 = { ...item.meta }
+    if (meta2.pic) meta2.pictureBase64 = meta2.pic
+    const saved = await saveAutoMatchedMeta(filePath, meta2)
+    if (saved && isSameTrackPath(getTrackFilePath(currentPlaying.value), filePath)) {
+      refreshPlayingLocalMeta(filePath, {
+        ...meta2,
+        pictureBase64: meta2.pic || meta2.pictureBase64,
+        hasPicture: Boolean(meta2.pic || meta2.pictureBase64 || meta2.picUrl),
+        hasLyrics: Boolean(meta2.lyric),
+      })
+    }
+    if (saved) {
+      showPlayerNotice('已自动匹配并保存该曲标签', 5000)
+    }
+  } catch {
+    // 自动匹配失败静默，不打扰播放
+  }
+}
+
+/** 标签缺失判断：与标签编辑一致 —— 专辑 / 封面 / 歌词任一缺失 */
+function isMissingLocalTag(meta) {
+  if (!meta) return false
+  const noAlbum = !String(meta.album || '').trim()
+  const noCover = !meta.hasPicture
+  const noLyric = !meta.hasLyrics
+  return noAlbum || noCover || noLyric
+}
+
+/** 将匹配结果写入文件（写盘 + 刷新音乐库索引缓存） */
+async function saveAutoMatchedMeta(filePath, meta) {
+  try {
+    const res = await api.tag.writeBatch([{ filePath, meta: buildAutoMatchWriteMeta(meta) }])
+    const row = (res.data || []).find(r => r.filePath === filePath) || (res.data || [])[0]
+    return Boolean(row?.ok)
+  } catch {
+    return false
+  }
+}
+
+function buildAutoMatchWriteMeta(meta) {
+  return {
+    title: meta.title,
+    artist: meta.artist,
+    album: meta.album,
+    year: meta.year,
+    genre: meta.genre,
+    comment: meta.comment,
+    lyric: meta.lyric,
+    pic: meta.pic || meta.pictureBase64 || undefined,
+    picUrl: meta.picUrl || undefined,
+  }
 }
 
 function hasFileCover(item) {
@@ -990,6 +1096,7 @@ function persistQueueState() {
       })),
       currentIndex: currentQueueIndex.value,
       playMode: playMode.value,
+      activeDynamicList: activeDynamicList.value,
     }))
     localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({
       currentPlaying: currentPlaying.value ? pickItemFields(currentPlaying.value) : null,
@@ -1084,6 +1191,7 @@ function loadQueueState() {
     if (data.playMode && ['list', 'loop', 'single', 'random'].includes(data.playMode)) {
       playMode.value = data.playMode
     }
+    activeDynamicList.value = data.activeDynamicList === ROAM_PLAYLIST_ID ? ROAM_PLAYLIST_ID : null
   } catch {}
 }
 
@@ -1452,7 +1560,87 @@ async function onTrackEnded() {
     isPaused.value = false
     return
   }
+  if (activeDynamicList.value === ROAM_PLAYLIST_ID) {
+    await playNextRoamAuto()
+    return
+  }
   await playNextAuto()
+}
+
+/** 漫游歌单自动连播：清已播 + 快播完时自动补充新随机曲目 */
+async function playNextRoamAuto() {
+  const finished = playQueue.value[currentQueueIndex.value]
+  if (finished) {
+    removeRoamTrack(finished.item)
+    playQueue.value.splice(currentQueueIndex.value, 1)
+    if (currentQueueIndex.value >= playQueue.value.length) {
+      currentQueueIndex.value = playQueue.value.length - 1
+    }
+    saveQueueState()
+  }
+
+  // 剩余不足阈值则先补充随机曲目
+  if (playQueue.value.length <= ROAM_REFILL_THRESHOLD) {
+    maybeRefillRoamQueue()
+  }
+
+  if (!playQueue.value.length) {
+    // 漫游歌单播完且补充不到：停止
+    activeDynamicList.value = null
+    isPaused.value = true
+    return
+  }
+
+  const maxSkip = Math.min(playQueue.value.length, 8)
+  const tried = new Set()
+  for (let i = 0; i < maxSkip; i++) {
+    const next = resolveNextRoamIndex()
+    if (next < 0) {
+      isPaused.value = true
+      return
+    }
+    if (tried.has(next)) {
+      isPaused.value = true
+      return
+    }
+    tried.add(next)
+    try {
+      await playTrackAt(next)
+      return
+    } catch (e) {
+      if (e?.aborted) return
+      if (i === 0) showPlayerNotice('当前曲目无法播放，已跳过', 4000)
+    }
+  }
+  isPaused.value = true
+}
+
+/**
+ * 漫游模式的下一首下标：
+ * 已播曲目已从队列删除，splice 后 currentQueueIndex 已指向下一首；
+ * 列表/循环模式直接播当前位置即可（避免 +1 跳过），随机模式仍随机挑选。
+ */
+function resolveNextRoamIndex() {
+  const len = playQueue.value.length
+  if (!len) return -1
+  if (playMode.value === 'random') return pickRandomIndex(currentQueueIndex.value)
+  let idx = currentQueueIndex.value
+  if (idx < 0 || idx >= len) idx = 0
+  return idx
+}
+
+/** 剩余不足阈值时：从音乐库随机抽 10 首追加到漫游歌单 + 播放队列 */
+function maybeRefillRoamQueue() {
+  if (activeDynamicList.value !== ROAM_PLAYLIST_ID) return
+  const added = appendRoamTracks(randomPickLibraryTracks(ROAM_PICK_SIZE))
+  for (const t of added) {
+    const cleaned = cleanTrackItem({ ...t, source: t.source || 'local' })
+    const src = cleaned.source || 'local'
+    const key = getTrackKey(cleaned, src)
+    if (playQueue.value.some(q => q.key === key)) continue
+    playQueue.value.push({ key, item: cleaned, source: src })
+  }
+  saveQueueState()
 }
 
 async function playNextAuto() {
@@ -1732,9 +1920,49 @@ export function addToQueue(item, source, { play = false, replace = false } = {})
   return idx
 }
 
+/** 设置当前播放所属的动态歌单（'roam' = 漫游歌单，null = 普通） */
+export function setActiveDynamicList(listId) {
+  activeDynamicList.value = listId === ROAM_PLAYLIST_ID ? ROAM_PLAYLIST_ID : null
+  saveQueueState()
+}
+
+/**
+ * 以指定曲目列表替换播放队列并立即播放（供随机播放入口使用）。
+ * 同时标记当前为漫游动态歌单，走自动续播/已播清理逻辑。
+ */
+export async function startPlayTracks(tracks, sourceOverride = '') {
+  const list = (tracks || []).map(t => {
+    const cleaned = cleanTrackItem({ ...t, source: t.source || sourceOverride || 'local' })
+    const src = cleaned.source || sourceOverride || 'local'
+    const key = getTrackKey(cleaned, src)
+    return { key, item: cleaned, source: src }
+  }).filter(e => e.key)
+  if (!list.length) return
+
+  // 去重后整体替换播放队列
+  const seen = new Set()
+  const dedup = []
+  for (const e of list) {
+    if (seen.has(e.key)) continue
+    seen.add(e.key)
+    dedup.push({ ...e, item: cleanTrackItem({ ...e.item, source: e.source }) })
+  }
+  playQueue.value = dedup
+
+  activeDynamicList.value = ROAM_PLAYLIST_ID
+  if (currentQueueIndex.value >= playQueue.value.length) currentQueueIndex.value = -1
+  await playTrackAt(0)
+  saveQueueState()
+}
+
 export function removeFromQueue(index) {
   if (index < 0 || index >= playQueue.value.length) return
+  const removedEntry = playQueue.value[index]
   playQueue.value.splice(index, 1)
+  // 漫游模式下手动移除队列条目时，同步从漫游歌单移除
+  if (activeDynamicList.value === ROAM_PLAYLIST_ID && removedEntry?.item) {
+    removeRoamTrack(removedEntry.item)
+  }
   if (currentQueueIndex.value === index) {
     if (playQueue.value.length) {
       const next = Math.min(index, playQueue.value.length - 1)
@@ -1752,6 +1980,7 @@ export function clearQueue() {
   playQueue.value = []
   playHistory = []
   currentQueueIndex.value = -1
+  activeDynamicList.value = null
   stopPlay()
   saveQueueState()
 }
@@ -1764,6 +1993,7 @@ export function togglePlayMode() {
 }
 
 export async function playItem(item, activeSource) {
+  if (activeDynamicList.value) activeDynamicList.value = null
   const key = getTrackKey(item, activeSource)
   const idx = playQueue.value.findIndex(q => q.key === key)
 
@@ -2049,7 +2279,15 @@ export async function playNext() {
   if (!playQueue.value.length) return
   const next = resolveNextIndex(false)
   if (next < 0) {
-    if (playMode.value === 'loop') await playTrackAt(0)
+    if (playMode.value === 'loop') {
+      await playTrackAt(0)
+      return
+    }
+    // 漫游歌单播到末尾：自动补充随机曲目后从第一首继续
+    if (activeDynamicList.value === ROAM_PLAYLIST_ID) {
+      maybeRefillRoamQueue()
+      if (playQueue.value.length) await playTrackAt(0)
+    }
     return
   }
   await playTrackAt(next)
@@ -2137,6 +2375,7 @@ export function stopPlay() {
   stopPlaybackGraph()
   previewSwitchToken++
   previewSwitchInFlight = false
+  activeDynamicList.value = null
   if (audio) {
     audio.pause()
     audio.removeAttribute('src')

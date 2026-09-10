@@ -1,7 +1,13 @@
 import { Router } from 'express'
 import fs from 'node:fs'
 import path from 'node:path'
-import { getMusicPaths, isAllowedMediaPath } from '../utils/filePaths.js'
+import {
+  getMusicPaths,
+  isAllowedMediaPath,
+  addMusicPath,
+  resolveReal,
+} from '../utils/filePaths.js'
+import { listAudioFiles } from '../utils/audioScan.js'
 import {
   getAllCachedTracks,
   syncLibraryIndex,
@@ -20,6 +26,7 @@ import {
 } from '../utils/libraryScanSettings.js'
 import {
   notifyLibraryRemoved,
+  notifyLibraryChanged,
   notifyLibraryUserDataChanged,
 } from '../utils/libraryNotify.js'
 import {
@@ -203,12 +210,16 @@ libraryRouter.post('/delete-files', (req, res) => {
     const failed = []
     for (const filePath of filePaths) {
       try {
-        if (!isAllowedMediaPath(filePath)) {
+        // allowMissing：文件可能已被移走（整理/外部删除）但缓存仍残留。
+        // 这种"幽灵记录"只要路径仍归属音乐库/下载目录，就按已删除处理并清理缓存。
+        if (!isAllowedMediaPath(filePath, { allowMissing: true })) {
           failed.push({ filePath, error: '路径不在允许的音乐库/下载目录内' })
           continue
         }
         const resolved = path.resolve(filePath)
-        fs.unlinkSync(resolved)
+        if (fs.existsSync(resolved)) {
+          fs.unlinkSync(resolved)
+        }
         deleted.push(resolved)
       } catch (e) {
         failed.push({ filePath, error: e.message || '删除失败' })
@@ -282,6 +293,223 @@ libraryRouter.put('/playlists', (req, res) => {
     setCustomPlaylists(req.user.id, playlists)
     notifyLibraryUserDataChanged(req.user.id)
     res.json({ ok: true })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+const ARTIST_SPLIT_RE = /[、,，/;；&]/
+
+/** 将歌手字符串安全化为目录名：取第一位歌手、清除非法字符、保留中英文与常用符号 */
+function artistToDirName(singerRaw) {
+  const raw = String(singerRaw || '').trim()
+  if (!raw) return '未知歌手'
+  const first = raw.split(ARTIST_SPLIT_RE).map((s) => s.trim()).filter(Boolean)[0] || '未知歌手'
+  const cleaned = first
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, '')
+    .replace(/[. ]+$/g, '')
+    .trim()
+    .slice(0, 80)
+  return cleaned || '未知歌手'
+}
+
+function safeBaseName(fileName) {
+  return String(fileName || '')
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')
+    .replace(/[. ]+$/g, '')
+    .trim()
+    .slice(0, 200) || 'untitled'
+}
+
+/** 目录目标：允许音乐库根的子目录或外部目录；禁止根目录/音乐库根/音乐库根的上层目录 */
+function assertOrganizeTargetAllowed(targetDir) {
+  if (!targetDir || typeof targetDir !== 'string') {
+    throw new Error('请填写整理的目标目录')
+  }
+  const resolved = path.resolve(String(targetDir).trim())
+  const fsRoot = path.parse(resolved).root
+  if (resolved === fsRoot) {
+    throw new Error('目标目录不能是文件系统根目录')
+  }
+  const musicDirs = getMusicPaths().filter(Boolean)
+  for (const dir of musicDirs) {
+    const base = path.resolve(dir)
+    // 目标 = 音乐库根 → 会把全部文件视为"已在目录内"，无意义
+    if (resolved === base) {
+      throw new Error('目标目录不能是音乐库根目录本身，请使用其子目录或新的外部目录')
+    }
+    // 目标是音乐库根的上层目录 → 同样会把全部文件视为"已在目录内"
+    if (base.startsWith(resolved + path.sep)) {
+      throw new Error('目标目录不能是音乐库目录的上层目录')
+    }
+  }
+  return resolved
+}
+
+/** 移动文件：同文件系统用 rename；跨文件系统(EXDEV)时退化为复制+删除 */
+function moveFile(src, dest) {
+  try {
+    fs.renameSync(src, dest)
+  } catch (e) {
+    if (e?.code === 'EXDEV') {
+      fs.copyFileSync(src, dest)
+      fs.unlinkSync(src)
+    } else {
+      throw e
+    }
+  }
+}
+
+/** 解析整理范围，返回待整理的文件路径数组 */
+function resolveOrganizeFiles(body = {}) {
+  const mode = body.scope || 'all' // all | files | dir
+  const input = body.filePaths || body.files
+
+  if (mode === 'files') {
+    const list = Array.isArray(input) ? input : []
+    if (!list.length) throw new Error('请选择要整理的文件')
+    const seen = new Set()
+    const out = []
+    for (const p of list) {
+      if (!p) continue
+      const full = path.resolve(String(p))
+      if (seen.has(full)) continue
+      seen.add(full)
+      if (fs.existsSync(full) && fs.statSync(full).isFile()) out.push(full)
+    }
+    if (!out.length) throw new Error('所选文件均不存在')
+    return out
+  }
+
+  if (mode === 'dir') {
+    const dir = String(body.dir || body.dirPath || '').trim()
+    if (!dir) throw new Error('请选择要整理的文件夹')
+    if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) {
+      throw new Error(`文件夹不存在：${dir}`)
+    }
+    return listAudioFiles(dir) // 递归列出该目录下全部音频
+  }
+
+  // all / 默认：整个音乐库
+  const tracks = getAllCachedTracks() || []
+  const out = []
+  const seen = new Set()
+  for (const t of tracks) {
+    const p = t?.filePath
+    if (!p || seen.has(p)) continue
+    seen.add(p)
+    out.push(p)
+  }
+  return out
+}
+
+/** 整理音乐库：按歌手将歌曲迁移到 目标目录/歌手名/ 下（支持按文件/文件夹范围） */
+libraryRouter.post('/organize', async (req, res) => {
+  try {
+    const rawDir = req.body?.targetDir
+    const targetDir = assertOrganizeTargetAllowed(rawDir)
+
+    const srcPaths = resolveOrganizeFiles(req.body || {})
+    if (!srcPaths.length) {
+      return res.status(400).json({ error: '音乐库为空，无可整理的歌曲' })
+    }
+
+    if (!fs.existsSync(targetDir)) {
+      fs.mkdirSync(targetDir, { recursive: true })
+    }
+
+    // 是否已位于目标目录下的歌手子目录（跳过重复整理）
+    const targetReal = resolveReal(targetDir).replace(/[\\/]+$/, '')
+
+    // 路径 → 缓存曲目（含 singer/artist/album 标签）；未命中则按文件名兜底
+    const tracksByPath = new Map(
+      (getAllCachedTracks() || []).map((t) => [path.resolve(t.filePath || ''), t]),
+    )
+
+    const moved = []
+    const failed = []
+    const skipped = []
+
+    for (const src of srcPaths) {
+      if (!src || !fs.existsSync(src)) {
+        skipped.push({ filePath: src, reason: '文件不存在' })
+        continue
+      }
+      const srcReal = resolveReal(src)
+      if (srcReal.startsWith(targetReal + path.sep)) {
+        skipped.push({ filePath: src, reason: '已在目标目录内' })
+        continue
+      }
+      if (!isAllowedMediaPath(src)) {
+        failed.push({ filePath: src, error: '路径不在允许的音乐库/下载目录内' })
+        continue
+      }
+
+      const cached = tracksByPath.get(path.resolve(src))
+      const artistDir = artistToDirName(
+        cached?.artist || cached?.singer || cached?.parsedArtist || '',
+      )
+
+      const artistFolder = path.join(targetDir, artistDir)
+      const srcExt = path.extname(src).toLowerCase()
+      const fileName = safeBaseName(path.basename(src, srcExt)) + srcExt
+      let dest = path.join(artistFolder, fileName)
+
+      // 处理文件名冲突：与源相同则跳过；已存在则追加序号
+      if (resolveReal(src) === resolveReal(dest) && path.dirname(srcReal) === artistFolder) {
+        skipped.push({ filePath: src, reason: '已在对应歌手目录' })
+        continue
+      }
+
+      let n = 1
+      while (fs.existsSync(dest) && resolveReal(dest) !== resolveReal(src)) {
+        dest = path.join(artistFolder, `${safeBaseName(path.basename(src, srcExt))} (${n})${srcExt}`)
+        n++
+      }
+
+      try {
+        fs.mkdirSync(artistFolder, { recursive: true })
+        moveFile(src, dest)
+        moved.push({ from: src, to: dest, artist: artistDir })
+      } catch (e) {
+        failed.push({ filePath: src, error: e.message || '迁移失败' })
+      }
+    }
+
+    // 更新缓存：旧路径移除，新路径加入待扫描
+    if (moved.length) {
+      removeCachePaths(moved.map((m) => m.from))
+      const pending = moved
+        .filter((m) => fs.existsSync(m.to))
+        .map((m) => ({ filePath: m.to, mtime: 0, size: 0 }))
+      if (pending.length) {
+        try {
+          await scanBatchAndCache(pending)
+        } catch {}
+      }
+      // 目标目录不在已配置音乐库内时，自动加入扫描列表
+      try {
+        if (!getMusicPaths().some((p) => resolveReal(p) === resolveReal(targetDir))) {
+          addMusicPath(targetDir)
+        }
+      } catch {}
+      notifyLibraryRemoved(moved.map((m) => m.from), { reason: 'organize' })
+      notifyLibraryChanged(moved.map((m) => m.to), { reason: 'organize' })
+    }
+
+    res.json({
+      ok: true,
+      data: {
+        targetDir,
+        moved: moved.length,
+        failed: failed.length,
+        skipped: skipped.length,
+        movedList: moved,
+        failedList: failed,
+        skippedList: skipped,
+        artists: [...new Set(moved.map((m) => m.artist))].length,
+      },
+    })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }

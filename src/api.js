@@ -301,6 +301,11 @@ export const api = {
       }),
     },
     duplicates: () => request('/library/duplicates', { timeout: 60000 }),
+    organize: (targetDir, options = {}) => request('/library/organize', {
+      method: 'POST',
+      body: { targetDir, ...options },
+      timeout: 600000,
+    }),
     deleteFiles: (filePaths) => request('/library/delete-files', {
       method: 'POST',
       body: { filePaths: Array.isArray(filePaths) ? filePaths : [filePaths] },
