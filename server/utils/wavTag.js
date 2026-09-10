@@ -1,6 +1,7 @@
 import fs from 'fs'
 import NodeID3 from 'node-id3'
 import { detectImageMime } from './fetchPic.js'
+import { normalizeArtistForWrite } from './artistTag.js'
 
 /**
  * 写入 WAV 标签：RIFF INFO（标题/歌手等）+ 可选 id3 块（歌词/封面）
@@ -19,7 +20,9 @@ export function writeWavMeta(filePath, meta, { decodePicInput, atomicReplaceFile
 
   const infoMap = readInfoMap(chunks)
   applyInfoField(infoMap, 'INAM', meta.title)
-  applyInfoField(infoMap, 'IART', meta.artist)
+  if (meta.artist !== undefined) {
+    applyInfoField(infoMap, 'IART', normalizeArtistForWrite(meta.artist).display)
+  }
   applyInfoField(infoMap, 'IPRD', meta.album)
   applyInfoField(infoMap, 'ICRD', meta.year != null ? String(meta.year) : undefined)
   applyInfoField(infoMap, 'IGNR', meta.genre)
@@ -135,7 +138,7 @@ function buildInfoListChunk(infoMap) {
 function buildWavId3Chunk(meta, picBuf, clearPic) {
   const tags = {}
   if (meta.title != null) tags.title = meta.title
-  if (meta.artist != null) tags.artist = meta.artist
+  if (meta.artist != null) tags.artist = normalizeArtistForWrite(meta.artist).display
   if (meta.album != null) tags.album = meta.album
   if (meta.year != null) tags.year = String(meta.year)
   if (meta.genre != null) tags.genre = meta.genre

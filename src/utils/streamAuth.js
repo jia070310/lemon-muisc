@@ -12,28 +12,31 @@ export function stripStreamAuth(url) {
   try {
     const u = new URL(url, window.location.origin)
     u.searchParams.delete('token')
-    const qs = u.searchParams.toString()
-    return `${u.pathname}${qs ? `?${qs}` : ''}`
+    // 用 %20 重写，避免空格变成 +
+    const qs = []
+    u.searchParams.forEach((value, key) => {
+      qs.push(`${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+    })
+    return `${u.pathname}${qs.length ? `?${qs.join('&')}` : ''}`
   } catch {
     return String(url).replace(/([?&])token=[^&]*&?/g, '$1').replace(/[?&]$/, '')
   }
 }
 
-/** 为 audio/img 等无法带 Header 的媒体请求附加登录 token */
+/** 为 audio/img 等无法带 Header 的媒体请求附加登录 token（不重编码 path） */
 export function withStreamAuth(url) {
   if (!url || !needsStreamAuth(url)) return url
   const token = getToken()
   if (!token) return url
-  try {
-    const u = new URL(url, window.location.origin)
-    if (u.searchParams.get('token') === token) {
-      return `${u.pathname}${u.search}`
+  if (/[?&]token=/.test(String(url))) {
+    // 已有 token：若与当前一致则原样返回，避免 URLSearchParams 把空格改成 +
+    try {
+      const u = new URL(url, window.location.origin)
+      if (u.searchParams.get('token') === token) return String(url)
+    } catch {
+      return url
     }
-    u.searchParams.set('token', token)
-    return `${u.pathname}${u.search}`
-  } catch {
-    if (String(url).includes('token=')) return url
-    const sep = String(url).includes('?') ? '&' : '?'
-    return `${url}${sep}token=${encodeURIComponent(token)}`
   }
+  const sep = String(url).includes('?') ? '&' : '?'
+  return `${url}${sep}token=${encodeURIComponent(token)}`
 }

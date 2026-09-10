@@ -150,19 +150,21 @@
             <polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
           </svg>
         </button>
-        <div v-if="downloadMenuOpen" class="quality-menu" :style="downloadMenuStyle" data-player-dl @click.stop>
-          <div class="quality-menu-title">选择音质</div>
-          <template v-if="currentQualities.length">
-            <button
-              v-for="q in currentQualities"
-              :key="q"
-              type="button"
-              class="quality-option"
-              @click="downloadCurrent(q)"
-            >{{ getQualityDisplay(q, currentPlaying?.types) }}</button>
-          </template>
-          <div v-else class="quality-empty">该曲暂无可用音质（音源未返回）</div>
-        </div>
+        <Teleport to="body">
+          <div v-if="downloadMenuOpen" class="player-dl-quality-menu quality-menu" :style="downloadMenuStyle" data-player-dl @click.stop>
+            <div class="quality-menu-title">选择音质</div>
+            <template v-if="currentQualities.length">
+              <button
+                v-for="q in currentQualities"
+                :key="q"
+                type="button"
+                class="quality-option"
+                @click="downloadCurrent(q)"
+              >{{ getQualityDisplay(q, currentPlaying?.types) }}</button>
+            </template>
+            <div v-else class="quality-empty">该曲暂无可用音质（音源未返回）</div>
+          </div>
+        </Teleport>
       </div>
       <button
         v-if="currentLocalPath && !isMobilePlayer"
@@ -479,8 +481,12 @@ function closeDownloadMenu() {
 
 function toggleDownloadMenu(event) {
   downloadMenuOpen.value = !downloadMenuOpen.value
-  if (downloadMenuOpen.value) positionDownloadMenu(event?.currentTarget)
-  else clearDownloadMenuPosition()
+  if (downloadMenuOpen.value) {
+    // 播放栏在底部：强制向上弹出，避免被底栏/预留高度算错
+    positionDownloadMenu(event?.currentTarget, { preferUp: true, zIndex: 90 })
+  } else {
+    clearDownloadMenuPosition()
+  }
 }
 
 async function downloadCurrent(quality) {

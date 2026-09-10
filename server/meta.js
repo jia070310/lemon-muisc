@@ -5,6 +5,7 @@ import { detectImageMime } from './utils/fetchPic.js'
 import { normalizeLyricText, pickBestLyricText } from './utils/lyric.js'
 import { writeWavMeta } from './utils/wavTag.js'
 import { writeApeMeta } from './utils/apeTag.js'
+import { joinArtists, normalizeArtistForWrite } from './utils/artistTag.js'
 
 export async function writeMeta(filePath, ext, meta) {
   if (ext === '.mp3') return writeMp3Meta(filePath, meta)
@@ -32,7 +33,10 @@ function decodePicInput(pic) {
 function writeMp3Meta(filePath, meta) {
   const tags = {}
   if (meta.title != null) tags.title = meta.title
-  if (meta.artist != null) tags.artist = meta.artist
+  if (meta.artist != null) {
+    // ID3v2.3 / node-id3：写展示串「A / B」（规范多值需 v2.4 NUL，库支持有限）
+    tags.artist = normalizeArtistForWrite(meta.artist).display
+  }
   if (meta.album != null) tags.album = meta.album
   if (meta.year != null) tags.year = String(meta.year)
   if (meta.genre != null) tags.genre = meta.genre
@@ -69,6 +73,7 @@ async function writeFlacMeta(filePath, meta) {
   }
 
   // 合并已有 Vorbis 注释：只更新本次提交的字段，避免丢掉曲目号等其它标签
+  // 值可为 string | string[]（ARTIST 等多值）
   const tags = {}
   const oldComment = parsed.blocks.find((b) => b.type === 4)
   if (oldComment) Object.assign(tags, parseVorbisCommentBlock(oldComment.data))
@@ -80,14 +85,18 @@ async function writeFlacMeta(filePath, meta) {
     else tags[key] = text
   }
   applyField('TITLE', meta.title)
-  applyField('ARTIST', meta.artist)
+  if (meta.artist !== undefined) {
+    const { artists } = normalizeArtistForWrite(meta.artist)
+    if (!artists?.length) delete tags.ARTIST
+    else tags.ARTIST = artists
+  }
   applyField('ALBUM', meta.album)
   applyField('DATE', meta.year)
   applyField('GENRE', meta.genre)
   applyField('COMMENT', meta.comment)
   applyField('LYRICS', meta.lyric)
 
-  const comments = Object.entries(tags).map(([k, v]) => `${k}=${v}`)
+  const comments = vorbisTagsToComments(tags)
   const picBuf = decodePicInput(meta.pic)
   const clearPic = meta.clearPicture === true || meta.pic === ''
 
@@ -98,6 +107,23 @@ async function writeFlacMeta(filePath, meta) {
 
   const newFile = rebuildFlacBlocks(parsed, comments, picBuf, { clearPic })
   atomicReplaceFile(filePath, newFile)
+}
+
+/** Vorbis 注释：多值字段展开为多条 KEY=value */
+function vorbisTagsToComments(tags) {
+  const comments = []
+  for (const [k, v] of Object.entries(tags)) {
+    if (Array.isArray(v)) {
+      for (const item of v) {
+        const text = item == null ? '' : String(item).trim()
+        if (text) comments.push(`${k}=${text}`)
+      }
+    } else {
+      const text = v == null ? '' : String(v)
+      if (text) comments.push(`${k}=${text}`)
+    }
+  }
+  return comments
 }
 
 /** 先写临时文件再替换，避免写入中断导致 FLAC 损坏；跨盘时回退为 copy */
@@ -244,7 +270,7 @@ export function normalizeTagText(value) {
 function normalizeMetaFields(meta, { keepAlbumSameAsTitle = false } = {}) {
   const title = normalizeTagText(meta.title)
   let album = normalizeTagText(meta.album)
-  const artist = normalizeTagText(meta.artist)
+  const artist = joinArtists(normalizeTagText(meta.artist))
   const genre = normalizeTagText(meta.genre)
   const comment = normalizeTagText(meta.comment)
   // 仅在没有明确 ALBUM 标签、且专辑疑似由标题回填时清空
@@ -418,6 +444,8 @@ function hasExternalLrc(filePath) {
 function parseVorbisCommentBlock(blockData) {
   const tags = {}
   if (!blockData?.length || blockData.length < 8) return tags
+  /** 可重复出现的字段 → 读成数组 */
+  const MULTI = new Set(['ARTIST', 'ALBUMARTIST', 'PERFORMER', 'GENRE'])
   try {
     let offset = 0
     const vendorLen = blockData.readUInt32LE(offset)
@@ -435,10 +463,23 @@ function parseVorbisCommentBlock(blockData) {
       if (eq <= 0) continue
       const key = raw.slice(0, eq).toUpperCase()
       const val = raw.slice(eq + 1).trim()
-      if (val && !tags[key]) tags[key] = val
+      if (!val) continue
+      if (MULTI.has(key)) {
+        if (!tags[key]) tags[key] = [val]
+        else if (Array.isArray(tags[key])) tags[key].push(val)
+        else tags[key] = [tags[key], val]
+      } else if (!tags[key]) {
+        tags[key] = val
+      }
     }
   } catch {}
   return tags
+}
+
+function vorbisArtistDisplay(tags) {
+  const raw = tags?.ARTIST
+  if (Array.isArray(raw)) return joinArtists(raw)
+  return joinArtists(raw || '')
 }
 
 function readFlacNativeTags(filePath) {
@@ -457,15 +498,18 @@ function readFlacNativeTags(filePath) {
     const commentBlock = parsed.blocks.find(b => b.type === 4)
     const tags = commentBlock ? parseVorbisCommentBlock(commentBlock.data) : {}
     const lyricKeyOrder = ['SYNCEDLYRICS', 'LYRICS', 'LYRIC', 'LRC', 'UNSYNCEDLYRICS', 'DESCRIPTION']
-    const rawLyric = lyricKeyOrder.map(k => tags[k]).find(Boolean) || ''
+    const rawLyric = lyricKeyOrder.map(k => {
+      const v = tags[k]
+      return Array.isArray(v) ? v[0] : v
+    }).find(Boolean) || ''
     const lyric = normalizeLyricText(rawLyric)
     return {
-      title: normalizeTagText(tags.TITLE),
-      artist: normalizeTagText(tags.ARTIST),
-      album: normalizeTagText(tags.ALBUM),
-      year: normalizeTagText(tags.DATE || tags.YEAR),
-      genre: normalizeTagText(tags.GENRE),
-      comment: normalizeTagText(tags.COMMENT || tags.DESCRIPTION),
+      title: normalizeTagText(Array.isArray(tags.TITLE) ? tags.TITLE[0] : tags.TITLE),
+      artist: normalizeTagText(vorbisArtistDisplay(tags)),
+      album: normalizeTagText(Array.isArray(tags.ALBUM) ? tags.ALBUM[0] : tags.ALBUM),
+      year: normalizeTagText(Array.isArray(tags.DATE) ? tags.DATE[0] : (tags.DATE || tags.YEAR)),
+      genre: normalizeTagText(Array.isArray(tags.GENRE) ? joinArtists(tags.GENRE) : tags.GENRE),
+      comment: normalizeTagText(Array.isArray(tags.COMMENT) ? tags.COMMENT[0] : (tags.COMMENT || tags.DESCRIPTION)),
       lyric,
       hasPicture: parsed.blocks.some(b => b.type === 6 && b.data.length > 0),
       hasLyrics: Boolean(lyric) || hasExternalLrc(filePath),
@@ -489,7 +533,7 @@ function readMp3NativeTags(filePath) {
     const hasLyrics = Boolean(lyric) || frames.hasUslt || hasExternalLrc(filePath)
     return {
       title: normalizeTagText(tags.title),
-      artist: normalizeTagText(tags.artist),
+      artist: normalizeTagText(joinArtists(tags.artist)),
       album: normalizeTagText(tags.album),
       year: tags.year != null ? String(tags.year) : '',
       genre: normalizeTagText(tags.genre),
@@ -612,7 +656,11 @@ function buildMetaFromParsed(metadata, filePath, { includeContent = false } = {}
 
   return {
     title: metadata.common.title || '',
-    artist: metadata.common.artist || '',
+    artist: joinArtists(
+      (metadata.common.artists?.length ? metadata.common.artists : null)
+        || metadata.common.artist
+        || '',
+    ),
     album: metadata.common.album || '',
     year: metadata.common.year || '',
     genre: metadata.common.genre?.[0] || '',

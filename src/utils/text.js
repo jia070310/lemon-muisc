@@ -17,15 +17,36 @@ export function cleanText(str) {
   return s.replace(/\s+/g, ' ').trim()
 }
 
-/** 多歌手展示：统一解码后将 / & \\& 等分隔符规范为空格 */
+/** 多歌手展示：统一为「A / B」，便于读写标签与播放器识别 */
 export function formatArtists(str) {
   let s = cleanText(str)
   if (!s) return ''
   s = s.replace(/\\&/g, '&')
-  const parts = s.split(/(?:\s*&\s*|\s*\/\s*|;|、|，|,|\|)+/)
+  // ID3v2.4 NUL 多值
+  if (s.includes('\0')) {
+    return s.split('\0').map((p) => p.trim()).filter(Boolean).join(' / ')
+  }
+  const parts = s.split(/(?:\s*\/\s*|\s*[;|]\s*|\s*[&＆]\s*|、|，|,)+/)
     .map((p) => p.trim())
     .filter(Boolean)
-  return parts.length > 1 ? parts.join(' ') : s
+  if (!parts.length) return s
+  // 去重（忽略大小写）
+  const seen = new Set()
+  const uniq = []
+  for (const p of parts) {
+    const key = p.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    uniq.push(p)
+  }
+  return uniq.join(' / ')
+}
+
+/** 编辑框保存前：拆成歌手列表 */
+export function splitArtists(str) {
+  const display = formatArtists(str)
+  if (!display) return []
+  return display.split(' / ').map((p) => p.trim()).filter(Boolean)
 }
 
 export function cleanTrackItem(item) {

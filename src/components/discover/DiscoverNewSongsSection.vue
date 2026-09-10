@@ -43,9 +43,9 @@
             v-for="(item, i) in itemsForPage(page)"
             :key="itemKey(item, page, i)"
             :item="item"
-            :playing="Boolean(isPlaying?.(item))"
-            :paused="Boolean(isPaused)"
-            :loading="loadingPlay != null && String(loadingPlay) === String(item.id || item.songmid || item.hash || '')"
+            :playing="trackKey(item) === playingKey"
+            :paused="isPaused"
+            :loading="loadingKey !== '' && loadingKey === trackKey(item)"
             @play="$emit('play', item)"
           />
         </div>
@@ -61,7 +61,7 @@ import DiscoverSectionPager from './DiscoverSectionPager.vue'
 import DiscoverSectionSkeleton from './DiscoverSectionSkeleton.vue'
 import DiscoverSongItem from './DiscoverSongItem.vue'
 import DiscoverSwipeCarousel from './DiscoverSwipeCarousel.vue'
-import { loadingPlay } from '../../stores/player.js'
+import { currentPlaying, getTrackKey, isPaused, loadingPlay } from '../../stores/player.js'
 
 const props = defineProps({
   list: { type: Array, default: () => [] },
@@ -71,18 +71,30 @@ const props = defineProps({
   region: { type: String, default: '' },
   regions: { type: Array, default: () => [] },
   pageSize: { type: Number, default: 9 },
-  isPlaying: { type: Function, default: null },
-  isPaused: Boolean,
 })
 defineEmits(['play', 'play-all', 'more', 'update:region'])
 
 const pageIndex = ref(0)
 const pageCount = computed(() => Math.max(1, Math.ceil(props.list.length / props.pageSize)))
 const pageItems = computed(() => itemsForPage(pageIndex.value))
+const playingKey = computed(() => {
+  const cur = currentPlaying.value
+  return cur ? getTrackKey(cur, cur.source) : ''
+})
+const loadingKey = computed(() => {
+  if (loadingPlay.value == null || loadingPlay.value === '') return ''
+  const id = String(loadingPlay.value)
+  const hit = props.list.find((item) => String(item.id || item.songmid || item.hash || '') === id)
+  return hit ? trackKey(hit) : id
+})
 
 function itemsForPage(page) {
   const start = page * props.pageSize
   return props.list.slice(start, start + props.pageSize)
+}
+
+function trackKey(item) {
+  return getTrackKey(item, item?.source || '')
 }
 
 function itemKey(item, page, i) {

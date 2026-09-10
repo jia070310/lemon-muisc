@@ -1,13 +1,13 @@
 {
   "name": "lx-music-nas",
-  "version": "1.2.13.10",
+  "version": "1.2.14",
   "description": "Lemon Music - 柠檬音乐下载",
   "private": true,
   "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
-    "dev:server": "node --watch server/index.js",
+    "dev:server": "node --watch-path=server --watch-preserve-output server/index.js",
     "dev:client": "vite --host 0.0.0.0",
     "build": "vite build",
     "start": "node server/index.js",

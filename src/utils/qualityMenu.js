@@ -1,11 +1,15 @@
 import { ref, nextTick } from 'vue'
 
-/** 音质菜单使用 fixed 定位，避免被底部播放条遮挡 */
+/**
+ * 音质菜单使用 fixed + 视口坐标。
+ * 调用方须把菜单 Teleport 到 body：祖先若有 transform/filter（如发现页轮播），
+ * fixed 会相对变换层定位，出现明显左右偏移。
+ */
 export function useQualityMenuPosition() {
   const menuStyle = ref({})
   const menuOpenUp = ref(false)
 
-  function positionMenu(anchorEl, { align = 'right', zIndex = 80 } = {}) {
+  function positionMenu(anchorEl, { align = 'right', zIndex = 80, preferUp = false } = {}) {
     if (!anchorEl) return
     nextTick(() => {
       const rect = anchorEl.getBoundingClientRect()
@@ -18,26 +22,29 @@ export function useQualityMenuPosition() {
         || 0
       const bottomReserved = playerH + navH + 12
       const menuEstHeight = 220
+      const menuEstWidth = 168
       const spaceBelow = window.innerHeight - rect.bottom - bottomReserved
-      const openUp = spaceBelow < menuEstHeight
+      const openUp = preferUp || spaceBelow < menuEstHeight
 
       menuOpenUp.value = openUp
       const base = {
         position: 'fixed',
         zIndex,
-        minWidth: '160px',
+        minWidth: `${menuEstWidth}px`,
       }
       if (align === 'left') {
-        base.left = `${Math.max(8, rect.left)}px`
+        base.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - menuEstWidth - 8))}px`
         base.right = 'auto'
       } else {
-        base.right = `${Math.max(8, window.innerWidth - rect.right)}px`
-        base.left = 'auto'
+        // 右对齐锚点：用 left 计算，避免仅设 right 时在异常 containing block 下更难排查
+        const left = Math.max(8, Math.min(rect.right - menuEstWidth, window.innerWidth - menuEstWidth - 8))
+        base.left = `${left}px`
+        base.right = 'auto'
       }
       if (openUp) {
         menuStyle.value = {
           ...base,
-          bottom: `${window.innerHeight - rect.top + 6}px`,
+          bottom: `${Math.max(8, window.innerHeight - rect.top + 6)}px`,
           top: 'auto',
         }
       } else {

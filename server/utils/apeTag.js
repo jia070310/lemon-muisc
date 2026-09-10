@@ -1,4 +1,5 @@
 import fs from 'fs'
+import { normalizeArtistForWrite } from './artistTag.js'
 
 const APE_PREAMBLE = Buffer.from('APETAGEX', 'ascii')
 const APE_VERSION = 2000
@@ -21,7 +22,9 @@ export function writeApeMeta(filePath, meta, { decodePicInput, atomicReplaceFile
   const items = { ...existing }
 
   applyText(items, 'Title', meta.title)
-  applyText(items, 'Artist', meta.artist)
+  if (meta.artist !== undefined) {
+    applyText(items, 'Artist', normalizeArtistForWrite(meta.artist).display)
+  }
   applyText(items, 'Album', meta.album)
   applyText(items, 'Year', meta.year != null ? String(meta.year) : undefined)
   applyText(items, 'Genre', meta.genre)

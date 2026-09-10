@@ -58,19 +58,27 @@
             <polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
           </svg>
         </button>
-        <div v-if="menuOpen" class="quality-menu" :style="menuStyle" data-keep-actions-open @click.stop>
-          <div class="quality-menu-title">选择音质</div>
-          <template v-if="qualities.length">
-            <button
-              v-for="q in qualities"
-              :key="q"
-              type="button"
-              class="quality-option"
-              @click="onDownload(q)"
-            >{{ getQualityDisplay(q, item.types) }}</button>
-          </template>
-          <div v-else class="quality-empty">该曲暂无可用音质（音源未返回）</div>
-        </div>
+        <Teleport to="body">
+          <div
+            v-if="menuOpen"
+            class="quality-menu discover-dl-quality-menu"
+            :style="menuStyle"
+            data-keep-actions-open
+            @click.stop
+          >
+            <div class="quality-menu-title">选择音质</div>
+            <template v-if="qualities.length">
+              <button
+                v-for="q in qualities"
+                :key="q"
+                type="button"
+                class="quality-option"
+                @click="onDownload(q)"
+              >{{ getQualityDisplay(q, item.types) }}</button>
+            </template>
+            <div v-else class="quality-empty">该曲暂无可用音质（音源未返回）</div>
+          </div>
+        </Teleport>
       </div>
     </MobileRowActions>
 
@@ -182,7 +190,8 @@ function toggleMenu(event) {
   menuOpen.value = !menuOpen.value
   if (menuOpen.value) {
     openOwnerId.value = ownerId
-    positionMenu(event?.currentTarget)
+    // 发现页轮播有 transform，fixed 会相对变换层偏移；挂到 body 并用视口坐标
+    positionMenu(event?.currentTarget, { align: 'right', zIndex: 120 })
   } else {
     clearMenuPosition()
   }
@@ -226,7 +235,7 @@ onUnmounted(() => {
   background: rgba(52, 199, 89, 0.12);
 }
 .dl-wrap { position: relative; }
-.quality-menu {
+.discover-dl-quality-menu.quality-menu {
   background: var(--bg-elevated, var(--bg-card));
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -234,12 +243,12 @@ onUnmounted(() => {
   padding: 6px 0;
   min-width: 160px;
 }
-.quality-menu-title {
+.discover-dl-quality-menu .quality-menu-title {
   padding: 6px 12px 4px;
   font-size: 12px;
   color: var(--text-muted);
 }
-.quality-option {
+.discover-dl-quality-menu .quality-option {
   display: block;
   width: 100%;
   text-align: left;
@@ -250,11 +259,11 @@ onUnmounted(() => {
   font-size: 13px;
   cursor: pointer;
 }
-.quality-option:hover {
+.discover-dl-quality-menu .quality-option:hover {
   background: var(--bg-hover);
   color: var(--accent);
 }
-.quality-empty {
+.discover-dl-quality-menu .quality-empty {
   padding: 10px 12px;
   font-size: 13px;
   color: var(--text-muted);

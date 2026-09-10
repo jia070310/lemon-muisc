@@ -3,8 +3,9 @@
  * 某平台栏目不可用时返回 unsupported，前端分栏空态，不拖垮整页。
  */
 import needle from 'needle'
-import { AVAILABLE_SOURCES } from './musicSdk.js'
+import { AVAILABLE_SOURCES, attachSongTypes } from './musicSdk.js'
 import { mapWithConcurrency } from './utils/asyncPool.js'
+import { joinArtists } from './utils/artistTag.js'
 
 const req = (method, url, body, headers = {}) => needle(method, url, body, {
   headers,
@@ -40,7 +41,7 @@ function cleanHtml(str) {
 }
 
 function formatArtists(s) {
-  return cleanHtml(String(s || '').replace(/[,，]/g, '/'))
+  return joinArtists(cleanHtml(String(s || '')))
 }
 
 function formatTime(seconds) {
@@ -131,7 +132,7 @@ function mapTxSong(item) {
   const img = albumMid && String(albumMid) !== '0'
     ? `https://y.gtimg.cn/music/photo_new/T002R500x500M000${albumMid}.jpg`
     : ''
-  return {
+  return attachSongTypes('tx', item, {
     id: songmid,
     name: cleanHtml(item.title || item.songname || item.name || ''),
     singer: formatArtists(
@@ -150,12 +151,12 @@ function mapTxSong(item) {
     albummid: albumMid,
     img,
     picUrl: img,
-  }
+  })
 }
 
 function mapWySong(item) {
   const pic = item.al?.picUrl || item.album?.picUrl || ''
-  return {
+  return attachSongTypes('wy', item, {
     id: String(item.id),
     name: cleanHtml(item.name),
     singer: formatArtists((item.ar || item.artists || []).map((a) => a.name).join('/')),
@@ -168,7 +169,60 @@ function mapWySong(item) {
     musicId: String(item.id),
     img: pic,
     picUrl: pic,
-  }
+  })
+}
+
+function mapKwSong(item) {
+  return attachSongTypes('kw', item, {
+    id: String(item.rid || item.id || ''),
+    name: cleanHtml(item.name),
+    singer: formatArtists(item.artist),
+    album: cleanHtml(item.album),
+    albumName: cleanHtml(item.album),
+    interval: formatTime(item.duration),
+    source: 'kw',
+    songId: String(item.rid || item.id || ''),
+    musicId: String(item.rid || item.id || ''),
+    rid: String(item.rid || item.id || ''),
+    img: item.pic || item.albumpic || '',
+    picUrl: item.pic || item.albumpic || '',
+  })
+}
+
+function mapKgSong(item) {
+  const parts = String(item.filename || '').split(' - ')
+  const singer = parts.length > 1 ? parts[0] : (item.singername || '')
+  const name = parts.length > 1 ? parts.slice(1).join(' - ') : (item.songname || item.filename || '')
+  const cover = (item.album_sizable_cover || item.imgurl || '').replace('{size}', '400')
+  return attachSongTypes('kg', item, {
+    id: item.hash || item.album_audio_id,
+    name: cleanHtml(name),
+    singer: formatArtists(singer),
+    album: cleanHtml(item.album_name || ''),
+    interval: formatTime(item.duration),
+    source: 'kg',
+    hash: item.hash,
+    songId: item.hash,
+    albumAudioId: item.album_audio_id,
+    img: cover,
+    picUrl: cover,
+  })
+}
+
+function mapMgSong(item) {
+  const o = item?.objectInfo || item
+  return attachSongTypes('mg', o, {
+    id: o.copyrightId || o.songId,
+    name: cleanHtml(o.songName || o.name),
+    singer: formatArtists((o.singerList || o.singers || []).map((s) => s.name).join('/') || o.singer),
+    album: cleanHtml(o.album || ''),
+    source: 'mg',
+    songId: o.copyrightId || o.songId,
+    copyrightId: o.copyrightId || '',
+    img: o.albumImg || o.img1 || '',
+    picUrl: o.albumImg || o.img1 || '',
+    interval: '',
+  })
 }
 
 function mapAlbum({ id, name, artist, img, publishTime, count, source }) {
@@ -546,20 +600,7 @@ async function kwNewSongs(_region = '', page = 1, limit = 27) {
   const list = data?.data?.musicList || []
   const total = data?.data?.num || list.length
   return {
-    list: list.map((item) => ({
-      id: String(item.rid || item.id || ''),
-      name: cleanHtml(item.name),
-      singer: formatArtists(item.artist),
-      album: cleanHtml(item.album),
-      albumName: cleanHtml(item.album),
-      interval: formatTime(item.duration),
-      source: 'kw',
-      songId: String(item.rid || item.id || ''),
-      musicId: String(item.rid || item.id || ''),
-      rid: String(item.rid || item.id || ''),
-      img: item.pic || item.albumpic || '',
-      picUrl: item.pic || item.albumpic || '',
-    })),
+    list: list.map(mapKwSong),
     total,
     page,
     allPage: Math.max(1, Math.ceil(total / limit)),
@@ -674,19 +715,7 @@ async function kwToplistDetail(id, page = 1, limit = 50) {
       updateTime: '',
       source: 'kw',
     },
-    list: list.map((item) => ({
-      id: String(item.rid || item.id || ''),
-      name: cleanHtml(item.name),
-      singer: formatArtists(item.artist),
-      album: cleanHtml(item.album),
-      interval: formatTime(item.duration),
-      source: 'kw',
-      songId: String(item.rid || item.id || ''),
-      musicId: String(item.rid || item.id || ''),
-      rid: String(item.rid || item.id || ''),
-      img: item.pic || '',
-      picUrl: item.pic || '',
-    })),
+    list: list.map(mapKwSong),
     total,
     page,
     source: 'kw',
@@ -702,24 +731,7 @@ async function kgNewSongs(_region = '', page = 1, limit = 27) {
   const list = data?.data?.info || []
   const total = data?.data?.total || list.length
   return {
-    list: list.map((item) => {
-      const parts = String(item.filename || '').split(' - ')
-      const singer = parts.length > 1 ? parts[0] : (item.singername || '')
-      const name = parts.length > 1 ? parts.slice(1).join(' - ') : (item.songname || item.filename || '')
-      return {
-        id: item.hash || item.album_audio_id,
-        name: cleanHtml(name),
-        singer: formatArtists(singer),
-        album: cleanHtml(item.album_name || ''),
-        interval: formatTime(item.duration),
-        source: 'kg',
-        hash: item.hash,
-        songId: item.hash,
-        albumAudioId: item.album_audio_id,
-        img: (item.album_sizable_cover || item.imgurl || '').replace('{size}', '400'),
-        picUrl: (item.album_sizable_cover || item.imgurl || '').replace('{size}', '400'),
-      }
-    }),
+    list: list.map(mapKgSong),
     total,
     page,
     allPage: Math.max(1, Math.ceil(total / limit)),
@@ -840,24 +852,7 @@ async function kgToplistDetail(id, page = 1, limit = 50) {
       updateTime: '',
       source: 'kg',
     },
-    list: list.map((item) => {
-      const parts = String(item.filename || '').split(' - ')
-      const singer = parts.length > 1 ? parts[0] : (item.singername || '')
-      const name = parts.length > 1 ? parts.slice(1).join(' - ') : (item.songname || item.filename || '')
-      return {
-        id: item.hash,
-        name: cleanHtml(name),
-        singer: formatArtists(singer),
-        album: cleanHtml(item.album_name || ''),
-        interval: formatTime(item.duration),
-        source: 'kg',
-        hash: item.hash,
-        songId: item.hash,
-        albumAudioId: item.album_audio_id,
-        img: (item.album_sizable_cover || '').replace('{size}', '400'),
-        picUrl: (item.album_sizable_cover || '').replace('{size}', '400'),
-      }
-    }),
+    list: list.map(mapKgSong),
     total,
     page,
     source: 'kg',
@@ -879,18 +874,7 @@ async function mgNewSongs(_region = '', page = 1, limit = 27) {
   for (const c of contents) {
     const o = c.objectInfo || c
     if (!o?.copyrightId && !o?.songId) continue
-    songs.push({
-      id: o.copyrightId || o.songId,
-      name: cleanHtml(o.songName || o.name),
-      singer: formatArtists((o.singerList || o.singers || []).map((s) => s.name).join('/') || o.singer),
-      album: cleanHtml(o.album || ''),
-      source: 'mg',
-      songId: o.copyrightId || o.songId,
-      copyrightId: o.copyrightId || '',
-      img: o.albumImg || o.img1 || '',
-      picUrl: o.albumImg || o.img1 || '',
-      interval: '',
-    })
+    songs.push(mapMgSong(o))
   }
   if (!songs.length) return unsupported(page)
   return { ...pageSlice(songs, page, limit), regions: [], region: '', source: 'mg' }
@@ -965,17 +949,7 @@ async function mgToplistDetail(id, page = 1, limit = 50) {
   for (const c of contents) {
     const o = c.objectInfo || c
     if (!o?.copyrightId && !o?.songId) continue
-    songs.push({
-      id: o.copyrightId || o.songId,
-      name: cleanHtml(o.songName || o.name),
-      singer: formatArtists((o.singerList || []).map((s) => s.name).join('/') || o.singer),
-      source: 'mg',
-      songId: o.copyrightId || o.songId,
-      copyrightId: o.copyrightId || '',
-      img: o.albumImg || '',
-      picUrl: o.albumImg || '',
-      interval: '',
-    })
+    songs.push(mapMgSong(o))
   }
   return {
     info: { id: String(id), name: '排行榜', cover: '', updateTime: '', source: 'mg' },

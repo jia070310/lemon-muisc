@@ -180,6 +180,9 @@ playRouter.post('/url', async (req, res) => {
 })
 
 function setLocalStreamHeaders(res, req) {
+  // 大文件串流期间禁止空闲超时（经 Vite 代理时尤其容易被掐断）
+  try { req.setTimeout?.(0) } catch {}
+  try { res.setTimeout?.(0) } catch {}
   const origin = req.headers.origin
   if (origin) {
     res.setHeader('Access-Control-Allow-Origin', origin)
@@ -211,9 +214,10 @@ playRouter.get('/local', (req, res) => {
       return res.status(400).json({ error: '缺少文件路径' })
     }
     try {
-      filePath = decodeURIComponent(filePath)
+      // URLSearchParams 常把空格编成 +；decodeURIComponent 不会还原
+      filePath = decodeURIComponent(String(filePath).replace(/\+/g, '%20'))
     } catch {
-      filePath = String(filePath)
+      filePath = String(filePath).replace(/\+/g, ' ')
     }
     if (!isAllowedMediaPath(filePath)) {
       return res.status(403).json({ error: '无权访问该文件' })
@@ -270,9 +274,9 @@ playRouter.get('/local-ape', async (req, res) => {
       return res.status(400).json({ error: '缺少文件路径' })
     }
     try {
-      filePath = decodeURIComponent(filePath)
+      filePath = decodeURIComponent(String(filePath).replace(/\+/g, '%20'))
     } catch {
-      filePath = String(filePath)
+      filePath = String(filePath).replace(/\+/g, ' ')
     }
     if (!isAllowedMediaPath(filePath)) {
       return res.status(403).json({ error: '无权访问该文件' })

@@ -113,9 +113,11 @@ server.on('error', (err) => {
   process.exit(1)
 })
 
-server.timeout = 120000
+// 本地大 FLAC / 代理串流可能超过 2 分钟；0 = 不因空闲掐断连接
+server.timeout = 0
+server.requestTimeout = 0
+server.headersTimeout = 0
 server.keepAliveTimeout = 65000
-server.headersTimeout = 66000
 
 server.listen(PORT, '::', () => {
   console.log(`Lemon Music running at http://[::]:${PORT} (IPv4+IPv6)`)

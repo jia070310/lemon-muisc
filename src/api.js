@@ -4,6 +4,8 @@ import { getToken, clearAuthSession } from './utils/auth.js'
 const BASE = '/api'
 const DEFAULT_TIMEOUT = 30000
 const MAX_CONCURRENT_REQUESTS = 6
+/** 后端 --watch 重启窗口常见：空响应 / 断连；GET 自动重试几次 */
+const DEFAULT_GET_RETRIES = 4
 
 let activeRequests = 0
 const requestWaitQueue = []
@@ -39,7 +41,26 @@ function releaseRequestSlot() {
   }
 }
 
-async function request(url, options = {}) {
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function isTransientRequestError(err) {
+  if (!err || err.aborted) return false
+  const msg = String(err.message || err || '')
+  return /服务器暂时无响应|服务器响应异常|无法连接服务器|Failed to fetch|NetworkError|network error|ECONNRESET|ECONNREFUSED|socket hang|proxy error|请求超时/i.test(msg)
+}
+
+function resolveRetryCount(url, options) {
+  if (typeof options.retries === 'number') return Math.max(0, options.retries)
+  const method = String(options.method || 'GET').toUpperCase()
+  if (method !== 'GET' && method !== 'HEAD') return 0
+  // 鉴权类不自动重试，避免拖慢登录失败提示
+  if (String(url).startsWith('/auth/')) return 0
+  return DEFAULT_GET_RETRIES
+}
+
+async function requestOnce(url, options = {}) {
   await acquireRequestSlot()
   const controller = new AbortController()
   const timeoutMs = options.timeout || DEFAULT_TIMEOUT
@@ -54,7 +75,7 @@ async function request(url, options = {}) {
   const token = getToken()
 
   try {
-    const { signal: _signal, timeout: _timeout, body, ...rest } = options
+    const { signal: _signal, timeout: _timeout, retries: _retries, body, ...rest } = options
     const res = await fetch(BASE + url, {
       headers: {
         'Content-Type': 'application/json',
@@ -70,7 +91,14 @@ async function request(url, options = {}) {
     try {
       data = await res.json()
     } catch {
-      throw new Error('服务器响应异常')
+      // Vite 代理在后端重启时常见：空 body / HTML 502
+      const err = new Error(
+        res.status >= 500 || res.status === 0
+          ? '服务器暂时无响应，请稍后重试'
+          : '服务器响应异常',
+      )
+      err.transient = true
+      throw err
     }
 
     if (res.status === 401 && data.code === 'UNAUTHORIZED' && !url.startsWith('/auth/')) {
@@ -82,6 +110,7 @@ async function request(url, options = {}) {
       const err = new Error(formatUserError(data.error || '请求失败', '请求失败，请稍后重试'))
       if (data.code) err.code = data.code
       if (data.sourceFallbackOffer) err.sourceFallbackOffer = data.sourceFallbackOffer
+      if (res.status >= 502 && res.status <= 504) err.transient = true
       throw err
     }
     return data
@@ -92,17 +121,44 @@ async function request(url, options = {}) {
         err.aborted = true
         throw err
       }
-      throw new Error('请求超时，请检查服务是否正常运行')
+      const err = new Error('请求超时，请检查服务是否正常运行')
+      err.transient = true
+      throw err
     }
-    if (e.message === 'Failed to fetch') throw new Error('无法连接服务器，请确认后端已启动')
+    if (e.message === 'Failed to fetch') {
+      const err = new Error('无法连接服务器，请确认后端已启动')
+      err.transient = true
+      throw err
+    }
+    if (e instanceof Error && e.transient) throw e
     if (e instanceof Error && /[\u4e00-\u9fff]/.test(e.message) && !/socket hang|Failed to fetch|ECONN/i.test(e.message)) {
       throw e
     }
-    throw new Error(formatUserError(e, '请求失败，请稍后重试'))
+    const err = new Error(formatUserError(e, '请求失败，请稍后重试'))
+    if (isTransientRequestError(e) || isTransientRequestError(err)) err.transient = true
+    throw err
   } finally {
     clearTimeout(timeout)
     releaseRequestSlot()
   }
+}
+
+async function request(url, options = {}) {
+  const retries = resolveRetryCount(url, options)
+  let lastError = null
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await requestOnce(url, options)
+    } catch (e) {
+      lastError = e
+      if (e?.aborted || options.signal?.aborted) throw e
+      const canRetry = attempt < retries && (e?.transient || isTransientRequestError(e))
+      if (!canRetry) throw e
+      // 后端 --watch 重启 + 音源加载通常约 1–3s
+      await sleep(400 * (2 ** attempt) + Math.floor(Math.random() * 250))
+    }
+  }
+  throw lastError || new Error('请求失败，请稍后重试')
 }
 
 export const api = {

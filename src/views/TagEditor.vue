@@ -480,10 +480,15 @@
                 @click="applyCheckSuggestion('artist')"
               >采用建议</button>
             </span>
-            <input v-model="editForm.artist" @input="onSuspectFieldInput('artist')" />
+            <input
+              v-model="editForm.artist"
+              placeholder="多歌手用 / 分隔，如：周杰伦 / 费玉清"
+              @input="onSuspectFieldInput('artist')"
+            />
             <span v-if="isFieldSuspect('artist') && tagCheckResult?.suggested?.artist" class="suspect-tip">
               建议：{{ tagCheckResult.suggested.artist }}
             </span>
+            <span class="field-hint">多歌手用「 / 」分隔；FLAC 写入多值，其它格式写展示串</span>
           </label>
           <label :class="{ 'field-suspect': isFieldSuspect('album') }">
             <span class="field-label-row">
@@ -2968,6 +2973,12 @@ tr.playing .play-btn,
   font-size: 11px;
   color: #f59e0b;
   margin-top: 2px;
+}
+.field-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+  line-height: 1.4;
 }
 .cell-suspect {
   color: #f59e0b !important;

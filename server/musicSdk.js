@@ -392,10 +392,22 @@ function formatArtists(str) {
   let s = cleanHtml(str)
   if (!s) return ''
   s = s.replace(/\\&/g, '&')
-  const parts = s.split(/(?:\s*&\s*|\s*\/\s*|;|、|，|,|\|)+/)
+  if (s.includes('\0')) {
+    return s.split('\0').map((p) => p.trim()).filter(Boolean).join(' / ')
+  }
+  const parts = s.split(/(?:\s*\/\s*|\s*[;|]\s*|\s*[&＆]\s*|、|，|,)+/)
     .map((p) => p.trim())
     .filter(Boolean)
-  return parts.length > 1 ? parts.join(' ') : s
+  if (!parts.length) return s
+  const seen = new Set()
+  const uniq = []
+  for (const p of parts) {
+    const key = p.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    uniq.push(p)
+  }
+  return uniq.join(' / ')
 }
 
 function formatSize(bytes) {
@@ -559,6 +571,39 @@ function withTypes(base, types) {
     types: ordered,
     qualitys: ordered.map(t => t.type).filter(Boolean),
   }
+}
+
+/**
+ * 给已映射歌曲挂上 types/qualitys（发现页新歌/榜单等复用）。
+ * 优先解析音源返回的分档体积；接口未带体积时给出常见可取链档位（无 size），避免下载菜单空态。
+ */
+export function attachSongTypes(source, rawItem, mapped, { fallback = true } = {}) {
+  const raw = rawItem && typeof rawItem === 'object' ? rawItem : {}
+  let types = []
+  if (source === 'tx') {
+    types = parseTxTypes(raw)
+  } else if (source === 'wy') {
+    types = parseWyTypes(raw)
+  } else if (source === 'kw') {
+    types = parseKwTypes(raw)
+  } else if (source === 'kg') {
+    const audio = raw.audio_info || raw.audioInfo || {}
+    types = parseKgTypes({
+      FileSize: audio.filesize || raw.filesize || raw.FileSize,
+      HQFileSize: audio.filesize_320 || raw.filesize_320 || raw['320filesize'] || raw.HQFileSize,
+      SQFileSize: audio.filesize_flac || raw.filesize_flac || raw.sqfilesize || raw.SQFileSize,
+      ResFileSize: audio.filesize_high || raw.filesize_high || raw.ResFileSize,
+    })
+    const hash = mapped?.hash || raw.hash || raw.FileHash || ''
+    if (hash && types.length) types[0].hash = hash
+  } else if (source === 'mg') {
+    types = parseMgTypes(raw)
+  }
+
+  if (!types.length && fallback) {
+    types = buildTypes({ flac: true, '320k': true, '128k': true })
+  }
+  return withTypes(mapped, types)
 }
 
 function formatTime(seconds) {

@@ -55,8 +55,6 @@
         :unsupported="discoverState.newSongsUnsupported"
         :region="discoverState.songRegion"
         :regions="discoverState.newSongsRegions"
-        :is-playing="(item) => isPlayingItem(item)"
-        :is-paused="isPaused"
         @update:region="changeSongRegion"
         @play="playHomeSong"
         @play-all="playHomeSongs"
@@ -141,18 +139,25 @@
             >
               {{ batchDownloading ? '添加中...' : `批量下载${selectedCount ? ` (${selectedCount})` : ''}` }}
             </button>
-            <div class="quality-menu" v-if="showBatchQualityMenu" :style="batchMenuStyle" @click.stop>
-              <div class="quality-menu-title">批量音质：仅列出所选歌曲实际支持的音质</div>
-              <template v-if="batchQualities.length">
-                <button
-                  v-for="q in batchQualities"
-                  :key="q"
-                  class="quality-option"
-                  @click="downloadSelected(q)"
-                >{{ getQualityLabel(q) }}</button>
-              </template>
-              <div v-else class="quality-empty">所选歌曲暂无可用音质信息</div>
-            </div>
+            <Teleport to="body">
+              <div
+                class="quality-menu discover-batch-quality-menu"
+                v-if="showBatchQualityMenu"
+                :style="batchMenuStyle"
+                @click.stop
+              >
+                <div class="quality-menu-title">批量音质：仅列出所选歌曲实际支持的音质</div>
+                <template v-if="batchQualities.length">
+                  <button
+                    v-for="q in batchQualities"
+                    :key="q"
+                    class="quality-option"
+                    @click="downloadSelected(q)"
+                  >{{ getQualityLabel(q) }}</button>
+                </template>
+                <div v-else class="quality-empty">所选歌曲暂无可用音质信息</div>
+              </div>
+            </Teleport>
           </div>
           <button
             class="btn-ghost btn-sm"
@@ -710,11 +715,17 @@ function goRanksMore() {
   })
 }
 
+let homePlayLock = false
+
 async function playHomeSong(item) {
+  if (!item || homePlayLock) return
+  homePlayLock = true
   try {
     await playItem(item, item.source || activeSource.value)
   } catch (e) {
     showToast(e.message || '试听失败', 'error')
+  } finally {
+    homePlayLock = false
   }
 }
 
@@ -846,7 +857,7 @@ function toggleBatchQualityMenu(event) {
   if (!selectedCount.value) return
   showBatchQualityMenu.value = !showBatchQualityMenu.value
   if (showBatchQualityMenu.value) {
-    positionBatchMenu(event?.currentTarget, { align: 'left' })
+    positionBatchMenu(event?.currentTarget, { align: 'left', zIndex: 120 })
   } else {
     clearBatchMenuPosition()
   }
@@ -1434,7 +1445,8 @@ function showToast(text, type = 'info') {
 .col-name { font-weight: 500; }
 
 .dl-wrap { position: relative; display: inline-block; }
-.quality-menu {
+.quality-menu,
+.discover-batch-quality-menu {
   min-width: 160px;
   max-height: min(280px, 50vh);
   overflow-y: auto;
@@ -1443,13 +1455,15 @@ function showToast(text, type = 'info') {
   border-radius: var(--radius);
   box-shadow: var(--shadow);
 }
-.quality-menu-title {
+.quality-menu-title,
+.discover-batch-quality-menu .quality-menu-title {
   padding: 8px 12px;
   font-size: 11px;
   color: var(--text-muted);
   border-bottom: 1px solid var(--border-light);
 }
-.quality-option {
+.quality-option,
+.discover-batch-quality-menu .quality-option {
   display: block;
   width: 100%;
   padding: 8px 12px;
@@ -1460,7 +1474,8 @@ function showToast(text, type = 'info') {
   border: none;
   border-radius: 0;
 }
-.quality-option:hover { background: var(--bg-hover); color: var(--accent); }
+.quality-option:hover,
+.discover-batch-quality-menu .quality-option:hover { background: var(--bg-hover); color: var(--accent); }
 .quality-empty { padding: 10px 12px; font-size: 13px; color: var(--text-muted); }
 
 .spin { animation: spin 1s linear infinite; }

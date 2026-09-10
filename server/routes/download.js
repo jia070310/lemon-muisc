@@ -6,6 +6,7 @@ import { broadcast } from '../ws.js'
 import { requestSourceWithMeta, hasActiveSource } from '../sourceManager.js'
 import { getStoredActiveSourceIds } from '../utils/activeSources.js'
 import { writeMeta } from '../meta.js'
+import { joinArtists } from '../utils/artistTag.js'
 import { buildMusicInfoFromTask } from '../utils/musicInfo.js'
 import { buildEmbedLyrics } from '../utils/lyric.js'
 import { getDownloadSavePath } from '../utils/filePaths.js'
@@ -1570,7 +1571,7 @@ async function writeMetaIfNeeded(task, meta, filePath, ext, settings) {
   if (canEmbed && (wantEmbedPic || wantEmbedLyric)) {
     const metaData = {
       title: task.name || '',
-      artist: (task.singer || '').replace(/\//g, ';'),
+      artist: joinArtists(task.singer || ''),
       album: task.album || '',
     }
     if (wantEmbedPic && picBuf) metaData.pic = picBuf

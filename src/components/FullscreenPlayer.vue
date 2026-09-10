@@ -349,7 +349,7 @@ function closeDownloadMenu() {
 
 function toggleDownloadMenu(event) {
   downloadMenuOpen.value = !downloadMenuOpen.value
-  if (downloadMenuOpen.value) positionDownloadMenu(event?.currentTarget, { zIndex: 10050 })
+  if (downloadMenuOpen.value) positionDownloadMenu(event?.currentTarget, { zIndex: 10050, preferUp: true })
   else clearDownloadMenuPosition()
 }
 

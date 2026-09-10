@@ -15,7 +15,20 @@
         class="swipe-slide"
         :style="slideStyle"
       >
-        <slot :page="page - 1" />
+        <!-- 只挂载当前页及相邻页，避免发现首页一次渲染几十张封面导致播放时卡死/崩溃 -->
+        <div
+          v-if="shouldRenderPage(page - 1)"
+          class="swipe-slide-body"
+          :ref="(el) => setSlideBodyRef(page - 1, el)"
+        >
+          <slot :page="page - 1" />
+        </div>
+        <div
+          v-else
+          class="swipe-slide-placeholder"
+          :style="{ minHeight: `${Math.max(contentHeight, 120)}px` }"
+          aria-hidden="true"
+        />
       </div>
     </div>
   </div>
@@ -37,6 +50,7 @@ const width = ref(0)
 const dragOffset = ref(0)
 const dragging = ref(false)
 const animating = ref(false)
+const contentHeight = ref(180)
 
 let startX = 0
 let startY = 0
@@ -48,6 +62,8 @@ let listening = false
 let pendingPage = null
 let suppressClick = false
 let resizeObserver = null
+/** @type {Map<number, Element>} */
+const slideBodies = new Map()
 
 const trackStyle = computed(() => {
   const x = -props.modelValue * width.value + dragOffset.value
@@ -64,11 +80,31 @@ const slideStyle = computed(() => ({
   flex: width.value ? `0 0 ${width.value}px` : '0 0 100%',
 }))
 
+function shouldRenderPage(page) {
+  const cur = props.modelValue
+  if (Math.abs(page - cur) <= 1) return true
+  if (pendingPage != null && Math.abs(page - pendingPage) <= 1) return true
+  return false
+}
+
+function setSlideBodyRef(page, el) {
+  if (el) slideBodies.set(page, el)
+  else slideBodies.delete(page)
+}
+
+function syncContentHeight() {
+  const el = slideBodies.get(props.modelValue) || [...slideBodies.values()][0]
+  if (!el) return
+  const h = el.getBoundingClientRect().height
+  if (h > 40) contentHeight.value = Math.round(h)
+}
+
 function measure() {
   const el = viewportRef.value
   if (!el) return
   const next = el.clientWidth
   if (next > 0) width.value = next
+  syncContentHeight()
 }
 
 function clampPage(page) {
@@ -185,6 +221,7 @@ function finishPending() {
   if (target != null && target !== props.modelValue) {
     emit('update:modelValue', target)
   }
+  nextTick(syncContentHeight)
 }
 
 function settle(velocity = 0) {
@@ -235,6 +272,7 @@ watch(() => props.modelValue, (next, prev) => {
   nextTick(() => {
     animating.value = true
     dragOffset.value = 0
+    nextTick(syncContentHeight)
   })
 })
 
@@ -262,6 +300,7 @@ onUnmounted(() => {
   el?.removeEventListener('pointerdown', onPointerDown)
   el?.removeEventListener('click', onClickCapture, true)
   resizeObserver?.disconnect()
+  slideBodies.clear()
 })
 </script>
 
@@ -282,5 +321,12 @@ onUnmounted(() => {
 .swipe-slide {
   min-width: 0;
   box-sizing: border-box;
+}
+.swipe-slide-body,
+.swipe-slide-placeholder {
+  width: 100%;
+}
+.swipe-slide-placeholder {
+  pointer-events: none;
 }
 </style>

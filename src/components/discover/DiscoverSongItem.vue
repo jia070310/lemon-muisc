@@ -210,15 +210,14 @@ onUnmounted(() => {
   color: #fff;
   z-index: 4;
   border-radius: inherit;
-  transition: background 0.18s ease, backdrop-filter 0.18s ease;
-  backdrop-filter: saturate(1);
+  transition: background 0.18s ease;
+  /* 不用 backdrop-filter：发现页封面多，叠加滤镜易导致 GPU/页面崩溃 */
 }
 .song-play-overlay svg {
   transition: transform 0.22s ease, opacity 0.18s ease;
 }
 .song-cover-btn.rippling .song-play-overlay {
   background: color-mix(in srgb, var(--accent) 48%, rgba(0, 0, 0, 0.26));
-  backdrop-filter: saturate(1.35);
 }
 .song-cover-btn.rippling .song-play-overlay svg {
   transform: scale(1.28);

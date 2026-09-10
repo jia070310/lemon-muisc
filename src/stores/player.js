@@ -1869,9 +1869,8 @@ async function startPlaybackFromUrl(url, { resumeTime = 0, item, source, isLocal
   applyAudioCrossOrigin(audio, url)
   audio.src = authedUrl
   hasMediaSrc = true
-  if (audio.readyState < 2) {
-    await waitForAudioReady(authedUrl, { isLocal })
-  }
+  // 换源后务必等待就绪；勿用旧 readyState 跳过，否则本地大 FLAC 会假播放卡在 00:00
+  await waitForAudioReady(authedUrl, { isLocal })
 
   applyAudioOutput()
   if (resumeTime > 0) {
@@ -1885,6 +1884,7 @@ async function startPlaybackFromUrl(url, { resumeTime = 0, item, source, isLocal
 
   unlockAudioFromGesture()
   try {
+    await ensureAudioContextRunning()
     await audio.play()
   } catch (playErr) {
     if (playErr?.name === 'NotAllowedError') {
@@ -1894,6 +1894,8 @@ async function startPlaybackFromUrl(url, { resumeTime = 0, item, source, isLocal
   }
 
   clearPlaybackError()
+  endPlaybackBuffer()
+  isPaused.value = false
   applyAudioOutput()
   rememberLoadedPlayUrl(item, source, url, DEFAULT_PLAY_QUALITY)
   if (visualizerEnabled.value) {
@@ -2082,8 +2084,8 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 }
   const isLocal = isLocalTrack(item, source)
   currentPlayPlatform.value = isLocal ? '' : String(source || item.source || '')
   const quality = DEFAULT_PLAY_QUALITY
-  // 在线链容易过期；失败后清缓存 + 重建 Audio，再取新链
-  const maxAttempts = 2
+  // 在线链容易过期；本地流经 Vite 代理偶发 ECONNRESET。失败后清缓存 + 重建 Audio 再试
+  const maxAttempts = isLocal ? 3 : 2
   const audioBrokenAtStart = Boolean(audio?.error)
 
   try {
@@ -2092,6 +2094,9 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 }
       if (intent !== playIntentToken) return
       if (attempt > 0 || audioBrokenAtStart) {
         recoverPlaybackPipeline(trackKey, item, source, quality)
+        if (isLocal && attempt > 0) {
+          await new Promise((r) => setTimeout(r, 250 * attempt))
+        }
       }
 
       try {
@@ -2194,8 +2199,8 @@ function getAudioElementError(el = audio) {
 function isRetryablePlayError(error) {
   const text = String(error?.message || error || '')
   if (error?.aborted || isBenignPlayInterrupt(error)) return false
-  return /播放链接失效|无法播放该音频|无法解码|音频加载超时|网络异常|音频解码失败|音频加载失败|获取播放链接失败/i.test(text)
-    || /NotSupportedError|no supported sources|MEDIA_ERR_SRC_NOT_SUPPORTED/i.test(text)
+  return /播放链接失效|无法播放该音频|无法解码|音频加载超时|本地音频加载超时|网络异常|音频加载被中止|音频解码失败|音频加载失败|获取播放链接失败/i.test(text)
+    || /NotSupportedError|no supported sources|MEDIA_ERR_SRC_NOT_SUPPORTED|MEDIA_ERR_NETWORK|MEDIA_ERR_ABORTED/i.test(text)
 }
 
 function isBenignPlayInterrupt(error) {
@@ -2205,10 +2210,13 @@ function isBenignPlayInterrupt(error) {
 }
 
 function waitForAudioReady(expectedUrl = '', { isLocal = false } = {}) {
-  const timeoutMs = isLocal ? 20000 : 8000
+  const timeoutMs = isLocal ? 45000 : 8000
+  /** 本地大文件需等到有可播数据；仅 metadata 就 play 容易一直卡在 00:00 */
+  const minReady = isLocal ? 2 : 1
   return new Promise((resolve, reject) => {
     if (!audio) { resolve(); return }
-    if (audio.readyState >= 1 && !audio.error) {
+    const matchesExpected = () => !expectedUrl || urlsMatch(audio.src, expectedUrl)
+    if (matchesExpected() && audio.readyState >= minReady && !audio.error) {
       syncDurationFromAudio()
       resolve()
       return
@@ -2216,9 +2224,10 @@ function waitForAudioReady(expectedUrl = '', { isLocal = false } = {}) {
     let settled = false
     const isStale = () => expectedUrl && audio && !urlsMatch(audio.src, expectedUrl)
     const cleanup = () => {
-      audio?.removeEventListener('loadedmetadata', finish)
-      audio?.removeEventListener('canplay', finish)
-      audio?.removeEventListener('durationchange', finish)
+      audio?.removeEventListener('loadedmetadata', onMaybeReady)
+      audio?.removeEventListener('canplay', onMaybeReady)
+      audio?.removeEventListener('canplaythrough', onMaybeReady)
+      audio?.removeEventListener('durationchange', onMaybeReady)
       audio?.removeEventListener('error', onError)
     }
     const fail = (err) => {
@@ -2237,16 +2246,18 @@ function waitForAudioReady(expectedUrl = '', { isLocal = false } = {}) {
         fail(Object.assign(new Error('播放已取消'), { aborted: true }))
         return
       }
-      settled = true
-      cleanup()
       if (audio.error) {
         const detail = getAudioElementError(audio)
         fail(new Error(detail || '音频加载失败，请尝试其他歌曲'))
         return
       }
+      if (audio.readyState < minReady) return
+      settled = true
+      cleanup()
       syncDurationFromAudio()
       resolve()
     }
+    const onMaybeReady = () => { finish() }
     const onError = () => {
       if (isStale()) {
         fail(Object.assign(new Error('播放已取消'), { aborted: true }))
@@ -2255,9 +2266,10 @@ function waitForAudioReady(expectedUrl = '', { isLocal = false } = {}) {
       const detail = getAudioElementError(audio)
       fail(new Error(detail || '音频加载失败，请尝试其他歌曲'))
     }
-    audio.addEventListener('loadedmetadata', finish)
-    audio.addEventListener('canplay', finish)
-    audio.addEventListener('durationchange', finish)
+    audio.addEventListener('loadedmetadata', onMaybeReady)
+    audio.addEventListener('canplay', onMaybeReady)
+    audio.addEventListener('canplaythrough', onMaybeReady)
+    audio.addEventListener('durationchange', onMaybeReady)
     audio.addEventListener('error', onError)
     setTimeout(() => {
       if (settled) return
@@ -2269,7 +2281,7 @@ function waitForAudioReady(expectedUrl = '', { isLocal = false } = {}) {
         onError()
         return
       }
-      if (audio.readyState >= 1) finish()
+      if (audio.readyState >= minReady) finish()
       else fail(new Error(isLocal ? '本地音频加载超时，请检查文件是否存在或路径是否有效' : '音频加载超时，请检查网络或文件路径'))
     }, timeoutMs)
   })
@@ -2316,7 +2328,16 @@ export async function togglePause() {
   if (!currentPlaying.value) return
   unlockAudioFromGesture()
 
+  // 缓冲中再点：已有媒体则按「暂停」处理；尚未就绪才取消整次加载
   if (isBuffering.value) {
+    if (hasPlayableAudioSrc()) {
+      try { audio.pause() } catch {}
+      endPlaybackBuffer()
+      isPaused.value = true
+      syncMediaSessionPlaybackState()
+      saveQueueState()
+      return
+    }
     cancelPlaybackIntent()
     syncMediaSessionPlaybackState()
     saveQueueState()
@@ -2334,13 +2355,17 @@ export async function togglePause() {
     }
     return
   }
-  if (audio.paused) {
+  if (audio.paused || isPaused.value) {
     beginPlaybackBuffer()
     applyAudioOutput()
     try {
       unlockAudioFromGesture()
+      // 暂停后 AudioContext 可能仍是 suspended，续播前先拉起
+      await ensureAudioContextRunning()
       await audio.play()
       clearPlaybackError()
+      // 勿只等 playing 事件：本地流/代理偶发不触发时 UI 会一直卡在缓冲（显示暂停图标却无声）
+      endPlaybackBuffer()
       isPaused.value = false
       saveQueueState()
       if (visualizerEnabled.value) {
