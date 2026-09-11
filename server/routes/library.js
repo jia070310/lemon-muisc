@@ -204,7 +204,6 @@ libraryRouter.post('/delete-files', (req, res) => {
     const list = Array.isArray(raw) ? raw : (raw ? [raw] : [])
     const filePaths = [...new Set(list.map((p) => String(p || '').trim()).filter(Boolean))]
     if (!filePaths.length) return res.status(400).json({ error: '请指定要删除的文件' })
-    if (filePaths.length > 50) return res.status(400).json({ error: '单次最多删除 50 个文件' })
 
     const deleted = []
     const failed = []
@@ -334,15 +333,13 @@ function assertOrganizeTargetAllowed(targetDir) {
   const musicDirs = getMusicPaths().filter(Boolean)
   for (const dir of musicDirs) {
     const base = path.resolve(dir)
-    // 目标 = 音乐库根 → 会把全部文件视为"已在目录内"，无意义
-    if (resolved === base) {
-      throw new Error('目标目录不能是音乐库根目录本身，请使用其子目录或新的外部目录')
-    }
-    // 目标是音乐库根的上层目录 → 同样会把全部文件视为"已在目录内"
+    // 目标是音乐库根的上层目录 → 会把全部文件视为"已在目录内"，且可能越权扫全盘
     if (base.startsWith(resolved + path.sep)) {
       throw new Error('目标目录不能是音乐库目录的上层目录')
     }
   }
+  // 目标目录等于某音乐库根（含整理成功后自动加入音乐库的目标目录）是允许的：
+  // 整理是文件级移动，已在目标目录内的文件由 resolveOrganizeFiles/skip 单独判断（"已在目标目录内"），不会误整。
   return resolved
 }
 
