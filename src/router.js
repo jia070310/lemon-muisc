@@ -21,13 +21,17 @@ const routes = [
   { path: '/discover/new-albums', name: 'DiscoverNewAlbums', component: () => import('./views/DiscoverNewAlbums.vue') },
   { path: '/discover/ranks', name: 'DiscoverRanks', component: () => import('./views/DiscoverRanks.vue') },
   { path: '/library', name: 'Library', component: () => import('./views/Library.vue') },
+  { path: '/library/search', name: 'LibrarySearch', component: () => import('./views/LibrarySearch.vue') },
   { path: '/library/playlists', name: 'LibraryPlaylists', component: () => import('./views/LibraryPlaylists.vue') },
   { path: '/library/album', name: 'LibraryAlbum', component: () => import('./views/LibraryAlbum.vue') },
   { path: '/library/albums', name: 'LibraryAlbums', component: () => import('./views/LibraryAlbums.vue') },
   { path: '/library/genres', name: 'LibraryGenres', component: () => import('./views/LibraryGenres.vue') },
   { path: '/library/genre', name: 'LibraryGenre', component: () => import('./views/LibraryGenre.vue') },
+  { path: '/library/artists', name: 'LibraryArtists', component: () => import('./views/LibraryArtists.vue') },
+  { path: '/library/artist', name: 'LibraryArtist', component: () => import('./views/LibraryArtist.vue') },
   { path: '/download', name: 'Download', component: () => import('./views/Download.vue') },
-  { path: '/tag', name: 'Tag', component: () => import('./views/TagEditor.vue') },
+  { path: '/file-manager', name: 'FileManager', component: () => import('./views/FileManager.vue') },
+  { path: '/tag', redirect: { path: '/file-manager', query: { tab: 'tag' } } },
   { path: '/tag/track', name: 'TagEditTrack', component: () => import('./views/TagEditTrack.vue') },
   { path: '/settings', name: 'Settings', component: () => import('./views/Settings.vue') },
   { path: '/about', name: 'About', component: () => import('./views/About.vue') },
@@ -70,7 +74,7 @@ router.beforeEach(async (to, from) => {
     return { name: 'Setup', query: { redirect: to.fullPath } }
   }
 
-  if (!getToken()) {
+  if (!getToken() && !isSessionValid.value) {
     finishRouteLoading()
     return { name: 'Login', query: { redirect: to.fullPath } }
   }

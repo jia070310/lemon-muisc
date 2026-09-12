@@ -1,58 +1,36 @@
 <template>
-  <div class="library-genre-page">
+  <div class="library-artist-page">
     <div class="page-header-row">
       <button class="btn-ghost btn-sm" @click="$router.back()">← 返回</button>
-      <div class="page-title">音乐风格</div>
+      <div class="page-title">歌手</div>
     </div>
 
     <div v-if="libraryLoading && !libraryTracks.length" class="loading card">正在加载音乐库…</div>
-    <div v-else-if="!genre" class="empty card">
-      <p>未找到该风格</p>
-      <router-link to="/library/genres" class="btn-ghost btn-sm">浏览全部风格</router-link>
+    <div v-else-if="!artist" class="empty card">
+      <p>未找到该歌手</p>
+      <router-link to="/library/artists" class="btn-ghost btn-sm">浏览全部歌手</router-link>
     </div>
     <template v-else>
-      <section class="genre-hero card" :style="heroStyle">
-        <div class="genre-hero-cover">
-          <CoverArt :src="genre.cover" />
+      <section class="artist-hero card">
+        <div class="artist-hero-cover">
+          <CoverArt v-if="artist.cover" :src="artist.cover" />
+          <div v-else class="artist-avatar-fallback">{{ artistInitial(artist.name) }}</div>
         </div>
-        <div class="genre-hero-info">
-          <p class="genre-hero-label">风格</p>
-          <h1 class="genre-hero-title">{{ genre.name }}</h1>
-          <p class="genre-hero-meta">{{ genre.trackCount }} 首 · {{ genre.artistCount }} 位歌手</p>
-          <div class="genre-hero-actions">
-            <button class="btn-primary btn-sm" :disabled="!genre.tracks.length" @click="playAll">播放全部</button>
-            <button class="btn-ghost btn-sm" :disabled="!genre.tracks.length" @click="shufflePlay">随机混合</button>
-            <button class="btn-ghost btn-sm" :disabled="!genre.tracks.length" @click="queueAll">加入试听列表</button>
+        <div class="artist-hero-info">
+          <p class="artist-hero-label">歌手</p>
+          <h1 class="artist-hero-title">{{ artist.name }}</h1>
+          <p class="artist-hero-meta">{{ artist.trackCount }} 首 · {{ artist.albumCount }} 张专辑</p>
+          <div class="artist-hero-actions">
+            <button class="btn-primary btn-sm" :disabled="!artist.tracks.length" @click="playAll">播放全部</button>
+            <button class="btn-ghost btn-sm" :disabled="!artist.tracks.length" @click="shufflePlay">随机播放</button>
+            <button class="btn-ghost btn-sm" :disabled="!artist.tracks.length" @click="queueAll">加入试听列表</button>
           </div>
-        </div>
-      </section>
-
-      <section class="for-you card" v-if="genre.tracks.length">
-        <h2 class="section-title">为您</h2>
-        <div class="mix-cards">
-          <button type="button" class="mix-card mix-card-main" :style="mixMainStyle" @click="shufflePlay">
-            <div class="mix-card-icon">♪</div>
-            <div class="mix-card-text">
-              <div class="mix-card-title">随机混合</div>
-              <div class="mix-card-desc">从「{{ genre.name }}」中随机播放</div>
-            </div>
-            <span class="mix-card-play">
-              <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><polygon points="8,5 19,12 8,19"/></svg>
-            </span>
-          </button>
-          <button type="button" class="mix-card" @click="playAll">
-            <div class="mix-card-icon subtle">▶</div>
-            <div class="mix-card-text">
-              <div class="mix-card-title">顺序播放</div>
-              <div class="mix-card-desc">按最近添加排序</div>
-            </div>
-          </button>
         </div>
       </section>
 
       <section class="tracks-panel card">
         <h2 class="section-title">歌曲</h2>
-        <div v-if="!genre.tracks.length" class="detail-empty">该风格下暂无歌曲</div>
+        <div v-if="!artist.tracks.length" class="detail-empty">该歌手暂无歌曲</div>
         <template v-else>
           <div class="track-list">
             <div
@@ -90,8 +68,14 @@
               </button>
               <div class="track-meta">
                 <div class="track-name">{{ song.name }}</div>
-                <div class="track-artist">{{ song.singer }}</div>
-                <div class="track-tags">{{ formatTrackTags(song) }}</div>
+                <div class="track-artist">
+                  <span>{{ song.singer }}</span>
+                  <template v-if="song.album && song.album !== '未知专辑'">
+                    <span class="track-album-sep">·</span>
+                    <span class="track-album">{{ song.album }}</span>
+                  </template>
+                </div>
+                <div class="track-path" :title="trackPath(song)">{{ trackPath(song) }}</div>
               </div>
               <MobileRowActions
                 :open="actionsOpenKey === song.key"
@@ -141,7 +125,6 @@
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from '../api.js'
-import { formatTrackTags } from '../utils/format.js'
 import PickPlaylistModal from '../components/PickPlaylistModal.vue'
 import CoverArt from '../components/CoverArt.vue'
 import MobileRowActions from '../components/MobileRowActions.vue'
@@ -150,15 +133,14 @@ import {
   libraryTracks,
   libraryLoading,
   libraryScanned,
-  findGenreById,
-  getGenreTheme,
+  findArtistById,
   scanLibrary,
   isFavorite,
   toggleFavorite,
 } from '../stores/library.js'
 
 const route = useRoute()
-const genreId = ref('')
+const artistId = ref('')
 const page = ref(1)
 const pageSize = 30
 const hoverKey = ref('')
@@ -174,30 +156,20 @@ const toast = ref(null)
 const pickPlaylistTrack = ref(null)
 let narrowMq = null
 
-const genre = computed(() => findGenreById(libraryTracks.value, genreId.value))
-const theme = computed(() => genre.value?.theme || getGenreTheme(genre.value?.name || ''))
-const heroStyle = computed(() => ({
-  borderColor: theme.value.border,
-  background: `linear-gradient(135deg, ${theme.value.bg} 0%, var(--bg-card, var(--bg-elevated)) 55%)`,
-}))
-const mixMainStyle = computed(() => ({
-  borderColor: theme.value.border,
-  background: `linear-gradient(135deg, ${theme.value.bg} 0%, rgba(0,0,0,0.04) 100%)`,
-  '--genre-accent': theme.value.border,
-}))
-const totalPages = computed(() => Math.max(1, Math.ceil((genre.value?.tracks.length || 0) / pageSize)))
+const artist = computed(() => findArtistById(libraryTracks.value, artistId.value))
+const totalPages = computed(() => Math.max(1, Math.ceil((artist.value?.tracks.length || 0) / pageSize)))
 const listStart = computed(() => (page.value - 1) * pageSize)
 const pagedTracks = computed(() => {
-  const tracks = genre.value?.tracks || []
+  const tracks = artist.value?.tracks || []
   return tracks.slice(listStart.value, listStart.value + pageSize)
 })
 
 watch(() => route.query.id, (id) => {
-  genreId.value = id ? String(id) : ''
+  artistId.value = id ? String(id) : ''
   page.value = 1
 })
 
-watch(genreId, () => {
+watch(artistId, () => {
   page.value = 1
 })
 
@@ -209,7 +181,7 @@ onMounted(async () => {
   narrowMq = window.matchMedia('(max-width: 768px)')
   updateNarrow()
   narrowMq.addEventListener('change', updateNarrow)
-  if (route.query.id) genreId.value = String(route.query.id)
+  if (route.query.id) artistId.value = String(route.query.id)
   if (!libraryScanned.value) {
     try { await scanLibrary(api, { resync: true }) } catch {}
   }
@@ -232,6 +204,10 @@ function trackPayload(song) {
     picUrl: song.picUrl,
     lyric: song.lyric,
   }
+}
+
+function trackPath(song) {
+  return String(song?.localPath || song?.filePath || '').trim()
 }
 
 function isPlayingSong(song) {
@@ -281,19 +257,19 @@ async function onTrackCoverClick(song) {
 }
 
 async function playAll() {
-  const list = genre.value?.tracks || []
+  const list = artist.value?.tracks || []
   if (!list.length) return
   for (const s of list) addToQueue(trackPayload(s), 'local')
   try {
     await playItem(trackPayload(list[0]), 'local')
-    showToast(`开始播放：${genre.value.name}`, 'success')
+    showToast(`开始播放：${artist.value.name}`, 'success')
   } catch (e) {
     showToast(e.message || '播放失败', 'error')
   }
 }
 
 async function shufflePlay() {
-  const list = [...(genre.value?.tracks || [])]
+  const list = [...(artist.value?.tracks || [])]
   if (!list.length) return
   for (let i = list.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -302,7 +278,7 @@ async function shufflePlay() {
   for (const s of list) addToQueue(trackPayload(s), 'local')
   try {
     await playItem(trackPayload(list[0]), 'local')
-    showToast(`随机播放：${genre.value.name}`, 'success')
+    showToast(`随机播放：${artist.value.name}`, 'success')
   } catch (e) {
     showToast(e.message || '播放失败', 'error')
   }
@@ -329,7 +305,7 @@ function onAddedToPlaylist({ playlist, duplicate }) {
 }
 
 function queueAll() {
-  const list = genre.value?.tracks || []
+  const list = artist.value?.tracks || []
   if (!list.length) return
   let added = 0
   for (const s of list) {
@@ -342,6 +318,14 @@ function queueAll() {
   showToast(added ? `已加入 ${added} 首` : '歌曲已在试听列表', added ? 'success' : 'info')
 }
 
+function artistInitial(name) {
+  const n = String(name || '').trim()
+  if (!n) return '?'
+  const first = n[0]
+  if (/[a-zA-Z]/.test(first)) return first.toUpperCase()
+  return first
+}
+
 function showToast(text, type = 'info') {
   toast.value = { text, type }
   setTimeout(() => { toast.value = null }, 2800)
@@ -349,7 +333,7 @@ function showToast(text, type = 'info') {
 </script>
 
 <style scoped>
-.library-genre-page { width: 100%; max-width: 100%; min-width: 0; }
+.library-artist-page { width: 100%; max-width: 100%; min-width: 0; }
 .page-header-row {
   display: flex;
   align-items: center;
@@ -362,126 +346,70 @@ function showToast(text, type = 'info') {
   text-align: center;
   color: var(--text-muted);
 }
-.genre-hero {
+.artist-hero {
   display: flex;
   gap: 20px;
   padding: 18px;
   margin-bottom: 16px;
-  border: 1.5px solid;
   border-radius: 16px;
   flex-wrap: wrap;
 }
-.genre-hero-cover {
+.artist-hero-cover {
   width: 140px;
   height: 140px;
-  border-radius: 14px;
+  border-radius: 50%;
   overflow: hidden;
   flex-shrink: 0;
   background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
 }
-.genre-hero-cover img {
+.artist-hero-cover img {
   width: 100%;
   height: 100%;
   object-fit: cover;
   display: block;
 }
-.genre-hero-fallback {
+.artist-avatar-fallback {
   width: 100%;
   height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 42px;
+  font-size: 46px;
   font-weight: 700;
   color: var(--accent);
   background: var(--accent-muted);
 }
-.genre-hero-info { flex: 1; min-width: 200px; }
-.genre-hero-label {
+.artist-hero-info { flex: 1; min-width: 200px; }
+.artist-hero-label {
   margin: 0 0 4px;
   font-size: 12px;
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
-.genre-hero-title {
+.artist-hero-title {
   margin: 0 0 8px;
   font-size: 28px;
   font-weight: 700;
   line-height: 1.25;
 }
-.genre-hero-meta {
+.artist-hero-meta {
   margin: 0 0 14px;
   font-size: 14px;
   color: var(--text-muted);
 }
-.genre-hero-actions {
+.artist-hero-actions {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
 }
-.for-you {
-  padding: 16px 18px;
-  margin-bottom: 16px;
-}
+.tracks-panel { padding: 16px 18px 18px; }
 .section-title {
   margin: 0 0 12px;
   font-size: 20px;
   font-weight: 650;
 }
-.mix-cards {
-  display: grid;
-  grid-template-columns: 1.4fr 1fr;
-  gap: 12px;
-}
-.mix-card {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 14px 16px;
-  border-radius: 14px;
-  border: 1px solid var(--border-light);
-  background: var(--bg-elevated);
-  text-align: left;
-  cursor: pointer;
-  transition: transform 0.15s ease;
-}
-.mix-card:hover { transform: translateY(-1px); }
-.mix-card-main {
-  border-width: 1.5px;
-}
-.mix-card-icon {
-  width: 40px;
-  height: 40px;
-  border-radius: 10px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 18px;
-  color: var(--genre-accent, var(--accent));
-  background: rgba(255, 255, 255, 0.06);
-  flex-shrink: 0;
-}
-.mix-card-icon.subtle { font-size: 14px; color: var(--text-secondary); }
-.mix-card-text { flex: 1; min-width: 0; }
-.mix-card-title {
-  font-size: 15px;
-  font-weight: 600;
-  margin-bottom: 2px;
-}
-.mix-card-desc {
-  font-size: 12px;
-  color: var(--text-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.mix-card-play {
-  color: var(--genre-accent, var(--accent));
-  line-height: 0;
-  flex-shrink: 0;
-}
-.tracks-panel { padding: 16px 18px 18px; }
 .detail-empty {
   color: var(--text-muted);
   font-size: 14px;
@@ -603,15 +531,17 @@ function showToast(text, type = 'info') {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.track-tags {
-  margin-top: 3px;
+.track-album-sep { margin: 0 5px; opacity: 0.6; }
+.track-album { color: var(--text-muted); }
+.track-path {
+  margin-top: 2px;
   font-size: 12px;
   color: var(--text-muted);
+  opacity: 0.85;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.track-row-actions,
 .mobile-row-actions {
   display: flex;
   gap: 6px;
@@ -643,10 +573,9 @@ function showToast(text, type = 'info') {
 
 @media (max-width: 768px) {
   .page-title { font-size: 18px; }
-  .genre-hero-cover { width: 100px; height: 100px; }
-  .genre-hero-title { font-size: 22px; }
-  .mix-cards { grid-template-columns: 1fr; }
-  .track-tags { display: none; }
+  .artist-hero-cover { width: 96px; height: 96px; }
+  .artist-hero-title { font-size: 22px; }
+  .artist-avatar-fallback { font-size: 34px; }
   .song-cover-btn {
     width: 48px;
     height: 48px;

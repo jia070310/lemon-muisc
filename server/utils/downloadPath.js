@@ -1,8 +1,11 @@
 import path from 'path'
+import { splitArtists } from './artistTag.js'
 
 export function sanitizePathSegment(name) {
   return String(name || '').replace(/[\\/:*?"<>|]/g, '_').trim()
 }
+
+const VARIOUS_ARTISTS_DIR = '群星 (Various Artists)'
 
 function resolveGroupMode(settings = {}) {
   const mode = String(settings['download.savePathGroupBy'] || '').trim()
@@ -11,10 +14,11 @@ function resolveGroupMode(settings = {}) {
   return 'none'
 }
 
+/** 多歌手归档到群星；单歌手取唯一署名 */
 function pickArtistSegment(task = {}) {
-  const raw = String(task.singer || '').trim()
-  if (!raw) return ''
-  return raw.split(/[/;；、,，|]/)[0]?.trim() || raw
+  const artists = splitArtists(task.singer || '')
+  if (artists.length >= 2) return VARIOUS_ARTISTS_DIR
+  return artists[0] || ''
 }
 
 function pickGroupSegment(mode, task = {}) {

@@ -13,9 +13,6 @@
       <button type="button" class="btn-ghost btn-sm" :disabled="libraryScanning" @click="refreshLibrary">
         {{ scanButtonLabel }}
       </button>
-      <button type="button" class="btn-ghost btn-sm" :disabled="dupScanning" @click="scanDuplicates">
-        {{ dupScanning ? '查重中…' : '查重' }}
-      </button>
       <button type="button" class="btn-primary btn-sm" @click="openCreatePlaylist">创建歌单</button>
     </div>
     <div v-if="scanSummary || showScanStatus" class="library-scan-summary">
@@ -110,6 +107,38 @@
           >
             <span class="genre-pill-name">{{ genre.name }}</span>
             <span class="genre-pill-play" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><polygon points="8,5 19,12 8,19"/></svg>
+            </span>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <section class="artist-section" v-if="visibleArtists.length">
+      <div class="section-head">
+        <h2>歌手</h2>
+        <button
+          v-if="allArtists.length > visibleArtists.length"
+          type="button"
+          class="section-more-btn"
+          @click="openAllArtists"
+        >
+          <span>全部</span>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+      </div>
+      <div class="horizontal-scroll artist-scroll">
+        <div class="artist-pill-row">
+          <button
+            v-for="artist in visibleArtists"
+            :key="artist.id"
+            type="button"
+            class="artist-pill"
+            @click="openArtist(artist)"
+          >
+            <span class="artist-pill-name">{{ artist.name }}</span>
+            <span class="artist-pill-meta">{{ artist.trackCount }} 首</span>
+            <span class="artist-pill-play" aria-hidden="true">
               <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><polygon points="8,5 19,12 8,19"/></svg>
             </span>
           </button>
@@ -285,41 +314,6 @@
       @added="onAddedToPlaylist"
     />
 
-    <div v-if="showDupModal" class="modal-overlay" @click.self="showDupModal = false">
-      <div class="modal-card dup-modal">
-        <div class="dup-modal-head">
-          <h4 class="modal-title">重复曲目</h4>
-          <button type="button" class="btn-ghost btn-sm" @click="showDupModal = false">关闭</button>
-        </div>
-        <p class="dup-summary">
-          共 {{ dupResult.groupCount || 0 }} 组、{{ dupResult.fileCount || 0 }} 个文件（同歌名+歌手，优先按文件名）
-        </p>
-        <div v-if="!(dupResult.groups || []).length" class="dup-empty">未发现重复曲目</div>
-        <div v-else class="dup-list">
-          <div v-for="(g, gi) in dupResult.groups" :key="gi" class="dup-group">
-            <div class="dup-group-title">
-              <strong>{{ g.title || '未知标题' }}</strong>
-              <span>{{ g.artist || '未知歌手' }}</span>
-              <span class="dup-count">{{ g.count }} 份</span>
-            </div>
-            <ul class="dup-files">
-              <li v-for="(f, fi) in g.files" :key="fi">
-                <code :title="f.filePath">{{ f.fileName || f.filePath }}</code>
-                <span v-if="f.bitrate" class="dup-meta">{{ Math.round(f.bitrate / 1000) }}kbps</span>
-                <button type="button" class="btn-ghost btn-sm" @click="copyDupPath(f.filePath)">复制路径</button>
-                <button
-                  type="button"
-                  class="btn-ghost btn-sm btn-danger-hover"
-                  :disabled="dupDeletingPath === f.filePath || g.files.length <= 1"
-                  :title="g.files.length <= 1 ? '请至少保留一份' : '从磁盘永久删除'"
-                  @click="deleteDupFile(g, f)"
-                >{{ dupDeletingPath === f.filePath ? '删除中…' : '删除文件' }}</button>
-              </li>
-            </ul>
-          </div>
-        </div>
-      </div>
-    </div>
   </div>
 </template>
 
@@ -339,11 +333,10 @@ import { formatTrackTags, formatAlbumTags } from '../utils/format.js'
 import { getTrackFilePath } from '../utils/trackPath.js'
 import { countAutoFillColumns } from '../utils/grid.js'
 import { playItem, addToQueue, isInQueue, isPlayingItem, isPaused } from '../stores/player.js'
-import { appConfirm } from '../stores/appDialog.js'
 import {
   libraryTracks, libraryLoading, libraryMetaLoading, libraryLoadProgress,
   libraryScanning, libraryScanPhase, libraryScanCurrent, libraryScanTotal, libraryScanPercent,
-  groupAlbums, groupGenres, getGenreTheme, buildPlaylistCards, sortPlaylistCards,
+  groupAlbums, groupGenres, getGenreTheme, groupArtists, buildPlaylistCards, sortPlaylistCards,
   sortAlbums, sortLibrarySongs,
   PLAYLIST_SORT_OPTIONS, ALBUM_SORT_OPTIONS, SONG_SORT_OPTIONS,
   scanLibrary, isFavorite, toggleFavorite,
@@ -356,7 +349,6 @@ const SONG_SORT_KEY = 'lemon-library-song-sort'
 
 const router = useRouter()
 const keyword = ref('')
-const appliedKeyword = ref('')
 const page = ref(1)
 const pageSize = 20
 const hoverKey = ref('')
@@ -368,10 +360,6 @@ function toggleRowActions(key) {
 const tappingSongKey = ref('')
 const coverPendingPauseKey = ref('')
 const toast = ref(null)
-const dupScanning = ref(false)
-const showDupModal = ref(false)
-const dupResult = ref({ groupCount: 0, fileCount: 0, groups: [] })
-const dupDeletingPath = ref('')
 const loadProgress = libraryLoadProgress
 const songColumns = computed(() => librarySongColumns.value)
 const scanButtonLabel = computed(() => {
@@ -433,12 +421,18 @@ const allGenres = computed(() => (
 ))
 const visibleGenres = computed(() => allGenres.value.slice(0, genrePreviewLimit))
 
+const artistPreviewLimit = 20
+const allArtists = computed(() => groupArtists(libraryTracks.value))
+const visibleArtists = computed(() => allArtists.value.slice(0, artistPreviewLimit))
+
 const allAlbums = computed(() => groupAlbums(libraryTracks.value))
 const playlistSortOptions = computed(() => PLAYLIST_SORT_OPTIONS.map(o => ({ value: o.id, label: o.label })))
 const albumSortOptions = computed(() => ALBUM_SORT_OPTIONS.map(o => ({ value: o.id, label: o.label })))
 const songSortOptions = computed(() => SONG_SORT_OPTIONS.map(o => ({ value: o.id, label: o.label })))
 const allPlaylistCards = computed(() => buildPlaylistCards(libraryTracks.value))
-const sortedPlaylistCards = computed(() => sortPlaylistCards(allPlaylistCards.value, playlistSort.value))
+const sortedPlaylistCards = computed(() =>
+  sortPlaylistCards(allPlaylistCards.value, playlistSort.value).filter((c) => !c.hidden)
+)
 const visiblePlaylistCards = computed(() => {
   if (isNarrow.value) return sortedPlaylistCards.value
   return showAllPlaylistCards.value
@@ -449,13 +443,7 @@ const showPlaylistMoreBtn = computed(() => (
   !isNarrow.value && sortedPlaylistCards.value.length > playlistPreviewLimit.value
 ))
 
-const displayAlbums = computed(() => {
-  const q = appliedKeyword.value.trim().toLowerCase()
-  if (!q) return allAlbums.value
-  return allAlbums.value.filter(a =>
-    [a.name, a.artist].some(v => String(v || '').toLowerCase().includes(q))
-  )
-})
+const displayAlbums = computed(() => allAlbums.value)
 const sortedDisplayAlbums = computed(() => sortAlbums(displayAlbums.value, albumSort.value))
 const visibleAlbums = computed(() => {
   const limit = isNarrow.value ? albumPreviewLimitMobile : albumPreviewLimit
@@ -466,13 +454,7 @@ const showAlbumMoreBtn = computed(() => {
   return sortedDisplayAlbums.value.length > limit
 })
 
-const filteredSongs = computed(() => {
-  const q = appliedKeyword.value.trim().toLowerCase()
-  if (!q) return libraryTracks.value
-  return libraryTracks.value.filter(s =>
-    [s.name, s.singer, s.album, s.genre, s.year].some(v => String(v || '').toLowerCase().includes(q))
-  )
-})
+const filteredSongs = computed(() => libraryTracks.value)
 const sortedFilteredSongs = computed(() => sortLibrarySongs(filteredSongs.value, songSort.value))
 
 const totalPages = computed(() => Math.max(1, Math.ceil(sortedFilteredSongs.value.length / pageSize)))
@@ -480,8 +462,6 @@ const pagedSongs = computed(() => {
   const start = (page.value - 1) * pageSize
   return sortedFilteredSongs.value.slice(start, start + pageSize)
 })
-
-watch(appliedKeyword, () => { page.value = 1 })
 
 watch(playlistSort, (value) => {
   try { localStorage.setItem(PLAYLIST_SORT_KEY, value) } catch {}
@@ -539,6 +519,7 @@ onMounted(() => {
   loadLibrarySongColumns(api).catch(() => {})
   loadScanSummary()
   scanLibrary(api, {
+    resync: true,
     onError: (msg) => showToast(msg, 'error'),
     onComplete: (result, meta) => {
       loadScanSummary()
@@ -566,12 +547,13 @@ async function refreshLibrary() {
 }
 
 function applySearch() {
-  appliedKeyword.value = keyword.value.trim()
+  const q = keyword.value.trim()
+  if (!q) return
+  router.push({ path: '/library/search', query: { q } })
 }
 
 function clearSearch() {
   keyword.value = ''
-  appliedKeyword.value = ''
 }
 
 function trackPayload(song) {
@@ -650,6 +632,15 @@ function openAllGenres() {
   router.push({ path: '/library/genres' })
 }
 
+function openArtist(artist) {
+  if (!artist?.id) return
+  router.push({ path: '/library/artist', query: { id: artist.id } })
+}
+
+function openAllArtists() {
+  router.push({ path: '/library/artists' })
+}
+
 function openAllAlbums() {
   router.push({ path: '/library/albums' })
 }
@@ -715,81 +706,6 @@ function showToast(text, type = 'info') {
   setTimeout(() => { toast.value = null }, 2800)
 }
 
-async function scanDuplicates() {
-  if (dupScanning.value) return
-  dupScanning.value = true
-  try {
-    const res = await api.library.duplicates()
-    dupResult.value = res?.data || { groupCount: 0, fileCount: 0, groups: [] }
-    showDupModal.value = true
-    if (!(dupResult.value.groupCount > 0)) showToast('未发现重复曲目', 'info')
-  } catch (e) {
-    showToast(e.message || '查重失败', 'error')
-  } finally {
-    dupScanning.value = false
-  }
-}
-
-async function copyDupPath(filePath) {
-  try {
-    await navigator.clipboard.writeText(filePath || '')
-    showToast('路径已复制', 'success')
-  } catch {
-    showToast(filePath || '无路径', 'info')
-  }
-}
-
-function pruneDupResult() {
-  const groups = (dupResult.value.groups || [])
-    .map((g) => ({
-      ...g,
-      files: (g.files || []).filter(Boolean),
-      count: (g.files || []).length,
-    }))
-    .filter((g) => g.files.length > 1)
-  const fileCount = groups.reduce((n, g) => n + g.files.length, 0)
-  dupResult.value = {
-    groupCount: groups.length,
-    fileCount,
-    groups,
-  }
-}
-
-async function deleteDupFile(group, file) {
-  const filePath = file?.filePath
-  if (!filePath || dupDeletingPath.value) return
-  if ((group?.files || []).length <= 1) {
-    showToast('请至少保留一份，勿删光', 'info')
-    return
-  }
-  const name = file.fileName || filePath
-  const ok = await appConfirm({
-    title: '永久删除文件',
-    message: `确定从磁盘永久删除？\n\n${name}`,
-    hint: '此操作不可恢复。',
-    confirmText: '删除',
-    danger: true,
-  })
-  if (!ok) return
-
-  dupDeletingPath.value = filePath
-  try {
-    const res = await api.library.deleteFiles([filePath])
-    const failed = res?.data?.failed || []
-    if (failed.length) {
-      showToast(failed[0]?.error || '删除失败', 'error')
-      return
-    }
-    group.files = group.files.filter((f) => f.filePath !== filePath)
-    group.count = group.files.length
-    pruneDupResult()
-    showToast('已删除磁盘文件', 'success')
-  } catch (e) {
-    showToast(e.message || '删除失败', 'error')
-  } finally {
-    dupDeletingPath.value = ''
-  }
-}
 </script>
 
 <style scoped>
@@ -969,6 +885,52 @@ async function deleteDupFile(group, file) {
 }
 
 .album-section { margin-bottom: 32px; }
+
+.artist-section { margin-bottom: 28px; }
+.artist-scroll { overflow: visible; }
+.artist-pill-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.artist-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 14px;
+  border-radius: 999px;
+  border: 1.5px solid var(--border-light);
+  background: var(--bg-card, var(--bg-elevated));
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+}
+.artist-pill:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+  border-color: var(--accent);
+}
+.artist-pill-name {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.artist-pill-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+.artist-pill-play {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  opacity: 0.9;
+  line-height: 0;
+}
 .album-row {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(156px, 1fr));
@@ -1178,102 +1140,6 @@ async function deleteDupFile(group, file) {
   color: var(--text-muted);
 }
 
-.modal-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 1200;
-  background: rgba(0, 0, 0, 0.55);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 20px;
-}
-.modal-card {
-  width: min(380px, 100%);
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-light);
-  border-radius: 12px;
-  padding: 20px;
-}
-.modal-card.dup-modal {
-  width: min(640px, 100%);
-  max-height: min(80vh, 720px);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-.dup-modal-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 8px;
-}
-.dup-modal .modal-title { margin: 0; }
-.dup-summary {
-  margin: 0 0 12px;
-  font-size: 13px;
-  color: var(--text-muted);
-}
-.dup-empty {
-  padding: 24px 0;
-  text-align: center;
-  color: var(--text-muted);
-}
-.dup-list {
-  overflow: auto;
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-.dup-group-title {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 8px;
-  margin-bottom: 6px;
-  font-size: 14px;
-}
-.dup-group-title span { color: var(--text-muted); font-size: 13px; }
-.dup-count {
-  margin-left: auto;
-  color: var(--accent) !important;
-}
-.dup-files {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.dup-files li {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-}
-.dup-files code {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12px;
-}
-.dup-meta { color: var(--text-muted); flex-shrink: 0; }
-.dup-files .btn-danger-hover:hover:not(:disabled) {
-  color: var(--error, #f56c6c);
-  border-color: var(--error, #f56c6c);
-}
-.dup-files .btn-ghost:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-.modal-card h3 { margin: 0 0 14px; }
-.modal-card input { width: 100%; margin-bottom: 14px; }
-.modal-actions { display: flex; justify-content: flex-end; gap: 10px; }
 
 .toast {
   position: fixed;
@@ -1381,6 +1247,23 @@ async function deleteDupFile(group, file) {
     min-width: 100%;
   }
   .genre-pill-name { max-width: 120px; }
+
+  .artist-scroll {
+    margin: 0 -14px;
+    padding: 0 14px 4px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+  .artist-scroll::-webkit-scrollbar { display: none; }
+  .artist-pill-row {
+    flex-wrap: nowrap;
+    width: max-content;
+    min-width: 100%;
+  }
+  .artist-pill-name { max-width: 110px; }
 
   .album-row {
     grid-template-columns: repeat(2, minmax(0, 1fr));

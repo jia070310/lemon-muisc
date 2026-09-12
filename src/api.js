@@ -77,6 +77,7 @@ async function requestOnce(url, options = {}) {
   try {
     const { signal: _signal, timeout: _timeout, retries: _retries, body, ...rest } = options
     const res = await fetch(BASE + url, {
+      credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -176,6 +177,7 @@ export const api = {
       const token = getToken()
       const res = await fetch(BASE + '/source/import', {
         method: 'POST',
+        credentials: 'include',
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         body: form,
       })
@@ -357,6 +359,11 @@ export const api = {
       }),
     },
     duplicates: () => request('/library/duplicates', { timeout: 60000 }),
+    organize: (targetDir, options = {}) => request('/library/organize', {
+      method: 'POST',
+      body: { targetDir, ...options },
+      timeout: 600000,
+    }),
     deleteFiles: (filePaths) => request('/library/delete-files', {
       method: 'POST',
       body: { filePaths: Array.isArray(filePaths) ? filePaths : [filePaths] },

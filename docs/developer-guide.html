@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-page-node-id="80fDPDn5j68yPnb3IHEtke">
+<head data-page-node-id="RtMAlbFm2VHjbNEIJXqzXL">
+<meta charset="UTF-8" data-page-node-id="TpsKzXnxsA2Rfx8aexlQQI">
+<meta name="viewport" content="width=device-width, initial-scale=1.0" data-page-node-id="dsCPIt3C639mDD1u4x1IZE">
+<title>柠檬音乐 Lemon Music · 开发者指南</title>
+<style>
+  :root {
+    --bg: #f7f8fa;
+    --panel: #ffffff;
+    --border: #e5e7eb;
+    --text: #1f2937;
+    --muted: #6b7280;
+    --accent: #1677ff;
+    --accent-soft: rgba(22, 119, 255, 0.08);
+    --green: #0e9f6e;
+    --orange: #d97706;
+    --red: #dc2626;
+    --code-bg: #f3f4f6;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+    padding: 40px 20px 80px;
+  }
+  .container { max-width: 980px; margin: 0 auto; }
+  header.hero {
+    background: linear-gradient(135deg, #1677ff 0%, #0e9f6e 100%);
+    color: #fff;
+    border-radius: 16px;
+    padding: 42px 48px;
+    margin-bottom: 32px;
+  }
+  header.hero h1 { font-size: 30px; font-weight: 700; margin-bottom: 10px; }
+  header.hero p { opacity: 0.92; font-size: 15px; max-width: 720px; }
+  .badges { margin-top: 18px; display: flex; flex-wrap: wrap; gap: 8px; }
+  .badge {
+    background: rgba(255,255,255,0.18);
+    border: 1px solid rgba(255,255,255,0.35);
+    padding: 3px 12px; border-radius: 999px; font-size: 12.5px;
+  }
+  h2 {
+    font-size: 22px; margin: 40px 0 16px; padding-left: 12px;
+    border-left: 4px solid var(--accent);
+  }
+  h3 { font-size: 17px; margin: 26px 0 10px; color: #111827; }
+  p { margin-bottom: 12px; color: #374151; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 22px 26px;
+    margin-bottom: 16px;
+  }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 760px) { .grid2 { grid-template-columns: 1fr; } }
+  .muted { color: var(--muted); font-size: 13.5px; }
+  code {
+    font-family: "JetBrains Mono", Consolas, "Courier New", monospace;
+    background: var(--code-bg);
+    border-radius: 5px;
+    padding: 1.5px 6px;
+    font-size: 13px;
+    color: #0b3d91;
+  }
+  pre {
+    background: #111827;
+    color: #e5e7eb;
+    border-radius: var(--radius);
+    padding: 18px 22px;
+    overflow-x: auto;
+    font-size: 13px;
+    line-height: 1.6;
+    margin: 14px 0;
+  }
+  pre code { background: transparent; color: inherit; padding: 0; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13.5px;
+    margin: 14px 0;
+    background: var(--panel);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  th, td { border: 1px solid var(--border); padding: 9px 12px; text-align: left; vertical-align: top; }
+  th { background: #f0f4fa; font-weight: 600; white-space: nowrap; }
+  tr:nth-child(even) td { background: #fafbfc; }
+  .tag {
+    display: inline-block; font-size: 11.5px; padding: 2px 8px; border-radius: 999px;
+    font-weight: 600; margin-right: 4px;
+  }
+  .tag.f { background: #e0f2fe; color: #0369a1; }
+  .tag.b { background: #dcfce7; color: #166534; }
+  .tag.d { background: #fef3c7; color: #92400e; }
+  .tag.c { background: #ede9fe; color: #5b21b6; }
+  .tree { font-family: "JetBrains Mono", Consolas, monospace; font-size: 13px; line-height: 1.75; }
+  .tree .cm { color: #9ca3af; }
+  .flow {
+    display: flex; align-items: stretch; gap: 0; flex-wrap: wrap;
+    margin: 16px 0;
+  }
+  .flow .step {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 14px; font-size: 13px;
+    min-width: 120px; text-align: center; flex: 1;
+  }
+  .flow .arrow { display: flex; align-items: center; color: var(--muted); padding: 0 6px; font-weight: 700; }
+  .note {
+    background: var(--accent-soft);
+    border-left: 3px solid var(--accent);
+    padding: 12px 16px;
+    border-radius: 0 8px 8px 0;
+    font-size: 13.5px;
+    margin: 14px 0;
+  }
+  .warn {
+    background: rgba(217, 119, 6, 0.08);
+    border-left: 3px solid var(--orange);
+    padding: 12px 16px; border-radius: 0 8px 8px 0; font-size: 13.5px; margin: 14px 0;
+  }
+  .endpoints { font-size: 13.5px; }
+  .endpoints .m { font-family: Consolas, monospace; font-size: 12.5px; border-radius: 6px; padding: 1px 7px; margin-right: 8px; font-weight: 700; }
+  .m.get { background: #dbeafe; color: #1d4ed8; }
+  .m.post { background: #dcfce7; color: #15803d; }
+  .m.put { background: #fef3c7; color: #b45309; }
+  .m.del { background: #fee2e2; color: #b91c1c; }
+  .ep-item { padding: 5px 0; border-bottom: 1px dashed var(--border); }
+  .ep-item:last-child { border-bottom: none; }
+  .toc { columns: 2; column-gap: 30px; font-size: 14px; }
+  .toc a { display: block; padding: 3px 0; }
+  @media (max-width: 760px) { .toc { columns: 1; } }
+  footer { margin-top: 50px; color: var(--muted); font-size: 13px; text-align: center; }
+</style>
+</head>
+<body data-page-node-id="8KEHTHErPNZyxtevNXpEv3">
+<div class="container" data-page-node-id="s2JYBSCCNIpv7ItroH1nIv">
+
+<header class="hero" data-page-node-id="MB3CKL7pgwlQXVOI3R2zBv">
+  <h1 data-page-node-id="BcFo1Fqh2jnB3RVGejXnZJ">🍋 柠檬音乐 Lemon Music · 开发者指南</h1>
+  <p data-page-node-id="UAyalx4EFmlQUEz6t3feoe">面向飞牛 NAS 与自托管环境的 Web 音乐工具：多平台搜索、歌单发现、在线试听、批量下载、本地标签管理。本文档从代码层面解析项目架构、核心机制与 API 设计，供开发与二次开发参考。</p>
+  <div class="badges" data-page-node-id="rzQFd80fzYPlF2GbHUgCdu">
+    <span class="badge" data-page-node-id="YFqtomuWXFS3ryKQWqBILC">v1.2.13</span>
+    <span class="badge" data-page-node-id="2ZUnolV3P69Ttlv0JJa1i8">MIT License</span>
+    <span class="badge" data-page-node-id="8B3Jvd32jDFNGTavuqb56j">Vue 3 + Vite</span>
+    <span class="badge" data-page-node-id="y3pQ43HhbZ4YAGyMPwBXsl">Node.js 20+ / Express 5</span>
+    <span class="badge" data-page-node-id="djqmYoLKCcVyiiFst2TcX7">better-sqlite3</span>
+    <span class="badge" data-page-node-id="owQyFH3eQsnRUSbtyLaHjQ">飞牛 FPK 原生应用</span>
+  </div>
+</header>
+
+<div class="card" data-page-node-id="sPh5ciaHbMRmUwJEkREXmh">
+  <h3 style="margin-top:0" data-page-node-id="QjPvEJbZZXBncMCfjqZCfx">目录</h3>
+  <div class="toc" data-page-node-id="hBGjFnd3GyciFC9K0QVfwy">
+    <a href="#overview" data-page-node-id="fxD79zCVuvhnH4fCzOgQI4">1. 项目概览</a>
+    <a href="#tech" data-page-node-id="LRwQdAXbeGFvnF03mlT4QY">2. 技术栈</a>
+    <a href="#structure" data-page-node-id="6dcqZ8a1fDCirPzzMPXVvx">3. 目录结构</a>
+    <a href="#arch" data-page-node-id="hmAd7NW1rgBqydICdTRpyO">4. 总体架构</a>
+    <a href="#frontend" data-page-node-id="moduM008BknV5mTgo9QwAx">5. 前端设计</a>
+    <a href="#backend" data-page-node-id="dGY80NCGPjiG4pKe8gqxMp">6. 后端设计</a>
+    <a href="#database" data-page-node-id="0kaeRuHFfCV2h6OQRvzEdv">7. 数据模型</a>
+    <a href="#core" data-page-node-id="l0p7mg9LGZ7BDjNKsRrLFu">8. 核心机制</a>
+    <a href="#api" data-page-node-id="BIX8ZEcfBDi4dR3SZZ0D7C">9. API 参考</a>
+    <a href="#ws" data-page-node-id="UYPeKFGkNcOJviF4vZ9HbI">10. WebSocket 事件</a>
+    <a href="#dev" data-page-node-id="3hztz30FPv7CB0MT0iTMXz">11. 开发与部署</a>
+    <a href="#scripts" data-page-node-id="iXGOXvERq0nYxFF6zi1S28">12. 常用脚本</a>
+  </div>
+</div>
+
+<!-- ============ 1 概览 ============ -->
+<h2 id="overview" data-page-node-id="5896PPB9rYoBVv7NJxF3Cj">1. 项目概览</h2>
+<div class="card" data-page-node-id="yZVVuIj5A4kSOkf4GlM8xm">
+  <p data-page-node-id="0UYjAAm0Qvb2EW5QSdT1kJ"><strong data-page-node-id="dFNel0ICqYNIcpeJ8ZT3IZ">Lemon Music</strong> 是一个面向飞牛 NAS（fnOS）与自托管环境的 Web 音乐管理工具，在浏览器中完成「找歌 → 试听 → 下载 → 整理」全流程：</p>
+  <table data-page-node-id="WS67NIwHzwivAKnIBTLCbv">
+    <tr data-page-node-id="FL4HqacDOk4OP3MmFCfCOE"><th style="width:160px" data-page-node-id="EMzHxJTV2u9KuAcMuGHYeP">维度</th><th data-page-node-id="D9pDOnHZpPrIL8QkmRUjEl">说明</th></tr>
+    <tr data-page-node-id="LqXfEdE6JN4ZUKZGm3MPrI"><td data-page-node-id="Tri6xdCbMJR6c3nqOhUkiD">定位</td><td data-page-node-id="i2YGBrTLAxii6qUQYx4T9K">NAS 个人音乐整理工具，兼容落雪音乐（LX Music）自定义音源脚本</td></tr>
+    <tr data-page-node-id="0WJbnjZUH4XS8RgnjNUrP5"><td data-page-node-id="GncN983WvfIAoypTlGVbGx">核心能力</td><td data-page-node-id="UqGxtX6nzNU7lvmy4NhfBo">多平台搜索（酷我/酷狗/QQ/网易云/咪咕）、发现页（歌单/榜单/新歌/新碟）、试听播放、批量下载、本地标签编辑（MP3/FLAC/WAV/APE）、音乐库管理、查重备份、多用户与音源健康度</td></tr>
+    <tr data-page-node-id="VDcPu2P92dUiP4aJA4YoRL"><td data-page-node-id="eYFElFhrTsp6GOnNnnKxyr">部署形态</td><td data-page-node-id="vbgGyK4HOwUFhGk1Ui1rVh">飞牛 FPK 原生应用（不依赖 Docker），默认端口 <code data-page-node-id="nyVd6S3rX7Do01uwJQVNuh">7983</code>；亦可本地开发运行</td></tr>
+    <tr data-page-node-id="F32eu8fqO87RwkZt88W8uY"><td data-page-node-id="Xc5eQHWKRFNDxUBgkYEb2b">音源体系</td><td data-page-node-id="9xqPXlZici1iQm6pWDzPDB">两套机制并存：内置 <code data-page-node-id="2UdEqvtCk3cAuz0b09qMry">musicSdk.js</code> 直连平台接口 + 用户导入的落雪/澜音脚本沙箱运行时</td></tr>
+    <tr data-page-node-id="ruDWkAuCMlDeU2Bjn3Mszs"><td data-page-node-id="fAbRsL4kOqLIq7FxzBXiIu">仓库</td><td data-page-node-id="Gf5ywOlC8uoNIYLDFKItx9"><a href="https://github.com/jia070310/lemon-muisc" data-page-node-id="Dcx0dQ8kGT1bkHnPZwyozO">github.com/jia070310/lemon-muisc</a></td></tr>
+  </table>
+</div>
+
+<!-- ============ 2 技术栈 ============ -->
+<h2 id="tech" data-page-node-id="8ah2dkJmQpuWDAQbbakH3y">2. 技术栈</h2>
+<div class="card" data-page-node-id="iSSpyfrJepe2MDtLFpvrGV">
+  <table data-page-node-id="u8ETvV1qHAtK2Us1EJnJsV">
+    <tr data-page-node-id="9iQPLifSFy4i0v9rLzM9Sb"><th style="width:120px" data-page-node-id="UCn7ye8gTrsA8HyNd5g32l">部分</th><th data-page-node-id="BRe2vrpddg6q2yqG37smOp">技术</th><th data-page-node-id="MRc41V5kIniBoz3cIoBB2i">说明</th></tr>
+    <tr data-page-node-id="CaMBmoXLQjh91yrZc9Rcn7"><td data-page-node-id="hFduH3042OpnBchFh9f4Qg">前端</td><td data-page-node-id="aLlICP5qSv3AOQweZrSWFh">Vue 3 + Vue Router 5 + Vite 8</td><td data-page-node-id="R6SGXSA9KziDglHP2BGzqN">Composition API，手写 store（Pinia 未使用），全局 CSS 变量主题</td></tr>
+    <tr data-page-node-id="zSJ2RBOeQAVUXdm4bYox4p"><td data-page-node-id="3oaDYpaDCX4TT5VQfyTbHi">后端</td><td data-page-node-id="BX8RF7NQ2DXCaS1WTyxdCN">Node.js 20+、Express 5、ws</td><td data-page-node-id="gl14aE3AEzM1PWJW2vhjDl">ESM 模块；单进程常驻服务；WebSocket 实时推送</td></tr>
+    <tr data-page-node-id="SGvtj9UrEgeBzWvYsblJ3m"><td data-page-node-id="NBkKa4fRCMxQrC8sobHkUB">数据层</td><td data-page-node-id="SbkcAHC3WJCpawFeomKSy5">better-sqlite3（同步 SQLite）</td><td data-page-node-id="CHpO97b1XRGtU9UbQPM9fK">WAL 模式，单文件 <code data-page-node-id="AV0H3bme52NPn0D86Agy4j">lx-music.db</code></td></tr>
+    <tr data-page-node-id="GpAyUYBxXjIf1fiNky5hjG"><td data-page-node-id="znHLXEcl0YvjCmBxcuzyDE">标签处理</td><td data-page-node-id="uBKMqDYJkAK76vhf9o32Hf">node-id3、music-metadata</td><td data-page-node-id="bDFF3eAw1inHxMbgCtd138">MP3 (ID3v2) / FLAC 读写 + 自实现 WAV / APE 标签写入</td></tr>
+    <tr data-page-node-id="5okXMxrtDxSFHXBZvrr4IC"><td data-page-node-id="gdw039MTFSHLmX295g2adE">音源沙箱</td><td data-page-node-id="lh26qo5tPAGxADh7EROjbH">vm（Node 内置）+ needle</td><td data-page-node-id="hJG0kIcaGVJy9nG2GT0yuM">落雪脚本经 <code data-page-node-id="8oWwjn7gi2nKwXz5ZLYYi9">vm</code> 沙箱运行，隔离网络与加密工具</td></tr>
+    <tr data-page-node-id="ag23oa8lGYpPmxpSpqHbp4"><td data-page-node-id="B4a4i311Z6HrZxZaqAXzxO">可视化</td><td data-page-node-id="JIHu3XtCGObB6t5SLDGTJx">Web Audio API + Canvas</td><td data-page-node-id="DHVRtGjKdVLaZVJBPcIRls">播放栏频谱动效、全屏播放器</td></tr>
+    <tr data-page-node-id="08kaZ2cy7p6Z62QwyjA7Or"><td data-page-node-id="jIQ2lr7Yzjhk2bddHyx5UJ">部署</td><td data-page-node-id="nmaS4KxoDKaPbJNb8yd2ly">FPK 打包（PowerShell 脚本）</td><td data-page-node-id="E4d8HbzgA2Yu1T80rF2QfD">依赖应用中心 Node.js v22；x86/ARM 双架构</td></tr>
+  </table>
+</div>
+
+<!-- ============ 3 目录结构 ============ -->
+<h2 id="structure" data-page-node-id="4Q8nDNrXhjH488iCuYwhZW">3. 目录结构</h2>
+<div class="card" data-page-node-id="1MASjSOArK2jzr1CkfzKCO">
+  <pre data-page-node-id="fqibBXgSONQb9vgRFX88KA"><code data-page-node-id="t7fgpQUADPBlxOKkrIWIjC">lemon-muisc/
+├── <b data-page-node-id="wpD4ABnlc81ShUJ7XVX0p4">src/</b>                          # 前端（Vue 3）
+│   ├── main.js / App.vue / router.js
+│   ├── api.js                       # 统一 API 客户端（并发限流 6、JWT、错误归一）
+│   ├── ws.js                        # WebSocket 客户端（指数退避重连）
+│   ├── views/                       # 页面：Search/Discover/Download/Library/TagEditor/Settings...
+│   ├── components/                  # PlayerBar、FullscreenPlayer、TagFileEditor 等 22 个组件
+│   ├── stores/                      # 手写状态库：player(2298行)/library(1948行)/discover...
+│   ├── composables/                 # 批量下载、虚拟列表、封面渐进加载等逻辑复用
+│   ├── utils/                       # 认证、音质、歌词、封面、主题、平台名等工具
+│   └── styles/global.css            # 全局样式与主题变量
+├── <b data-page-node-id="cuboIW28OalKODfe1JXyOK">server/</b>                      # 后端（Node ESM）
+│   ├── index.js / ws.js / db.js     # 入口 / WebSocket / SQLite 初始化
+│   ├── musicSdk.js                  # 内置音源 SDK（2524 行，四大平台直连）
+│   ├── discoverSdk.js               # 发现页 SDK（新歌/新碟/榜单）
+│   ├── sourceManager.js             # 音源脚本加载沙箱与激活管理
+│   ├── sourceFault.js               # 音源故障判定（临时网络错误 vs 永久故障）
+│   ├── meta.js                      # 标签写入统一入口（按扩展名路由）
+│   ├── routes/                      # 16 个 Express 路由模块
+│   └── utils/                       # 46 个工具模块（下载/标签/扫描/缓存/邮件/遥测...）
+├── <b data-page-node-id="nA20eHT5Tt0GKZuzyb6Kfs">docs/</b>                        # 发布说明、飞牛论坛帖、安装说明、截图
+├── <b data-page-node-id="MWZ7vIgn5da16KBnTa315K">scripts/</b>                     # reset-password.js / reset-users.js / build-fpk.ps1
+├── <b data-page-node-id="MODbfMvPuqelk7cJL7iUld">fpk/</b>                         # 飞牛打包骨架（manifest、cmd、wizard、config）
+├── config/                          # 运行时配置目录（SETUP_README.txt、resource/）
+├── public/                          # favicon 等静态资源
+├── fpk.json                         # 旧版 Docker 发布清单（历史遗留）
+├── vite.config.js                   # 前端构建：别名 @→src，代理 /api 与 /ws → 7983
+└── package.json                     # v1.2.13，Node >= 20</code></pre>
+
+  <div class="note" data-page-node-id="XKTz5ywt5ugFiGod8QCBuC">
+    代码规模：约 119 个 JS 文件 + 50 个 Vue 文件。其中 <code data-page-node-id="brrENe0THK7ZcvYuMDdpQt">server/musicSdk.js</code>（2524 行）、
+    <code data-page-node-id="lklb8EdZr35Qsoq3upCswC">server/routes/download.js</code>（1637 行）、<code data-page-node-id="Mw55sPAv4iH3gICgSy8z60">src/stores/player.js</code>（2298 行）、
+    <code data-page-node-id="etvfGP742IqjRBFqa6CtYx">src/stores/library.js</code>（1948 行）、<code data-page-node-id="a7fW5TJtDSSqBqxsTD0u3A">src/views/Settings.vue</code>（3207 行）为体量最大的模块。
+  </div>
+</div>
+
+<!-- ============ 4 总体架构 ============ -->
+<h2 id="arch" data-page-node-id="zWvwNbATOlt94cM0Oo4M23">4. 总体架构</h2>
+<div class="card" data-page-node-id="2YDvWPHSgUuuK8TUfRAkqM">
+  <p data-page-node-id="XFTTAtA5IQhVU4AsXcNke5">前后端同仓部署，开发期由 Vite 代理，生产期由 Express 托管静态产物。整体数据流如下：</p>
+
+  <h3 data-page-node-id="7l5FgUSYm3UebuKrlckLkQ">进程与端口</h3>
+  <pre data-page-node-id="j46uuRzhuUNh1oxoAvyFQG"><code data-page-node-id="jF2SzTZi1JX7zffhdUqyJK">浏览器 ──► Vite dev (5174) ──代理──► Express (7983)
+                     │                      │
+                     │  /api/*  HTTP+JWT     │
+                     ├──────────────────────►├──► better-sqlite3 (config/lx-music.db)
+                     │                      ├──► 音源沙箱 (vm) ──► 平台 API
+                     │  /ws WebSocket        ├──► 内置 SDK (needle) ──► 平台 API
+                     └──────────────────────►├──► 下载队列 (内存 Map + 任务表)
+                                             └──► 本地文件系统（音乐库/下载/标签）</pre>
+
+  <h3 data-page-node-id="4rNNhLaio89I2tcCieqNB3">请求处理链</h3>
+  <div class="flow" data-page-node-id="2JujzTc1p2B2cObBKzydfD">
+    <div class="step" data-page-node-id="LD2pZG44TlPHEhJ20xMqZk">浏览器 fetch / WS</div>
+    <div class="arrow" data-page-node-id="0tlEO17wDClTXHyiKfBV5v">→</div>
+    <div class="step" data-page-node-id="ME7z0esbEcdjm9jmKcAuj2">api.js 客户端（限流6/超时/401跳转）</div>
+    <div class="arrow" data-page-node-id="844jcjrsLyoEXe6pgWvcSL">→</div>
+    <div class="step" data-page-node-id="1ERqjBzFUnNP6BBUI7hlh5">Express 中间件（CORS / JWT）</div>
+    <div class="arrow" data-page-node-id="OpiMXCyjTLe5rZrQvQb2t0">→</div>
+    <div class="step" data-page-node-id="ZpS5F70lTW3H3GYCbjcmKm">routes/* 路由模块</div>
+    <div class="arrow" data-page-node-id="HDCJBHJFaNMaLmO8GX8O1b">→</div>
+    <div class="step" data-page-node-id="DllbPh9ioUFRjP6MA1yPd6">utils/* 业务逻辑</div>
+  </div>
+
+  <h3 data-page-node-id="VAgPUNhEROkJWW9eFKIdQp">认证体系</h3>
+  <ul style="margin-left:20px" data-page-node-id="TYrHmbUhmE0LqxFZLp3JmJ">
+    <li data-page-node-id="P1NiNIthdYdgBEFqhcu0Fy"><code data-page-node-id="iPvBIhhCBgNWvJFl0xKGS6">POST /api/auth/login</code> 签发会话 → <code data-page-node-id="i6q2b4JlQweZ5DHyhrOPRm">sessions</code> 表；前端存 <code data-page-node-id="slt2Y0ghrUsujwl0taI1o7">localStorage["lemon-auth-token"]</code></li>
+    <li data-page-node-id="mW2AQBeDMMl3KaT69FA3iO">除 <code data-page-node-id="BMSckVSF7dcVydsbhX0xIG">/auth/*</code>、<code data-page-node-id="CaqQGAmLs4Fq92E125fFzQ">/health</code> 外，所有 <code data-page-node-id="tkI6MPLMrUbq9MDjgSgYSV">/api/*</code> 均经 <code data-page-node-id="iJGYFxrkvVPzqs661t47WH">requireAuth</code> 中间件</li>
+    <li data-page-node-id="hFnysuiKEYiJjPFyiDV9tX">WebSocket 以 URL 参数 <code data-page-node-id="GKEsjie2yCMDaYwTKwkkys">?token=</code> 校验（<code data-page-node-id="5d7slVlZAvin3CU0cHDkGi">validateWsToken</code>）</li>
+    <li data-page-node-id="7ziDQcTZxea19fU52ZoMsV">音频流 URL 由 <code data-page-node-id="1MwBgvP7UxBVAabAcQtT02">appendStreamToken</code> 追加短期 token（<code data-page-node-id="NxUXfYnyAFd1kI5iNImCbo">/api/play/</code>、<code data-page-node-id="6EWWiU6p8zda0M7H1W66nb">/api/tag/cover</code>）</li>
+    <li data-page-node-id="uFAQbjEW958OoKc2idQpit">角色：<code data-page-node-id="TBqEqtyWhYmJrzjv6iLHGo">admin</code>（用户/路径管理）与 <code data-page-node-id="Zon3zzfET5eF1qSgzAF9f1">user</code>（普通用户，仍可管理自己的音源启用与歌单）</li>
+  </ul>
+</div>
+
+<!-- ============ 5 前端 ============ -->
+<h2 id="frontend" data-page-node-id="RNo2BuB6kHo0PB8pDFHEIV">5. 前端设计</h2>
+<div class="card" data-page-node-id="TW3gnxbK4hTCu3FTHJwzc4">
+  <div class="grid2" data-page-node-id="M6cbDTAWSPl0LtQ410a2VP">
+    <div data-page-node-id="N5rCShLyGSQ1LFWLHqoYeq">
+      <h3 data-page-node-id="c0JjfBJqQmJMBBrSaB5uJ0">路由结构</h3>
+      <table data-page-node-id="EeStbn3JQ8IUcOVKzSTiUa">
+        <tr data-page-node-id="Tb8vG2hLXtFSVoIXfFO47W"><th data-page-node-id="rIMAW742lLV2HyOa434lHs">路径</th><th data-page-node-id="FdRthWeuOH5op3SAH4gk6U">页面</th></tr>
+        <tr data-page-node-id="xkbGUHTmTpDxuTA2XuUe4B"><td data-page-node-id="5Q3EnY8uMg4GYuXredhA39"><code data-page-node-id="hAfxTRtXtkplUWalSLe7lH">/search</code></td><td data-page-node-id="zEjw7p5Q95r85FhwWtoAsO">搜索（默认首页）</td></tr>
+        <tr data-page-node-id="MR0kpffisBE8CPtOn0KaXP"><td data-page-node-id="TFEsAvn5GGPo5qTDZyonv6"><code data-page-node-id="iJBg6IhQOldErasNMFxH9V">/discover</code> …</td><td data-page-node-id="kRzF5b2NTXVAbN53X4ost8">发现（含 playlists/new-songs/new-albums/ranks 子页）</td></tr>
+        <tr data-page-node-id="ojuZ2YHrBGa1esw2VCYFQJ"><td data-page-node-id="FdIGyzo4d4i5AhFYh5Mgxh"><code data-page-node-id="JDwLHJNDFiCOnhhmXFoev4">/library</code> …</td><td data-page-node-id="okQgMVofJGr1FLCjMKXXgK">音乐库（playlists/album/albums/genres）</td></tr>
+        <tr data-page-node-id="draN9sQtTHbgMKW7LCtcm5"><td data-page-node-id="DXJLUOl3HP8QL1hxlBvHD7"><code data-page-node-id="CVpuycXq6zDgObBsgATiSw">/download</code></td><td data-page-node-id="3h41Ugkd1tD1rpBzZrgema">下载管理</td></tr>
+        <tr data-page-node-id="qPES1tEDL13nQWOcayhNg0"><td data-page-node-id="gcaA1FcmBIMZg3h7XqZ5O1"><code data-page-node-id="L7HZx5JGRuURqPgcLG8MEK">/tag</code>、<code data-page-node-id="cV43Lvo65isUrOPkK0N4XU">/tag/track</code></td><td data-page-node-id="ari9kdFWkP0FqAePLpFJ2K">标签编辑</td></tr>
+        <tr data-page-node-id="foqoSjeszEGGMVEnQEMSdf"><td data-page-node-id="QbfvMofyeuhRXZ9ed0ikul"><code data-page-node-id="E1JwuleOmZ2Gl01ppMPBMl">/settings</code> / <code data-page-node-id="7zoviujEhjnRmqPhsfdwIW">/about</code></td><td data-page-node-id="mDCDtcnxQP4saXyaJRNEHu">设置 / 关于</td></tr>
+        <tr data-page-node-id="wRLyCj6DcbDgh4tvJyHtm4"><td data-page-node-id="5aPDQyWMHr57uX7BisyghJ"><code data-page-node-id="xEDTpqCnVWZUAGLRKAf2tX">/login /setup /reset-password /verify-email /auth-callback</code></td><td data-page-node-id="lm4uJ0BzzrN6WBUYyqL4Yg">认证（public）</td></tr>
+      </table>
+      <p class="muted" data-page-node-id="hQ6AHuo7DxAnmUEPN9DPLs">路由守卫：先 <code data-page-node-id="o9jYduYFjmm48dmFQomGgy">initAuth()</code> → 未初始化跳 /setup → 未登录跳 /login。</p>
+    </div>
+    <div data-page-node-id="EhyXU1URuNLo7j0gVxain7">
+      <h3 data-page-node-id="1zBlPZOLv2qZQR3xIkzFj7">状态库（store）</h3>
+      <table data-page-node-id="NPydtOLcDlJygioyVSnpAy">
+        <tr data-page-node-id="rakNH3L0eeIOtAXBwEG0Cp"><th data-page-node-id="NGO4906zdfWozcBeiHpzaQ">模块</th><th data-page-node-id="haqOPYGv2FLSDHdYAvXnrV">职责</th></tr>
+        <tr data-page-node-id="sC0vTajZC8tW9GwUFzdELz"><td data-page-node-id="HxYqLoHJRjVfFLH6gq1b4h"><code data-page-node-id="20w2JIIIYvZFCsdwEJRcv3">player</code></td><td data-page-node-id="oTxoBFfVTHs7zVqy0BcFfc">播放核心：播放队列、进度、歌词/封面、换源、全屏、睡眠定时</td></tr>
+        <tr data-page-node-id="b2rzNUhKOqQWoq3EAhmcEq"><td data-page-node-id="9rnrqTliHrQlNdVgYoEd9D"><code data-page-node-id="pLbq3X9xZu8OzCrGS333mT">library</code></td><td data-page-node-id="olthCW86WDB92iySH9H2TF">音乐库：扫描、歌单、收藏、查重、用户数据</td></tr>
+        <tr data-page-node-id="WyyrV3HL3dxYGIZ86387vN"><td data-page-node-id="BenC7WqHun3EmxF9ZV6S1c"><code data-page-node-id="ay5XA5UzpZPDJAFH29M3p6">discover</code></td><td data-page-node-id="ahWcHBw6h0s8tT4bUzuShu">发现页分区数据与分页</td></tr>
+        <tr data-page-node-id="2biTd2OULFGqfBaMvi2Z5o"><td data-page-node-id="NfQgxQfo18qyMoOQa6OXUy"><code data-page-node-id="Ca3rEeimeN6Yo94gwLs2cI">tagMatch</code></td><td data-page-node-id="iH2zF4B0OywiWfznjYK7mY">标签匹配任务状态（并发、暂停/停止）</td></tr>
+        <tr data-page-node-id="M1VTRoGmwPfH3V8Da8i0qK"><td data-page-node-id="xWFvbk2XHkKrGmJVDmB6ie"><code data-page-node-id="v1qVCpTijE6g3Fevvua5PE">navigation</code></td><td data-page-node-id="9Jp9kn0mRqZoQFrLJI3HKD">路由加载动画状态</td></tr>
+        <tr data-page-node-id="7iec8lYk72AypVhvjSUNYn"><td data-page-node-id="zunh9q5nnT4AaDSq7r7i1z"><code data-page-node-id="eD4XirEl5Eeexg5JT44weT">downloadGuard</code></td><td data-page-node-id="ukb7iA4ZuMCE5BSXa3aBX5">下载前试听时长守卫提示</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <h3 data-page-node-id="JvtbXLcOrdGGY7W7XzfOTu">关键组件</h3>
+  <table data-page-node-id="fJoNzrgnU2WjT8GQLTpdrR">
+    <tr data-page-node-id="SPNs2hMjVdXS4kFe6jcnrz"><th style="width:180px" data-page-node-id="M2iLSLo5ebXitKYr5yMbnx">组件</th><th data-page-node-id="wBCrC2EsDEfzY5Alw71GJA">说明</th></tr>
+    <tr data-page-node-id="w5VE7mSPHv5n1ZjNycOIc0"><td data-page-node-id="Yq5B2KNZTDEk4z4UM4GI3T"><code data-page-node-id="zmiDmMTrNjTRDmJD2zRQjO">PlayerBar.vue</code>（1769行）</td><td data-page-node-id="oqXmFy3jVm82YYg9PbGB5n">底栏播放器：播放控制、进度、音量、频谱、当前曲目下载、平台徽章、换源提示</td></tr>
+    <tr data-page-node-id="O7ChRHBCI9wGYhOACGm7i6"><td data-page-node-id="eLNnRZm1gKwGGAbgEhvMl8"><code data-page-node-id="sJWEnayp26BmcSiNeH6MYe">FullscreenPlayer.vue</code>（1328行）</td><td data-page-node-id="s188vmdDm1cEjgpMpkFdnw">全屏播放页：大封面、滚动歌词、沉浸频谱</td></tr>
+    <tr data-page-node-id="e2WeEfDVGBgIchZIPDDY9m"><td data-page-node-id="5gJbU5xfFhOTgAIRv3Feil"><code data-page-node-id="bC0ftQwu7qvixYP8t0X3W5">TagFileEditor.vue</code>（727行）</td><td data-page-node-id="GzwPJyTaJuGZEDRlRR9HIQ">单文件标签编辑器（封面/歌词/字段）</td></tr>
+    <tr data-page-node-id="3DFNsTMIeBw3f9pG6BtOfo"><td data-page-node-id="SXjRWUgwUFSIADH44fs0c5"><code data-page-node-id="sMPA7uHPY9OWc72sWpFANO">discover/*</code></td><td data-page-node-id="VEQVYF27ETTHOGSm6QhPgf">发现页分区组件（卡片轮播、滑动分页、骨架屏）</td></tr>
+    <tr data-page-node-id="cxyN3HHhjdaNoFZy79kDmC"><td data-page-node-id="sWXrcWLhCzNoLVZvVg2TXj"><code data-page-node-id="6zB3bGlVxlQBubNXDpp8lp">SpectrumVisualizer.vue</code></td><td data-page-node-id="BWYjOg851ZYvh8y7hlHH35">Web Audio 频谱可视化</td></tr>
+  </table>
+
+  <h3 data-page-node-id="I6ymN0clnuUlGCNbYeef9e">可复用逻辑（composables）</h3>
+  <table data-page-node-id="zcDzGrNubhwmSpF8cehtEs">
+    <tr data-page-node-id="g36pHaTXWrjDWbkft5GMDo"><th data-page-node-id="49lnJqHPCY7udrIFqxi37v">模块</th><th data-page-node-id="cuBYWrWOKEAyAVDDAcCQuM">职责</th></tr>
+    <tr data-page-node-id="MFYGpWqJzgZ7EjeGh5FZbK"><td data-page-node-id="e7dIfh1vkm9nVPf3BGF370"><code data-page-node-id="0UgHSiQWOjBVnR8VZfWcNR">useVirtualTrackList</code> / <code data-page-node-id="BYPMsXwMgovCE3RTnSL4ol">usePagedTrackRows</code></td><td data-page-node-id="aziFlJ0PE3A6FxjeNYvoIb">大列表虚拟滚动 / 分页渲染</td></tr>
+    <tr data-page-node-id="6U8LgASPvyxanPDxvH8jJZ"><td data-page-node-id="OB0fqEGSrpG6AyqQs8APHR"><code data-page-node-id="NjNtzQeVjHQkpsf8HYHR5H">useBatchDownload</code></td><td data-page-node-id="7JEpBLqImWZOYdEVwoUu3V">多选批量下载：统一选音质 + 降档策略确认</td></tr>
+    <tr data-page-node-id="q7AnvIuhiiDP9L0jUkdRXm"><td data-page-node-id="O4tkH6SuavtxG275aSlvht"><code data-page-node-id="UpD59coPJLnGA7FCfwG2Dy">useProgressiveTrackCovers</code></td><td data-page-node-id="X51aMTiiGsISTpliD3CCzN">封面渐进加载，首屏提速</td></tr>
+    <tr data-page-node-id="mdQD9xXXKx2gMO6CQzz9P3"><td data-page-node-id="bZHXJF0KSoCBJyUzB5xQUD"><code data-page-node-id="LZmWBwY9WmCzlLPY6i9A2H">useUpdateCheck</code></td><td data-page-node-id="tHsgBKGWh7nHjWOT7MMx4d">检查 GitHub 最新 Release</td></tr>
+  </table>
+</div>
+
+<!-- ============ 6 后端 ============ -->
+<h2 id="backend" data-page-node-id="THNd0BKtNu9BwX47yG0NiP">6. 后端设计</h2>
+<div class="card" data-page-node-id="x6jPOzRMhPQdNMXEUAd3x3">
+  <h3 data-page-node-id="KWa63lZYkebXBLWd5nSC7J">服务入口 <code data-page-node-id="0Qv6GZFulK3NCZwE6E4U65">server/index.js</code></h3>
+  <p data-page-node-id="16RBbHxd7lTgSmYsOa7PMr">启动流程：初始化 SQLite → 迁移文件路径 → 刷新音源元数据 → 挂载 <code data-page-node-id="6pekRQXydlx3OodTdCU7BE">/api</code> → 托管前端静态产物（SPA fallback）→ 启动 WebSocket → <strong data-page-node-id="oNahQ77mdANWx4GB8WZOv6">恢复各用户激活音源</strong>（跳过故障音源）→ 初始化下载队列 → 内存守卫 → 遥测。</p>
+  <p class="muted" data-page-node-id="J0jvuVS4ZE641VLCJ7qsA6">优雅停机：SIGINT/SIGTERM 时停止遥测、关闭 WS 与 HTTP。端口占用（EADDRINUSE）给出友好提示。</p>
+
+  <h3 data-page-node-id="QfH8hbJjaQrTQWzk85v1QR">路由模块一览（routes/）</h3>
+  <table data-page-node-id="nEJzGbFlAISQF2CiYzvTHS">
+    <tr data-page-node-id="7ANRWarV48t5AhNMx9dNyE"><th data-page-node-id="O6kZPiIxFIog7I5fkELq7O">模块</th><th data-page-node-id="KGdczJFk6pkjtYrhaqJJJ4">挂载路径</th><th data-page-node-id="pdbClBSnBNk3w4rByTFcJH">职责</th></tr>
+    <tr data-page-node-id="HphaRsCVTEaiQ2jsM6FJkF"><td data-page-node-id="Fnkiw6jkoULttKOp886BRx"><code data-page-node-id="yXsKF7fwkwVTmb3C0iZm4P">auth</code></td><td data-page-node-id="DShMLtwcffHfOP2cft7uUD">/api/auth</td><td data-page-node-id="XhZkDVhk1DbeCPHnQBJnWl">登录/登出/设置/重置密码/邮件验证/用户管理（管理员）/SMTP 测试</td></tr>
+    <tr data-page-node-id="BZGN2x9p9edngmgs1nyAGC"><td data-page-node-id="pEw9iBZMliHgW9COUYp3Fw"><code data-page-node-id="14BCphdO1TzAqtBbFWf00W">source</code></td><td data-page-node-id="jk259Xh9dnfPPm5rSHG8VH">/api/source</td><td data-page-node-id="Anc4ix56NDxawtJ5HWQYFc">音源脚本导入（文本/文件/URL）、启停、健康度上报、故障处理</td></tr>
+    <tr data-page-node-id="nrE2YMmkRBzbjNuQ3QUJkS"><td data-page-node-id="olS2YXteYl1wXNxrTTzJAg"><code data-page-node-id="zSk4xfgyhPBFseFD0hT7CR">search</code> / <code data-page-node-id="xQELpZe0E6PG3CCJOIwDpJ">album</code></td><td data-page-node-id="dK5AuXdypikzp1bSTz8dYq">/api/search</td><td data-page-node-id="GZ8B3WFNhlqH6FSSQBIdXQ">歌曲/专辑/歌单检索与专辑详情</td></tr>
+    <tr data-page-node-id="kA6uNEmGiLMYCnw6LIYfEQ"><td data-page-node-id="rClQ1gDlJpnUcljhjK9v0B"><code data-page-node-id="hlzYQNfpCD3GKbLa2ldEoV">playlist</code></td><td data-page-node-id="znCRixttvDAnNoPQ8iTCQO">/api/playlist</td><td data-page-node-id="BHEd78axMogJuJqkTEjl3l">歌单解析（链接/ID）、推荐歌单、平台列表</td></tr>
+    <tr data-page-node-id="WAunKHhCkVcS8hLOr9HlP5"><td data-page-node-id="4nmqYDZb7yvEY8GSAf4EE6"><code data-page-node-id="dmSLk0NWLThfk95JM78Fsh">discover</code></td><td data-page-node-id="MaCbmWK6g00PU4BKsIt4JL">/api/discover</td><td data-page-node-id="DBpdgrscy6eW9GHRCMmQ8H">新歌/新碟/排行榜/地区</td></tr>
+    <tr data-page-node-id="XTZ0I8KnBMOAmR9Wow19VD"><td data-page-node-id="x0W2OqDO7wApspAhLd6tpv"><code data-page-node-id="F14Gdc0z1PqckF3y05ExXM">play</code></td><td data-page-node-id="LGn3lu6Dd5oP42G2PxfDci">/api/play</td><td data-page-node-id="LFT4ZIcywhWAKTiDYwBdlx">播放 URL、歌词、封面、音频代理、本地文件流（含 APE 转码）</td></tr>
+    <tr data-page-node-id="DQDtqHIYd6QzdgBgsC6skD"><td data-page-node-id="YVFldlEUUsCLCwLSWwhgD5"><code data-page-node-id="0B8wKWECPxGehHYpkTPl9G">download</code></td><td data-page-node-id="uE4QUNYIRMyjlTA76w76EK">/api/download</td><td data-page-node-id="bYrobSRRdaWjluINFOoLgE">下载队列：添加/暂停/继续/重试/删除/降档与同名文件确认</td></tr>
+    <tr data-page-node-id="ofeGaR1XzVz9cBS7aCU7Vz"><td data-page-node-id="12P5wGSCUVu7EPUjQHiwrv"><code data-page-node-id="aC3e0UAUGU6bVggsAdRB0Y">tag</code></td><td data-page-node-id="4rTpMCUcqR1Y0jmD3YuZgC">/api/tag</td><td data-page-node-id="XGW359kX4SGMK6nnFs3EG0">目录扫描、标签读写（批量）、按文件名/歌手匹配、手动检测</td></tr>
+    <tr data-page-node-id="FLG6NSolOTEAfB0B62droK"><td data-page-node-id="Yq7LsLGMsFi8xO56yB8ZtK"><code data-page-node-id="vAEMbbFhOOSHCgzLMGcRLr">library</code></td><td data-page-node-id="AB4YgiFnqzpyrEazz763Ad">/api/library</td><td data-page-node-id="3qbLLCt8lI9mCzOqCkiAAf">音乐库扫描、歌单、用户数据、查重、删除文件</td></tr>
+    <tr data-page-node-id="rwWqY1GHqvvC8lmNV4EAzO"><td data-page-node-id="iqXVpaEefEFo2WuOCFqyP1"><code data-page-node-id="5gT13mOtiRou1TXSZXsC2x">paths</code></td><td data-page-node-id="jSGKbhIQUYkBxHdbxbOerC">/api/paths</td><td data-page-node-id="Nij0spvFCqAmBYzLm2ZXbf">音乐库/下载路径管理（管理员）</td></tr>
+    <tr data-page-node-id="Ffikb8N1DzrBm3kcHwcARp"><td data-page-node-id="0xE0ob37D7wMOPrtttFVDh"><code data-page-node-id="TycdIJ1qa7mLMvd4jJ7sY6">settings</code> / <code data-page-node-id="LEbDIeeR6Ezlutjg5LnDa1">backup</code> / <code data-page-node-id="lDEZciCqHpc3Nq4bRoq2Jx">about</code> / <code data-page-node-id="3koYyndb6MR4KIDcVsZfel">health</code></td><td data-page-node-id="28CTmtTAVr65hBdCaheNIU">—</td><td data-page-node-id="RkiPNRUZdsWzJ0ifOyPRR6">设置读写（合并用户级）、备份导入导出、版本信息、健康检查</td></tr>
+  </table>
+
+  <h3 data-page-node-id="NoTf6a4NeH4ZjXlxQAx6dE">音源沙箱（sourceManager.js）</h3>
+  <p data-page-node-id="6iCcaxM2BecWdEbXvqXxal">支持两种音源规范，在 <code data-page-node-id="7Rx1GODukqlhsSZ9gKaSXj">vm</code> 沙箱中加载：</p>
+  <ul style="margin-left:20px" data-page-node-id="VtdfJu5dLHH6Nan5TuswK4">
+    <li data-page-node-id="L0CAROGbfXG5j8zFk7gEqL"><span class="tag b" data-page-node-id="78siQ4cAsVq6FqUIAdNt2F">LX Music</span> 落雪规范：暴露 <code data-page-node-id="fUFqX8q5j8YqbON8j7gPx1">lx</code> 全局（<code data-page-node-id="3oKvMUAkD1sOP211lAU1TM">send/on/request/utils</code>），<code data-page-node-id="Yc0zPQpnTIl2iIZViRF0Bv">utils</code> 提供 crypto（AES/RSA/MD5）、buffer、zlib 等受限能力；<code data-page-node-id="BXTWLWczYFJ60bSbrlLIM1">request</code> 经服务端代理转发</li>
+    <li data-page-node-id="1DSmj7bRV24un0fxkzesGF"><span class="tag f" data-page-node-id="fbO82hs8izpB2f52QNiJhl">澜音 cerumusic</span> 规范：<code data-page-node-id="XCvH6N4SUFOkFyk5yVnPLo">createCerumusicApi()</code> 创建兼容对象并归一化为同名 source</li>
+  </ul>
+  <p data-page-node-id="h1qWcopXHMioIcWZcfnrBD">支持平台：<code data-page-node-id="IshTkGf9o0rhMiD0HXlQsP">kw</code>（酷我）/ <code data-page-node-id="qr8fW2mjsWWRuOD79NDdHa">kg</code>（酷狗）/ <code data-page-node-id="LcbCyoXow7wR4bENvmgQRZ">tx</code>（QQ音乐）/ <code data-page-node-id="OIOIPhr7ohGotswexf3GJ8">wy</code>（网易云）/ <code data-page-node-id="gh2Cc3eHPspaM5EeDOiouT">mg</code>（咪咕）；支持动作：<code data-page-node-id="ch6hnINm72gcdQxlXeaWAo">musicUrl / lyric / pic</code>；音质档：<code data-page-node-id="Goux8vFdGJTO6DMbY5ezlB">128k / 320k / flac / flac24bit / hires / atmos / atmos_plus / master</code>。</p>
+  <p data-page-node-id="motABFZ6uM8Igc5uEWAttv">安全设计：沙箱内 console 置空、require 白名单化、初始化 20s 超时、同 id 先卸后装避免重复沙箱；故障判定区分<strong data-page-node-id="ZVzQb2Y23hU0dZUwvgAbYM">临时网络错误</strong>（不封源）与<strong data-page-node-id="RuIrPZJHVBpMTtjYdfpFhe">永久故障</strong>（停用并广播 <code data-page-node-id="OEspcTmTIGFnGSGVtRCKyK">source.fault</code>）。</p>
+</div>
+
+<!-- ============ 7 数据模型 ============ -->
+<h2 id="database" data-page-node-id="JS7Vf1J4MuczGrwCFS0WLT">7. 数据模型</h2>
+<div class="card" data-page-node-id="71e5NU5axKYZZaVzfnMIM9">
+  <p data-page-node-id="73ahMvgRqLEzhcMaFeOmTT">SQLite 单文件（<code data-page-node-id="fMGTaGlkoqDR00ExzjDGTB">config/lx-music.db</code>），WAL 模式，<code data-page-node-id="e5f7DUtsBRpVf3X8R4VU9B">busy_timeout=5000</code>。数据表：</p>
+  <table data-page-node-id="sHIHBaMfS8KlrSweaihumt">
+    <tr data-page-node-id="duEUchUfG7c4IrctcAgHxT"><th style="width:170px" data-page-node-id="I3zqwhM8JHkNkDXDzTOjBT">表</th><th data-page-node-id="TKHoPoJDJgJhnii659KSUW">关键字段</th><th data-page-node-id="0KbKyVDq2ZSYQdnIMoj88H">说明</th></tr>
+    <tr data-page-node-id="uXu5yFpYOuMiX0TWuDUmh7"><td data-page-node-id="8gU3n0GT15UiwEwKXOUuSO"><code data-page-node-id="jhJiZwjbpOT3AVkGQExCzm">settings</code></td><td data-page-node-id="EC6qQHJGqgGRyUtTpDXWMX">key (PK), value</td><td data-page-node-id="fKXiwBgOSNWYN9CR6neda0">全局设置 KV（下载/音源/播放器/UI/邮件…含默认值）</td></tr>
+    <tr data-page-node-id="1kH1kAyVOZ1fFNcpnihTuL"><td data-page-node-id="o5nwbUfPqUIFs70ocGLpoT"><code data-page-node-id="en67OyOxmWD3O99F7vQv7u">user_apis</code></td><td data-page-node-id="GFNJBZjFNkvThLJKASXfL5">id, name, script, sources, author, version…</td><td data-page-node-id="WI2bgcLppWE6D7FClzunpA">导入的音源脚本本体与元数据</td></tr>
+    <tr data-page-node-id="sDKvgbNEXXGcjhVb3DRsNU"><td data-page-node-id="FGeEj6LHRCehBXQO2Tbqn6"><code data-page-node-id="PdeSTqFGzqavusOsxkzqBO">download_tasks</code></td><td data-page-node-id="KAcVPm3b4ITCLXUdfGHI2E">id, name, singer, quality, url, status, progress, user_id…</td><td data-page-node-id="GK6YyQ3CmfYn75hXjLt1Pz">下载任务持久化</td></tr>
+    <tr data-page-node-id="wf9bWvVJEygMqCmlGHUyU2"><td data-page-node-id="7h5eRHaO9kr30uneAgApDF"><code data-page-node-id="jPY3TxJAeQVRbFPNa9OzEK">library_index</code></td><td data-page-node-id="LixAsHISuAyFGBDyPXfUda">file_path (PK), mtime, size, meta_json</td><td data-page-node-id="naRf94ZoEnaJIEBt7LlOni">音乐库扫描索引（缓存音频元数据）</td></tr>
+    <tr data-page-node-id="18GNofA7n6xJ9z4VBiwziU"><td data-page-node-id="sLQLC30fgf2QWsy51LhH0A"><code data-page-node-id="tRSX5riGUvibhuqZzXYB5k">users</code></td><td data-page-node-id="XnowZUeZZu1W1FB8Vid5DG">id, username, password_hash, role, fnos_uid, email, email_verified</td><td data-page-node-id="9Bx34TST0HrzCE9Kpuu6CE">账号（admin/user）</td></tr>
+    <tr data-page-node-id="SzIs7pq8sN8LGWI8DVrYzs"><td data-page-node-id="faZGRTdfODkQHSHXf4Wgcc"><code data-page-node-id="lK12XJAEbtaAe66L2n7LMs">sessions</code></td><td data-page-node-id="1RBR8sM40uZm3CP5cDQyJV">id, user_id, expires_at</td><td data-page-node-id="0WCeYVgCCVoclo3zzMFNeC">登录会话（外键级联删除）</td></tr>
+    <tr data-page-node-id="DkvcNFS1WuxBx7G3xmUB0e"><td data-page-node-id="I7i1nEpjAR0zcFuRjIogLT"><code data-page-node-id="wGSbjFFLJCheMh4WQ8nYsR">user_settings</code></td><td data-page-node-id="Uh05zOF6cuefSztzskwsvc">user_id+key (PK), value</td><td data-page-node-id="5p2gBhARx1I7LqP0EVATq7">个人歌单/收藏/音源启用等</td></tr>
+    <tr data-page-node-id="TDNHMpiPWk4L8n4KW8iDyX"><td data-page-node-id="23AD9rEcW65lAx0iHfEk9d"><code data-page-node-id="MWIHuWJmAOrpBMyZEGDiXH">auth_tokens</code></td><td data-page-node-id="Jl5Nq2mPb64eli2rKu2FaY">id, user_id, type, expires_at</td><td data-page-node-id="OQ7bASYAYW8s45EQRs8AcU">邮件验证/找回令牌</td></tr>
+  </table>
+  <p class="muted" data-page-node-id="rDMnHQrZ69laB5HUy9geHz">动态迁移：<code data-page-node-id="9H59OMThnpxNVWjAUd6tF5">migrateSchema()</code> 通过 <code data-page-node-id="shyAWhugBEk8XTYe4LXats">PRAGMA table_info</code> 检测缺失列后 ALTER 补列（如 user_id、email），实现历史版本平滑升级。</p>
+  <h3 data-page-node-id="S2FPBHBvGD9sTy8rIRmvuY">默认设置项（节选）</h3>
+  <ul style="margin-left:20px; font-size:13.5px; columns:2" data-page-node-id="vhfZwGrjITJXPZJWJAqip3">
+    <li data-page-node-id="94RhxaigFoL8L53Bok5lHI"><code data-page-node-id="FQCOHcMgWuYTUZWwqzbxyW">download.savePath</code> = /downloads</li>
+    <li data-page-node-id="6xEnyVYOkWpNEj65smh2JE"><code data-page-node-id="BS1mvDOdrw0ATOW6ISNxvO">download.fileName</code> = {name} - {singer}</li>
+    <li data-page-node-id="NbZcNUEOmcRVGoeAHZ1mYV"><code data-page-node-id="pcOE1LmOTQZ4gzO0EvtfC0">download.maxDownloadNum</code> = 3</li>
+    <li data-page-node-id="RuCroA0wpCosyoFV9bKqb7"><code data-page-node-id="r8AQnXTKonwdDkZQJFyPG0">download.isEmbedPic</code> = true</li>
+    <li data-page-node-id="Zb4RjQhCFRVvFa3kJHNaje"><code data-page-node-id="GxmS7yDYURDW1c7ZDVYOvo">source.active</code> = []</li>
+    <li data-page-node-id="vptoS6DdyyXhIz69kF9EFI"><code data-page-node-id="wCyMCYJXFD5vD5vWxrK3Sw">ui.theme</code> = dark</li>
+    <li data-page-node-id="fPo62YX7owbETByoXcHEq5"><code data-page-node-id="D9pdLGINGq2knUzsL2MFAh">tag.matchConcurrency</code> = 3</li>
+    <li data-page-node-id="G6lnvDqYoiOJev7m30hK6G"><code data-page-node-id="wnuDe6trJW1aKqZsMcm7ya">player.visualizer</code> = true</li>
+    <li data-page-node-id="wB6gJWYLm9F483k5UGtBAK"><code data-page-node-id="xDSLjD4UZybO0039jTubAE">mail.enabled</code> = false</li>
+  </ul>
+</div>
+
+<!-- ============ 8 核心机制 ============ -->
+<h2 id="core" data-page-node-id="gTKvsHtdlSHcE58P85ougT">8. 核心机制</h2>
+<div class="card" data-page-node-id="9ZWXjR4LN2QnAscqtwMSoG">
+  <h3 data-page-node-id="tedRYDgzgW6OEdx5XSujKf">8.1 下载流水线</h3>
+  <div class="flow" data-page-node-id="eilkptnyjAAuqfMtYByRkR">
+    <div class="step" data-page-node-id="FgcsqR0iBZYo3J5gBtYKX1">/download/add（多任务）</div>
+    <div class="arrow" data-page-node-id="6tjvti5HFtOESEerj0LeLI">→</div>
+    <div class="step" data-page-node-id="8AhdVQ7EmizapIIBCtrnKy">质量档位校验（无此音质→降档确认）</div>
+    <div class="arrow" data-page-node-id="dicMxRAZefoJt4iMO0pClA">→</div>
+    <div class="step" data-page-node-id="0Xc8kF4bGDe8LIVqXiI54S">同名文件检测（询问/跳过/覆盖）</div>
+    <div class="arrow" data-page-node-id="NdBicxtOIByow0djuYeumB">→</div>
+    <div class="step" data-page-node-id="wffGy2KX9TD9SZYGIFBOSQ">取链（同音质 3 次尝试 + 换源兜底）</div>
+    <div class="arrow" data-page-node-id="M1aBliiqyeyTfgsEyyh0pT">→</div>
+    <div class="step" data-page-node-id="z0CpT3eHkqOGIRv5GpTFIG">下载 + 试听时长校验（短片段自动取消）</div>
+    <div class="arrow" data-page-node-id="D1q2iZI831rXHFBdUu4zvI">→</div>
+    <div class="step" data-page-node-id="apRt5NfZmegGbeAJ9qoTsk">写入标签/封面/歌词</div>
+  </div>
+  <p class="muted" data-page-node-id="EDksMyPudbyJtes40Z7EMR">细节：并发上限可配；中断可续传（<code data-page-node-id="0VzeWv8EuWfPwMDOgEq1bl">await_exist / await_source</code> 等确认态）；任务状态经 <code data-page-node-id="XKXgi2LCgMJXinRTJ6L4JH">download:added</code> / <code data-page-node-id="67ieEFzZP1i8t5YTxCi3JK">download:cleared</code> 事件推送；结束写入 <code data-page-node-id="eGpVVwWDvxYw238Iq823Z7">library</code> 索引并广播 <code data-page-node-id="EgZnLrBr2GlCsscjy8EDpV">library:changed</code>。</p>
+  <div class="note" data-page-node-id="7nrlnxT24EzZSbAKS0QAe0">
+    「真 FLAC」校验：无损档位会检查 Content-Type 与文件头（<code data-page-node-id="zpSmtQDDnhFu2gCD2qpRym">assertLosslessContentType / assertLosslessFile</code>），防止"假无损"；试听时长明显短于曲目时长则取消并归类可单独重试。
+  </div>
+
+  <h3 data-page-node-id="Aj9BjvOzowANwJrn4OAe3o">8.2 播放链路与换源</h3>
+  <p data-page-node-id="YuxAoNlseD7kBOW3xYhAnY"><code data-page-node-id="hvWhUPuI8Do2jYHTB03Gq5">POST /api/play/url</code> → 构建 musicInfo → 播放 URL 缓存（LRU，<code data-page-node-id="ICSxrBSow1i7DUBtlqEOYH">playUrlCache</code>）→ 音源请求（<code data-page-node-id="EV2vosDsFLCQ7tOcUQ2kDh">playUrlLimiter</code> 8 并发、25s 超时）→ 校验 URL → 包装为代理或直链 + 流 token。失败时返回 <code data-page-node-id="EhLMu5qxSNM3sbtsxfD5C7">409 SOURCE_FALLBACK_REQUIRED</code>，前端据此弹出「换平台/换音源」选择。</p>
+  <h4 data-page-node-id="fPo5kLGp5n5pw8W2xCDA10">音频代理</h4>
+  <ul style="margin-left:20px" data-page-node-id="R0EkZSpN2E6f2oB1eFRwPF">
+    <li data-page-node-id="NJxLG51SkBOYhu8tE3X6Oz"><code data-page-node-id="1JFwqtk8HBATnId3X0mtNW">GET /api/play/local</code> — 本地文件 Range 流式播放（白名单目录校验）</li>
+    <li data-page-node-id="GAS7tE3mE8rSZIhFiMSlEv"><code data-page-node-id="dfF1vyhiZQCR4U6e4VVa4R">GET /api/play/local-ape</code> — APE 经 ffmpeg 转码为 WAV 缓存后流式输出</li>
+    <li data-page-node-id="2k5bcQsfTmBFYGhUV5Zdgd"><code data-page-node-id="tLFNkSFtQh5djuX4Nitvfl">GET /api/play/proxy</code> — 远程音频反代（带平台 Referer、Range 透传、8 路上限、SSRF 防护：拒绝内网/局域网地址）</li>
+  </ul>
+
+  <h3 data-page-node-id="EDGW5lO0ejIyY3RNbr0NK7">8.3 试听短片段自动恢复</h3>
+  <p data-page-node-id="78Q3hT37aST93GzHwgcX9W">播放链异常时：同平台换音源 → 其它平台搜同名曲 → 完整播放后再继续；「无法播放该音频格式」误报大幅减少。</p>
+
+  <h3 data-page-node-id="1U8E8DYk3fEvamlC1DOXB4">8.4 标签系统</h3>
+  <p data-page-node-id="p8SwOAM14rKv2KIsFGVH6T"><code data-page-node-id="aKvCQvYJ5Bb2KyQ6TY575y">meta.js</code> 按扩展名分发：MP3 用 node-id3（ID3v2），FLAC 用 music-metadata 写 Vorbis Comment；WAV / APE 为自实现写入器（<code data-page-node-id="7g2Nc67vv7B0uWDAo1sS5T">wavTag.js / apeTag.js</code>），保存更稳、封面不误清。标签匹配：<code data-page-node-id="QQIfdU0Gb6ErFHTT0Mw6yx">matchByFilename / matchByArtistTitle</code> 调用音源 <code data-page-node-id="tKRe7hq2MsPSeAbkUMsGAs">pic/lyric</code> 与搜索，支持手动检测标黄一键采用、按文件名批量重设、并发 1–6 路可调。</p>
+
+  <h3 data-page-node-id="HqWg0J9cffJO2U4ZEwKhkI">8.5 音乐库与查重</h3>
+  <p data-page-node-id="3CydcsXjGIlT89JKADx0uU">定时/手动扫描 → 写入 <code data-page-node-id="2ZwSgXgI7lZAgH9a96LMOu">library_index</code>（mtime 增量）→ 内存缓存（libraryCache）→ 智能歌单（最新添加/最近播放/收藏）。查重按「标题+歌手」聚合，同组至少保留一份，可复制路径或删除磁盘文件。</p>
+
+  <h3 data-page-node-id="v8s0KOrGiy9A798TKd1NvT">8.6 内存守卫与遥测</h3>
+  <p data-page-node-id="DgJBa3JmN6lhontjsUWAi3"><code data-page-node-id="BCZPGuaLlAnaxyLSihqbFT">memoryGuard.js</code> 定时监控进程内存；<code data-page-node-id="hOAgjH3xIvj2DNskB3dIKp">telemetry.js</code> 匿名用量统计（可关闭，fpk 提供 no-telemetry 构建）。</p>
+
+  <h3 data-page-node-id="sBaR4sVRrEudwS5ckX2XwD">8.7 飞牛 FPK 打包</h3>
+  <p data-page-node-id="r8JLTc65tg82qHSSAmNEYC"><code data-page-node-id="x8iAzkjA9cpRWw61tHR0dM">scripts/build-fpk.ps1</code> 生成 <code data-page-node-id="eEPWUW0P1zw1C0vRav0Eth">fpk/lemon-music-&lt;ver&gt;-&lt;arch&gt;.fpk</code>；<code data-page-node-id="JzSH29cYmS9XHE9UPAaA3o">fpk/manifest</code> 声明依赖 <code data-page-node-id="WUiXxTS16vLR4qVD4CgQvo">nodejs_v22</code>、端口 7983、服务脚本（cmd/ 下的 install/upgrade/uninstall 回调）。</p>
+</div>
+
+<!-- ============ 9 API 参考 ============ -->
+<h2 id="api" data-page-node-id="KVAuxIVPoDlxqP3QVDYIGb">9. API 参考（/api 前缀）</h2>
+<div class="card" data-page-node-id="p8YkTObSCVT2LCRHw95wWx">
+  <p class="muted" data-page-node-id="PZxzfXd5dIdF80otl3DrOE">除 <code data-page-node-id="RTq0sq4xMAHVi7gtGkHlJE">/auth/*</code> 与 <code data-page-node-id="fN1EDcULtYPHZf9CzJN1vK">/health</code>，全部需要 <code data-page-node-id="8RKPoGgf0izRt2ZrH977TC">Authorization: Bearer &lt;token&gt;</code>。响应统一 JSON。</p>
+
+  <h3 data-page-node-id="sU326GqHeD5mGyY3idqXfg">认证 auth</h3>
+  <div class="endpoints" data-page-node-id="de9ElVJIzauLZXFV9ppeGR">
+    <div class="ep-item" data-page-node-id="Edfa6a8HJfARTJFrDrCOZF"><span class="m post" data-page-node-id="MEMAJWpd5BiOzAACzkfiEE">POST</span><code data-page-node-id="SZmsSIufR08fFY63edpFNZ">/auth/login</code> 登录　<span class="m post" data-page-node-id="YGz12Eq9zzCbpPchYrCgIv">POST</span><code data-page-node-id="PFrvW0VKXMqvRtVBGomZyd">/auth/logout</code> 登出　<span class="m get" data-page-node-id="xO8eBdhFJxGkdByWFNF9Fr">GET</span><code data-page-node-id="SiYa0bNjWqXmDSecJ4h2dh">/auth/me</code> 当前用户</div>
+    <div class="ep-item" data-page-node-id="DhLt0EgmAZ8ACp4QBwMeix"><span class="m get" data-page-node-id="XD3ATJSAXBB2aaAuCtslKD">GET</span><code data-page-node-id="GUPOgdGHDPId9Ez6e1smjT">/auth/status</code> 状态（含 setupRequired）　<span class="m post" data-page-node-id="4xy8BBUii89dHIIoxe8pjI">POST</span><code data-page-node-id="VJBeHgaQuPHrgs4eDF9oak">/auth/setup</code> 初始化管理员　<span class="m post" data-page-node-id="hkP1gcwLNsyNHNXCUmGARV">POST</span><code data-page-node-id="2PGfLfhwun8ey0Zkchk5GD">/auth/setup/test-mail</code> SMTP 测试</div>
+    <div class="ep-item" data-page-node-id="3U9p2ff8vYfgIwsdDDtujC"><span class="m post" data-page-node-id="zun6hLCThnY9eYhD3dQ56V">POST</span><code data-page-node-id="oiBL3rzcmeYMqmkgqqpGyc">/auth/forgot-password</code> / <code data-page-node-id="HZdWYclyZpvHMBYSNvVPzI">/auth/reset-password</code> / <code data-page-node-id="kBB4i7Uwy9EFBWX9XBhXlJ">/auth/change-password</code></div>
+    <div class="ep-item" data-page-node-id="uD3LMK1ZmNZVmdIp8viIYU"><span class="m post" data-page-node-id="rpFSi6oMq8mBH7OYoW6OQw">POST</span><code data-page-node-id="B1qf8Q8ATJoRUDcOBHvsXz">/auth/verify-email</code> / <code data-page-node-id="9BNSMvHHIhpS94xB9PfJmX">/auth/bind-email</code> / <code data-page-node-id="Husruwg25hmOishAvUf9gO">/auth/resend-verification</code>　<span class="m post" data-page-node-id="frXQGt5tjAvZxSwcAuyxPL">POST</span><code data-page-node-id="kjbwLEbwqZA5C3aUElOgSp">/auth/mail/test</code>(admin)</div>
+    <div class="ep-item" data-page-node-id="asRXVdWp9HOytJH4nfmrRv"><span class="m get" data-page-node-id="aQMFwEUM3yuvowUVdlcSeo">GET</span><code data-page-node-id="HnC6rHCEoYIGvbwQdPD2Pf">/auth/users</code>　<span class="m post" data-page-node-id="QwOMvU0PYE8fTIAvkkofAd">POST</span><code data-page-node-id="dnQi5kjNRebBqlwDx9mAOC">/auth/users</code>　<span class="m post" data-page-node-id="L9BpOs62zIjl5Hov28HEyC">POST</span><code data-page-node-id="2XtrJR26WRdFrJk1nYd210">/auth/users/:id/reset-password</code>　<span class="m del" data-page-node-id="JyF0s8fyTW7Qf0MarTYYBg">DEL</span><code data-page-node-id="p6M2egA9XGBgUdRfpbJUoZ">/auth/users/:id</code>（均 admin）</div>
+  </div>
+
+  <h3 data-page-node-id="Ozz75wvcigcLv35SAViq0i">音源 source</h3>
+  <div class="endpoints" data-page-node-id="gOeV0R5NIsA0bO0WZmHr42">
+    <div class="ep-item" data-page-node-id="xSrGgQdirtg04o4AChAD1A"><span class="m get" data-page-node-id="Og60OQCdDvz3SwOLacSJkp">GET</span><code data-page-node-id="v8OQlfGDnW09g9CGI9UNDE">/source/list</code>　<span class="m post" data-page-node-id="B7G0GpZnKVHigiDl63gSHG">POST</span><code data-page-node-id="9zACg1ZEUmysBrF2zRbKHE">/source/import</code>（文本/文件）　<span class="m post" data-page-node-id="sTAtkb63sYIK9DTZbriGB4">POST</span><code data-page-node-id="ycRktYNmduupgESzt6deLX">/source/import-url</code>　<span class="m del" data-page-node-id="ZODC1XwlxyGF1tgbAGccbu">DEL</span><code data-page-node-id="7ZV6LNoDbHFTqNvv7BRpHo">/source/:id</code></div>
+    <div class="ep-item" data-page-node-id="hRhKYzmpCrtuIlnq7Lwvqg"><span class="m post" data-page-node-id="Lc6L1ydnD54YddhxQjClPg">POST</span><code data-page-node-id="Oh6bp2SfAuVRDAlQaHjvst">/source/activate/:id</code> / <code data-page-node-id="byUSE8ndGCCWIccWD71943">/source/deactivate/:id</code>　<span class="m get" data-page-node-id="qSQalOJsPXHmUTsXZNYhET">GET</span><code data-page-node-id="R0bQ5vzir1g2eDGYtiukF9">/source/active</code></div>
+    <div class="ep-item" data-page-node-id="Gx2LEkNTQS7Iry06A1CrHX"><span class="m get" data-page-node-id="ieE1q5neneXRJxcWkXmjyN">GET</span><code data-page-node-id="tSFR8JtcEh4sfywah9bx9Y">/source/fault</code>　<span class="m post" data-page-node-id="r0RYABgdC6BadUhr5CFTUC">POST</span><code data-page-node-id="af5goUFjPkJhMRndMgXq4F">/source/fault/delete|dismiss|reimport</code></div>
+    <div class="ep-item" data-page-node-id="c9t7fKkpJAOG3mwpVZe0dz"><span class="m post" data-page-node-id="26BampGSE9MF8C525296R9">POST</span><code data-page-node-id="8Bq0pv2L1utVAfGNnFGbzt">/source/health/report|dismiss|clear</code>　<span class="m post" data-page-node-id="tKlJcV4iBZVYThmhU4Mjv6">POST</span><code data-page-node-id="4P3hAIarvoEs5RBuAj8NkB">/source/request</code>（通用调用）　<span class="m post" data-page-node-id="8ItQSSjQyIog80mgt4OqCp">POST</span><code data-page-node-id="lPwD95upcVeLOeIYHphC9Q">/source/refresh-meta</code></div>
+  </div>
+
+  <h3 data-page-node-id="CmZ6weBvF5YIY17KZCjcd0">搜索 search / album / playlist / discover</h3>
+  <div class="endpoints" data-page-node-id="ggOLIKfjKDte8isqZQtA5H">
+    <div class="ep-item" data-page-node-id="6LCiimStxEJ72Wqi1R1ehF"><span class="m get" data-page-node-id="ktCVVz6RXPcC0mWa7uvSdD">GET</span><code data-page-node-id="o3qx3qCEAD1DMPmaBWuXur">/search?keyword=&amp;source=&amp;page=</code>　<span class="m get" data-page-node-id="qhXQiEX5VWKMSjCe1boSYE">GET</span><code data-page-node-id="YNfM4AnCHrgNqHWtY3NqnS">/search/album</code>　<span class="m get" data-page-node-id="PLfNEDi2I4QBsZto4UBmoH">GET</span><code data-page-node-id="fMNCN4VZiYPEAbZByW770q">/search/playlist</code>　<span class="m get" data-page-node-id="CYDme23QiD3UUQKRzmdXOo">GET</span><code data-page-node-id="56zamBrLwLRqOERZFUFYHY">/search/album/detail</code>　<span class="m get" data-page-node-id="OaV4lYpkTFD8AyQTRTCQwM">GET</span><code data-page-node-id="KLTegoRAV6S8n2oSLwBAYl">/search/sources</code></div>
+    <div class="ep-item" data-page-node-id="zMtFSW2oQHySwoT8FeW9Ku"><span class="m get" data-page-node-id="b8mWOpfcAmiGFPrSbA0yVQ">GET</span><code data-page-node-id="NlS6fFcWcm8w6IniD76aiW">/album/search</code>　<span class="m get" data-page-node-id="oC6qhMZmzmLQll9GxC2q6Y">GET</span><code data-page-node-id="raS5eKIzKr7QEtFcS0dOJT">/album/:id</code></div>
+    <div class="ep-item" data-page-node-id="VpXgUx666EyTXjTR0r8ba9"><span class="m get" data-page-node-id="TAJOgrNRCKG8hnkEkkMPK2">GET</span><code data-page-node-id="DQD1TlTWtQWZtL3eXuIR6b">/playlist?url=&amp;source=</code>（partial 可部分解析）　<span class="m get" data-page-node-id="bkeGUlh0YzWPSXIIMifsHY">GET</span><code data-page-node-id="qp6eFWYpraporMIgLFd7G8">/playlist/recommend?source=&amp;sort=hot|new</code>　<span class="m get" data-page-node-id="UbG8UOOvyiRxHqu5x5Bdf5">GET</span><code data-page-node-id="yvmeWAwENsFHbhGRcFu6j7">/playlist/sources</code></div>
+    <div class="ep-item" data-page-node-id="FxEDkY7h4xdlk6obwOsV2w"><span class="m get" data-page-node-id="fm1nHrH2ebmK5yO0VBhCC7">GET</span><code data-page-node-id="wpjn3JLS8NOrONXbGKuuZO">/discover/new-songs</code>　<span class="m get" data-page-node-id="bshBk2xNLWIToARztT2Asr">GET</span><code data-page-node-id="YcyBMlCewsCiIwm762nyQD">/discover/new-albums</code>　<span class="m get" data-page-node-id="AhHvnBWGRTF3KBFnJ7XNfV">GET</span><code data-page-node-id="dr5lJbAMhCDaq4MVAm3bdF">/discover/toplists</code>　<span class="m get" data-page-node-id="6wlD5Hj1mU5h9RFrloqANu">GET</span><code data-page-node-id="7sFQqkqVdQwaX7nLraweBJ">/discover/toplist</code>　<span class="m get" data-page-node-id="GbET6ITAvjNrRhMhubYCpG">GET</span><code data-page-node-id="hfbhUf0DVTrnLhD1XrQIxV">/discover/regions</code></div>
+  </div>
+
+  <h3 data-page-node-id="4j8KUNGQZKTRfaHuRECG6L">播放 play</h3>
+  <div class="endpoints" data-page-node-id="DKnnF7eDsQgw4F7RM8HXfY">
+    <div class="ep-item" data-page-node-id="S7lmGK9WzmeE6IEzRSN1Uu"><span class="m post" data-page-node-id="KQHRbA5zLyc467il61Nqa2">POST</span><code data-page-node-id="riQHNTDdfdCx4wBJcosq92">/play/url</code> 获取播放链接/本地播放　<span class="m post" data-page-node-id="BAkbM367IxZf4LC2yMeuZU">POST</span><code data-page-node-id="XUF04IRL1L9aLVqvpAaAoJ">/play/lyric</code>　<span class="m post" data-page-node-id="NN8kMT8BD75RPrxlczjuOE">POST</span><code data-page-node-id="vE2MfVKzHDang4SCVSSxls">/play/cover</code></div>
+    <div class="ep-item" data-page-node-id="AqBp5Nkba27OFUYO3Q6tKp"><span class="m get" data-page-node-id="4RHFfpLJJIsaHwWnqbZsPv">GET</span><code data-page-node-id="IrtNPiWflBqKOBj6ual9eT">/play/local?path=</code> Range 流　<span class="m get" data-page-node-id="JBO1QpNsfjmADDk3ZExnVE">GET</span><code data-page-node-id="ZCZnGjGOq8J7vpcSnV4CF0">/play/local-ape?path=</code> APE 转码流　<span class="m get" data-page-node-id="AS0A45MCeXupDMAwm1MZH5">GET</span><code data-page-node-id="XfASSokjLa973lyUgZvc8P">/play/proxy?url=&amp;source=</code> 远程代理　<span class="m get" data-page-node-id="rONJkbMUVuP5T4XGPofTAG">GET</span><code data-page-node-id="GniHqnYPAiz9XThKDhnqma">/play/cover-img?url=</code></div>
+  </div>
+
+  <h3 data-page-node-id="kKEaXZ07ZLaweIuPAAA6Fz">下载 download</h3>
+  <div class="endpoints" data-page-node-id="2AvUucPUJ7PWkGmU7AM7mh">
+    <div class="ep-item" data-page-node-id="Qz8GxWO2SmCTla7UCFZRlD"><span class="m get" data-page-node-id="whwrnl4eQokjG30vy7L3zl">GET</span><code data-page-node-id="ZpSPqexKLYKuJhvxsv7gJT">/download/list</code>　<span class="m post" data-page-node-id="kHgwASzxt4EdKoVL9pMyG9">POST</span><code data-page-node-id="lH8Ml3i1mmXwZFkVIG1das">/download/add</code>（数组）　<span class="m del" data-page-node-id="3H7kzH6GymRBUVqtXRc4Aa">DEL</span><code data-page-node-id="ktB3zQCCGZmTppqCAVwE04">/download/:id</code></div>
+    <div class="ep-item" data-page-node-id="B75i2pRZVAgjKwFEjbo7W2"><span class="m post" data-page-node-id="IUjzmiGWY9RzyqgtFUuu3V">POST</span><code data-page-node-id="vphoDeg2kgSqsmtSj6GdGg">/download/pause/:id</code> / <code data-page-node-id="5k80aEoyuDQhzjqhBYThxT">resume/:id</code> / <code data-page-node-id="i4Jik0Aeg9ghQTacmwtuWm">pause-all</code> / <code data-page-node-id="0XlFgPt65Fhn2HKymKH25K">resume-all</code></div>
+    <div class="ep-item" data-page-node-id="t6GSAAK1ljor4RxX3uCuFR"><span class="m post" data-page-node-id="09ospUhjHqSA8C3iECWuaY">POST</span><code data-page-node-id="TPmtEVtXRu5Pw3rPtOgEms">/download/dismiss</code> / <code data-page-node-id="NLD1xhymhTZuor6qKJvn5P">dismiss-all</code> / <code data-page-node-id="3pjVCMVU2QGpAfxLx6k7OC">clear-completed</code>（移出/清空）</div>
+    <div class="ep-item" data-page-node-id="UzTeDO13XH9fd3HWEWilo4">确认流程：<code data-page-node-id="PcYLwPMpyaXFgooxUuoCZA">confirm-downgrade/:id</code>、<code data-page-node-id="SjgAucvB0O2KfWzm6XX9cJ">reject-downgrade/:id</code>、<code data-page-node-id="cBrEsB6bLeR3l2c4VWgz6e">confirm-exist/:id</code>（applyToRest）、<code data-page-node-id="JFghulXzIVfGbxb1qim02o">skip-exist/:id</code>、<code data-page-node-id="xD3XFbHHXfB42Gy8EEq6GR">confirm-source/:id</code>、<code data-page-node-id="xF74gQfAvidET3AjZOj9Ka">reject-source/:id</code></div>
+  </div>
+
+  <h3 data-page-node-id="j4P4SdiPpH0n7B05G5eHL5">标签 tag</h3>
+  <div class="endpoints" data-page-node-id="3zOEltELHDBm0HC8YwiucW">
+    <div class="ep-item" data-page-node-id="sm1I51yDZ6Trrsxv7T03Xf"><span class="m get" data-page-node-id="xeDbGkCN6zXz2BtKrq80j8">GET</span><code data-page-node-id="rAUK5mLTyIYWXsSXsZedw3">/tag/cover?path=</code> 内嵌封面　<span class="m post" data-page-node-id="ZAsshrMRSwFtV13z7YdxEH">POST</span><code data-page-node-id="AAnfp2V2FCQmOEBYeCaef0">/tag/read</code> / <code data-page-node-id="QOhEToD0rkU5I2vCQmqBoT">/tag/read-batch</code>　<span class="m post" data-page-node-id="LhjDxyoSbcD5gIPC2sfDDr">POST</span><code data-page-node-id="LVYXqdE45CxTYAMyESRDVl">/tag/write</code> / <code data-page-node-id="qqNemqCV8Wq9BgAinhrrRR">/tag/write-batch</code></div>
+    <div class="ep-item" data-page-node-id="Mb3pMpAxt0Ehqfvq6n4wQs"><span class="m post" data-page-node-id="dCl3DXq261VADEIdfm8aRA">POST</span><code data-page-node-id="jBMVTfAH0YEubMIGxYPMzG">/tag/list-dir</code>　<span class="m post" data-page-node-id="j8ho6chcelTTnjN0J5YvD5">POST</span><code data-page-node-id="uM10fVbytBIbtZQn3Qo9rM">/tag/scan</code>　<span class="m post" data-page-node-id="YUZ4jBJCGkDkBGk99mIBsJ">POST</span><code data-page-node-id="7qCCbN9cx332NLK6AKig2u">/tag/match</code>　<span class="m post" data-page-node-id="DdpPadqlHM9PExQsPwNs7o">POST</span><code data-page-node-id="xpc2EgaIrgEmHwl5PHUa6C">/tag/match-apply</code>　<span class="m post" data-page-node-id="9FFEASv1j2GmsC4Isliw9U">POST</span><code data-page-node-id="3BYkqbefPDYTZJX74bMggC">/tag/match-batch</code></div>
+    <div class="ep-item muted" data-page-node-id="Nrhd0yZscsJMjEISZlcZ8t">旧路径：<code data-page-node-id="Vxj4tZMMAdCkF2bVuYxsbv">/tag/dirs</code>（GET/POST/DELETE，已标记 deprecated，由 /api/paths 取代）</div>
+  </div>
+
+  <h3 data-page-node-id="d2CmcSwvVQioE4BH64o8KX">音乐库 library / 路径 paths / 其它</h3>
+  <div class="endpoints" data-page-node-id="EEX8ybHiJuI8GbuBuFtos5">
+    <div class="ep-item" data-page-node-id="VYVr1vSa9BSkoHApMF5jUy"><span class="m get" data-page-node-id="l2pC9jHZvqyV71m0WSsIcW">GET</span><code data-page-node-id="sPAuiwMjlxi7yN3M7AuBMk">/library/tracks</code>　<span class="m post" data-page-node-id="Uw9SvNDS0gHdEYxNwoPoY9">POST</span><code data-page-node-id="xV2XUO1qvSbTug3FlZF0U2">/library/sync|scan-start|scan-batch</code>　<span class="m get" data-page-node-id="Itb8Q9pS6yDDpDtD0hxvBZ">GET</span><code data-page-node-id="7c12y1Z2SEW1Dwg8UqFqOl">/library/scan-settings|scan-status</code>　<span class="m put" data-page-node-id="7YWHe6ifvDBEtLgpmH92Cn">PUT</span><code data-page-node-id="KVBnYWi05T2upfBtwY0e4u">/library/scan-settings</code></div>
+    <div class="ep-item" data-page-node-id="aH7Cxh18EmWiBMMzGVoSt6"><span class="m get" data-page-node-id="ZhwlkagvKPXx74tbUl3gkO">GET</span><code data-page-node-id="HrAfd3m7dixokXbQDmm45F">/library/playlists</code>　<span class="m put" data-page-node-id="TH8DJN0f396h8JDevDjx2j">PUT</span><code data-page-node-id="MpbMVdMVAhA1xxqOdcFPAN">/library/playlists</code>　<span class="m get" data-page-node-id="K14z3ojaHzbGdRJkQWSDAl">GET</span><code data-page-node-id="1NPWnDeuKJ9I6Jpw6i5oEr">/library/user-data</code>　<span class="m put" data-page-node-id="9Sq3uao5Z1ScqQMMZAqGpF">PUT</span><code data-page-node-id="QoWAKONZFwmYPKdHjk3ZEy">/library/user-data</code></div>
+    <div class="ep-item" data-page-node-id="2AfNzGMJvAeIc2gzCXAVZ6"><span class="m get" data-page-node-id="CKGiv8rwQ21DPQFsR0lOql">GET</span><code data-page-node-id="imjAO1FvSzb4FFXQQU2U5N">/library/duplicates</code>　<span class="m post" data-page-node-id="GC240WkDPh9JMoluOTcELa">POST</span><code data-page-node-id="rBHMjUVZyJEJ8Gggxx65HX">/library/delete-files</code></div>
+    <div class="ep-item" data-page-node-id="bKXvyNBBBrVLrCCHDQILNv"><span class="m get" data-page-node-id="EfXwACIq1tHO97UMYvJ8Kt">GET</span><code data-page-node-id="agyGoNMnBSsXVGz3LYEaXs">/paths</code>　<span class="m post" data-page-node-id="KOVd2h8kcvfAG3oJEwGDlq">POST</span><code data-page-node-id="NOgKkmLFY4OJLrwQUFBgEF">/paths</code>　<span class="m put" data-page-node-id="Drz5MAR9nucALfWa8hMnYg">PUT</span><code data-page-node-id="xMkuLjYnpqW39FYiA2Wvan">/paths</code>　<span class="m del" data-page-node-id="YXjEAKsaJYnFmzimSydrTX">DEL</span><code data-page-node-id="KCidLJs7Gwgy7zggoSILJi">/paths</code>（admin）　<span class="m get" data-page-node-id="NyWvQeBblSJJVuhlfHFqXJ">GET</span><code data-page-node-id="zHaBQi2JKnWdT9VkA6Iuw5">/paths/stats</code>　<span class="m put" data-page-node-id="UDxly4NH8jt5nHNerQmPxn">PUT</span><code data-page-node-id="LAiKShGsI1UCT1LEtlOi7C">/paths/download|download/mode|download/personal</code></div>
+    <div class="ep-item" data-page-node-id="dBOUyeTXytGJLUIoHLZ0B0"><span class="m get" data-page-node-id="eKGBnibhD8RzJak1XcD8B9">GET</span><code data-page-node-id="tzYXn0GXCp9OXAsFa8Kvfo">/settings</code>　<span class="m put" data-page-node-id="ukVHshS6lUNPOkRk56hHP6">PUT</span><code data-page-node-id="oZ5HcfJneBUeweBYqlA6pY">/settings</code>　<span class="m get" data-page-node-id="wcGQNYmFRuTn7GacTAtGUS">GET</span><code data-page-node-id="nJRcVetrNDDC3FFhpMGGpP">/settings/global</code></div>
+    <div class="ep-item" data-page-node-id="sueHsjHl8Xaxf39rDRlsVR"><span class="m get" data-page-node-id="ZZnKGe4GqCsDE832QAoW1O">GET</span><code data-page-node-id="LlmK9Dyuu29xkmMqH7jU3d">/backup/export</code>　<span class="m post" data-page-node-id="Dcj86PMgiRHALHgj1xOIQk">POST</span><code data-page-node-id="iEvApBgIcF4svTG4dDH4Fu">/backup/import</code>（mode: replace）　<span class="m get" data-page-node-id="ywwOzkmNjlBXHfikRHv4uN">GET</span><code data-page-node-id="Wkyv2fHMKTTvJudHUA0dFx">/about</code>　<span class="m get" data-page-node-id="nTbsfjLWAlbCqwdYa7pIrU">GET</span><code data-page-node-id="rTfcElqhSB2VEFW8EdCoC9">/health</code></div>
+  </div>
+</div>
+
+<!-- ============ 10 WS ============ -->
+<h2 id="ws" data-page-node-id="ROH1a1O1LDaQzAWCZ9FY4C">10. WebSocket 事件</h2>
+<div class="card" data-page-node-id="AZxcdc178vti5lPjsEWRYx">
+  <p data-page-node-id="jKItKchsvSIO6UH7UVmdzb">连接：<code data-page-node-id="TFgpfYIKdbYkJX9Agjqxti">ws://host/ws?token=&lt;jwt&gt;</code>，校验失败以 <code data-page-node-id="xWRJnjAiD7t7KhoOub1Pbn">4401</code> 关闭。消息格式 <code data-page-node-id="bFKvdCdgAIGBVMybUSisXe">{ type, data }</code>。服务端广播时支持按用户过滤（userId）。</p>
+  <table data-page-node-id="ukEAx9FqWJEtAWuOqaBdDo">
+    <tr data-page-node-id="7yCiPtIeJecanf0rTu7laj"><th style="width:220px" data-page-node-id="FZZxxekCtkJ5oEp3CwkgYA">事件</th><th data-page-node-id="zAdXxTinDsWI0Wbz9nzPE1">范围</th><th data-page-node-id="tgXIjSVFaDNpllIYz8HCPF">说明</th></tr>
+    <tr data-page-node-id="MBC1EGWJsA4FeaJ4itr57A"><td data-page-node-id="Rai9s8quqH102yMG7TzSIa"><code data-page-node-id="cXVSxLGZqgbF6GTYE1w9UG">download:added</code> / <code data-page-node-id="1AXmolHgPEDweWzD2RkIrn">download:cleared</code></td><td data-page-node-id="b8W1uZcUzJfmBpxKSMURw3">用户级</td><td data-page-node-id="6ukw3YRYpe7AlnDBak0To4">下载任务新增 / 队列清空，驱动进度条</td></tr>
+    <tr data-page-node-id="j2jrl9NkELuuRwCHFdeIN3"><td data-page-node-id="rDU7F0jc4yOahPtGhlXnBc"><code data-page-node-id="EphVEGF08hO04RBMMkLCEP">library:changed</code> / <code data-page-node-id="BbBpGVT1nNpCU2OUxFXRHj">library:removed</code></td><td data-page-node-id="cpFewTJwEchoMd7AG0J2Uw">全员</td><td data-page-node-id="bfBr6jagdQ2hyAzjsrVasp">音乐库变更（新下载入库 / 文件移除）</td></tr>
+    <tr data-page-node-id="D1IS9YW60gmeHWKIHpRgPk"><td data-page-node-id="ORn6OvuOcbK9dy9G0htfkm"><code data-page-node-id="gsbxZJOLFaZ6rmofyCDPbq">library:scan-progress</code> / <code data-page-node-id="k2jydTPYLjCh3eG6RffdED">library:scan-complete</code></td><td data-page-node-id="HJNAGyAoBlfIZYg6Bc6PmF">全员</td><td data-page-node-id="q4HiPVuGBcz80rRPxxf4d1">扫描进度与完成</td></tr>
+    <tr data-page-node-id="5T7FDDVltDWOXuSFOdMlMX"><td data-page-node-id="AYhAFsEVvi0k3AbhZKI3uD"><code data-page-node-id="ghN4pCmzdZoHW5Aa8CqSGg">library:user-data-changed</code></td><td data-page-node-id="CcEdtgC4kmyDLDLJBnOAQB">用户级</td><td data-page-node-id="pW4hmcSzVn0OwxZIchdZ5N">个人歌单/收藏变更</td></tr>
+    <tr data-page-node-id="5jUBgfRo9BSzXIgAPj46w4"><td data-page-node-id="PhHvT2RUMyeM9TgH5Y0LJa"><code data-page-node-id="FD4wpP2xP8u70L656shtor">source.fault</code></td><td data-page-node-id="9frsXW3nZlsRSIurXc15oc">用户级</td><td data-page-node-id="WG0oIWXCN1rx3jdQWa73JU">音源故障，前端提示修复/停用</td></tr>
+  </table>
+  <p class="muted" data-page-node-id="UPqG7WEXy3K0eapXELvWet">客户端：指数退避重连（1s→15s）、弱网（online/visibilitychange）自动恢复、断线静默。</p>
+</div>
+
+<!-- ============ 11 开发与部署 ============ -->
+<h2 id="dev" data-page-node-id="mM2k5ZOLuC4agbsEPWKFp9">11. 开发与部署</h2>
+<div class="card" data-page-node-id="iA5lyrEUIT0kJBNUDUZDV1">
+  <h3 data-page-node-id="gFaRywTVJMhJF6LG7Tk7js">本地开发（Node ≥ 20）</h3>
+  <pre data-page-node-id="45lsQuJwol2fwUp3TyR89j"><code data-page-node-id="IR6brW6KOfx2Ba8CDEytXg">git clone https://github.com/jia070310/lemon-muisc.git
+cd lemon-muisc
+npm install
+npm run dev       # 前端 :5174 + 后端 :7983 并行
+
+# 生产
+npm run build     # 产物 → dist/public
+npm start         # Express 托管 + API</code></pre>
+
+  <h3 data-page-node-id="Yswc29oSCfmNyfmNe6uTDK">环境变量</h3>
+  <table data-page-node-id="hkbcdFtjtPtExNVkITwFom">
+    <tr data-page-node-id="7uhOTsBs7zs2AoYe1ErN2N"><th data-page-node-id="x9uMt5tseUiYDJLjEgetd8">变量</th><th data-page-node-id="frLiaXa6PWoCdKEKOzSo0k">默认</th><th data-page-node-id="HALJFUUYme8vHqEcCeTY7N">说明</th></tr>
+    <tr data-page-node-id="D5BEodHhI9qACergdjnS7I"><td data-page-node-id="RGw5sKPALQoHCFhi4AJpFc"><code data-page-node-id="jVjbUlT0Vx6PovRrk6oY2b">PORT</code></td><td data-page-node-id="FlFQnEFSwtPmbFXgaccihf">7983</td><td data-page-node-id="i9EnxNhmyoyQNxHRsj7QEx">HTTP 端口</td></tr>
+    <tr data-page-node-id="nZ6QXWiUaBWbCb39qxW0Wo"><td data-page-node-id="qkWUg49rC58ahoALb8NBJj"><code data-page-node-id="NbB2U46z2fUDq3G5CdaL49">DOWNLOAD_PATH</code></td><td data-page-node-id="wlFHI59lrcuZOaatexTOT0">./data</td><td data-page-node-id="7gVLTwZdJKWnxshnpFVMu5">下载/数据目录</td></tr>
+    <tr data-page-node-id="3toDdwijHQezGANiM6wFnq"><td data-page-node-id="P59dBdAXUkAgIK77Rvva4N"><code data-page-node-id="RUM20Ur2xZoFKMTVOViRlZ">CONFIG_PATH</code></td><td data-page-node-id="GhPaDAJkb75ZZAj7fWYp9C">./config</td><td data-page-node-id="BuUaIYU6ub09hzNfaFYnpV">配置目录（含 lx-music.db）</td></tr>
+  </table>
+
+  <h3 data-page-node-id="8q7zQmQ0an8q3zZTeRVFwI">账号恢复</h3>
+  <pre data-page-node-id="Uv4e4UI3nUIYEItGv9sA91"><code data-page-node-id="nCSvmGOupxf9bjLCYkGeHJ">npm run auth:reset-password -- --list                # 列出用户
+CONFIG_PATH=/你的配置目录 npm run auth:reset-password -- admin 新密码
+npm run auth:reset-users -- --list                   # 预览
+npm run auth:reset-users -- --yes                    # 清空所有用户（重新初始化向导）</code></pre>
+
+  <h3 data-page-node-id="F8feR9sQqQVJSfGSD9ipMc">飞牛 NAS 部署</h3>
+  <pre data-page-node-id="LTjXHDHBuWiN9JNk5io5rW"><code data-page-node-id="sCncAHtTBlXGTUEyvAx3bj">npm run fpk:build                 # → fpk/lemon-music-1.2.13-{x86,arm}.fpk
+npm run fpk:build:no-telemetry    # 无上报测试包</code></pre>
+  <div class="warn" data-page-node-id="62LVwi8bJl5imiCRt9830f">
+    安装向导填写<strong data-page-node-id="baFG0W4fj7W2mHdrmECzCy">本机绝对路径</strong>（音乐库/下载目录）；依赖应用中心 Node.js v22；卸载默认保留应用配置，不删除音乐文件。详见 <code data-page-node-id="Zp7R8aQZyJJF62bAv70nkQ">docs/fpk-install.md</code>。
+  </div>
+</div>
+
+<!-- ============ 12 脚本 ============ -->
+<h2 id="scripts" data-page-node-id="9iDeXI7BUH2tWYyRtxSYyg">12. 常用脚本汇总</h2>
+<div class="card" data-page-node-id="Rh73tk5WEN2b2Oz45JxkPR">
+  <table data-page-node-id="O1Xh7qWsqTHe26uxsyy78G">
+    <tr data-page-node-id="vpvOj12oT6sWjHFD27Lhln"><th data-page-node-id="q1tt0DtfjrDr5LXUgfetCP">命令</th><th data-page-node-id="gnhnWCzGAZMtCcDu2aYjcp">说明</th></tr>
+    <tr data-page-node-id="ZDFwr5WrghL5lLCet32now"><td data-page-node-id="Ih3PsI3YL8ZDDgGKpXGVTy"><code data-page-node-id="sTz5gcurAGh5iQgQNctQ2L">npm run dev</code></td><td data-page-node-id="EvyLAK88H907A0xMrUi8tm">前后端并行开发</td></tr>
+    <tr data-page-node-id="5wY6QdWCY2aN9rxKmPhFOY"><td data-page-node-id="2V6cLvsvBiHD2DVrRwgg2D"><code data-page-node-id="dW3CS3yjLUMpf1xsH9e2K2">npm run build / start</code></td><td data-page-node-id="TxsMgLT2dk2tWESDK2OZic">构建前端 / 启动后端</td></tr>
+    <tr data-page-node-id="YqyF6iQFxRcvRznIIzBzHa"><td data-page-node-id="BKJSW33tkTQsT49CHEIX1H"><code data-page-node-id="BT34sMQAcPAZuWPULsLnY9">npm run auth:reset-password</code></td><td data-page-node-id="PvD15wUy63P5qIo2ukFKkn">重置用户密码（--list 列出）</td></tr>
+    <tr data-page-node-id="Jrt6tKz9umW4ah5GSnHYdF"><td data-page-node-id="mda3RlYC6EUIBfQ2V9Vv3T"><code data-page-node-id="ffrp1VXDDrwbaGuAOzl9gL">npm run auth:reset-users</code></td><td data-page-node-id="H6trrqhMzHpioDEG5wpTZD">清空所有用户重新初始化（必须 --yes）</td></tr>
+    <tr data-page-node-id="hZo8hQVm1XL4ZgeAsABavj"><td data-page-node-id="1bhDVecqff0dZhbkB6BCq0"><code data-page-node-id="EP3GliujGdkuqLDyBDYYyn">npm run fpk:build[:no-telemetry]</code></td><td data-page-node-id="PdUABo6ynhAKU2MptybG2O">打包飞牛 FPK（可选无遥测）</td></tr>
+  </table>
+  <p class="muted" style="margin-top:10px" data-page-node-id="r1p1q8G013JE0XakKgUKZO">CI：<code data-page-node-id="maV9ToxvnW3xD2YBXV4wsr">.github/workflows/fpk.yml</code> 自动构建双架构 FPK。</p>
+</div>
+
+<footer data-page-node-id="ZadnIadANFJfiZSbjBqIU4">Lemon Music v1.2.13 · 开发者指南 · 生成于项目代码分析 · <a href="https://github.com/jia070310/lemon-muisc" target="_blank" data-page-node-id="faCf5EX5o6VyPbcgQ4HuDK">GitHub 仓库</a></footer>
+</div>
+</body>
+</html>

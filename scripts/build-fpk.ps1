@@ -6,7 +6,9 @@
 
 param(
   [switch]$BundleNodeModules,
-  [switch]$AllowNoTelemetry
+  [switch]$AllowNoTelemetry,
+  [switch]$SkipFrontendBuild,
+  [switch]$SkipClean
 )
 
 $ErrorActionPreference = "Stop"
@@ -109,9 +111,9 @@ function Install-LinuxNodeModules {
     $env:npm_config_registry = "https://registry.npmmirror.com"
     $env:npm_config_disturl = "https://npmmirror.com/mirrors/node"
     $env:npm_config_build_from_source = "false"
-    npm ci --omit=dev --ignore-scripts
+    npm.cmd ci --omit=dev --ignore-scripts
     if ($LASTEXITCODE -ne 0) {
-      npm install --omit=dev --ignore-scripts
+      npm.cmd install --omit=dev --ignore-scripts
       if ($LASTEXITCODE -ne 0) { throw "npm install --ignore-scripts failed for linux/$Arch" }
     }
   }
@@ -126,14 +128,21 @@ function Install-LinuxNodeModules {
 }
 
 # 1) Build frontend
-Write-Host ">>> npm run build" -ForegroundColor Cyan
-Set-Location $Root
-if (-not (Test-Path (Join-Path $Root "node_modules"))) {
-  npm ci
-}
-npm run build
-if (-not (Test-Path (Join-Path $Root "dist"))) {
-  throw "dist/ missing after build"
+if ($SkipFrontendBuild) {
+  if (-not (Test-Path (Join-Path $Root "dist\public"))) {
+    throw "dist/public missing, cannot skip frontend build"
+  }
+  Write-Host ">>> skip frontend build (reuse dist/public)" -ForegroundColor Cyan
+} else {
+  Write-Host ">>> npm run build" -ForegroundColor Cyan
+  Set-Location $Root
+  if (-not (Test-Path (Join-Path $Root "node_modules"))) {
+    npm.cmd ci
+  }
+  npm.cmd run build
+  if (-not (Test-Path (Join-Path $Root "dist"))) {
+    throw "dist/ missing after build"
+  }
 }
 
 # 2) Stage sources (no node_modules by default)

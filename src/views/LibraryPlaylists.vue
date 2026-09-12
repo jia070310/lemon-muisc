@@ -403,8 +403,10 @@ function updateNarrow() {
 }
 
 const allCards = computed(() => buildPlaylistCards(libraryTracks.value))
-const customCards = computed(() => allCards.value.filter((c) => !SMART_PLAYLIST_IDS.has(c.id)))
-const smartCards = computed(() => allCards.value.filter((c) => SMART_PLAYLIST_IDS.has(c.id)))
+/** 含隐藏卡，仅用于详情页查找；展示列表过滤 hidden */
+const visibleCards = computed(() => allCards.value.filter((c) => !c.hidden))
+const customCards = computed(() => visibleCards.value.filter((c) => !SMART_PLAYLIST_IDS.has(c.id)))
+const smartCards = computed(() => visibleCards.value.filter((c) => SMART_PLAYLIST_IDS.has(c.id)))
 /** 有自定义/导入歌单时只展示这些；没有时才展示最近添加 / 收藏 / 最近播放 */
 const sourceCards = computed(() => (
   customCards.value.length ? customCards.value : smartCards.value
@@ -500,7 +502,7 @@ onMounted(async () => {
   const q = route.query.id
   if (q) selectedId.value = String(q)
   if (!libraryScanned.value) {
-    try { await scanLibrary(api) } catch {}
+    try { await scanLibrary(api, { resync: true }) } catch {}
   }
 })
 
@@ -704,7 +706,7 @@ async function syncLocal() {
   syncingLocal.value = true
   try {
     if (!libraryScanned.value) {
-      await scanLibrary(api)
+      await scanLibrary(api, { resync: true })
     }
     const { matched } = syncPlaylistLocalTracks(selectedId.value)
     if (matched > 0) showToast(`已匹配本地 ${matched} 首`, 'success')

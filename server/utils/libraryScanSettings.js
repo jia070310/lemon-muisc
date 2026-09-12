@@ -4,6 +4,12 @@ import { getMusicPaths, mapToContainerPath, isUnderConfiguredMusicDir, isPathUnd
 
 const AUTO_SCAN_MODE_KEY = 'library.scan.autoMode'
 const AUTO_SCAN_DIRS_KEY = 'library.scan.autoDirs'
+const WATCH_ENABLED_KEY = 'library.scan.watchEnabled'
+const WATCH_INTERVAL_KEY = 'library.scan.watchIntervalSec'
+
+const DEFAULT_WATCH_INTERVAL_SEC = 120
+const MIN_WATCH_INTERVAL_SEC = 30
+const MAX_WATCH_INTERVAL_SEC = 3600
 
 function getSetting(key) {
   const row = getDB().prepare('SELECT value FROM settings WHERE key = ?').get(key)
@@ -19,6 +25,22 @@ function setSetting(key, value) {
 
 export function getLibraryAutoScanMode() {
   return getSetting(AUTO_SCAN_MODE_KEY) === 'selected' ? 'selected' : 'all'
+}
+
+export function getLibraryWatchEnabled() {
+  const raw = getSetting(WATCH_ENABLED_KEY)
+  if (raw == null || raw === '') return true
+  return raw === '1' || raw === 'true'
+}
+
+export function getLibraryWatchIntervalSec() {
+  const n = Number(getSetting(WATCH_INTERVAL_KEY))
+  if (!Number.isFinite(n)) return DEFAULT_WATCH_INTERVAL_SEC
+  return Math.min(MAX_WATCH_INTERVAL_SEC, Math.max(MIN_WATCH_INTERVAL_SEC, Math.round(n)))
+}
+
+export function getLibraryWatchIntervalMs() {
+  return getLibraryWatchIntervalSec() * 1000
 }
 
 export function getLibraryAutoScanDirs() {
@@ -49,10 +71,12 @@ export function getLibraryScanSettings() {
       .map((p) => mapToContainerPath(String(p || '').trim()))
       .filter((p) => p && isUnderConfiguredMusicDir(p)),
     musicPaths: all,
+    watchEnabled: getLibraryWatchEnabled(),
+    watchIntervalSec: getLibraryWatchIntervalSec(),
   }
 }
 
-export function setLibraryScanSettings({ autoMode, autoDirs } = {}) {
+export function setLibraryScanSettings({ autoMode, autoDirs, watchEnabled, watchIntervalSec } = {}) {
   if (autoMode === 'all' || autoMode === 'selected') {
     setSetting(AUTO_SCAN_MODE_KEY, autoMode)
   }
@@ -61,6 +85,16 @@ export function setLibraryScanSettings({ autoMode, autoDirs } = {}) {
       .map((p) => mapToContainerPath(String(p || '').trim()))
       .filter((p) => p && isUnderConfiguredMusicDir(p))
     setSetting(AUTO_SCAN_DIRS_KEY, JSON.stringify([...new Set(valid)]))
+  }
+  if (watchEnabled !== undefined) {
+    setSetting(WATCH_ENABLED_KEY, watchEnabled ? '1' : '0')
+  }
+  if (watchIntervalSec !== undefined && watchIntervalSec !== null && watchIntervalSec !== '') {
+    const n = Number(watchIntervalSec)
+    if (Number.isFinite(n)) {
+      const sec = Math.min(MAX_WATCH_INTERVAL_SEC, Math.max(MIN_WATCH_INTERVAL_SEC, Math.round(n)))
+      setSetting(WATCH_INTERVAL_KEY, String(sec))
+    }
   }
   return getLibraryScanSettings()
 }

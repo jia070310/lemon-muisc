@@ -195,10 +195,10 @@
                 <div class="setting-item-info">
                   <div class="setting-item-label">
                     自动扫描范围
-                    <span class="setting-item-label-hint">（后台扫描，关闭网页/App 不影响，歌曲热更新）</span>
+                    <span class="setting-item-label-hint">（进入音乐库 / 后台监测时使用）</span>
                   </div>
                   <div class="setting-item-desc">
-                    进入音乐库时，后台自动扫描并刷新元数据。
+                    进入音乐库时会增量检查外部新增文件；也可开启下方后台监测定时同步。
                     <template v-if="scanAutoMode === 'all'">当前为所有已添加目录。</template>
                     <template v-else>当前为目录列表中勾选「自动」的目录。</template>
                   </div>
@@ -209,6 +209,41 @@
                     :options="scanAutoModeOptions"
                     size="sm"
                     min-width="168px"
+                    @change="saveScanSettings"
+                  />
+                </div>
+              </div>
+
+              <div class="setting-item setting-item-path-row">
+                <div class="setting-item-info">
+                  <div class="setting-item-label">
+                    后台监测外部文件
+                    <span class="setting-item-label-hint">（关闭网页也会继续）</span>
+                  </div>
+                  <div class="setting-item-desc">
+                    定时比对磁盘与音乐库缓存；通过 NAS / 拷贝 / 其它工具放入的新歌会自动入库并热更新。
+                  </div>
+                </div>
+                <div class="setting-item-action">
+                  <label class="toggle">
+                    <input v-model="scanWatchEnabled" type="checkbox" @change="saveScanSettings" />
+                    <span class="slider"></span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="setting-item setting-item-path-row">
+                <div class="setting-item-info">
+                  <div class="setting-item-label">监测间隔</div>
+                  <div class="setting-item-desc">间隔越短越及时，大曲库建议 2 分钟及以上。</div>
+                </div>
+                <div class="setting-item-action">
+                  <AppSelect
+                    v-model="scanWatchIntervalSec"
+                    :options="scanWatchIntervalOptions"
+                    size="sm"
+                    min-width="140px"
+                    :disabled="!scanWatchEnabled"
                     @change="saveScanSettings"
                   />
                 </div>
@@ -243,10 +278,10 @@
             <div v-if="musicPaths.length" class="path-block scan-dir-block" :class="{ 'has-auto-col': scanAutoMode === 'selected' }">
               <div class="block-label">扫描目录</div>
               <p v-if="scanAutoMode === 'selected'" class="path-block-hint">
-                展开目录树后勾选要扫描的文件夹。「手动」勾选后立即扫描；「自动」勾选后，进入音乐库时会自动刷新该文件夹。
+                展开目录树后勾选要扫描的文件夹。「手动」勾选后立即扫描；「自动」勾选后，进入音乐库与后台监测会刷新该文件夹。
               </p>
               <p v-else class="path-block-hint">
-                展开目录树后勾选要扫描的文件夹。「手动」勾选后立即扫描；自动扫描范围为所有根目录，进入音乐库时会全部刷新。
+                展开目录树后勾选要扫描的文件夹。「手动」勾选后立即扫描；自动扫描范围为所有根目录。
               </p>
 
               <div v-if="editingPath" class="path-row path-row-edit card-inner">
@@ -258,7 +293,7 @@
 
               <div class="scan-tree-head">
                 <span class="path-col-check" title="勾选后用于手动扫描">手动</span>
-                <span v-if="scanAutoMode === 'selected'" class="path-col-auto" title="勾选后进入音乐库时自动扫描">自动</span>
+                <span v-if="scanAutoMode === 'selected'" class="path-col-auto" title="勾选后进入音乐库与后台监测会自动扫描">自动</span>
                 <span class="path-col-tree">目录</span>
                 <span class="path-col-actions">操作</span>
               </div>
@@ -432,6 +467,22 @@
               min-width="100px"
               @change="saveTagMatchConcurrency"
             />
+          </div>
+        </div>
+        <div class="setting-item">
+          <div class="setting-item-info">
+            <div class="setting-item-label">播放自动匹配</div>
+            <div class="setting-item-desc">播放本地音乐时，若文件标签缺失（无专辑 / 封面 / 歌词等），自动联网匹配并保存到文件</div>
+          </div>
+          <div class="setting-item-action">
+            <label class="toggle">
+              <input
+                type="checkbox"
+                :checked="settings[AUTO_MATCH_ON_PLAY_KEY] === 'true'"
+                @change="toggleAutoMatchOnPlay"
+              />
+              <span class="slider"></span>
+            </label>
           </div>
         </div>
         <div v-if="isAdminUser" class="setting-item">
@@ -691,7 +742,7 @@
         <div class="setting-item">
           <div class="setting-item-info">
             <div class="setting-item-label">下载分组</div>
-            <div class="setting-item-desc">在下载目录下创建子文件夹；按歌手时多位歌手取第一位；歌手/专辑为两级目录</div>
+            <div class="setting-item-desc">在下载目录下创建子文件夹；按歌手时多位歌手归档到「群星 (Various Artists)」；歌手/专辑为两级目录</div>
           </div>
           <div class="setting-item-action">
             <AppSelect
@@ -944,7 +995,7 @@ defineOptions({ name: 'Settings' })
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from '../api.js'
-import { loadCoverStyle, loadPlayerSettings } from '../stores/player.js'
+import { loadCoverStyle, loadPlayerSettings, setAutoMatchOnPlay, PLAYER_AUTO_MATCH_ON_PLAY_KEY } from '../stores/player.js'
 import { scanLibrary, libraryScanning, PLAYLIST_REMOTE_SYNC_DAYS_KEY, setPlaylistRemoteSyncDays, getPlaylistRemoteSyncDays, LIBRARY_SONG_COLUMNS_KEY, setLibrarySongColumns, normalizeLibrarySongColumns } from '../stores/library.js'
 import { reloadSearchSources } from '../stores/search.js'
 import { reloadDiscoverSources } from '../stores/discover.js'
@@ -996,6 +1047,7 @@ const librarySongColumnsOptions = [
   { value: '4', label: '四列' },
 ]
 const DOWNLOAD_GROUP_BY_KEY = 'download.savePathGroupBy'
+const AUTO_MATCH_ON_PLAY_KEY = PLAYER_AUTO_MATCH_ON_PLAY_KEY
 const lrcFormatOptions = [
   { value: 'utf8', label: 'UTF-8' },
   { value: 'gbk', label: 'GBK' },
@@ -1081,6 +1133,15 @@ const libraryStats = ref(null)
 const libraryStatsLoading = ref(false)
 const scanAutoMode = ref('all')
 const autoScanDirs = ref([])
+const scanWatchEnabled = ref(true)
+const scanWatchIntervalSec = ref(120)
+const scanWatchIntervalOptions = [
+  { value: 30, label: '30 秒' },
+  { value: 60, label: '1 分钟' },
+  { value: 120, label: '2 分钟' },
+  { value: 300, label: '5 分钟' },
+  { value: 600, label: '10 分钟' },
+]
 const manualScanDirs = ref([])
 const scanTreeCache = ref({})
 const scanExpandedPaths = ref(new Set())
@@ -1633,6 +1694,9 @@ async function loadScanSettings() {
     const res = await api.library.scanSettings.get()
     scanAutoMode.value = res.data?.autoMode || 'all'
     autoScanDirs.value = res.data?.autoDirs || []
+    scanWatchEnabled.value = res.data?.watchEnabled !== false
+    const interval = Number(res.data?.watchIntervalSec)
+    scanWatchIntervalSec.value = Number.isFinite(interval) ? interval : 120
   } catch {}
 }
 
@@ -1641,8 +1705,13 @@ async function saveScanSettings() {
     const res = await api.library.scanSettings.save({
       autoMode: scanAutoMode.value,
       autoDirs: autoScanDirs.value,
+      watchEnabled: scanWatchEnabled.value,
+      watchIntervalSec: Number(scanWatchIntervalSec.value) || 120,
     })
     autoScanDirs.value = res.data?.autoDirs || []
+    scanWatchEnabled.value = res.data?.watchEnabled !== false
+    const interval = Number(res.data?.watchIntervalSec)
+    if (Number.isFinite(interval)) scanWatchIntervalSec.value = interval
     showToast('扫描设置已保存', 'success')
   } catch (e) {
     showToast(e.message || '保存失败', 'error')
@@ -1727,6 +1796,7 @@ onMounted(async () => {
     if (!settings[CUSTOM_COLOR_KEY]) settings[CUSTOM_COLOR_KEY] = currentCustomColor.value
     if (!settings[SOURCE_FALLBACK_MODE_KEY]) settings[SOURCE_FALLBACK_MODE_KEY] = 'auto'
     applySourceFallbackMode(settings[SOURCE_FALLBACK_MODE_KEY])
+    setAutoMatchOnPlay(settings[AUTO_MATCH_ON_PLAY_KEY] === 'true')
     if (!settings[DOWNLOAD_GROUP_BY_KEY]) {
       settings[DOWNLOAD_GROUP_BY_KEY] = settings['download.isSavePathGroupByListName'] === 'true' ? 'album' : 'none'
     }
@@ -2194,6 +2264,18 @@ function onCustomColorHex(e) {
 function toggleSetting(key) {
   settings[key] = settings[key] === 'true' ? 'false' : 'true'
   saveSetting(key)
+}
+
+/** 播放自动匹配开关：保存到服务端并同步播放器运行时状态 */
+async function toggleAutoMatchOnPlay() {
+  const next = settings[AUTO_MATCH_ON_PLAY_KEY] === 'true' ? 'false' : 'true'
+  settings[AUTO_MATCH_ON_PLAY_KEY] = next
+  setAutoMatchOnPlay(next === 'true')
+  try {
+    await api.settings.update({ [AUTO_MATCH_ON_PLAY_KEY]: next })
+  } catch (e) {
+    showToast(e.message, 'error')
+  }
 }
 
 async function toggleVisualizerSetting() {
