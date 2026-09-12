@@ -77,6 +77,7 @@ async function requestOnce(url, options = {}) {
   try {
     const { signal: _signal, timeout: _timeout, retries: _retries, body, ...rest } = options
     const res = await fetch(BASE + url, {
+      credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -176,6 +177,7 @@ export const api = {
       const token = getToken()
       const res = await fetch(BASE + '/source/import', {
         method: 'POST',
+        credentials: 'include',
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         body: form,
       })

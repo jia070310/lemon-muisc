@@ -183,7 +183,7 @@ onMounted(async () => {
   narrowMq.addEventListener('change', updateNarrow)
   if (route.query.id) artistId.value = String(route.query.id)
   if (!libraryScanned.value) {
-    try { await scanLibrary(api) } catch {}
+    try { await scanLibrary(api, { resync: true }) } catch {}
   }
 })
 

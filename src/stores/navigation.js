@@ -11,13 +11,16 @@ const ROUTE_PAGE_MAP = {
   DiscoverNewAlbums: 'discover',
   DiscoverRanks: 'discover',
   Library: 'library',
+  LibrarySearch: 'library',
   LibraryPlaylists: 'library',
   LibraryAlbum: 'library',
   LibraryAlbums: 'library',
   LibraryGenres: 'library',
   LibraryGenre: 'library',
+  LibraryArtists: 'library',
+  LibraryArtist: 'library',
   Download: 'download',
-  Tag: 'tag',
+  FileManager: 'file-manager',
   TagEditTrack: 'tag',
   Settings: 'settings',
   About: 'about',
@@ -28,7 +31,8 @@ const PATH_PAGE_MAP = {
   '/discover': 'discover',
   '/library': 'library',
   '/download': 'download',
-  '/tag': 'tag',
+  '/file-manager': 'file-manager',
+  '/tag': 'file-manager',
   '/settings': 'settings',
   '/about': 'about',
 }
@@ -38,7 +42,8 @@ const prefetchers = {
   '/discover': () => import('../views/Discover.vue'),
   '/library': () => import('../views/Library.vue'),
   '/download': () => import('../views/Download.vue'),
-  '/tag': () => import('../views/TagEditor.vue'),
+  '/file-manager': () => import('../views/FileManager.vue'),
+  '/tag': () => import('../views/FileManager.vue'),
   '/settings': () => import('../views/Settings.vue'),
   '/about': () => import('../views/About.vue'),
 }
@@ -52,6 +57,7 @@ function resolvePage(to) {
     if (path.startsWith('/discover')) return 'discover'
     if (path.startsWith('/library')) return 'library'
     if (path.startsWith('/tag')) return 'tag'
+    if (path.startsWith('/file-manager')) return 'file-manager'
     return 'default'
   }
   return ROUTE_PAGE_MAP[to.name] || 'default'
@@ -74,4 +80,4 @@ export function prefetchRoute(path) {
   loader().catch(() => prefetched.delete(normalized))
 }
 
-export const MAIN_TAB_NAMES = ['Search', 'Discover', 'Library', 'Download', 'Tag', 'Settings', 'About']
+export const MAIN_TAB_NAMES = ['Search', 'Discover', 'Library', 'Download', 'FileManager', 'Settings', 'About']

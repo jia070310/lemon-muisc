@@ -1,10 +1,11 @@
 <template>
-  <div class="tag-page">
-    <div class="page-header">
-      <div>
+  <div class="tag-page" :class="{ embedded }">
+    <div class="page-header" :class="{ 'page-header--embed': embedded }">
+      <div v-if="!embedded">
         <div class="page-title">标签编辑</div>
         <div class="page-subtitle">批量编辑本地音乐元数据、封面与歌词；「匹配缺失 / 匹配选中」会自动保存到文件</div>
       </div>
+      <div v-else class="embed-toolbar-hint">批量编辑元数据、封面与歌词；匹配后会自动保存到文件</div>
       <div class="header-actions">
         <button class="btn-primary btn-sm" @click="saveAll" :disabled="!hasChanges || saving">
           {{ saving ? '保存中...' : '保存全部修改' }}
@@ -33,7 +34,7 @@
         </div>
 
         <template v-if="browseMode === 'dir'">
-          <p class="dir-hint">展开文件夹浏览；点击文件夹仅加载该层音频。路径在「设置 → 文件路径」中管理。</p>
+          <p class="dir-hint">展开文件夹浏览；点击文件夹会加载该目录及所有子目录中的音频。路径在「设置 → 文件路径」中管理。</p>
           <div class="dir-tree">
             <template v-for="row in visibleTreeRows" :key="row.path">
               <div
@@ -199,9 +200,10 @@
               v-if="browseMode === 'dir'"
               class="btn-ghost btn-sm"
               :disabled="!activeDir || scanning || loadingMeta"
-              @click="scanSubdirsRecursive"
+              @click="scanCurrentLevelOnly"
+              title="只列出当前文件夹内的音频，不含子目录"
             >
-              含子目录扫描
+              仅当前层
             </button>
             <button class="btn-ghost btn-sm" :disabled="!displayedFiles.length" @click="playAllVisible">
               试听全部
@@ -370,7 +372,7 @@
         </template>
         <div v-else-if="scanning" class="empty">{{ browseMode === 'artist' ? '正在加载歌手歌曲...' : '正在加载文件夹...' }}</div>
         <div v-else-if="files.length && missingFilter !== 'all'" class="empty">当前筛选条件下没有缺失文件</div>
-        <div v-else class="empty">{{ browseMode === 'artist' ? '在左侧选择一位歌手，加载其全部歌曲进行编辑' : '在左侧展开并选择文件夹，加载该层音频文件' }}</div>
+        <div v-else class="empty">{{ browseMode === 'artist' ? '在左侧选择一位歌手，加载其全部歌曲进行编辑' : '在左侧选择文件夹，将递归加载该目录及子目录中的音频' }}</div>
       </section>
 
       <div
@@ -684,7 +686,6 @@
 </template>
 
 <script setup>
-defineOptions({ name: 'Tag' })
 import { ref, computed, reactive, onMounted, onBeforeUnmount, watch } from 'vue'
 import { api } from '../api.js'
 import {
@@ -719,6 +720,12 @@ import CoverArt from '../components/CoverArt.vue'
 import { collectDefaultExpandedPaths } from '../utils/dirTreeExpand.js'
 import { resolveSearchArtistTitle, parseFilename } from '../utils/filenameParse.js'
 import { withStreamAuth } from '../utils/streamAuth.js'
+
+defineOptions({ name: 'Tag' })
+defineProps({
+  /** 嵌在文件管理页时精简页头标题 */
+  embedded: { type: Boolean, default: false },
+})
 
 const sourceOptions = [
   { value: 'tx', label: 'QQ音乐' },
@@ -1213,12 +1220,15 @@ async function selectFolder(dir) {
   selectAll.value = false
 
   try {
-    const res = await api.tag.listDir(dir)
+    // 并行：补齐树节点子目录 + 递归列出全部音频
+    const [listRes, scanRes] = await Promise.all([
+      api.tag.listDir(dir).catch(() => null),
+      api.tag.scan(dir, { recursive: true }),
+    ])
     if (token !== metaLoadToken.value) return
 
-    const data = res.data || {}
-    const cached = getTreeEntry(dir)
-    if (!cached.loaded) {
+    if (listRes?.data) {
+      const data = listRes.data
       treeCache.value = {
         ...treeCache.value,
         [dir]: {
@@ -1229,18 +1239,15 @@ async function selectFolder(dir) {
       }
     }
 
-    files.value = mapListedFiles(data.files)
+    files.value = mapListedFiles(scanRes?.data)
     if (!files.value.length) {
-      const subCount = (data.dirs || []).length
-      showToast(subCount
-        ? '该文件夹没有音频，请展开子文件夹或选择其他目录'
-        : '该文件夹为空', 'info')
+      showToast(scanRes?.tip || '未发现音频文件', 'info')
       saveTagEditorSession({ mode: browseMode.value, activeDir: activeDir.value, activeArtist: activeArtist.value, files: files.value })
       return
     }
     const needTextMeta = files.value.filter(f => !f._metaLoaded)
     const toastText = needTextMeta.length
-      ? `已发现 ${files.value.length} 个文件，正在读取标签...`
+      ? `已递归发现 ${files.value.length} 个文件，正在读取标签...`
       : `已加载 ${files.value.length} 个文件，正在同步封面/歌词状态...`
     showToast(toastText, 'info')
     saveTagEditorSession({ mode: browseMode.value, activeDir: activeDir.value, activeArtist: activeArtist.value, files: files.value })
@@ -1252,7 +1259,8 @@ async function selectFolder(dir) {
   }
 }
 
-async function scanSubdirsRecursive() {
+/** 仅当前层（不含子目录） */
+async function scanCurrentLevelOnly() {
   if (!activeDir.value || scanning.value) return
   metaLoadToken.value += 1
   loadingMeta.value = false
@@ -1265,15 +1273,29 @@ async function scanSubdirsRecursive() {
   selectAll.value = false
 
   try {
-    const res = await api.tag.scan(activeDir.value, { recursive: true })
+    const res = await api.tag.listDir(activeDir.value)
     if (token !== metaLoadToken.value) return
 
-    files.value = mapListedFiles(res.data)
+    const data = res.data || {}
+    treeCache.value = {
+      ...treeCache.value,
+      [activeDir.value]: {
+        dirs: data.dirs || [],
+        loaded: true,
+        loading: false,
+      },
+    }
+
+    files.value = mapListedFiles(data.files)
     if (!files.value.length) {
-      showToast(res.tip || '未发现音频文件', 'error')
+      const subCount = (data.dirs || []).length
+      showToast(subCount
+        ? '该文件夹没有音频，可点左侧子文件夹，或直接点目录名递归加载'
+        : '该文件夹为空', 'info')
+      saveTagEditorSession({ mode: browseMode.value, activeDir: activeDir.value, activeArtist: activeArtist.value, files: files.value })
       return
     }
-    showToast(`已递归扫描 ${files.value.length} 个文件，正在读取标签...`, 'info')
+    showToast(`已加载当前层 ${files.value.length} 个文件，正在读取标签...`, 'info')
     saveTagEditorSession({ mode: browseMode.value, activeDir: activeDir.value, activeArtist: activeArtist.value, files: files.value })
     loadMetaInBatches(token)
   } catch (e) {
@@ -1281,6 +1303,11 @@ async function scanSubdirsRecursive() {
   } finally {
     if (token === metaLoadToken.value) scanning.value = false
   }
+}
+
+async function scanSubdirsRecursive() {
+  if (!activeDir.value || scanning.value) return
+  await selectFolder(activeDir.value)
 }
 
 function applyMetaRow(file, item) {
@@ -2282,6 +2309,27 @@ function showToast(text, type = 'info') {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+.tag-page.embedded .page-header {
+  margin-bottom: 10px;
+  align-items: center;
+}
+.tag-page.embedded .page-header--embed {
+  min-height: 0;
+}
+.tag-page.embedded .embed-toolbar-hint {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+.tag-page.embedded .tag-layout {
+  grid-template-columns: minmax(168px, 220px) minmax(0, 1fr) minmax(260px, 340px);
+  overflow: auto;
+}
+.tag-page.embedded .edit-panel {
+  min-width: 0;
 }
 
 .page-header {

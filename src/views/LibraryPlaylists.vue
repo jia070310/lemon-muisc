@@ -502,7 +502,7 @@ onMounted(async () => {
   const q = route.query.id
   if (q) selectedId.value = String(q)
   if (!libraryScanned.value) {
-    try { await scanLibrary(api) } catch {}
+    try { await scanLibrary(api, { resync: true }) } catch {}
   }
 })
 
@@ -706,7 +706,7 @@ async function syncLocal() {
   syncingLocal.value = true
   try {
     if (!libraryScanned.value) {
-      await scanLibrary(api)
+      await scanLibrary(api, { resync: true })
     }
     const { matched } = syncPlaylistLocalTracks(selectedId.value)
     if (matched > 0) showToast(`已匹配本地 ${matched} 首`, 'success')

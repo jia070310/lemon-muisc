@@ -3,8 +3,16 @@ import { ref, computed } from 'vue'
 const TOKEN_KEY = 'lemon-auth-token'
 const USER_KEY = 'lemon-auth-user'
 
-const token = ref(localStorage.getItem(TOKEN_KEY) || '')
-const user = ref(safeParse(localStorage.getItem(USER_KEY)))
+function readStorage(key) {
+  try {
+    return localStorage.getItem(key) || ''
+  } catch {
+    return ''
+  }
+}
+
+const token = ref(readStorage(TOKEN_KEY))
+const user = ref(safeParse(readStorage(USER_KEY) || null))
 const setupRequired = ref(false)
 const authReady = ref(false)
 const sessionValidated = ref(false)
@@ -26,26 +34,33 @@ export const needsSetup = computed(() => setupRequired.value)
 export const isAuthReady = computed(() => authReady.value)
 
 export function getToken() {
-  return token.value || localStorage.getItem(TOKEN_KEY) || ''
+  if (token.value) return token.value
+  return readStorage(TOKEN_KEY)
 }
 
 export function setAuthSession(newToken, newUser) {
   token.value = newToken || ''
   user.value = newUser || null
   sessionValidated.value = Boolean(newToken)
-  if (newToken) {
-    localStorage.setItem(TOKEN_KEY, newToken)
-    localStorage.setItem(USER_KEY, JSON.stringify(newUser || null))
-  } else {
-    localStorage.removeItem(TOKEN_KEY)
-    localStorage.removeItem(USER_KEY)
+  try {
+    if (newToken) {
+      localStorage.setItem(TOKEN_KEY, newToken)
+      localStorage.setItem(USER_KEY, JSON.stringify(newUser || null))
+    } else {
+      localStorage.removeItem(TOKEN_KEY)
+      localStorage.removeItem(USER_KEY)
+    }
+  } catch {
+    // 飞牛部分 WebView / 隐私模式可能禁止 localStorage；会话仍可由 Cookie 维持
   }
 }
 
 export function patchLocalUser(partial) {
   if (!partial || !user.value) return
   user.value = { ...user.value, ...partial }
-  localStorage.setItem(USER_KEY, JSON.stringify(user.value))
+  try {
+    localStorage.setItem(USER_KEY, JSON.stringify(user.value))
+  } catch {}
 }
 
 export function clearAuthSession() {
@@ -56,7 +71,7 @@ export function clearAuthSession() {
 export async function initAuth() {
   sessionValidated.value = false
   try {
-    const res = await fetch('/api/auth/status')
+    const res = await fetch('/api/auth/status', { credentials: 'include' })
     const data = await res.json().catch(() => ({}))
     setupRequired.value = Boolean(data.setupRequired)
 
@@ -66,18 +81,22 @@ export async function initAuth() {
       return
     }
 
-    if (getToken()) {
-      const meRes = await fetch('/api/auth/me', {
-        headers: { Authorization: `Bearer ${getToken()}` },
-      })
-      if (meRes.ok) {
-        const meData = await meRes.json()
+    // localStorage 或 Cookie 任一有会话即可（飞牛手机端常清掉 localStorage）
+    const meRes = await fetch('/api/auth/me', {
+      credentials: 'include',
+      headers: getToken() ? { Authorization: `Bearer ${getToken()}` } : {},
+    })
+    if (meRes.ok) {
+      const meData = await meRes.json()
+      if (meData.token) {
+        setAuthSession(meData.token, meData.user)
+      } else if (meData.user) {
         user.value = meData.user
-        localStorage.setItem(USER_KEY, JSON.stringify(meData.user))
-        sessionValidated.value = true
-      } else {
-        clearAuthSession()
+        sessionValidated.value = Boolean(getToken())
+        try { localStorage.setItem(USER_KEY, JSON.stringify(meData.user)) } catch {}
       }
+    } else if (getToken()) {
+      clearAuthSession()
     }
   } catch {
     // 后端未启动时保持当前 token，路由守卫会处理
@@ -91,6 +110,7 @@ export async function login(username, password, remember = true) {
   try {
     res = await fetch('/api/auth/login', {
       method: 'POST',
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         username: String(username || '').trim(),
@@ -122,6 +142,7 @@ export async function setupAdmin(username, password, displayName, email = '', ma
   try {
     res = await fetch('/api/auth/setup', {
       method: 'POST',
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password, displayName, email, mail, recoveryMode }),
     })
@@ -139,12 +160,11 @@ export async function setupAdmin(username, password, displayName, email = '', ma
 export async function logout() {
   try {
     const t = getToken()
-    if (t) {
-      await fetch('/api/auth/logout', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${t}` },
-      })
-    }
+    await fetch('/api/auth/logout', {
+      method: 'POST',
+      credentials: 'include',
+      headers: t ? { Authorization: `Bearer ${t}` } : {},
+    })
   } catch {}
   clearAuthSession()
 }

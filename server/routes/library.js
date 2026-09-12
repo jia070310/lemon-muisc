@@ -24,6 +24,8 @@ import {
   resolveScanDirs,
   isPartialScan,
 } from '../utils/libraryScanSettings.js'
+import { restartLibraryAutoWatch } from '../utils/libraryAutoWatch.js'
+import { splitArtists } from '../utils/artistTag.js'
 import {
   notifyLibraryRemoved,
   notifyLibraryChanged,
@@ -74,8 +76,9 @@ libraryRouter.get('/scan-settings', (_req, res) => {
 
 libraryRouter.put('/scan-settings', (req, res) => {
   try {
-    const { autoMode, autoDirs } = req.body || {}
-    const data = setLibraryScanSettings({ autoMode, autoDirs })
+    const { autoMode, autoDirs, watchEnabled, watchIntervalSec } = req.body || {}
+    const data = setLibraryScanSettings({ autoMode, autoDirs, watchEnabled, watchIntervalSec })
+    restartLibraryAutoWatch()
     res.json({ ok: true, data })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -297,19 +300,42 @@ libraryRouter.put('/playlists', (req, res) => {
   }
 })
 
-const ARTIST_SPLIT_RE = /[、,，/;；&]/
+/** 多歌手合辑归档目录名 */
+const VARIOUS_ARTISTS_DIR = '群星 (Various Artists)'
 
-/** 将歌手字符串安全化为目录名：取第一位歌手、清除非法字符、保留中英文与常用符号 */
+/** 将歌手/专辑艺术家安全化为目录名；多歌手统一归档到「群星 (Various Artists)」 */
 function artistToDirName(singerRaw) {
-  const raw = String(singerRaw || '').trim()
-  if (!raw) return '未知歌手'
-  const first = raw.split(ARTIST_SPLIT_RE).map((s) => s.trim()).filter(Boolean)[0] || '未知歌手'
+  const artists = splitArtists(singerRaw)
+  if (artists.length >= 2) return VARIOUS_ARTISTS_DIR
+  const first = artists[0] || '未知歌手'
   const cleaned = first
     .replace(/[<>:"/\\|?*\x00-\x1f]/g, '')
     .replace(/[. ]+$/g, '')
     .trim()
     .slice(0, 80)
   return cleaned || '未知歌手'
+}
+
+/** 专辑目录名 */
+function albumToDirName(albumRaw) {
+  const raw = String(albumRaw || '').trim()
+  if (!raw || raw === '未知专辑') return '未知专辑'
+  const cleaned = raw
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, '')
+    .replace(/[. ]+$/g, '')
+    .trim()
+    .slice(0, 80)
+  return cleaned || '未知专辑'
+}
+
+/** 优先专辑艺术家，否则歌手；再配专辑名 → 目标/<艺术家>/<专辑>/ */
+function resolveOrganizeDestDirs(cached = {}) {
+  const albumArtist = String(cached.albumArtist || '').trim()
+  const singer = cached.artist || cached.singer || cached.parsedArtist || ''
+  return {
+    artistDir: artistToDirName(albumArtist || singer),
+    albumDir: albumToDirName(cached.album),
+  }
 }
 
 function safeBaseName(fileName) {
@@ -400,7 +426,7 @@ function resolveOrganizeFiles(body = {}) {
   return out
 }
 
-/** 整理音乐库：按歌手将歌曲迁移到 目标目录/歌手名/ 下（支持按文件/文件夹范围） */
+/** 整理音乐库：迁移到 目标目录/专辑艺术家(或歌手)/专辑/文件 */
 libraryRouter.post('/organize', async (req, res) => {
   try {
     const rawDir = req.body?.targetDir
@@ -415,10 +441,10 @@ libraryRouter.post('/organize', async (req, res) => {
       fs.mkdirSync(targetDir, { recursive: true })
     }
 
-    // 是否已位于目标目录下的歌手子目录（跳过重复整理）
+    // 是否已位于目标目录下（跳过重复整理）
     const targetReal = resolveReal(targetDir).replace(/[\\/]+$/, '')
 
-    // 路径 → 缓存曲目（含 singer/artist/album 标签）；未命中则按文件名兜底
+    // 路径 → 缓存曲目（含 albumArtist/artist/album）；未命中则按文件名兜底
     const tracksByPath = new Map(
       (getAllCachedTracks() || []).map((t) => [path.resolve(t.filePath || ''), t]),
     )
@@ -442,32 +468,29 @@ libraryRouter.post('/organize', async (req, res) => {
         continue
       }
 
-      const cached = tracksByPath.get(path.resolve(src))
-      const artistDir = artistToDirName(
-        cached?.artist || cached?.singer || cached?.parsedArtist || '',
-      )
-
-      const artistFolder = path.join(targetDir, artistDir)
+      const cached = tracksByPath.get(path.resolve(src)) || {}
+      const { artistDir, albumDir } = resolveOrganizeDestDirs(cached)
+      const albumFolder = path.join(targetDir, artistDir, albumDir)
       const srcExt = path.extname(src).toLowerCase()
       const fileName = safeBaseName(path.basename(src, srcExt)) + srcExt
-      let dest = path.join(artistFolder, fileName)
+      let dest = path.join(albumFolder, fileName)
 
       // 处理文件名冲突：与源相同则跳过；已存在则追加序号
-      if (resolveReal(src) === resolveReal(dest) && path.dirname(srcReal) === artistFolder) {
-        skipped.push({ filePath: src, reason: '已在对应歌手目录' })
+      if (resolveReal(src) === resolveReal(dest) && path.dirname(srcReal) === albumFolder) {
+        skipped.push({ filePath: src, reason: '已在对应专辑目录' })
         continue
       }
 
       let n = 1
       while (fs.existsSync(dest) && resolveReal(dest) !== resolveReal(src)) {
-        dest = path.join(artistFolder, `${safeBaseName(path.basename(src, srcExt))} (${n})${srcExt}`)
+        dest = path.join(albumFolder, `${safeBaseName(path.basename(src, srcExt))} (${n})${srcExt}`)
         n++
       }
 
       try {
-        fs.mkdirSync(artistFolder, { recursive: true })
+        fs.mkdirSync(albumFolder, { recursive: true })
         moveFile(src, dest)
-        moved.push({ from: src, to: dest, artist: artistDir })
+        moved.push({ from: src, to: dest, artist: artistDir, album: albumDir })
       } catch (e) {
         failed.push({ filePath: src, error: e.message || '迁移失败' })
       }
@@ -505,6 +528,7 @@ libraryRouter.post('/organize', async (req, res) => {
         failedList: failed,
         skippedList: skipped,
         artists: [...new Set(moved.map((m) => m.artist))].length,
+        albums: [...new Set(moved.map((m) => `${m.artist}/${m.album}`))].length,
       },
     })
   } catch (e) {

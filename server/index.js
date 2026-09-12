@@ -20,6 +20,7 @@ import { refreshStoredSourceMeta } from './routes/source.js'
 import { installSourceFaultHandlers, recordSourceFault, getSourceFault } from './sourceFault.js'
 import { startMemoryGuard } from './utils/memoryGuard.js'
 import { startTelemetry, stopTelemetry } from './utils/telemetry.js'
+import { startLibraryAutoWatch, stopLibraryAutoWatch } from './utils/libraryAutoWatch.js'
 
 installSourceFaultHandlers()
 
@@ -31,7 +32,7 @@ const CONFIG_PATH = process.env.CONFIG_PATH || path.join(__dirname, '..', 'confi
 const app = express()
 const server = http.createServer(app)
 
-app.use(cors())
+app.use(cors({ origin: true, credentials: true }))
 app.use(express.json({ limit: '25mb' }))
 
 app.locals.dataPath = DATA_PATH
@@ -93,6 +94,7 @@ startMemoryGuard()
 
 function shutdown(signal) {
   console.log(`收到 ${signal}，正在关闭服务...`)
+  stopLibraryAutoWatch()
   stopTelemetry()
   wss.close(() => {
     server.close(() => process.exit(0))
@@ -124,4 +126,5 @@ server.listen(PORT, '::', () => {
   console.log(`Download path: ${DATA_PATH}`)
   console.log(`Config path: ${CONFIG_PATH}`)
   startTelemetry()
+  startLibraryAutoWatch()
 })

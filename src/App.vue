@@ -29,21 +29,13 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
           <span>音乐库</span>
         </router-link>
-        <router-link to="/library/artists" class="nav-item" active-class="active">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
-          <span>歌手</span>
-        </router-link>
         <router-link to="/download" class="nav-item" active-class="active">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
           <span>下载</span>
         </router-link>
-        <router-link to="/file-manager" class="nav-item" active-class="active">
+        <router-link to="/file-manager" class="nav-item" :class="{ active: isFileManagerNav }">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><polyline points="9 14 12 17 15 14"/></svg>
           <span>文件管理</span>
-        </router-link>
-        <router-link to="/tag" class="nav-item" active-class="active">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
-          <span>标签编辑</span>
         </router-link>
       </nav>
 
@@ -116,7 +108,7 @@
       </div>
       <div v-if="tagMatchRunning && !isTagPage" class="app-notice tag-match-banner">
         <span>标签自动匹配并保存中 {{ tagMatchProgress.done }}/{{ tagMatchProgress.total }}<template v-if="tagMatchProgress.current"> · {{ tagMatchProgress.current }}</template></span>
-        <router-link to="/tag" class="setup-link">查看</router-link>
+        <router-link to="/file-manager?tab=tag" class="setup-link">查看</router-link>
       </div>
       <div v-else-if="tagMatchResult && !isTagPage" class="app-notice tag-match-banner" :class="tagMatchResult.type">
         <span>{{ tagMatchResult.text }}</span>
@@ -352,17 +344,13 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
         <span>音乐库</span>
       </router-link>
-      <router-link to="/library/artists" class="tab-item" active-class="active" @touchstart.passive="onTabPrefetch('/library/artists')" @mousedown="onTabPrefetch('/library/artists')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
-        <span>歌手</span>
-      </router-link>
       <router-link to="/download" class="tab-item" active-class="active" @touchstart.passive="onTabPrefetch('/download')" @mousedown="onTabPrefetch('/download')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
         <span>下载</span>
       </router-link>
-      <router-link to="/tag" class="tab-item" active-class="active" @touchstart.passive="onTabPrefetch('/tag')" @mousedown="onTabPrefetch('/tag')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
-        <span>标签</span>
+      <router-link to="/file-manager" class="tab-item" :class="{ active: isFileManagerNav }" @touchstart.passive="onTabPrefetch('/file-manager')" @mousedown="onTabPrefetch('/file-manager')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><polyline points="9 14 12 17 15 14"/></svg>
+        <span>文件</span>
       </router-link>
       <router-link to="/settings" class="tab-item" active-class="active" @touchstart.passive="onTabPrefetch('/settings')" @mousedown="onTabPrefetch('/settings')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
@@ -456,7 +444,18 @@ const showAppShell = computed(() => (
   && isAuthenticated.value
 ))
 const showAuthSplash = computed(() => !isPublicPage.value && !showAppShell.value)
-const isTagPage = computed(() => route.path === '/tag' || route.path.startsWith('/tag/'))
+const isFileManagerNav = computed(() => (
+  route.path === '/file-manager'
+  || route.path === '/tag'
+  || route.path.startsWith('/tag/')
+))
+/** 标签编辑工作区（文件管理·标签页 或 单曲编辑），用于固定高度与匹配横幅 */
+const isTagPage = computed(() => {
+  if (route.path.startsWith('/tag/')) return true
+  if (route.path !== '/file-manager') return false
+  const tab = route.query.tab
+  return !tab || tab === 'tag'
+})
 const isDiscoverNav = computed(() => route.path === '/discover' || route.path.startsWith('/discover/'))
 const showRouteSkeleton = computed(() => isRouteLoading.value && isMobileUiContext(768))
 

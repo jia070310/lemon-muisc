@@ -2,6 +2,7 @@ import { ref, computed } from 'vue'
 import { findLocalMatchForTrack, isLocalPlaylistTrack } from '../utils/trackMatch.js'
 import { withStreamAuth } from '../utils/streamAuth.js'
 import { currentUser } from '../utils/auth.js'
+import { splitArtists } from '../utils/text.js'
 
 const FAVORITES_KEY_BASE = 'lemon-library-favorites'
 const RECENT_KEY_BASE = 'lemon-library-recent'
@@ -1443,19 +1444,25 @@ export function removeLibraryTracks(filePaths) {
 let scanPromise = null
 
 /** 扫描音乐库目录并读取标签（含封面地址、专辑等信息） */
-export async function scanLibrary(api, { force = false, dirs = null, scanAll = false, onError, onComplete } = {}) {
-  if (scanPromise && !force) return scanPromise
+export async function scanLibrary(api, { force = false, resync = false, dirs: requestDirs = null, scanAll = false, onError, onComplete } = {}) {
+  if (scanPromise && !force && !resync) return scanPromise
 
   const run = async () => {
     if (libraryLoading.value || libraryMetaLoading.value) {
-      if (!force) return null
+      if (!force && !resync) return null
     }
-    if (libraryScanned.value && !force) return null
+    if (libraryScanned.value && !force && !resync) return null
 
-    libraryLoading.value = true
-    libraryMetaLoading.value = false
-    resetScanProgress()
-    setScanProgress('prepare', { text: '读取目录' })
+    const softResync = resync && !force && libraryScanned.value && libraryTracks.value.length > 0
+    if (!softResync) {
+      libraryLoading.value = true
+      libraryMetaLoading.value = false
+      resetScanProgress()
+      setScanProgress('prepare', { text: '读取目录' })
+    } else {
+      libraryMetaLoading.value = true
+      setScanProgress('sync', { text: '检查外部文件更新' })
+    }
 
     let pendingCount = 0
     let tagScanned = 0
@@ -1463,17 +1470,17 @@ export async function scanLibrary(api, { force = false, dirs = null, scanAll = f
 
     try {
       const res = await api.paths.list()
-      const dirs = res.musicPaths || res.data || []
-      if (!dirs.length) {
+      const musicRoots = res.musicPaths || res.data || []
+      if (!musicRoots.length) {
         libraryTracks.value = []
         libraryScanned.value = true
         const result = { totalTracks: 0, scannedTags: 0, hadPending: false }
-        onComplete?.(result, { force })
+        onComplete?.(result, { force, resync })
         return result
       }
 
-      let showedCache = false
-      if (!force) {
+      let showedCache = softResync
+      if (!force && !softResync) {
         const sessionTracks = loadSessionTracks()
         if (sessionTracks?.length) {
           libraryTracks.value = sortTracksByMtime(sessionTracks)
@@ -1498,7 +1505,7 @@ export async function scanLibrary(api, { force = false, dirs = null, scanAll = f
         } catch {}
       }
 
-      if (!force) {
+      if (!force && !resync) {
         try {
           const statusRes = await api.library.scanStatus()
           if (statusRes.scan?.running) {
@@ -1515,14 +1522,14 @@ export async function scanLibrary(api, { force = false, dirs = null, scanAll = f
               hadPending: true,
               resumed: true,
             }
-            onComplete?.(result, { force })
+            onComplete?.(result, { force, resync })
             return result
           }
         } catch {}
       }
 
-      setScanProgress('sync', { text: '比对文件，启动后台扫描' })
-      const startRes = await api.library.scanStart(force, { dirs, scanAll })
+      if (!softResync) setScanProgress('sync', { text: '比对文件，启动后台扫描' })
+      const startRes = await api.library.scanStart(force, { dirs: requestDirs, scanAll })
       const { cached = [], pending = [], removed = [] } = startRes.data || {}
       const scan = startRes.scan || {}
       pendingCount = pending.length
@@ -1585,7 +1592,7 @@ export async function scanLibrary(api, { force = false, dirs = null, scanAll = f
       }
       saveSessionTracks(libraryTracks.value)
       if (!serverScanActive) syncAllImportedPlaylists()
-      if (!serverScanActive) onComplete?.(result, { force })
+      if (!serverScanActive) onComplete?.(result, { force, resync })
       return result
     } catch (e) {
       onError?.(e.message || '加载音乐库失败')
@@ -1703,31 +1710,34 @@ export function artistFromId(id) {
   }
 }
 
-/** 按歌手分组（一首歌通常一位歌手；如有多歌手以第一个作为主歌手） */
+/** 多歌手合辑在歌手浏览中的归档名（与文件整理一致） */
+export const VARIOUS_ARTISTS_NAME = '群星 (Various Artists)'
+
+/** 按歌手分组；多歌手歌曲归入「群星 (Various Artists)」 */
 export function groupArtists(tracks) {
   const cached = getCachedGroup(groupCacheArtists, tracks, (source) => {
     const map = new Map()
     for (const track of source) {
-      const singer = String(track.singer || '').trim()
-      const names = singer ? singer.split(/[、,，/;；&]/).map(s => s.trim()).filter(Boolean) : ['未知艺术家']
-      for (const name of names) {
-        const id = artistToId(name)
-        if (!map.has(id)) {
-          map.set(id, {
-            id,
-            name,
-            cover: track.picUrl || '',
-            tracks: [],
-            latestMtime: track.mtime || 0,
-            albumSet: new Set(),
-          })
-        }
-        const entry = map.get(id)
-        entry.tracks.push(track)
-        if (track.album && track.album !== '未知专辑') entry.albumSet.add(track.album)
-        if (!entry.cover && track.picUrl) entry.cover = track.picUrl
-        if ((track.mtime || 0) > entry.latestMtime) entry.latestMtime = track.mtime || 0
+      const names = splitArtists(track.singer || track.artist || '')
+      const bucketName = names.length >= 2
+        ? VARIOUS_ARTISTS_NAME
+        : (names[0] || '未知艺术家')
+      const id = artistToId(bucketName)
+      if (!map.has(id)) {
+        map.set(id, {
+          id,
+          name: bucketName,
+          cover: track.picUrl || '',
+          tracks: [],
+          latestMtime: track.mtime || 0,
+          albumSet: new Set(),
+        })
       }
+      const entry = map.get(id)
+      entry.tracks.push(track)
+      if (track.album && track.album !== '未知专辑') entry.albumSet.add(track.album)
+      if (!entry.cover && track.picUrl) entry.cover = track.picUrl
+      if ((track.mtime || 0) > entry.latestMtime) entry.latestMtime = track.mtime || 0
     }
     return [...map.values()].map((a) => ({
       id: a.id,
@@ -1739,7 +1749,12 @@ export function groupArtists(tracks) {
       latestMtime: a.latestMtime,
     }))
       .filter(a => a.name !== '未知艺术家')
-      .sort((a, b) => b.trackCount - a.trackCount || b.latestMtime - a.latestMtime)
+      .sort((a, b) => {
+        // 群星固定靠前，其余按曲目数
+        if (a.name === VARIOUS_ARTISTS_NAME && b.name !== VARIOUS_ARTISTS_NAME) return -1
+        if (b.name === VARIOUS_ARTISTS_NAME && a.name !== VARIOUS_ARTISTS_NAME) return 1
+        return b.trackCount - a.trackCount || b.latestMtime - a.latestMtime
+      })
   })
   return cached
 }

@@ -88,9 +88,10 @@ lemon-muisc/
 | `/library` 及子页 | 音乐库（playlists/album/albums/genres/artists/artist） |
 | `/library/artists` | 歌手列表（分页卡片） |
 | `/library/artist` | 歌手详情（全部歌曲、播放全部/随机、加入列表、收藏/歌单） |
-| `/file-manager` | 文件管理（查重 / 整理） |
+| `/file-manager` | 文件管理（标签编辑 / 查重 / 整理；`?tab=tag|dedup|organize`） |
 | `/download` | 下载管理 |
-| `/tag`、`/tag/track` | 标签编辑 |
+| `/tag` | 重定向到 `/file-manager?tab=tag` |
+| `/tag/track` | 单曲标签编辑（弹层入口） |
 | `/settings` / `/about` | 设置 / 关于 |
 | `/login /setup /reset-password /verify-email /auth-callback` | 认证（public） |
 
@@ -176,9 +177,11 @@ lemon-muisc/
 
 `meta.js` 按扩展名分发：MP3(node-id3)/FLAC(music-metadata)/WAV/APE(自实现)。匹配：`matchByFilename/matchByArtistTitle`，支持手动检测、按文件名批量重设、并发 1–6 路。
 
-### 8.5 音乐库、歌手与查重
+### 8.5 音乐库与歌手
 
-扫描写入 `library_index`（mtime 增量）→ 内存缓存 → 智能歌单。查重按「标题+歌手」聚合，同组至少保留一份。
+扫描写入 `library_index`（mtime 增量）→ 内存缓存 → 智能歌单。查重 / 整理见「文件管理」页（`/file-manager`）。
+
+外部新增文件：服务端 `libraryAutoWatch` 按间隔增量比对磁盘；进入音乐库页会 `resync` 再扫一次；变更经 `library:changed` / `library:removed` 热更新前端。可在「设置 → 文件路径」开关监测与间隔。
 
 - **歌手**：`groupArtists(libraryTracks)` 按歌手聚合（曲目数 / 专辑数），支持 `artistToId/artistFromId`；缓存三层：SQLite `library_index` / `sessionStorage("lemon-library-tracks-v1")` / 内存 `libraryTracks`，变更（`removeLibraryTracks`/`ingestLibraryTracks`）同步刷 session 快照，整理后 `reloadLibraryTracksFromServer(api)` 全量重载
 - **整理（organize）**：`POST /organize` 按歌手迁移（`scope: files` 勾选文件；目录目录名安全化、冲突加序号、EXDEV 跨盘回退复制+删除、目标目录自动加入扫描、迁移后广播 `library:removed`/`library:changed`）

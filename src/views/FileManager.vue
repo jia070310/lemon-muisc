@@ -1,16 +1,24 @@
 <template>
-  <div class="file-manager-page">
+  <div class="file-manager-page" :class="{ 'fm-embed-tag': activeTab === 'tag' }">
     <div class="fm-head">
       <h2>文件管理</h2>
-      <p class="fm-desc">管理本地音乐文件：查找重复曲目，或按歌手整理迁移音乐库</p>
+      <p class="fm-desc">管理本地音乐文件：编辑标签、查找重复曲目，或按歌手整理迁移音乐库</p>
     </div>
 
     <div class="fm-tabs">
       <button
         type="button"
         class="fm-tab"
+        :class="{ active: activeTab === 'tag' }"
+        @click="setTab('tag')"
+      >
+        标签编辑
+      </button>
+      <button
+        type="button"
+        class="fm-tab"
         :class="{ active: activeTab === 'dedup' }"
-        @click="activeTab = 'dedup'"
+        @click="setTab('dedup')"
       >
         去重
       </button>
@@ -18,10 +26,15 @@
         type="button"
         class="fm-tab"
         :class="{ active: activeTab === 'organize' }"
-        @click="activeTab = 'organize'"
+        @click="setTab('organize')"
       >
         整理
       </button>
+    </div>
+
+    <div v-show="activeTab === 'tag'" class="fm-tag-host">
+      <p v-if="tagEmbedError" class="fm-empty">标签编辑加载失败：{{ tagEmbedError }}</p>
+      <TagEditor v-else-if="tagVisited" embedded />
     </div>
 
     <!-- ============ 去重 ============ -->
@@ -182,7 +195,7 @@
                   :checked="orgFiles.length > 0 && orgFiles.every((f) => orgPickedFiles.has(f.filePath))"
                   @change="toggleAllOrgFiles"
                 />
-                全选本文件夹
+                全选列表
               </label>
               <button
                 type="button"
@@ -207,7 +220,7 @@
             </ul>
           </template>
           <div v-else class="org-picker-empty">
-            {{ orgActiveDir ? '该文件夹内没有音频文件' : '点击左侧文件夹查看其中的音频文件' }}
+            {{ orgActiveDir ? '该目录及子目录中没有音频文件' : '点击左侧文件夹，递归加载其中的音频文件' }}
           </div>
 
           <!-- 已选文件汇总（跨文件夹累计） -->
@@ -228,7 +241,7 @@
       <div class="org-form">
         <h3>迁移目标</h3>
         <p class="org-desc">
-          按「目标目录 / 歌手名 / 歌曲文件」结构整理所选文件。多歌手歌曲取第一位歌手。
+          按「目标目录 / 专辑艺术家 / 专辑 / 歌曲文件」整理。无专辑艺术家时用歌手；多歌手归档至「群星 (Various Artists)」。
           迁移后目标目录会自动加入音乐库扫描。
         </p>
         <div class="org-field">
@@ -270,7 +283,8 @@
           <span v-if="organizeResult.failed">
             <strong class="text-danger">{{ organizeResult.failed }}</strong> 首失败
           </span>
-          <span>共 <strong>{{ organizeResult.artists }}</strong> 位歌手</span>
+          <span>共 <strong>{{ organizeResult.artists }}</strong> 位艺术家</span>
+          <span v-if="organizeResult.albums"> · <strong>{{ organizeResult.albums }}</strong> 张专辑</span>
         </p>
         <p class="org-target-done">目标目录：<code>{{ organizeResult.targetDir }}</code></p>
 
@@ -299,19 +313,71 @@
 </template>
 
 <script setup>
-defineOptions({ name: 'FileManager' })
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted, onErrorCaptured } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { api } from '../api.js'
 import { appConfirm } from '../stores/appDialog.js'
 import { reloadLibraryTracksFromServer } from '../stores/library.js'
+import TagEditor from './TagEditor.vue'
 
-const activeTab = ref('dedup')
+defineOptions({ name: 'FileManager' })
 
-/* 切换到整理 Tab 时加载目录树 */
+const route = useRoute()
+const router = useRouter()
+
+const TAB_IDS = ['tag', 'dedup', 'organize']
+
+function normalizeTab(raw) {
+  const t = String(raw || '').trim()
+  return TAB_IDS.includes(t) ? t : 'tag'
+}
+
+const activeTab = ref(normalizeTab(route.query.tab))
+const tagVisited = ref(activeTab.value === 'tag')
+const tagEmbedError = ref('')
+
+onErrorCaptured((err) => {
+  tagEmbedError.value = err?.message || String(err)
+  console.error('[FileManager] child error:', err)
+  return false
+})
+
+function setTab(tab) {
+  const next = normalizeTab(tab)
+  if (next === 'tag') tagVisited.value = true
+  if (activeTab.value === next) return
+  activeTab.value = next
+}
+
+function syncTabToRoute(tab) {
+  const next = normalizeTab(tab)
+  if (normalizeTab(route.query.tab) === next) return
+  router.replace({
+    path: '/file-manager',
+    query: { ...route.query, tab: next },
+  }).catch(() => {})
+}
+
 watch(activeTab, (tab) => {
+  if (tab === 'tag') tagVisited.value = true
+  syncTabToRoute(tab)
   if (tab === 'organize' && !orgRootDirs.value.length) {
     loadOrgDirs()
   }
+})
+
+watch(
+  () => route.query.tab,
+  (tab) => {
+    const next = normalizeTab(tab)
+    if (next === 'tag') tagVisited.value = true
+    if (next !== activeTab.value) activeTab.value = next
+  },
+)
+
+onMounted(() => {
+  if (activeTab.value === 'tag') tagVisited.value = true
+  if (!route.query.tab) syncTabToRoute(activeTab.value)
 })
 
 /* ---------- 去重 ---------- */
@@ -594,7 +660,7 @@ async function toggleOrgNode(dirPath) {
   orgExpanded.value = next
 }
 
-/** 点击文件夹：加载该文件夹内的音频文件（不递归，仅当前层） */
+/** 点击文件夹：递归加载该目录及所有子目录中的音频 */
 async function selectOrgFolder(dirPath) {
   orgActiveDir.value = dirPath
   await ensureOrgChildren(dirPath)
@@ -603,8 +669,8 @@ async function selectOrgFolder(dirPath) {
 
 async function loadOrgFiles(dirPath) {
   try {
-    const res = await api.tag.listDir(dirPath)
-    orgFiles.value = (res.data?.files || []).filter((f) => f.filePath)
+    const res = await api.tag.scan(dirPath, { recursive: true })
+    orgFiles.value = (Array.isArray(res.data) ? res.data : []).filter((f) => f.filePath)
   } catch (e) {
     orgFiles.value = []
     alert(e.message || '加载文件失败')
@@ -644,7 +710,7 @@ async function startOrganize() {
 
   const ok = await appConfirm({
     title: '按歌手整理',
-    message: `将 ${scopeLabel} 中的歌曲迁移到：\n${target}\n\n按「目标目录/歌手名/歌曲」结构整理。迁移后原文件将被移动到新位置。`,
+    message: `将 ${scopeLabel} 中的歌曲迁移到：\n${target}\n\n按「目标目录/专辑艺术家/专辑/歌曲」结构整理（无专辑艺术家则用歌手）。迁移后原文件将被移动到新位置。`,
     hint: '建议先备份重要文件。此操作会物理移动文件。',
     confirmText: '开始整理',
   })
@@ -680,6 +746,35 @@ async function startOrganize() {
   max-width: 100%;
   min-width: 0;
   padding: 4px 0 32px;
+}
+.file-manager-page.fm-embed-tag {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  padding-bottom: 0;
+  overflow: hidden;
+}
+.file-manager-page.fm-embed-tag > .fm-head,
+.file-manager-page.fm-embed-tag > .fm-tabs {
+  flex-shrink: 0;
+}
+.fm-tag-host {
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.fm-tag-host :deep(.tag-page) {
+  flex: 1 1 0;
+  height: auto;
+  max-height: 100%;
+  min-height: 0;
+}
+.fm-tag-host :deep(.tag-layout) {
+  min-width: 0;
 }
 .fm-head {
   margin-bottom: 16px;

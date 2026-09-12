@@ -56,7 +56,7 @@ const genres = computed(() => (
 
 onMounted(async () => {
   if (!libraryScanned.value) {
-    try { await scanLibrary(api) } catch {}
+    try { await scanLibrary(api, { resync: true }) } catch {}
   }
 })
 
