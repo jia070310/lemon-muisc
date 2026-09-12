@@ -29,9 +29,17 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
           <span>音乐库</span>
         </router-link>
+        <router-link to="/library/artists" class="nav-item" active-class="active">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
+          <span>歌手</span>
+        </router-link>
         <router-link to="/download" class="nav-item" active-class="active">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
           <span>下载</span>
+        </router-link>
+        <router-link to="/file-manager" class="nav-item" active-class="active">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><polyline points="9 14 12 17 15 14"/></svg>
+          <span>文件管理</span>
         </router-link>
         <router-link to="/tag" class="nav-item" active-class="active">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
@@ -344,6 +352,10 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
         <span>音乐库</span>
       </router-link>
+      <router-link to="/library/artists" class="tab-item" active-class="active" @touchstart.passive="onTabPrefetch('/library/artists')" @mousedown="onTabPrefetch('/library/artists')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
+        <span>歌手</span>
+      </router-link>
       <router-link to="/download" class="tab-item" active-class="active" @touchstart.passive="onTabPrefetch('/download')" @mousedown="onTabPrefetch('/download')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
         <span>下载</span>
@@ -386,7 +398,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { connectWS, connected as wsConnected, onWS, disconnectWS } from './ws.js'
-import { initPlayer, showFullscreenPlayer, playerNotice, clearPlayerNotice } from './stores/player.js'
+import { initPlayer, showFullscreenPlayer, playerNotice, clearPlayerNotice, setAutoMatchOnPlay, PLAYER_AUTO_MATCH_ON_PLAY_KEY } from './stores/player.js'
 import { checkForUpdate, hasUpdate } from './composables/useUpdateCheck.js'
 import { api } from './api.js'
 import {
@@ -1048,6 +1060,7 @@ onMounted(() => {
       })
     }
     applySourceFallbackMode(s?.[SOURCE_FALLBACK_MODE_KEY])
+    setAutoMatchOnPlay(s?.[PLAYER_AUTO_MATCH_ON_PLAY_KEY] === 'true')
   }).catch(() => {})
 })
 

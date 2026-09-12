@@ -13,62 +13,120 @@
     </div>
 
     <div class="tag-layout">
-      <!-- 左侧：目录树（按文件夹逐层浏览） -->
+      <!-- 左侧：文件目录 / 按歌手 -->
       <aside class="dir-panel card">
-        <div class="panel-title">文件目录</div>
-        <p class="dir-hint">展开文件夹浏览；点击文件夹仅加载该层音频。路径在「设置 → 文件路径」中管理。</p>
-        <div class="dir-tree">
-          <template v-for="row in visibleTreeRows" :key="row.path">
-            <div
-              class="tree-row"
-              :class="{ active: activeDir === row.path, loading: row.loading }"
-              :style="{ paddingLeft: `${8 + row.depth * 14}px` }"
-            >
-              <button
-                class="tree-toggle"
-                :class="{ invisible: row.loaded && !row.hasChildren }"
-                :disabled="row.loading"
-                @click.stop="toggleTreeNode(row.path)"
-                :title="row.expanded ? '收起' : '展开'"
-              >
-                <span v-if="row.loading" class="tree-spin" />
-                <svg
-                  v-else
-                  viewBox="0 0 24 24"
-                  width="12"
-                  height="12"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  aria-hidden="true"
-                >
-                  <polyline v-if="row.expanded" points="6 9 12 15 18 9" />
-                  <polyline v-else points="9 18 15 12 9 6" />
-                </svg>
-              </button>
-              <span class="tree-folder" @click="selectFolder(row.path)">
-                <svg
-                  viewBox="0 0 24 24"
-                  width="19"
-                  height="19"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  aria-hidden="true"
-                >
-                  <path d="M3 7v12a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-6l-2-2H5a2 2 0 0 0-2 2z" />
-                </svg>
-              </span>
-              <span class="tree-label" :title="row.path" @click="selectFolder(row.path)">{{ row.name }}</span>
-              <span v-if="scanning && activeDir === row.path" class="dir-status">加载中</span>
-            </div>
-          </template>
-          <div v-if="!dirs.length" class="dir-empty">请先在设置中添加文件路径</div>
+        <div class="panel-title">
+          <div class="panel-tabs">
+            <button
+              type="button"
+              class="panel-tab"
+              :class="{ active: browseMode === 'dir' }"
+              @click="switchBrowseMode('dir')"
+            >文件目录</button>
+            <button
+              type="button"
+              class="panel-tab"
+              :class="{ active: browseMode === 'artist' }"
+              @click="switchBrowseMode('artist')"
+            >按歌手</button>
+          </div>
         </div>
+
+        <template v-if="browseMode === 'dir'">
+          <p class="dir-hint">展开文件夹浏览；点击文件夹仅加载该层音频。路径在「设置 → 文件路径」中管理。</p>
+          <div class="dir-tree">
+            <template v-for="row in visibleTreeRows" :key="row.path">
+              <div
+                class="tree-row"
+                :class="{ active: activeDir === row.path, loading: row.loading }"
+                :style="{ paddingLeft: `${8 + row.depth * 14}px` }"
+              >
+                <button
+                  class="tree-toggle"
+                  :class="{ invisible: row.loaded && !row.hasChildren }"
+                  :disabled="row.loading"
+                  @click.stop="toggleTreeNode(row.path)"
+                  :title="row.expanded ? '收起' : '展开'"
+                >
+                  <span v-if="row.loading" class="tree-spin" />
+                  <svg
+                    v-else
+                    viewBox="0 0 24 24"
+                    width="12"
+                    height="12"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                  >
+                    <polyline v-if="row.expanded" points="6 9 12 15 18 9" />
+                    <polyline v-else points="9 18 15 12 9 6" />
+                  </svg>
+                </button>
+                <span class="tree-folder" @click="selectFolder(row.path)">
+                  <svg
+                    viewBox="0 0 24 24"
+                    width="14"
+                    height="14"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M3 7v12a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-6l-2-2H5a2 2 0 0 0-2 2z" />
+                  </svg>
+                </span>
+                <span class="tree-label" :title="row.path" @click="selectFolder(row.path)">{{ row.name }}</span>
+                <span v-if="scanning && activeDir === row.path" class="dir-status">加载中</span>
+              </div>
+            </template>
+            <div v-if="!dirs.length" class="dir-empty">请先在设置中添加文件路径</div>
+          </div>
+        </template>
+
+        <template v-else>
+          <p class="dir-hint">选择一位歌手，加载该歌手的全部歌曲进行编辑。</p>
+          <div class="artist-tree">
+            <div v-if="!artistList.length" class="dir-empty">音乐库暂无歌曲</div>
+            <template v-else>
+              <div
+                v-for="artist in pagedArtistList"
+                :key="artist.id"
+                class="artist-row"
+                :class="{ active: activeArtist === artist.name }"
+                @click="selectArtist(artist)"
+              >
+                <span class="artist-avatar" :class="{ 'has-cover': artist.cover }">
+                  <CoverArt v-if="artist.cover" :src="artist.cover" />
+                  <template v-else>{{ artistInitial(artist.name) }}</template>
+                </span>
+                <span class="tree-label" :title="artist.name">{{ artist.name }}</span>
+                <span class="artist-count">{{ artist.trackCount }} 首</span>
+              </div>
+              <div v-if="totalArtistPages > 1" class="artist-pager">
+                <button
+                  type="button"
+                  class="pager-btn"
+                  :disabled="artistPage <= 1"
+                  title="上一页"
+                  @click="artistPage--"
+                >‹</button>
+                <span class="pager-info">{{ artistPage }} / {{ totalArtistPages }}</span>
+                <button
+                  type="button"
+                  class="pager-btn"
+                  :disabled="artistPage >= totalArtistPages"
+                  title="下一页"
+                  @click="artistPage++"
+                >›</button>
+              </div>
+            </template>
+          </div>
+        </template>
       </aside>
 
       <!-- 中间：文件列表 -->
@@ -137,7 +195,12 @@
             </label>
           </div>
           <div class="file-toolbar-actions">
-            <button class="btn-ghost btn-sm" :disabled="!activeDir || scanning || loadingMeta" @click="scanSubdirsRecursive">
+            <button
+              v-if="browseMode === 'dir'"
+              class="btn-ghost btn-sm"
+              :disabled="!activeDir || scanning || loadingMeta"
+              @click="scanSubdirsRecursive"
+            >
               含子目录扫描
             </button>
             <button class="btn-ghost btn-sm" :disabled="!displayedFiles.length" @click="playAllVisible">
@@ -305,9 +368,9 @@
           </div>
         </div>
         </template>
-        <div v-else-if="scanning" class="empty">正在加载文件夹...</div>
+        <div v-else-if="scanning" class="empty">{{ browseMode === 'artist' ? '正在加载歌手歌曲...' : '正在加载文件夹...' }}</div>
         <div v-else-if="files.length && missingFilter !== 'all'" class="empty">当前筛选条件下没有缺失文件</div>
-        <div v-else class="empty">在左侧展开并选择文件夹，加载该层音频文件</div>
+        <div v-else class="empty">{{ browseMode === 'artist' ? '在左侧选择一位歌手，加载其全部歌曲进行编辑' : '在左侧展开并选择文件夹，加载该层音频文件' }}</div>
       </section>
 
       <div
@@ -626,6 +689,8 @@ import { ref, computed, reactive, onMounted, onBeforeUnmount, watch } from 'vue'
 import { api } from '../api.js'
 import {
   updateLibraryTracksFromFiles,
+  libraryTracks,
+  groupArtists,
 } from '../stores/library.js'
 import { appConfirm } from '../stores/appDialog.js'
 import {
@@ -673,6 +738,8 @@ const activeDir = ref('')
 const expandedPaths = ref(new Set())
 const treeCache = ref({})
 const files = ref([])
+const browseMode = ref('dir')
+const activeArtist = ref('')
 const filterText = ref('')
 const missingFilter = ref('all')
 const selectAll = ref(false)
@@ -785,6 +852,124 @@ const visibleTreeRows = computed(() => {
   for (const root of dirs.value) visit(root, 0)
   return rows
 })
+
+/** 按歌手模式：从音乐库曲目分组得到歌手列表 */
+const artistList = computed(() => groupArtists(libraryTracks.value))
+
+const artistPage = ref(1)
+const artistPageSize = 50
+const totalArtistPages = computed(() => Math.max(1, Math.ceil(artistList.value.length / artistPageSize)))
+const artistPageStart = computed(() => (artistPage.value - 1) * artistPageSize)
+const pagedArtistList = computed(() =>
+  artistList.value.slice(artistPageStart.value, artistPageStart.value + artistPageSize)
+)
+
+watch(artistList, () => {
+  const max = Math.max(1, Math.ceil(artistList.value.length / artistPageSize))
+  if (artistPage.value > max) artistPage.value = max
+})
+
+function artistInitial(name) {
+  const n = String(name || '').trim()
+  if (!n) return '?'
+  const first = n[0]
+  if (/[a-zA-Z]/.test(first)) return first.toUpperCase()
+  return first
+}
+
+/** 切换左侧浏览模式（文件目录 / 按歌手） */
+function switchBrowseMode(mode) {
+  if (browseMode.value === mode) return
+  if (files.value.length) {
+    saveTagEditorSession({
+      mode: browseMode.value,
+      activeDir: activeDir.value,
+      activeArtist: activeArtist.value,
+      files: files.value,
+    })
+  }
+  // 保留两模式的浏览位置（activeDir / activeArtist 不重置），仅清空列表与编辑状态
+  files.value = []
+  editingFile.value = null
+  editForm.value = null
+  tagCheckResult.value = null
+  selectAll.value = false
+  browseMode.value = mode
+}
+
+/** 点击歌手：把该歌手全部歌曲转换为编辑列表（与选择文件夹一致） */
+async function selectArtist(artist) {
+  if (!artist?.name || scanning.value) return
+  metaLoadToken.value += 1
+  loadingMeta.value = false
+  const token = metaLoadToken.value
+  activeArtist.value = artist.name
+  scanning.value = true
+  files.value = []
+  editingFile.value = null
+  editForm.value = null
+  tagCheckResult.value = null
+  selectAll.value = false
+
+  try {
+    const list = (artist.tracks || []).map(t => {
+      const filePath = t.filePath || t.localPath
+      const ext = (filePath || '').match(/\.([^.]+)$/)?.[1] || ''
+      const picFromData = t.picUrl?.startsWith?.('data:')
+        ? t.picUrl
+        : (t.pictureBase64
+          ? (String(t.pictureBase64).startsWith('data:')
+            ? t.pictureBase64
+            : `data:${t.pictureMime || 'image/jpeg'};base64,${t.pictureBase64}`)
+          : '')
+      const coverUrl = picFromData || (t.picUrl && !t.picUrl.startsWith('data:') ? t.picUrl : '')
+      const item = {
+        filePath,
+        fileName: t.fileName || (filePath ? String(filePath).replace(/\\/g, '/').split('/').pop() : ''),
+        mtime: t.mtime || 0,
+        parsedTitle: t.name || '',
+        parsedArtist: t.singer || '',
+        title: t.title || t.name || '',
+        artist: t.singer || '',
+        album: t.album || '',
+        year: t.year || '',
+        genre: t.genre || '',
+        comment: t.comment || '',
+        lyric: t.lyric || '',
+        hasPicture: Boolean(t.hasPicture || t.picUrl || t.img || coverUrl),
+        hasLyrics: Boolean(t.lyric || t.hasLyrics),
+        pictureBase64: picFromData || '',
+        picUrl: coverUrl,
+        pictureMime: t.pictureMime || '',
+      }
+      return item
+    })
+    if (token !== metaLoadToken.value) return
+    files.value = mapListedFiles(list)
+    if (!files.value.length) {
+      showToast('该歌手暂无歌曲', 'info')
+      saveTagEditorSession({
+        mode: 'artist',
+        activeDir: activeDir.value,
+        activeArtist: activeArtist.value,
+        files: files.value,
+      })
+      return
+    }
+    showToast(`已加载 ${files.value.length} 个文件，正在同步封面/歌词状态...`, 'info')
+    saveTagEditorSession({
+      mode: 'artist',
+      activeDir: activeDir.value,
+      activeArtist: activeArtist.value,
+      files: files.value,
+    })
+    loadMetaInBatches(token)
+  } catch (e) {
+    showToast(e.message, 'error')
+  } finally {
+    if (token === metaLoadToken.value) scanning.value = false
+  }
+}
 
 function mapListedFiles(list) {
   return (list || []).map(f => ({
@@ -910,7 +1095,7 @@ watch(tagMatchPatchVersion, handleMatchPatchesSync)
 watch(tagMatchRunning, (running, wasRunning) => {
   if (wasRunning && !running) {
     handleMatchPatchesSync()
-    saveTagEditorSession(activeDir.value, files.value)
+    saveTagEditorSession({ mode: browseMode.value, activeDir: activeDir.value, activeArtist: activeArtist.value, files: files.value })
   }
 })
 
@@ -933,8 +1118,14 @@ onMounted(async () => {
   await loadDirs()
   await initTreeExpansion()
   const session = tagEditorSession.value
-  if (session.activeDir && session.files?.length) {
-    activeDir.value = session.activeDir
+  if (session.files?.length) {
+    if (session.mode === 'artist') {
+      browseMode.value = 'artist'
+      activeArtist.value = session.activeArtist || ''
+    } else {
+      browseMode.value = 'dir'
+      activeDir.value = session.activeDir || ''
+    }
     files.value = session.files.map(f => ({ ...f }))
     handleMatchPatchesSync()
   }
@@ -946,7 +1137,7 @@ onBeforeUnmount(() => {
     else compactMq.removeListener?.(syncCompactLayout)
   }
   if (files.value.length) {
-    saveTagEditorSession(activeDir.value, files.value)
+    saveTagEditorSession({ mode: browseMode.value, activeDir: activeDir.value, activeArtist: activeArtist.value, files: files.value })
   }
 })
 
@@ -1044,7 +1235,7 @@ async function selectFolder(dir) {
       showToast(subCount
         ? '该文件夹没有音频，请展开子文件夹或选择其他目录'
         : '该文件夹为空', 'info')
-      saveTagEditorSession(activeDir.value, files.value)
+      saveTagEditorSession({ mode: browseMode.value, activeDir: activeDir.value, activeArtist: activeArtist.value, files: files.value })
       return
     }
     const needTextMeta = files.value.filter(f => !f._metaLoaded)
@@ -1052,7 +1243,7 @@ async function selectFolder(dir) {
       ? `已发现 ${files.value.length} 个文件，正在读取标签...`
       : `已加载 ${files.value.length} 个文件，正在同步封面/歌词状态...`
     showToast(toastText, 'info')
-    saveTagEditorSession(activeDir.value, files.value)
+    saveTagEditorSession({ mode: browseMode.value, activeDir: activeDir.value, activeArtist: activeArtist.value, files: files.value })
     loadMetaInBatches(token)
   } catch (e) {
     showToast(e.message, 'error')
@@ -1083,7 +1274,7 @@ async function scanSubdirsRecursive() {
       return
     }
     showToast(`已递归扫描 ${files.value.length} 个文件，正在读取标签...`, 'info')
-    saveTagEditorSession(activeDir.value, files.value)
+    saveTagEditorSession({ mode: browseMode.value, activeDir: activeDir.value, activeArtist: activeArtist.value, files: files.value })
     loadMetaInBatches(token)
   } catch (e) {
     showToast(e.message, 'error')
@@ -1169,7 +1360,7 @@ async function loadMetaInBatches(token) {
   if (token === metaLoadToken.value) {
     loadingMeta.value = false
     syncFilesFromMatchPatches(files.value)
-    saveTagEditorSession(activeDir.value, files.value)
+    saveTagEditorSession({ mode: browseMode.value, activeDir: activeDir.value, activeArtist: activeArtist.value, files: files.value })
     showToast(`标签读取完成 ${metaProgress.value.done}/${metaProgress.value.total}`, 'success')
   }
 }
@@ -1301,7 +1492,6 @@ async function openEdit(f) {
       editForm.value = reactive({
         title: f.title || f.parsedTitle || '',
         artist: f.artist || f.parsedArtist || '',
-        albumArtist: f.albumArtist || '',
         album: f.album || '',
         year: f.year ? String(f.year) : '',
         genre: f.genre || '',
@@ -2182,6 +2372,112 @@ function showToast(text, type = 'info') {
 }
 .dir-hint { font-size: 11px; color: var(--text-muted); margin-bottom: 8px; line-height: 1.4; flex-shrink: 0; }
 
+.panel-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-pill);
+  flex-shrink: 0;
+}
+.panel-tab {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1;
+  padding: 5px 12px;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.panel-tab:hover { color: var(--text); }
+.panel-tab.active {
+  background: var(--accent);
+  color: #fff;
+  font-weight: 500;
+}
+
+.artist-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+.artist-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  min-width: 0;
+}
+.artist-row:hover { background: var(--bg-hover); }
+.artist-row.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.artist-avatar {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-muted);
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+}
+.artist-avatar :deep(img) {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.artist-count {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.artist-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 0 4px;
+  flex-shrink: 0;
+}
+.pager-btn {
+  min-width: 26px;
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  background: var(--bg-card, var(--bg-elevated));
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.pager-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.pager-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.pager-info {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
 .dir-add { display: flex; gap: 6px; }
 .dir-add input { flex: 1; min-width: 0; font-size: 12px; }
 
@@ -2254,7 +2550,7 @@ function showToast(text, type = 'info') {
 .tree-label {
   flex: 1;
   min-width: 0;
-  font-size: 14.5px;
+  font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

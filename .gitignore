@@ -42,3 +42,4 @@ docs/forum-post*.md
 
 # Cursor 本地规则（不进仓库，本机保留）
 .cursor/
+1/

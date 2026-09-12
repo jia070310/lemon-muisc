@@ -434,6 +434,22 @@
             />
           </div>
         </div>
+        <div class="setting-item">
+          <div class="setting-item-info">
+            <div class="setting-item-label">播放自动匹配</div>
+            <div class="setting-item-desc">播放本地音乐时，若文件标签缺失（无专辑 / 封面 / 歌词等），自动联网匹配并保存到文件</div>
+          </div>
+          <div class="setting-item-action">
+            <label class="toggle">
+              <input
+                type="checkbox"
+                :checked="settings[AUTO_MATCH_ON_PLAY_KEY] === 'true'"
+                @change="toggleAutoMatchOnPlay"
+              />
+              <span class="slider"></span>
+            </label>
+          </div>
+        </div>
         <div v-if="isAdminUser" class="setting-item">
           <div class="setting-item-info">
             <div class="setting-item-label">音源切换方式</div>
@@ -944,7 +960,7 @@ defineOptions({ name: 'Settings' })
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from '../api.js'
-import { loadCoverStyle, loadPlayerSettings } from '../stores/player.js'
+import { loadCoverStyle, loadPlayerSettings, setAutoMatchOnPlay, PLAYER_AUTO_MATCH_ON_PLAY_KEY } from '../stores/player.js'
 import { scanLibrary, libraryScanning, PLAYLIST_REMOTE_SYNC_DAYS_KEY, setPlaylistRemoteSyncDays, getPlaylistRemoteSyncDays, LIBRARY_SONG_COLUMNS_KEY, setLibrarySongColumns, normalizeLibrarySongColumns } from '../stores/library.js'
 import { reloadSearchSources } from '../stores/search.js'
 import { reloadDiscoverSources } from '../stores/discover.js'
@@ -996,6 +1012,7 @@ const librarySongColumnsOptions = [
   { value: '4', label: '四列' },
 ]
 const DOWNLOAD_GROUP_BY_KEY = 'download.savePathGroupBy'
+const AUTO_MATCH_ON_PLAY_KEY = PLAYER_AUTO_MATCH_ON_PLAY_KEY
 const lrcFormatOptions = [
   { value: 'utf8', label: 'UTF-8' },
   { value: 'gbk', label: 'GBK' },
@@ -1727,6 +1744,7 @@ onMounted(async () => {
     if (!settings[CUSTOM_COLOR_KEY]) settings[CUSTOM_COLOR_KEY] = currentCustomColor.value
     if (!settings[SOURCE_FALLBACK_MODE_KEY]) settings[SOURCE_FALLBACK_MODE_KEY] = 'auto'
     applySourceFallbackMode(settings[SOURCE_FALLBACK_MODE_KEY])
+    setAutoMatchOnPlay(settings[AUTO_MATCH_ON_PLAY_KEY] === 'true')
     if (!settings[DOWNLOAD_GROUP_BY_KEY]) {
       settings[DOWNLOAD_GROUP_BY_KEY] = settings['download.isSavePathGroupByListName'] === 'true' ? 'album' : 'none'
     }
@@ -2194,6 +2212,18 @@ function onCustomColorHex(e) {
 function toggleSetting(key) {
   settings[key] = settings[key] === 'true' ? 'false' : 'true'
   saveSetting(key)
+}
+
+/** 播放自动匹配开关：保存到服务端并同步播放器运行时状态 */
+async function toggleAutoMatchOnPlay() {
+  const next = settings[AUTO_MATCH_ON_PLAY_KEY] === 'true' ? 'false' : 'true'
+  settings[AUTO_MATCH_ON_PLAY_KEY] = next
+  setAutoMatchOnPlay(next === 'true')
+  try {
+    await api.settings.update({ [AUTO_MATCH_ON_PLAY_KEY]: next })
+  } catch (e) {
+    showToast(e.message, 'error')
+  }
 }
 
 async function toggleVisualizerSetting() {

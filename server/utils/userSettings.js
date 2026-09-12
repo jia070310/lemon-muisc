@@ -51,6 +51,7 @@ export const USER_SETTING_KEYS = new Set([
   'download.savePathPersonal',
   'source.active',
   'tag.matchConcurrency',
+  'player.autoMatchOnPlay',
 ])
 
 export function isGlobalSettingKey(key) {
