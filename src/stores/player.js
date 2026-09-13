@@ -10,7 +10,11 @@ import {
   isSourceFallbackError,
   notifySourceSwitch,
 } from './sourceFallback.js'
-import { recordRecentPlay, localCoverUrl, bumpLibraryCoverVersion } from './library.js'
+import {
+  recordRecentPlay,
+  localCoverUrl,
+  bumpLibraryCoverVersion,
+} from './library.js'
 import { parseLyric } from '../utils/lrc.js'
 import { formatArtists } from '../utils/text.js'
 import { getTrackFilePath, isLocalTrack, isSameTrackPath } from '../utils/trackPath.js'
@@ -83,6 +87,7 @@ export const currentQueueIndex = ref(-1)
 /** @type {import('vue').Ref<'list'|'loop'|'single'|'random'>} */
 export const playMode = ref('list')
 export const showQueuePanel = ref(false)
+
 
 export const playModeLabel = computed(() => {
   const labels = { list: '列表播放', loop: '列表循环', single: '单曲循环', random: '随机播放' }
@@ -516,9 +521,99 @@ async function fetchLocalMeta(item) {
     if (token !== localMetaFetchToken) return
     const playingPath = getTrackFilePath(currentPlaying.value)
     if (!playingPath || !isSameTrackPath(playingPath, filePath)) return
-    applyLocalMetaToPlaying(res?.data || res, filePath)
+    const meta = res?.data || res
+    applyLocalMetaToPlaying(meta, filePath)
     await fillLocalGapsFromNetwork(filePath)
+    autoMatchMissingOnPlay(meta, filePath)
   } catch {}
+}
+
+/* ===== 播放自动匹配：文件标签缺失时，播放时自动联网匹配并保存 ===== */
+
+/** 记录已自动匹配过的本地文件，避免同一首歌反复触发 */
+const autoMatchedOnPlay = new Set()
+
+const AUTO_MATCH_ON_PLAY_KEY = 'player.autoMatchOnPlay'
+/** 播放自动匹配设置项 key（Settings 页 / App 启动同步用） */
+export const PLAYER_AUTO_MATCH_ON_PLAY_KEY = AUTO_MATCH_ON_PLAY_KEY
+let autoMatchOnPlayEnabled = false
+
+/** 设置开启/关闭播放自动匹配（Settings 页切换时调用） */
+export function setAutoMatchOnPlay(enabled) {
+  autoMatchOnPlayEnabled = Boolean(enabled)
+  if (!enabled) autoMatchedOnPlay.clear()
+}
+
+/** 播放本地文件后调用：若开关打开且标签缺失，自动联网匹配并保存 */
+async function autoMatchMissingOnPlay(meta, filePath) {
+  if (!autoMatchOnPlayEnabled || !filePath) return
+  if (autoMatchedOnPlay.has(filePath)) return
+  if (!isMissingLocalTag(meta)) return
+
+  autoMatchedOnPlay.add(filePath)
+  const fileName = getTrackFilePath(currentPlaying.value)
+    ? ((currentPlaying.value && currentPlaying.value.name) || filePath.split(/[\\/]/).pop())
+    : filePath.split(/[\\/]/).pop()
+
+  try {
+    const res = await api.tag.matchBatch([{ filePath, fileName }])
+    const item = (res.data || [])[0]
+    if (!item?.ok || !item.meta) {
+      showPlayerNotice('自动匹配未找到该曲信息', 4000)
+      return
+    }
+    const meta2 = { ...item.meta }
+    if (meta2.pic) meta2.pictureBase64 = meta2.pic
+    const saved = await saveAutoMatchedMeta(filePath, meta2)
+    if (saved && isSameTrackPath(getTrackFilePath(currentPlaying.value), filePath)) {
+      refreshPlayingLocalMeta(filePath, {
+        ...meta2,
+        pictureBase64: meta2.pic || meta2.pictureBase64,
+        hasPicture: Boolean(meta2.pic || meta2.pictureBase64 || meta2.picUrl),
+        hasLyrics: Boolean(meta2.lyric),
+      })
+    }
+    if (saved) {
+      showPlayerNotice('已自动匹配并保存该曲标签', 5000)
+    }
+  } catch {
+    // 自动匹配失败静默，不打扰播放
+  }
+}
+
+/** 标签缺失判断：与标签编辑一致 —— 专辑 / 封面 / 歌词任一缺失 */
+function isMissingLocalTag(meta) {
+  if (!meta) return false
+  const noAlbum = !String(meta.album || '').trim()
+  const noCover = !meta.hasPicture
+  const noLyric = !meta.hasLyrics
+  return noAlbum || noCover || noLyric
+}
+
+/** 将匹配结果写入文件（写盘 + 刷新音乐库索引缓存） */
+async function saveAutoMatchedMeta(filePath, meta) {
+  try {
+    const res = await api.tag.writeBatch([{ filePath, meta: buildAutoMatchWriteMeta(meta) }])
+    const row = (res.data || []).find(r => r.filePath === filePath) || (res.data || [])[0]
+    return Boolean(row?.ok)
+  } catch {
+    return false
+  }
+}
+
+function buildAutoMatchWriteMeta(meta) {
+  return {
+    title: meta.title,
+    artist: meta.artist,
+    albumArtist: meta.albumArtist,
+    album: meta.album,
+    year: meta.year,
+    genre: meta.genre,
+    comment: meta.comment,
+    lyric: meta.lyric,
+    pic: meta.pic || meta.pictureBase64 || undefined,
+    picUrl: meta.picUrl || undefined,
+  }
 }
 
 function hasFileCover(item) {
@@ -2061,7 +2156,10 @@ export async function playNext() {
   if (!playQueue.value.length) return
   const next = resolveNextIndex(false)
   if (next < 0) {
-    if (playMode.value === 'loop') await playTrackAt(0)
+    if (playMode.value === 'loop') {
+      await playTrackAt(0)
+      return
+    }
     return
   }
   await playTrackAt(next)

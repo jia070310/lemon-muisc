@@ -44,7 +44,8 @@ function writeMp3Meta(filePath, meta) {
   if (meta.album != null) tags.album = meta.album
   if (meta.year != null) tags.year = String(meta.year)
   if (meta.genre != null) tags.genre = meta.genre
-  if (meta.comment != null) tags.comment = { text: meta.comment }
+  // node-id3：comment 必须带 language，否则 UTF-16 BOM 会占掉 language 字节，读写乱码
+  if (meta.comment != null) tags.comment = { language: 'chi', text: String(meta.comment) }
 
   const picBuf = decodePicInput(meta.pic)
   if (picBuf) {
@@ -363,9 +364,9 @@ function syncsafeSize(buf, start) {
     | (buf[start + 3] & 0x7f)
 }
 
-/** 一次扫描 MP3 ID3 标签，检测 APIC / USLT / SYLT 等帧 */
+/** 一次扫描 MP3 ID3 标签，检测 APIC / USLT / SYLT 等帧，并尽量恢复 COMM 描述 */
 function scanMp3Id3Frames(filePath) {
-  const result = { hasApic: false, hasUslt: false }
+  const result = { hasApic: false, hasUslt: false, comment: '' }
   const fd = fs.openSync(filePath, 'r')
   try {
     const header = Buffer.alloc(10)
@@ -385,7 +386,11 @@ function scanMp3Id3Frames(filePath) {
         : tagData.readUInt32BE(offset + 4)
       if (frameId === 'APIC' && frameSize > 0) result.hasApic = true
       if ((frameId === 'USLT' || frameId === 'SYLT') && frameSize > 0) result.hasUslt = true
-      if (result.hasApic && result.hasUslt) break
+      if (frameId === 'COMM' && frameSize > 1 && !result.comment) {
+        const body = tagData.subarray(offset + 10, offset + 10 + frameSize)
+        result.comment = decodeId3CommentBody(body)
+      }
+      if (result.hasApic && result.hasUslt && result.comment) break
       const next = offset + 10 + frameSize
       if (frameSize <= 0 || next > read) break
       offset = next
@@ -396,6 +401,92 @@ function scanMp3Id3Frames(filePath) {
   } finally {
     fs.closeSync(fd)
   }
+}
+
+/**
+ * 解析 ID3 COMM 帧正文。
+ * node-id3 在缺少 language 时会写成：01 FF FE 00 00 FF FE <utf16 text>
+ * （BOM 占掉 language），标准库读出会乱码；这里兼容两种布局。
+ */
+function decodeUtf16Buffer(buf, littleEndian) {
+  if (!buf?.length) return ''
+  if (littleEndian) return buf.toString('utf16le')
+  const swapped = Buffer.alloc(buf.length - (buf.length % 2))
+  for (let i = 0; i + 1 < swapped.length; i += 2) {
+    swapped[i] = buf[i + 1]
+    swapped[i + 1] = buf[i]
+  }
+  return swapped.toString('utf16le')
+}
+
+function decodeId3CommentBody(body) {
+  if (!body?.length) return ''
+  const enc = body[0]
+  try {
+    if (enc === 0 || enc === 3) {
+      // ISO-8859-1 / UTF-8：language(3) + short\0 + text
+      let p = 4
+      while (p < body.length && body[p] !== 0) p += 1
+      p += 1
+      const text = enc === 3
+        ? body.subarray(p).toString('utf8')
+        : body.subarray(p).toString('latin1')
+      return text.replace(/\0+$/g, '').trim()
+    }
+    if (enc === 1 || enc === 2) {
+      // UTF-16：正常为 language(3) + short\0\0 + text
+      // 异常（缺 language）：BOM 紧跟 encoding → 01 FF FE 00 00 [FF FE] text
+      let p = 1
+      const langLooksBom = body[1] === 0xff && body[2] === 0xfe
+      const langLooksBeBom = body[1] === 0xfe && body[2] === 0xff
+      if (!langLooksBom && !langLooksBeBom) p = 4
+      // 跳过 short description（UTF-16 双字节空终止）
+      if (body[p] === 0xff && body[p + 1] === 0xfe) p += 2
+      else if (body[p] === 0xfe && body[p + 1] === 0xff) p += 2
+      while (p + 1 < body.length && !(body[p] === 0 && body[p + 1] === 0)) p += 2
+      p += 2
+      if (p >= body.length) return ''
+      let textBuf = body.subarray(p)
+      let le = enc === 1
+      if (textBuf[0] === 0xff && textBuf[1] === 0xfe) {
+        le = true
+        textBuf = textBuf.subarray(2)
+      } else if (textBuf[0] === 0xfe && textBuf[1] === 0xff) {
+        le = false
+        textBuf = textBuf.subarray(2)
+      }
+      return decodeUtf16Buffer(textBuf, le).replace(/\0+$/g, '').trim()
+    }
+  } catch {}
+  return ''
+}
+
+function isBrokenId3Language(lang) {
+  const s = String(lang || '')
+  if (!s) return true
+  // 正常 language 为 3 位字母（eng/chi/...）；BOM 误入会变成 ÿþ 等
+  return !/^[a-z]{3}$/i.test(s.slice(0, 3)) || /[ÿþ\u0000\ufeff]/.test(s)
+}
+
+function preferReadableComment(primary, recovered) {
+  const a = String(primary || '').trim()
+  const b = String(recovered || '').trim()
+  if (!b) return a
+  if (!a) return b
+  // 已有可读中文且不像乱码时保留
+  if (/[\u4e00-\u9fff]/.test(a) && !isLikelyCommentMojibake(a)) return a
+  if (/[\u4e00-\u9fff]/.test(b) && !isLikelyCommentMojibake(b)) return b
+  return a || b
+}
+
+/** 粗检：大量冷僻/符号混排的「假中文」乱码 */
+function isLikelyCommentMojibake(text) {
+  const s = String(text || '')
+  if (!s) return false
+  const cjk = (s.match(/[\u4e00-\u9fff]/g) || []).length
+  const weird = (s.match(/[\u0100-\u024f\u1100-\u11ff\u3040-\u30ff\ua000-\uffff∏⁑⧈]/g) || []).length
+  // 正常中文描述几乎全是常用汉字；乱码里冷僻字/假名/符号占比高
+  return weird > Math.max(3, cjk * 0.35)
 }
 
 /** @deprecated 使用 scanMp3Id3Frames */
@@ -549,6 +640,17 @@ function readMp3NativeTags(filePath) {
     const frames = scanMp3Id3Frames(filePath)
     const hasPicture = Boolean(tags.image?.imageBuffer?.length) || frames.hasApic
     const hasLyrics = Boolean(lyric) || frames.hasUslt || hasExternalLrc(filePath)
+    let comment = normalizeTagText(tags.comment?.text || tags.comment)
+    // 缺 language 写入的 COMM：node-id3 / music-metadata 都会读乱；从原始帧恢复
+    if (frames.comment) {
+      if (isBrokenId3Language(tags.comment?.language) || !comment || isLikelyCommentMojibake(comment)) {
+        // language 异常时以原始帧为准（库读出的 text 几乎总是错的）
+        comment = isBrokenId3Language(tags.comment?.language)
+          ? frames.comment
+          : preferReadableComment(comment, frames.comment)
+      }
+    }
+    comment = normalizeTagText(comment)
     return {
       title: normalizeTagText(tags.title),
       artist: normalizeTagText(joinArtists(tags.artist)),
@@ -556,7 +658,7 @@ function readMp3NativeTags(filePath) {
       album: normalizeTagText(tags.album),
       year: tags.year != null ? String(tags.year) : '',
       genre: normalizeTagText(tags.genre),
-      comment: normalizeTagText(tags.comment?.text || tags.comment),
+      comment,
       lyric,
       hasPicture,
       hasLyrics,
@@ -578,7 +680,7 @@ function mergeNativeMeta(base, native, { lite = false } = {}) {
     album: pick(base.album, native.album),
     year: base.year || native.year || '',
     genre: pick(base.genre, native.genre),
-    comment: pick(base.comment, native.comment),
+    comment: preferReadableComment(base.comment, native.comment),
     lyric,
     hasPicture: Boolean(base.hasPicture || native.hasPicture),
     hasLyrics: Boolean(base.hasLyrics || native.hasLyrics || (!lite && lyric)),

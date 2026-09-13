@@ -143,7 +143,8 @@ function buildWavId3Chunk(meta, picBuf, clearPic) {
   if (meta.album != null) tags.album = meta.album
   if (meta.year != null) tags.year = String(meta.year)
   if (meta.genre != null) tags.genre = meta.genre
-  if (meta.comment != null) tags.comment = { text: meta.comment }
+  // 与 MP3 相同：COMM 必须带 language，否则中文描述会乱码
+  if (meta.comment != null) tags.comment = { language: 'chi', text: String(meta.comment) }
   if (meta.lyric != null) {
     tags.unsynchronisedLyrics = { language: 'chi', text: meta.lyric }
   }

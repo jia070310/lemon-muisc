@@ -20,6 +20,7 @@ import { refreshStoredSourceMeta } from './routes/source.js'
 import { installSourceFaultHandlers, recordSourceFault, getSourceFault } from './sourceFault.js'
 import { startMemoryGuard } from './utils/memoryGuard.js'
 import { startTelemetry, stopTelemetry } from './utils/telemetry.js'
+import { startLibraryAutoWatch, stopLibraryAutoWatch } from './utils/libraryAutoWatch.js'
 
 installSourceFaultHandlers()
 
@@ -31,7 +32,7 @@ const CONFIG_PATH = process.env.CONFIG_PATH || path.join(__dirname, '..', 'confi
 const app = express()
 const server = http.createServer(app)
 
-app.use(cors())
+app.use(cors({ origin: true, credentials: true }))
 app.use(express.json({ limit: '25mb' }))
 
 app.locals.dataPath = DATA_PATH
@@ -46,6 +47,17 @@ app.use('/api', apiRouter)
 const publicDir = path.join(__dirname, '..', 'dist', 'public')
 const publicIndex = path.join(publicDir, 'index.html')
 if (fs.existsSync(publicIndex)) {
+  // PWA：避免浏览器强缓存旧 SW；允许根作用域
+  app.use((req, res, next) => {
+    if (req.path === '/sw.js') {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate')
+      res.setHeader('Service-Worker-Allowed', '/')
+    } else if (req.path === '/manifest.webmanifest') {
+      res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8')
+      res.setHeader('Cache-Control', 'no-cache')
+    }
+    next()
+  })
   app.use(express.static(publicDir))
   app.get(/^\/(?!api|ws).*/, (_req, res) => {
     res.sendFile(publicIndex)
@@ -93,6 +105,7 @@ startMemoryGuard()
 
 function shutdown(signal) {
   console.log(`收到 ${signal}，正在关闭服务...`)
+  stopLibraryAutoWatch()
   stopTelemetry()
   wss.close(() => {
     server.close(() => process.exit(0))
@@ -124,4 +137,5 @@ server.listen(PORT, '::', () => {
   console.log(`Download path: ${DATA_PATH}`)
   console.log(`Config path: ${CONFIG_PATH}`)
   startTelemetry()
+  startLibraryAutoWatch()
 })

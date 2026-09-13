@@ -5,14 +5,14 @@
       <div class="page-title">音乐风格</div>
     </div>
 
-    <div v-if="libraryLoading && !libraryTracks.length" class="loading card">正在加载音乐库…</div>
+    <div v-if="loading && !genres.length" class="loading card">正在加载音乐库…</div>
     <div v-else-if="!genres.length" class="empty card">
       <p>暂无风格标签</p>
       <p class="empty-hint">歌曲需包含风格（Genre）标签信息</p>
       <router-link to="/library" class="btn-ghost btn-sm">返回音乐库</router-link>
     </div>
     <section v-else class="genres-panel">
-      <p class="genres-summary">共 {{ genres.length }} 种风格</p>
+      <p class="genres-summary">共 {{ total }} 种风格</p>
       <div class="genre-grid">
         <button
           v-for="genre in genres"
@@ -31,33 +31,55 @@
           <div class="genre-card-meta">{{ genre.trackCount }} 首 · {{ genre.artistCount }} 位歌手</div>
         </button>
       </div>
+      <div v-if="totalPages > 1" class="pager">
+        <button class="btn-ghost btn-sm" :disabled="page <= 1" @click="page--">上一页</button>
+        <span>{{ page }} / {{ totalPages }}</span>
+        <button class="btn-ghost btn-sm" :disabled="page >= totalPages" @click="page++">下一页</button>
+      </div>
     </section>
   </div>
 </template>
 
 <script setup>
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../api.js'
 import {
-  libraryTracks,
-  libraryLoading,
   libraryScanned,
-  groupGenres,
   getGenreTheme,
   scanLibrary,
+  fetchLibraryGenres,
 } from '../stores/library.js'
 
 const router = useRouter()
+const genres = ref([])
+const total = ref(0)
+const page = ref(1)
+const pageSize = 60
+const loading = ref(false)
+const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize)))
 
-const genres = computed(() => (
-  groupGenres(libraryTracks.value).filter(g => g.name !== '未知风格')
-))
+async function loadPage() {
+  loading.value = true
+  try {
+    const res = await fetchLibraryGenres(api, { page: page.value, limit: pageSize, sort: 'count' })
+    genres.value = res.items
+    total.value = res.total
+  } catch {
+    genres.value = []
+    total.value = 0
+  } finally {
+    loading.value = false
+  }
+}
+
+watch(page, () => { loadPage() })
 
 onMounted(async () => {
   if (!libraryScanned.value) {
-    try { await scanLibrary(api) } catch {}
+    try { await scanLibrary(api, { resync: true }) } catch {}
   }
+  await loadPage()
 })
 
 function openGenre(genre) {
@@ -97,20 +119,20 @@ function genreCardStyle(genre) {
 }
 .genre-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: 12px;
 }
 .genre-card {
   text-align: left;
-  padding: 16px 14px;
-  border-radius: 14px;
-  border: 1.5px solid;
+  padding: 14px 14px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border-light);
   cursor: pointer;
   transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 .genre-card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.16);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.12);
 }
 .genre-card-top {
   display: flex;
@@ -120,19 +142,34 @@ function genreCardStyle(genre) {
   margin-bottom: 8px;
 }
 .genre-card-name {
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 650;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .genre-card-play {
-  color: var(--genre-accent, var(--accent));
-  line-height: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  background: var(--genre-accent, var(--accent));
   flex-shrink: 0;
 }
 .genre-card-meta {
   font-size: 12px;
+  color: var(--text-muted);
+}
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 18px;
+  font-size: 13px;
   color: var(--text-muted);
 }
 
@@ -142,7 +179,5 @@ function genreCardStyle(genre) {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 10px;
   }
-  .genre-card { padding: 14px 12px; }
-  .genre-card-name { font-size: 15px; }
 }
 </style>

@@ -124,18 +124,22 @@ export function markEmailVerified(userId) {
 export function createSession(userId, remember = true) {
   const db = getDB()
   const token = randomBytes(32).toString('hex')
-  const ttl = remember ? SESSION_TTL_REMEMBER : SESSION_TTL_DEFAULT
+  const rememberFlag = remember ? 1 : 0
+  const ttl = rememberFlag ? SESSION_TTL_REMEMBER : SESSION_TTL_DEFAULT
   const now = Math.floor(Date.now() / 1000)
   const expiresAt = now + ttl
   db.prepare('DELETE FROM sessions WHERE expires_at <= ?').run(now)
   db.prepare(`
-    INSERT INTO sessions (id, user_id, expires_at, created_at)
-    VALUES (?, ?, ?, ?)
-  `).run(token, userId, expiresAt, now)
-  return { token, expiresAt, remember: Boolean(remember) }
+    INSERT INTO sessions (id, user_id, expires_at, created_at, remember)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(token, userId, expiresAt, now, rememberFlag)
+  return { token, expiresAt, remember: Boolean(rememberFlag), ttl }
 }
 
 function sessionTtlForRow(row) {
+  if (row.remember != null) {
+    return Number(row.remember) ? SESSION_TTL_REMEMBER : SESSION_TTL_DEFAULT
+  }
   const created = row.created_at || row.expires_at - SESSION_TTL_DEFAULT
   const originalTtl = Math.max(0, row.expires_at - created)
   return originalTtl > SESSION_TTL_DEFAULT ? SESSION_TTL_REMEMBER : SESSION_TTL_DEFAULT
@@ -150,6 +154,7 @@ function slideSessionExpiry(row) {
   if (row.expires_at >= now + ttl - 3600) return row.expires_at
   const newExpires = now + ttl
   db.prepare('UPDATE sessions SET expires_at = ? WHERE id = ?').run(newExpires, row.id)
+  row.expires_at = newExpires
   return newExpires
 }
 
@@ -157,7 +162,7 @@ export function getSession(token) {
   const db = getDB()
   if (!token) return null
   const row = db.prepare(`
-    SELECT s.id, s.user_id, s.expires_at, s.created_at,
+    SELECT s.id, s.user_id, s.expires_at, s.created_at, s.remember,
            u.username, u.display_name, u.role, u.email, u.email_verified, u.fnos_uid, u.created_at AS user_created_at
     FROM sessions s
     JOIN users u ON u.id = s.user_id
@@ -169,9 +174,11 @@ export function getSession(token) {
     db.prepare('DELETE FROM sessions WHERE id = ?').run(token)
     return null
   }
-  slideSessionExpiry(row)
+  const expiresAt = slideSessionExpiry(row)
   return {
     token: row.id,
+    expiresAt,
+    remember: Boolean(row.remember ?? (sessionTtlForRow(row) === SESSION_TTL_REMEMBER)),
     user: toPublicUser({
       id: row.user_id,
       username: row.username,

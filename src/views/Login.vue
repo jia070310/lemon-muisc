@@ -2,7 +2,7 @@
   <div class="login-page">
     <div class="login-card card" :class="{ wide: setupMode && setupStep === 2 }">
       <div class="login-brand">
-        <img src="/icon.png" alt="柠檬音乐" class="login-logo" />
+        <img :src="APP_ICON_URL" alt="柠檬音乐" class="login-logo" />
         <h1>{{ title }}</h1>
         <p class="login-sub">{{ subtitle }}</p>
         <div v-if="setupMode" class="setup-steps">
@@ -25,6 +25,7 @@
           <input v-model="remember" type="checkbox" />
           <span>保持登录（30 天）</span>
         </label>
+        <p class="field-hint remember-hint">勾选后会写入浏览器 Cookie，飞牛手机端关闭应用后再打开也可保持登录。</p>
         <p v-if="error" class="login-error">{{ error }}</p>
         <button class="btn-primary login-btn" type="submit" :disabled="loading">登录</button>
         <button type="button" class="link-btn" @click="mode = 'forgot'">忘记密码？</button>
@@ -149,6 +150,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { login, setupAdmin, needsSetup } from '../utils/auth.js'
 import { api } from '../api.js'
 import MailConfigGuide from '../components/MailConfigGuide.vue'
+import { APP_ICON_URL } from '../utils/appIcon.js'
 
 const route = useRoute()
 const router = useRouter()
@@ -358,6 +360,7 @@ async function submitForgot() {
 .field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--text-secondary); }
 .field input { width: 100%; box-sizing: border-box; padding: 11px 12px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--bg-input); color: var(--text); font-size: 15px; }
 .field-hint { margin: -4px 0 0; font-size: 12px; line-height: 1.45; color: var(--text-muted); }
+.remember-hint { margin-top: 2px; }
 .remember { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-secondary); }
 .login-error { margin: 0; color: var(--error); font-size: 13px; white-space: pre-line; }
 .login-info { margin: 0; color: var(--success); font-size: 13px; line-height: 1.45; white-space: pre-line; }

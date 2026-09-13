@@ -2,6 +2,7 @@ import { ref, computed } from 'vue'
 import { findLocalMatchForTrack, isLocalPlaylistTrack } from '../utils/trackMatch.js'
 import { withStreamAuth } from '../utils/streamAuth.js'
 import { currentUser } from '../utils/auth.js'
+import { splitArtists } from '../utils/text.js'
 
 const FAVORITES_KEY_BASE = 'lemon-library-favorites'
 const RECENT_KEY_BASE = 'lemon-library-recent'
@@ -25,6 +26,8 @@ function playlistsKey() { return storageKey(PLAYLISTS_KEY_BASE) }
 function userDataRevKey() { return storageKey(USER_DATA_REV_KEY_BASE) }
 
 export const libraryTracks = ref([])
+/** 服务端曲库总数（不再依赖前端持有全量） */
+export const libraryTrackTotal = ref(0)
 export const libraryLoading = ref(false)
 export const libraryMetaLoading = ref(false)
 export const libraryScanned = ref(false)
@@ -99,13 +102,170 @@ function applyServerScanProgress(scan = {}) {
 async function reloadTracksFromCache(api) {
   if (!api?.library?.tracks) return
   try {
-    const cachedRes = await api.library.tracks()
-    const cachedList = cachedRes.data || []
-    if (cachedList.length) {
+    const [pageRes, countRes] = await Promise.all([
+      api.library.tracks({ page: 1, limit: 50, sort: 'mtime' }),
+      api.library.tracksCount?.().catch(() => null),
+    ])
+    const cachedList = pageRes.data || []
+    const total = Number(countRes?.total ?? pageRes.total ?? cachedList.length) || 0
+    libraryTrackTotal.value = total
+    if (cachedList.length || total === 0) {
       libraryTracks.value = sortTracksByMtime(cachedList.map(fileToLibraryTrack))
       saveSessionTracks(libraryTracks.value)
     }
   } catch {}
+}
+
+/** 按服务端分页拉取曲目，写入 libraryTracks（当前页工作集） */
+export async function fetchLibraryTracksPage(api, {
+  page = 1,
+  limit = 50,
+  q = '',
+  sort = 'mtime',
+  artist = '',
+  album = '',
+  albumArtist = '',
+  genre = '',
+  replace = true,
+} = {}) {
+  if (!api?.library?.tracks) return { items: [], total: 0, page, limit }
+  const res = await api.library.tracks({ page, limit, q, sort, artist, album, albumArtist, genre })
+  const items = (res.data || []).map(fileToLibraryTrack)
+  libraryTrackTotal.value = Number(res.total) || 0
+  if (replace) libraryTracks.value = items
+  return {
+    items,
+    total: Number(res.total) || 0,
+    page: Number(res.page) || page,
+    limit: Number(res.limit) || limit,
+  }
+}
+
+export async function fetchLibraryArtists(api, params = {}) {
+  const res = await api.library.artists(params)
+  return {
+    items: (res.data || []).map((a) => ({
+      ...a,
+      cover: a.coverPath ? localCoverUrl(a.coverPath) : (a.cover || ''),
+      tracks: [],
+    })),
+    total: Number(res.total) || 0,
+    page: Number(res.page) || 1,
+    limit: Number(res.limit) || 48,
+  }
+}
+
+export async function fetchLibraryAlbums(api, params = {}) {
+  const res = await api.library.albums(params)
+  return {
+    items: (res.data || []).map((a) => ({
+      ...a,
+      cover: a.coverPath ? localCoverUrl(a.coverPath) : (a.cover || ''),
+      tracks: [],
+    })),
+    total: Number(res.total) || 0,
+    page: Number(res.page) || 1,
+    limit: Number(res.limit) || 48,
+  }
+}
+
+export async function fetchLibraryGenres(api, params = {}) {
+  const res = await api.library.genres(params)
+  return {
+    items: (res.data || []).map((g) => ({
+      ...g,
+      cover: g.coverPath ? localCoverUrl(g.coverPath) : (g.cover || ''),
+      theme: getGenreTheme(g.name),
+      tracks: [],
+    })),
+    total: Number(res.total) || 0,
+    page: Number(res.page) || 1,
+    limit: Number(res.limit) || 48,
+  }
+}
+
+export async function fetchLibraryTracksByPaths(api, paths) {
+  if (!api?.library?.tracksByPaths || !paths?.length) return []
+  const res = await api.library.tracksByPaths(paths)
+  return (res.data || []).map(fileToLibraryTrack)
+}
+
+function pathFromLibraryKey(key) {
+  const k = String(key || '')
+  if (k.startsWith('local:')) return k.slice(6)
+  return ''
+}
+
+function collectLocalPathsFromKeys(keys = []) {
+  const out = []
+  for (const key of keys) {
+    const p = pathFromLibraryKey(key)
+    if (p) out.push(p)
+  }
+  return out
+}
+
+/**
+ * 歌单卡片：从服务端拉「最新添加」+ 按路径解析收藏/最近/自定义歌单本地曲，
+ * 不再依赖前端持有全量 libraryTracks。
+ */
+export async function loadPlaylistCardsFromServer(api, { limit } = {}) {
+  const pathSet = new Set()
+  for (const f of favorites.value) {
+    const p = pathFromLibraryKey(f.key) || f.localPath || f.filePath
+    if (p) pathSet.add(p)
+  }
+  for (const r of recentPlays.value) {
+    const p = pathFromLibraryKey(r.key) || r.localPath || r.filePath
+    if (p) pathSet.add(p)
+  }
+  for (const pl of customPlaylists.value) {
+    const normalized = normalizePlaylist(pl)
+    for (const key of normalized.trackKeys || []) {
+      const p = pathFromLibraryKey(key)
+      if (p) pathSet.add(p)
+    }
+    for (const snap of Object.values(normalized.trackSnapshots || {})) {
+      const p = pathFromLibraryKey(snap?.key) || snap?.localPath || snap?.filePath
+      if (p) pathSet.add(p)
+    }
+  }
+
+  const [recentRes, resolved] = await Promise.all([
+    fetchLibraryTracksPage(api, { page: 1, limit: 80, sort: 'mtime', replace: false }),
+    fetchLibraryTracksByPaths(api, [...pathSet].slice(0, 2000)),
+  ])
+
+  const map = new Map()
+  for (const t of [...recentRes.items, ...resolved]) {
+    const fp = t.filePath || t.localPath
+    if (fp) map.set(fp, t)
+  }
+  const workingSet = [...map.values()]
+  return buildPlaylistCards(workingSet, { limit })
+}
+
+/** 按条件拉取全部曲目（分页拼合，有上限，供播放全部） */
+export async function fetchAllLibraryTracks(api, filter = {}, { max = 2000 } = {}) {
+  const limit = 200
+  let page = 1
+  let items = []
+  let total = Infinity
+  while (items.length < Math.min(total, max)) {
+    const res = await fetchLibraryTracksPage(api, {
+      ...filter,
+      page,
+      limit,
+      replace: false,
+    })
+    total = res.total
+    if (!res.items.length) break
+    items = items.concat(res.items)
+    if (items.length >= total) break
+    page += 1
+    if (page > 100) break
+  }
+  return items
 }
 
 async function finishBackgroundScan(api) {
@@ -130,31 +290,39 @@ function loadSessionTracks() {
   }
 }
 
+let sessionSaveTimer = null
 function saveSessionTracks(tracks) {
-  try {
-    const slim = (tracks || []).slice(0, SESSION_TRACKS_LIMIT).map((t) => ({
-      filePath: t.filePath || t.localPath,
-      localPath: t.localPath || t.filePath,
-      title: t.name,
-      artist: t.singer,
-      album: t.album,
-      picUrl: t.picUrl || t.img || '',
-      hasPicture: t.hasPicture,
-      mtime: t.mtime || 0,
-      year: t.year || '',
-      genre: t.genre || '',
-      format: t.format || '',
-      duration: t.duration || 0,
-      track: t.trackNo || '',
-    }))
-    sessionStorage.setItem(SESSION_TRACKS_KEY, JSON.stringify(slim))
-  } catch {}
+  // 防抖合并：扫描/整理期间 libraryTracks 可能高频变更，避免每次全量 JSON.stringify 阻塞主线程
+  if (sessionSaveTimer) clearTimeout(sessionSaveTimer)
+  sessionSaveTimer = setTimeout(() => {
+    sessionSaveTimer = null
+    try {
+      const source = (tracks && tracks.length ? tracks : libraryTracks.value) || []
+      const slim = source.slice(0, SESSION_TRACKS_LIMIT).map((t) => ({
+        filePath: t.filePath || t.localPath,
+        localPath: t.localPath || t.filePath,
+        title: t.name,
+        artist: t.singer,
+        album: t.album,
+        picUrl: t.picUrl || t.img || '',
+        hasPicture: t.hasPicture,
+        mtime: t.mtime || 0,
+        year: t.year || '',
+        genre: t.genre || '',
+        format: t.format || '',
+        duration: t.duration || 0,
+        track: t.trackNo || '',
+      }))
+      sessionStorage.setItem(SESSION_TRACKS_KEY, JSON.stringify(slim))
+    } catch {}
+  }, 400)
 }
 
 /** 从搜索/发现页挑选歌曲加入歌单时设置 */
 export const playlistPickTarget = ref(null)
 
 export const SMART_PLAYLIST_IDS = new Set(['recent-added', 'recent-played', 'favorites'])
+
 
 /** 固定渐变图标样式，不使用歌曲封面 */
 export const GRADIENT_CARD_IDS = new Set(['recent-added', 'recent-played'])
@@ -707,7 +875,10 @@ export function countPlaylistTrackOrigins(tracks = []) {
   return { local, online, total: tracks.length }
 }
 
-export function buildPlaylistCards(allTracks, { limit } = {}) {
+/* buildPlaylistCards 复合缓存：输入引用不变时复用结果 */
+let playlistCardsCacheState = null
+
+function buildPlaylistCardsUncached(allTracks, { limit } = {}) {
   const recentAdded = [...allTracks]
     .sort((a, b) => (b.mtime || 0) - (a.mtime || 0))
     .map((t) => ({ ...enrichLocalCover(t), isLocal: true }))
@@ -746,6 +917,31 @@ export function buildPlaylistCards(allTracks, { limit } = {}) {
   })
   const cards = [...smart, ...custom]
   return limit ? cards.slice(0, limit) : cards
+}
+
+export function buildPlaylistCards(allTracks, { limit } = {}) {
+  const state = {
+    tracks: allTracks,
+    favorites: favorites.value,
+    recentPlays: recentPlays.value,
+    playlists: customPlaylists.value,
+    limit: limit || 0,
+  }
+  if (playlistCardsCacheState) {
+    const prev = playlistCardsCacheState
+    if (
+      prev.tracks === state.tracks
+      && prev.favorites === state.favorites
+      && prev.recentPlays === state.recentPlays
+      && prev.playlists === state.playlists
+      && prev.limit === state.limit
+    ) {
+      return prev.cards
+    }
+  }
+  const cards = buildPlaylistCardsUncached(allTracks, { limit })
+  playlistCardsCacheState = { ...state, cards }
+  return cards
 }
 
 export const PLAYLIST_SORT_OPTIONS = [
@@ -817,24 +1013,96 @@ export function sortAlbums(albums, sortBy = 'recent') {
   return list.sort((a, b) => (b.latestMtime || 0) - (a.latestMtime || 0))
 }
 
+/* 排序结果缓存：key = 源数组引用 + 排序方式。libraryTracks 每次赋值新数组，引用不变则结果复用。 */
+const songSortCache = new WeakMap()
+
 export function sortLibrarySongs(tracks, sortBy = 'recent') {
+  if (!tracks || !tracks.length) return [...(tracks || [])]
+  const bySort = songSortCache.get(tracks)
+  if (bySort?.has(sortBy)) return bySort.get(sortBy)
   const list = [...tracks]
   if (sortBy === 'name') {
-    return list.sort((a, b) => String(a.name).localeCompare(String(b.name), 'zh-CN'))
-  }
-  if (sortBy === 'artist') {
-    return list.sort((a, b) => String(a.singer).localeCompare(String(b.singer), 'zh-CN')
+    list.sort((a, b) => String(a.name).localeCompare(String(b.name), 'zh-CN'))
+  } else if (sortBy === 'artist') {
+    list.sort((a, b) => String(a.singer).localeCompare(String(b.singer), 'zh-CN')
       || String(a.name).localeCompare(String(b.name), 'zh-CN'))
-  }
-  if (sortBy === 'album') {
-    return list.sort((a, b) => String(a.album).localeCompare(String(b.album), 'zh-CN')
+  } else if (sortBy === 'album') {
+    list.sort((a, b) => String(a.album).localeCompare(String(b.album), 'zh-CN')
       || String(a.name).localeCompare(String(b.name), 'zh-CN'))
-  }
-  if (sortBy === 'duration') {
-    return list.sort((a, b) => (b.duration || 0) - (a.duration || 0)
+  } else if (sortBy === 'duration') {
+    list.sort((a, b) => (b.duration || 0) - (a.duration || 0)
       || String(a.name).localeCompare(String(b.name), 'zh-CN'))
+  } else {
+    list.sort((a, b) => (b.mtime || 0) - (a.mtime || 0))
   }
-  return list.sort((a, b) => (b.mtime || 0) - (a.mtime || 0))
+  const map = bySort || new Map()
+  map.set(sortBy, list)
+  songSortCache.set(tracks, map)
+  return list
+}
+
+/* 分组结果缓存：以源数组引用为 key。libraryTracks 每次赋值都是新数组（merge/remove/scan 均重建），
+   引用不变即认为数据未变，直接复用上次分组结果，避免大数组全量重算导致卡顿。 */
+const groupCacheArtists = new WeakMap()
+const groupCacheAlbums = new WeakMap()
+const groupCacheGenres = new WeakMap()
+
+function getCachedGroup(cache, source, compute) {
+  if (!source) return []
+  if (cache.has(source)) return cache.get(source)
+  const result = compute(source)
+  cache.set(source, result)
+  return result
+}
+
+export function groupAlbums(tracks) {
+  const cached = getCachedGroup(groupCacheAlbums, tracks, (source) => {
+    const map = new Map()
+    for (const track of source) {
+      const album = track.album || '未知专辑'
+      const artist = track.singer || '未知艺术家'
+      const id = `${artist}::${album}`
+      if (!map.has(id)) {
+        map.set(id, {
+          id,
+          name: album,
+          artist,
+          cover: track.picUrl || '',
+          year: track.year || '',
+          genre: track.genre || '',
+          tracks: [],
+          latestMtime: track.mtime || 0,
+        })
+      }
+      const entry = map.get(id)
+      entry.tracks.push(track)
+      if (!entry.cover && track.picUrl) entry.cover = track.picUrl
+      if (!entry.year && track.year) entry.year = track.year
+      if (!entry.genre && track.genre) entry.genre = track.genre
+      if ((track.mtime || 0) > entry.latestMtime) entry.latestMtime = track.mtime || 0
+    }
+    return [...map.values()].map(a => ({
+      ...a,
+      tracks: sortAlbumTracks(a.tracks),
+      trackCount: a.tracks.length,
+    })).sort((a, b) => b.latestMtime - a.latestMtime)
+  })
+  return cached
+}
+
+function sortAlbumTracks(tracks) {
+  return [...tracks].sort((a, b) => {
+    const na = parseInt(a.trackNo, 10)
+    const nb = parseInt(b.trackNo, 10)
+    if (!Number.isNaN(na) && !Number.isNaN(nb) && na !== nb) return na - nb
+    return String(a.name || '').localeCompare(String(b.name || ''), 'zh-CN')
+  })
+}
+
+export function findAlbumById(tracks, id) {
+  if (!id) return null
+  const list = groupCacheAlbums.has(tracks) ? groupCacheAlbums.get(tracks) : groupAlbums(tracks)
+  return list.find(a => a.id === id) || null
 }
 
 export function createPlaylist(name, {
@@ -1327,25 +1595,33 @@ export function removeLibraryTracks(filePaths) {
   if (!removed.size) return 0
   const before = libraryTracks.value.length
   libraryTracks.value = libraryTracks.value.filter(t => !removed.has(t.filePath) && !removed.has(t.localPath))
-  return before - libraryTracks.value.length
+  const n = before - libraryTracks.value.length
+  if (n > 0) saveSessionTracks(libraryTracks.value)
+  return n
 }
 
 let scanPromise = null
 
 /** 扫描音乐库目录并读取标签（含封面地址、专辑等信息） */
-export async function scanLibrary(api, { force = false, dirs = null, scanAll = false, onError, onComplete } = {}) {
-  if (scanPromise && !force) return scanPromise
+export async function scanLibrary(api, { force = false, resync = false, dirs: requestDirs = null, scanAll = false, onError, onComplete } = {}) {
+  if (scanPromise && !force && !resync) return scanPromise
 
   const run = async () => {
     if (libraryLoading.value || libraryMetaLoading.value) {
-      if (!force) return null
+      if (!force && !resync) return null
     }
-    if (libraryScanned.value && !force) return null
+    if (libraryScanned.value && !force && !resync) return null
 
-    libraryLoading.value = true
-    libraryMetaLoading.value = false
-    resetScanProgress()
-    setScanProgress('prepare', { text: '读取目录' })
+    const softResync = resync && !force && libraryScanned.value && libraryTracks.value.length > 0
+    if (!softResync) {
+      libraryLoading.value = true
+      libraryMetaLoading.value = false
+      resetScanProgress()
+      setScanProgress('prepare', { text: '读取目录' })
+    } else {
+      libraryMetaLoading.value = true
+      setScanProgress('sync', { text: '检查外部文件更新' })
+    }
 
     let pendingCount = 0
     let tagScanned = 0
@@ -1353,17 +1629,17 @@ export async function scanLibrary(api, { force = false, dirs = null, scanAll = f
 
     try {
       const res = await api.paths.list()
-      const dirs = res.musicPaths || res.data || []
-      if (!dirs.length) {
+      const musicRoots = res.musicPaths || res.data || []
+      if (!musicRoots.length) {
         libraryTracks.value = []
         libraryScanned.value = true
         const result = { totalTracks: 0, scannedTags: 0, hadPending: false }
-        onComplete?.(result, { force })
+        onComplete?.(result, { force, resync })
         return result
       }
 
-      let showedCache = false
-      if (!force) {
+      let showedCache = softResync
+      if (!force && !softResync) {
         const sessionTracks = loadSessionTracks()
         if (sessionTracks?.length) {
           libraryTracks.value = sortTracksByMtime(sessionTracks)
@@ -1375,20 +1651,17 @@ export async function scanLibrary(api, { force = false, dirs = null, scanAll = f
         }
         try {
           if (!showedCache) setScanProgress('cache', { text: '加载缓存' })
-          const cachedRes = await api.library.tracks()
-          const cachedList = cachedRes.data || []
-          if (cachedList.length) {
-            libraryTracks.value = sortTracksByMtime(cachedList.map(fileToLibraryTrack))
+          await reloadTracksFromCache(api)
+          if (libraryTracks.value.length || libraryTrackTotal.value > 0) {
             libraryScanned.value = true
             showedCache = true
             libraryLoading.value = false
             libraryMetaLoading.value = true
-            saveSessionTracks(libraryTracks.value)
           }
         } catch {}
       }
 
-      if (!force) {
+      if (!force && !resync) {
         try {
           const statusRes = await api.library.scanStatus()
           if (statusRes.scan?.running) {
@@ -1405,40 +1678,43 @@ export async function scanLibrary(api, { force = false, dirs = null, scanAll = f
               hadPending: true,
               resumed: true,
             }
-            onComplete?.(result, { force })
+            onComplete?.(result, { force, resync })
             return result
           }
         } catch {}
       }
 
-      setScanProgress('sync', { text: '比对文件，启动后台扫描' })
-      const startRes = await api.library.scanStart(force, { dirs, scanAll })
-      const { cached = [], pending = [], removed = [] } = startRes.data || {}
+      if (!softResync) setScanProgress('sync', { text: '比对文件，启动后台扫描' })
+      const startRes = await api.library.scanStart(force, { dirs: requestDirs, scanAll })
+      const {
+        cached = [],
+        pending = [],
+        removed = [],
+        cachedCount = 0,
+        pendingCount: pendingCountFromServer = 0,
+        total = 0,
+      } = startRes.data || {}
       const scan = startRes.scan || {}
-      pendingCount = pending.length
+      pendingCount = pending.length || pendingCountFromServer
       tagScanned = scan.scanned || 0
-
-      const keysBeforeSync = new Set(
-        libraryTracks.value.map(t => t.filePath || t.localPath).filter(Boolean),
-      )
 
       if (removed.length) removeLibraryTracks(removed)
 
+      // 服务端不再下发全量列表：只更新总数并刷新首页工作集
+      if (total > 0) libraryTrackTotal.value = total
+      else if (cachedCount || pendingCount) {
+        libraryTrackTotal.value = Math.max(libraryTrackTotal.value, cachedCount + pendingCount)
+      }
+
       if (cached.length) {
         mergeLibraryTracks(cached.map(fileToLibraryTrack))
-      }
-
-      if (pending.length) {
+      } else if (pending.length) {
         mergeLibraryTracks(pending.map(f => fileToLibraryTrack(f)))
-      } else if (!libraryTracks.value.length && !cached.length) {
-        libraryTracks.value = []
+      } else {
+        await reloadTracksFromCache(api)
       }
 
-      let addedFromSync = 0
-      for (const f of pending) {
-        const fp = f.filePath
-        if (fp && !keysBeforeSync.has(fp)) addedFromSync++
-      }
+      const addedFromSync = pendingCount
       const showedBgScanInitHint = scan.running
         ? maybeShowBackgroundScanInitHint()
         : false
@@ -1464,18 +1740,18 @@ export async function scanLibrary(api, { force = false, dirs = null, scanAll = f
         await reloadTracksFromCache(api)
       }
 
-      if (!showedCache && !cached.length && !pending.length && !libraryTracks.value.length) {
+      if (!showedCache && !libraryTracks.value.length && libraryTrackTotal.value === 0) {
         libraryTracks.value = []
       }
 
       const result = {
-        totalTracks: libraryTracks.value.length,
+        totalTracks: libraryTrackTotal.value || libraryTracks.value.length,
         scannedTags: tagScanned,
-        hadPending: pendingCount > 0,
+        hadPending: pendingCount > 0 || Boolean(scan.running),
       }
       saveSessionTracks(libraryTracks.value)
       if (!serverScanActive) syncAllImportedPlaylists()
-      if (!serverScanActive) onComplete?.(result, { force })
+      if (!serverScanActive) onComplete?.(result, { force, resync })
       return result
     } catch (e) {
       onError?.(e.message || '加载音乐库失败')
@@ -1491,52 +1767,6 @@ export async function scanLibrary(api, { force = false, dirs = null, scanAll = f
 
   scanPromise = run().finally(() => { scanPromise = null })
   return scanPromise
-}
-
-export function groupAlbums(tracks) {
-  const map = new Map()
-  for (const track of tracks) {
-    const album = track.album || '未知专辑'
-    const artist = track.singer || '未知艺术家'
-    const id = `${artist}::${album}`
-    if (!map.has(id)) {
-      map.set(id, {
-        id,
-        name: album,
-        artist,
-        cover: track.picUrl || '',
-        year: track.year || '',
-        genre: track.genre || '',
-        tracks: [],
-        latestMtime: track.mtime || 0,
-      })
-    }
-    const entry = map.get(id)
-    entry.tracks.push(track)
-    if (!entry.cover && track.picUrl) entry.cover = track.picUrl
-    if (!entry.year && track.year) entry.year = track.year
-    if (!entry.genre && track.genre) entry.genre = track.genre
-    if ((track.mtime || 0) > entry.latestMtime) entry.latestMtime = track.mtime || 0
-  }
-  return [...map.values()].map(a => ({
-    ...a,
-    tracks: sortAlbumTracks(a.tracks),
-    trackCount: a.tracks.length,
-  })).sort((a, b) => b.latestMtime - a.latestMtime)
-}
-
-function sortAlbumTracks(tracks) {
-  return [...tracks].sort((a, b) => {
-    const na = parseInt(a.trackNo, 10)
-    const nb = parseInt(b.trackNo, 10)
-    if (!Number.isNaN(na) && !Number.isNaN(nb) && na !== nb) return na - nb
-    return String(a.name || '').localeCompare(String(b.name || ''), 'zh-CN')
-  })
-}
-
-export function findAlbumById(tracks, id) {
-  if (!id) return null
-  return groupAlbums(tracks).find(a => a.id === id) || null
 }
 
 const GENRE_THEME_COLORS = [
@@ -1581,45 +1811,118 @@ function splitGenreTags(genreRaw) {
 
 /** 按音乐风格分组（一首歌可属于多个风格标签） */
 export function groupGenres(tracks) {
-  const map = new Map()
-  for (const track of tracks) {
-    const tags = splitGenreTags(track.genre)
-    const names = tags.length ? tags : ['未知风格']
-    for (const name of names) {
-      const id = genreToId(name)
-      if (!map.has(id)) {
-        map.set(id, {
-          id,
-          name,
-          cover: track.picUrl || '',
-          tracks: [],
-          latestMtime: track.mtime || 0,
-          artistSet: new Set(),
-        })
+  const cached = getCachedGroup(groupCacheGenres, tracks, (source) => {
+    const map = new Map()
+    for (const track of source) {
+      const tags = splitGenreTags(track.genre)
+      const names = tags.length ? tags : ['未知风格']
+      for (const name of names) {
+        const id = genreToId(name)
+        if (!map.has(id)) {
+          map.set(id, {
+            id,
+            name,
+            cover: track.picUrl || '',
+            tracks: [],
+            latestMtime: track.mtime || 0,
+            artistSet: new Set(),
+          })
+        }
+        const entry = map.get(id)
+        entry.tracks.push(track)
+        if (track.singer) entry.artistSet.add(track.singer)
+        if (!entry.cover && track.picUrl) entry.cover = track.picUrl
+        if ((track.mtime || 0) > entry.latestMtime) entry.latestMtime = track.mtime || 0
       }
-      const entry = map.get(id)
-      entry.tracks.push(track)
-      if (track.singer) entry.artistSet.add(track.singer)
-      if (!entry.cover && track.picUrl) entry.cover = track.picUrl
-      if ((track.mtime || 0) > entry.latestMtime) entry.latestMtime = track.mtime || 0
     }
-  }
-  return [...map.values()].map((g) => ({
-    id: g.id,
-    name: g.name,
-    cover: g.cover,
-    tracks: sortLibrarySongs(g.tracks, 'recent'),
-    trackCount: g.tracks.length,
-    artistCount: g.artistSet.size,
-    latestMtime: g.latestMtime,
-    theme: getGenreTheme(g.name),
-  })).sort((a, b) => b.trackCount - a.trackCount || b.latestMtime - a.latestMtime)
+    return [...map.values()].map((g) => ({
+      id: g.id,
+      name: g.name,
+      cover: g.cover,
+      tracks: sortLibrarySongs(g.tracks, 'recent'),
+      trackCount: g.tracks.length,
+      artistCount: g.artistSet.size,
+      latestMtime: g.latestMtime,
+      theme: getGenreTheme(g.name),
+    })).sort((a, b) => b.trackCount - a.trackCount || b.latestMtime - a.latestMtime)
+  })
+  return cached
 }
 
 export function findGenreById(tracks, id) {
   if (!id) return null
   const name = genreFromId(id)
-  return groupGenres(tracks).find(g => g.id === id || g.name === name) || null
+  const list = groupCacheGenres.has(tracks) ? groupCacheGenres.get(tracks) : groupGenres(tracks)
+  return list.find(g => g.id === id || g.name === name) || null
+}
+
+export function artistToId(name) {
+  return encodeURIComponent(String(name || ''))
+}
+
+export function artistFromId(id) {
+  if (!id) return ''
+  try {
+    return decodeURIComponent(String(id))
+  } catch {
+    return String(id)
+  }
+}
+
+/** 多歌手合辑在歌手浏览中的归档名（与文件整理一致） */
+export const VARIOUS_ARTISTS_NAME = '群星 (Various Artists)'
+
+/** 按歌手分组；多歌手歌曲归入「群星 (Various Artists)」 */
+export function groupArtists(tracks) {
+  const cached = getCachedGroup(groupCacheArtists, tracks, (source) => {
+    const map = new Map()
+    for (const track of source) {
+      const names = splitArtists(track.singer || track.artist || '')
+      const bucketName = names.length >= 2
+        ? VARIOUS_ARTISTS_NAME
+        : (names[0] || '未知艺术家')
+      const id = artistToId(bucketName)
+      if (!map.has(id)) {
+        map.set(id, {
+          id,
+          name: bucketName,
+          cover: track.picUrl || '',
+          tracks: [],
+          latestMtime: track.mtime || 0,
+          albumSet: new Set(),
+        })
+      }
+      const entry = map.get(id)
+      entry.tracks.push(track)
+      if (track.album && track.album !== '未知专辑') entry.albumSet.add(track.album)
+      if (!entry.cover && track.picUrl) entry.cover = track.picUrl
+      if ((track.mtime || 0) > entry.latestMtime) entry.latestMtime = track.mtime || 0
+    }
+    return [...map.values()].map((a) => ({
+      id: a.id,
+      name: a.name,
+      cover: a.cover,
+      tracks: sortLibrarySongs(a.tracks, 'recent'),
+      trackCount: a.tracks.length,
+      albumCount: a.albumSet.size,
+      latestMtime: a.latestMtime,
+    }))
+      .filter(a => a.name !== '未知艺术家')
+      .sort((a, b) => {
+        // 群星固定靠前，其余按曲目数
+        if (a.name === VARIOUS_ARTISTS_NAME && b.name !== VARIOUS_ARTISTS_NAME) return -1
+        if (b.name === VARIOUS_ARTISTS_NAME && a.name !== VARIOUS_ARTISTS_NAME) return 1
+        return b.trackCount - a.trackCount || b.latestMtime - a.latestMtime
+      })
+  })
+  return cached
+}
+
+export function findArtistById(tracks, id) {
+  if (!id) return null
+  const name = artistFromId(id)
+  const list = groupCacheArtists.has(tracks) ? groupCacheArtists.get(tracks) : groupArtists(tracks)
+  return list.find(a => a.id === id || a.name === name) || null
 }
 
 function syncStoredSnapshotsForTrack(track) {
@@ -1720,6 +2023,23 @@ export async function refreshLibraryTracks(api, filePaths) {
   return updated
 }
 
+/** 从服务端缓存全量重载音乐库（整理/删除等结构性变更后调用，保证新旧记录一致） */
+export async function reloadLibraryTracksFromServer(apiClient = null) {
+  const client = apiClient || libraryApi
+  if (!client?.library?.tracks) return null
+  try {
+    const cachedRes = await client.library.tracks()
+    const cachedList = cachedRes.data || []
+    if (cachedList.length) {
+      libraryTracks.value = sortTracksByMtime(cachedList.map(fileToLibraryTrack))
+      libraryScanned.value = true
+      saveSessionTracks(libraryTracks.value)
+      return libraryTracks.value.length
+    }
+  } catch {}
+  return null
+}
+
 function basenameFromPath(filePath) {
   const raw = String(filePath || '')
   const parts = raw.split(/[/\\]/)
@@ -1788,6 +2108,7 @@ export async function ingestLibraryTracks(api, filePaths) {
 
   libraryTracks.value = sortTracksByMtime(next)
   libraryScanned.value = true
+  if (added > 0 || updated > 0) saveSessionTracks(libraryTracks.value)
   return { added, updated }
 }
 

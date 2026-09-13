@@ -17,8 +17,9 @@
       <div v-for="i in 5" :key="i" class="sk-list-row tall" />
     </template>
 
-    <template v-else-if="page === 'tag'">
+    <template v-else-if="page === 'tag' || page === 'file-manager'">
       <div class="sk-title" />
+      <div class="sk-row sk-tabs" />
       <div class="sk-row sk-search-bar" />
       <div v-for="i in 7" :key="i" class="sk-tree-row" />
     </template>

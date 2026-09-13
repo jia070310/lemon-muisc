@@ -80,6 +80,7 @@ export function initDB(configPath) {
       user_id TEXT NOT NULL,
       expires_at INTEGER NOT NULL,
       created_at INTEGER DEFAULT (unixepoch()),
+      remember INTEGER DEFAULT 1,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
 
@@ -168,4 +169,9 @@ function migrateSchema(db) {
     );
     CREATE INDEX IF NOT EXISTS idx_auth_tokens_user ON auth_tokens(user_id, type);
   `)
+
+  const sessionCols = db.prepare('PRAGMA table_info(sessions)').all()
+  if (!sessionCols.some((c) => c.name === 'remember')) {
+    db.exec('ALTER TABLE sessions ADD COLUMN remember INTEGER DEFAULT 1')
+  }
 }

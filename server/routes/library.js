@@ -1,12 +1,24 @@
 import { Router } from 'express'
 import fs from 'node:fs'
 import path from 'node:path'
-import { getMusicPaths, isAllowedMediaPath } from '../utils/filePaths.js'
+import {
+  getMusicPaths,
+  isAllowedMediaPath,
+  addMusicPath,
+  resolveReal,
+} from '../utils/filePaths.js'
+import { listAudioFiles } from '../utils/audioScan.js'
 import {
   getAllCachedTracks,
   syncLibraryIndex,
   scanBatchAndCache,
   removeCachePaths,
+  queryCachedTracks,
+  queryArtists,
+  queryAlbums,
+  queryGenres,
+  queryTracksByPaths,
+  countCachedTracks,
 } from '../utils/libraryCache.js'
 import {
   getLibraryScanStatus,
@@ -18,8 +30,11 @@ import {
   resolveScanDirs,
   isPartialScan,
 } from '../utils/libraryScanSettings.js'
+import { restartLibraryAutoWatch } from '../utils/libraryAutoWatch.js'
+import { splitArtists } from '../utils/artistTag.js'
 import {
   notifyLibraryRemoved,
+  notifyLibraryChanged,
   notifyLibraryUserDataChanged,
 } from '../utils/libraryNotify.js'
 import {
@@ -31,11 +46,118 @@ import {
 
 export const libraryRouter = Router()
 
-/** 读取已缓存的音乐库索引（秒开） */
-libraryRouter.get('/tracks', (_req, res) => {
+/** 读取音乐库曲目：默认分页；?all=1 仍返回全量（兼容整理等内部用途，前端勿用） */
+libraryRouter.get('/tracks', (req, res) => {
   try {
-    const data = getAllCachedTracks()
+    const wantAll = String(req.query.all || '') === '1'
+    if (wantAll) {
+      const data = getAllCachedTracks()
+      return res.json({ ok: true, data, total: data.length })
+    }
+    const result = queryCachedTracks({
+      page: req.query.page,
+      limit: req.query.limit,
+      q: req.query.q,
+      sort: req.query.sort,
+      artist: req.query.artist,
+      album: req.query.album,
+      albumArtist: req.query.albumArtist,
+      genre: req.query.genre,
+    })
+    res.json({
+      ok: true,
+      data: result.items,
+      total: result.total,
+      page: result.page,
+      limit: result.limit,
+    })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+/** 曲库总数 */
+libraryRouter.get('/tracks/count', (_req, res) => {
+  try {
+    res.json({ ok: true, total: countCachedTracks() })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+/** 按路径批量取曲（歌单 / 收藏解析） */
+libraryRouter.post('/tracks/by-paths', (req, res) => {
+  try {
+    const paths = Array.isArray(req.body?.paths) ? req.body.paths : []
+    if (paths.length > 2000) {
+      return res.status(400).json({ error: '单次最多 2000 条路径' })
+    }
+    const data = queryTracksByPaths(paths, { limit: paths.length || 500 })
     res.json({ ok: true, data })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+/** 歌手聚合分页 */
+libraryRouter.get('/artists', (req, res) => {
+  try {
+    const result = queryArtists({
+      page: req.query.page,
+      limit: req.query.limit,
+      q: req.query.q,
+      sort: req.query.sort,
+    })
+    res.json({
+      ok: true,
+      data: result.items,
+      total: result.total,
+      page: result.page,
+      limit: result.limit,
+    })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+/** 专辑聚合分页 */
+libraryRouter.get('/albums', (req, res) => {
+  try {
+    const result = queryAlbums({
+      page: req.query.page,
+      limit: req.query.limit,
+      q: req.query.q,
+      sort: req.query.sort,
+      artist: req.query.artist,
+    })
+    res.json({
+      ok: true,
+      data: result.items,
+      total: result.total,
+      page: result.page,
+      limit: result.limit,
+    })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+/** 风格聚合分页 */
+libraryRouter.get('/genres', (req, res) => {
+  try {
+    const result = queryGenres({
+      page: req.query.page,
+      limit: req.query.limit,
+      q: req.query.q,
+      sort: req.query.sort,
+    })
+    res.json({
+      ok: true,
+      data: result.items,
+      total: result.total,
+      page: result.page,
+      limit: result.limit,
+    })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
@@ -50,7 +172,19 @@ libraryRouter.post('/sync', (req, res) => {
     if (result.removed.length) {
       notifyLibraryRemoved(result.removed)
     }
-    res.json({ ok: true, data: result, scan: getLibraryScanStatus(), dirs })
+    res.json({
+      ok: true,
+      data: {
+        cached: [],
+        pending: [],
+        removed: result.removed || [],
+        cachedCount: result.cached?.length || 0,
+        pendingCount: result.pending?.length || 0,
+        total: result.total || 0,
+      },
+      scan: getLibraryScanStatus(),
+      dirs,
+    })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
@@ -67,8 +201,9 @@ libraryRouter.get('/scan-settings', (_req, res) => {
 
 libraryRouter.put('/scan-settings', (req, res) => {
   try {
-    const { autoMode, autoDirs } = req.body || {}
-    const data = setLibraryScanSettings({ autoMode, autoDirs })
+    const { autoMode, autoDirs, watchEnabled, watchIntervalSec } = req.body || {}
+    const data = setLibraryScanSettings({ autoMode, autoDirs, watchEnabled, watchIntervalSec })
+    restartLibraryAutoWatch()
     res.json({ ok: true, data })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -89,7 +224,15 @@ libraryRouter.post('/scan-start', (req, res) => {
     const scan = startLibraryScanJob({ force, syncResult, dirs })
     res.json({
       ok: true,
-      data: syncResult,
+      data: {
+        // 不再下发全量 cached/pending，避免前端持有整库
+        cached: [],
+        pending: [],
+        removed: syncResult.removed || [],
+        cachedCount: syncResult.cached?.length || 0,
+        pendingCount: syncResult.pending?.length || 0,
+        total: syncResult.total || 0,
+      },
       scan,
       dirs,
     })
@@ -197,18 +340,21 @@ libraryRouter.post('/delete-files', (req, res) => {
     const list = Array.isArray(raw) ? raw : (raw ? [raw] : [])
     const filePaths = [...new Set(list.map((p) => String(p || '').trim()).filter(Boolean))]
     if (!filePaths.length) return res.status(400).json({ error: '请指定要删除的文件' })
-    if (filePaths.length > 50) return res.status(400).json({ error: '单次最多删除 50 个文件' })
 
     const deleted = []
     const failed = []
     for (const filePath of filePaths) {
       try {
-        if (!isAllowedMediaPath(filePath)) {
+        // allowMissing：文件可能已被移走（整理/外部删除）但缓存仍残留。
+        // 这种"幽灵记录"只要路径仍归属音乐库/下载目录，就按已删除处理并清理缓存。
+        if (!isAllowedMediaPath(filePath, { allowMissing: true })) {
           failed.push({ filePath, error: '路径不在允许的音乐库/下载目录内' })
           continue
         }
         const resolved = path.resolve(filePath)
-        fs.unlinkSync(resolved)
+        if (fs.existsSync(resolved)) {
+          fs.unlinkSync(resolved)
+        }
         deleted.push(resolved)
       } catch (e) {
         failed.push({ filePath, error: e.message || '删除失败' })
@@ -282,6 +428,242 @@ libraryRouter.put('/playlists', (req, res) => {
     setCustomPlaylists(req.user.id, playlists)
     notifyLibraryUserDataChanged(req.user.id)
     res.json({ ok: true })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+/** 多歌手合辑归档目录名 */
+const VARIOUS_ARTISTS_DIR = '群星 (Various Artists)'
+
+/** 将歌手/专辑艺术家安全化为目录名；多歌手统一归档到「群星 (Various Artists)」 */
+function artistToDirName(singerRaw) {
+  const artists = splitArtists(singerRaw)
+  if (artists.length >= 2) return VARIOUS_ARTISTS_DIR
+  const first = artists[0] || '未知歌手'
+  const cleaned = first
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, '')
+    .replace(/[. ]+$/g, '')
+    .trim()
+    .slice(0, 80)
+  return cleaned || '未知歌手'
+}
+
+/** 专辑目录名 */
+function albumToDirName(albumRaw) {
+  const raw = String(albumRaw || '').trim()
+  if (!raw || raw === '未知专辑') return '未知专辑'
+  const cleaned = raw
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, '')
+    .replace(/[. ]+$/g, '')
+    .trim()
+    .slice(0, 80)
+  return cleaned || '未知专辑'
+}
+
+/** 优先专辑艺术家，否则歌手；再配专辑名 → 目标/<艺术家>/<专辑>/ */
+function resolveOrganizeDestDirs(cached = {}) {
+  const albumArtist = String(cached.albumArtist || '').trim()
+  const singer = cached.artist || cached.singer || cached.parsedArtist || ''
+  return {
+    artistDir: artistToDirName(albumArtist || singer),
+    albumDir: albumToDirName(cached.album),
+  }
+}
+
+function safeBaseName(fileName) {
+  return String(fileName || '')
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')
+    .replace(/[. ]+$/g, '')
+    .trim()
+    .slice(0, 200) || 'untitled'
+}
+
+/** 目录目标：允许音乐库根的子目录或外部目录；禁止根目录/音乐库根/音乐库根的上层目录 */
+function assertOrganizeTargetAllowed(targetDir) {
+  if (!targetDir || typeof targetDir !== 'string') {
+    throw new Error('请填写整理的目标目录')
+  }
+  const resolved = path.resolve(String(targetDir).trim())
+  const fsRoot = path.parse(resolved).root
+  if (resolved === fsRoot) {
+    throw new Error('目标目录不能是文件系统根目录')
+  }
+  const musicDirs = getMusicPaths().filter(Boolean)
+  for (const dir of musicDirs) {
+    const base = path.resolve(dir)
+    // 目标是音乐库根的上层目录 → 会把全部文件视为"已在目录内"，且可能越权扫全盘
+    if (base.startsWith(resolved + path.sep)) {
+      throw new Error('目标目录不能是音乐库目录的上层目录')
+    }
+  }
+  // 目标目录等于某音乐库根（含整理成功后自动加入音乐库的目标目录）是允许的：
+  // 整理是文件级移动，已在目标目录内的文件由 resolveOrganizeFiles/skip 单独判断（"已在目标目录内"），不会误整。
+  return resolved
+}
+
+/** 移动文件：同文件系统用 rename；跨文件系统(EXDEV)时退化为复制+删除 */
+function moveFile(src, dest) {
+  try {
+    fs.renameSync(src, dest)
+  } catch (e) {
+    if (e?.code === 'EXDEV') {
+      fs.copyFileSync(src, dest)
+      fs.unlinkSync(src)
+    } else {
+      throw e
+    }
+  }
+}
+
+/** 解析整理范围，返回待整理的文件路径数组 */
+function resolveOrganizeFiles(body = {}) {
+  const mode = body.scope || 'all' // all | files | dir
+  const input = body.filePaths || body.files
+
+  if (mode === 'files') {
+    const list = Array.isArray(input) ? input : []
+    if (!list.length) throw new Error('请选择要整理的文件')
+    const seen = new Set()
+    const out = []
+    for (const p of list) {
+      if (!p) continue
+      const full = path.resolve(String(p))
+      if (seen.has(full)) continue
+      seen.add(full)
+      if (fs.existsSync(full) && fs.statSync(full).isFile()) out.push(full)
+    }
+    if (!out.length) throw new Error('所选文件均不存在')
+    return out
+  }
+
+  if (mode === 'dir') {
+    const dir = String(body.dir || body.dirPath || '').trim()
+    if (!dir) throw new Error('请选择要整理的文件夹')
+    if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) {
+      throw new Error(`文件夹不存在：${dir}`)
+    }
+    return listAudioFiles(dir) // 递归列出该目录下全部音频
+  }
+
+  // all / 默认：整个音乐库
+  const tracks = getAllCachedTracks() || []
+  const out = []
+  const seen = new Set()
+  for (const t of tracks) {
+    const p = t?.filePath
+    if (!p || seen.has(p)) continue
+    seen.add(p)
+    out.push(p)
+  }
+  return out
+}
+
+/** 整理音乐库：迁移到 目标目录/专辑艺术家(或歌手)/专辑/文件 */
+libraryRouter.post('/organize', async (req, res) => {
+  try {
+    const rawDir = req.body?.targetDir
+    const targetDir = assertOrganizeTargetAllowed(rawDir)
+
+    const srcPaths = resolveOrganizeFiles(req.body || {})
+    if (!srcPaths.length) {
+      return res.status(400).json({ error: '音乐库为空，无可整理的歌曲' })
+    }
+
+    if (!fs.existsSync(targetDir)) {
+      fs.mkdirSync(targetDir, { recursive: true })
+    }
+
+    // 是否已位于目标目录下（跳过重复整理）
+    const targetReal = resolveReal(targetDir).replace(/[\\/]+$/, '')
+
+    // 路径 → 缓存曲目（含 albumArtist/artist/album）；未命中则按文件名兜底
+    const tracksByPath = new Map(
+      (getAllCachedTracks() || []).map((t) => [path.resolve(t.filePath || ''), t]),
+    )
+
+    const moved = []
+    const failed = []
+    const skipped = []
+
+    for (const src of srcPaths) {
+      if (!src || !fs.existsSync(src)) {
+        skipped.push({ filePath: src, reason: '文件不存在' })
+        continue
+      }
+      const srcReal = resolveReal(src)
+      if (srcReal.startsWith(targetReal + path.sep)) {
+        skipped.push({ filePath: src, reason: '已在目标目录内' })
+        continue
+      }
+      if (!isAllowedMediaPath(src)) {
+        failed.push({ filePath: src, error: '路径不在允许的音乐库/下载目录内' })
+        continue
+      }
+
+      const cached = tracksByPath.get(path.resolve(src)) || {}
+      const { artistDir, albumDir } = resolveOrganizeDestDirs(cached)
+      const albumFolder = path.join(targetDir, artistDir, albumDir)
+      const srcExt = path.extname(src).toLowerCase()
+      const fileName = safeBaseName(path.basename(src, srcExt)) + srcExt
+      let dest = path.join(albumFolder, fileName)
+
+      // 处理文件名冲突：与源相同则跳过；已存在则追加序号
+      if (resolveReal(src) === resolveReal(dest) && path.dirname(srcReal) === albumFolder) {
+        skipped.push({ filePath: src, reason: '已在对应专辑目录' })
+        continue
+      }
+
+      let n = 1
+      while (fs.existsSync(dest) && resolveReal(dest) !== resolveReal(src)) {
+        dest = path.join(albumFolder, `${safeBaseName(path.basename(src, srcExt))} (${n})${srcExt}`)
+        n++
+      }
+
+      try {
+        fs.mkdirSync(albumFolder, { recursive: true })
+        moveFile(src, dest)
+        moved.push({ from: src, to: dest, artist: artistDir, album: albumDir })
+      } catch (e) {
+        failed.push({ filePath: src, error: e.message || '迁移失败' })
+      }
+    }
+
+    // 更新缓存：旧路径移除，新路径加入待扫描
+    if (moved.length) {
+      removeCachePaths(moved.map((m) => m.from))
+      const pending = moved
+        .filter((m) => fs.existsSync(m.to))
+        .map((m) => ({ filePath: m.to, mtime: 0, size: 0 }))
+      if (pending.length) {
+        try {
+          await scanBatchAndCache(pending)
+        } catch {}
+      }
+      // 目标目录不在已配置音乐库内时，自动加入扫描列表
+      try {
+        if (!getMusicPaths().some((p) => resolveReal(p) === resolveReal(targetDir))) {
+          addMusicPath(targetDir)
+        }
+      } catch {}
+      notifyLibraryRemoved(moved.map((m) => m.from), { reason: 'organize' })
+      notifyLibraryChanged(moved.map((m) => m.to), { reason: 'organize' })
+    }
+
+    res.json({
+      ok: true,
+      data: {
+        targetDir,
+        moved: moved.length,
+        failed: failed.length,
+        skipped: skipped.length,
+        movedList: moved,
+        failedList: failed,
+        skippedList: skipped,
+        artists: [...new Set(moved.map((m) => m.artist))].length,
+        albums: [...new Set(moved.map((m) => `${m.artist}/${m.album}`))].length,
+      },
+    })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }

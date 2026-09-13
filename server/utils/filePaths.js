@@ -382,7 +382,7 @@ function pathIsUnderRoot(resolved, root) {
   return filePath.startsWith(prefix)
 }
 
-export function isAllowedMediaPath(filePath) {
+export function isAllowedMediaPath(filePath, { allowMissing = false } = {}) {
   if (!filePath || typeof filePath !== 'string') return false
   let resolved
   try {
@@ -390,7 +390,10 @@ export function isAllowedMediaPath(filePath) {
   } catch {
     return false
   }
-  if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) return false
+  // 存在性校验只在需要真实文件时进行；allowMissing 用于清理缓存中的幽灵记录（文件已被移走/删除）
+  if (!allowMissing) {
+    if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) return false
+  }
 
   let personalPaths = []
   try {

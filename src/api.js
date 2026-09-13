@@ -77,6 +77,7 @@ async function requestOnce(url, options = {}) {
   try {
     const { signal: _signal, timeout: _timeout, retries: _retries, body, ...rest } = options
     const res = await fetch(BASE + url, {
+      credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -176,6 +177,7 @@ export const api = {
       const token = getToken()
       const res = await fetch(BASE + '/source/import', {
         method: 'POST',
+        credentials: 'include',
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         body: form,
       })
@@ -321,7 +323,60 @@ export const api = {
     }),
   },
   library: {
-    tracks: () => request('/library/tracks', { timeout: 60000 }),
+    tracks: (params = {}) => {
+      const q = new URLSearchParams()
+      for (const [k, v] of Object.entries(params || {})) {
+        if (v == null || v === '') continue
+        q.set(k, String(v))
+      }
+      if (
+        !q.has('all')
+        && !q.has('page')
+        && !q.has('limit')
+        && !q.has('q')
+        && !q.has('artist')
+        && !q.has('album')
+        && !q.has('genre')
+      ) {
+        q.set('page', '1')
+        q.set('limit', '50')
+      }
+      const qs = q.toString()
+      return request(`/library/tracks${qs ? `?${qs}` : ''}`, { timeout: 60000 })
+    },
+    tracksCount: () => request('/library/tracks/count'),
+    tracksByPaths: (paths) => request('/library/tracks/by-paths', {
+      method: 'POST',
+      body: { paths },
+      timeout: 60000,
+    }),
+    artists: (params = {}) => {
+      const q = new URLSearchParams()
+      for (const [k, v] of Object.entries(params || {})) {
+        if (v == null || v === '') continue
+        q.set(k, String(v))
+      }
+      const qs = q.toString()
+      return request(`/library/artists${qs ? `?${qs}` : ''}`, { timeout: 60000 })
+    },
+    albums: (params = {}) => {
+      const q = new URLSearchParams()
+      for (const [k, v] of Object.entries(params || {})) {
+        if (v == null || v === '') continue
+        q.set(k, String(v))
+      }
+      const qs = q.toString()
+      return request(`/library/albums${qs ? `?${qs}` : ''}`, { timeout: 60000 })
+    },
+    genres: (params = {}) => {
+      const q = new URLSearchParams()
+      for (const [k, v] of Object.entries(params || {})) {
+        if (v == null || v === '') continue
+        q.set(k, String(v))
+      }
+      const qs = q.toString()
+      return request(`/library/genres${qs ? `?${qs}` : ''}`, { timeout: 60000 })
+    },
     sync: () => request('/library/sync', { method: 'POST', timeout: 120000 }),
     scanStart: (force = false, { dirs = null, scanAll = false } = {}) => request('/library/scan-start', {
       method: 'POST',
@@ -357,6 +412,11 @@ export const api = {
       }),
     },
     duplicates: () => request('/library/duplicates', { timeout: 60000 }),
+    organize: (targetDir, options = {}) => request('/library/organize', {
+      method: 'POST',
+      body: { targetDir, ...options },
+      timeout: 600000,
+    }),
     deleteFiles: (filePaths) => request('/library/delete-files', {
       method: 'POST',
       body: { filePaths: Array.isArray(filePaths) ? filePaths : [filePaths] },

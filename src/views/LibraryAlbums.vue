@@ -11,13 +11,13 @@
       />
     </div>
 
-    <div v-if="libraryLoading && !libraryTracks.length" class="loading card">正在加载音乐库…</div>
+    <div v-if="loading && !albums.length" class="loading card">正在加载音乐库…</div>
     <div v-else-if="!albums.length" class="empty card">
       <p>暂无专辑</p>
       <router-link to="/library" class="btn-ghost btn-sm">返回音乐库</router-link>
     </div>
     <section v-else class="albums-panel">
-      <p class="albums-summary">共 {{ albums.length }} 张专辑</p>
+      <p class="albums-summary">共 {{ total }} 张专辑</p>
       <div class="album-grid">
         <button
           v-for="album in albums"
@@ -34,6 +34,11 @@
           <div v-if="formatAlbumTags(album)" class="album-tags">{{ formatAlbumTags(album) }}</div>
         </button>
       </div>
+      <div v-if="totalPages > 1" class="pager">
+        <button class="btn-ghost btn-sm" :disabled="page <= 1" @click="page--">上一页</button>
+        <span>{{ page }} / {{ totalPages }}</span>
+        <button class="btn-ghost btn-sm" :disabled="page >= totalPages" @click="page++">下一页</button>
+      </div>
     </section>
   </div>
 </template>
@@ -46,31 +51,56 @@ import AppSelect from '../components/AppSelect.vue'
 import CoverArt from '../components/CoverArt.vue'
 import { formatAlbumTags } from '../utils/format.js'
 import {
-  libraryTracks,
-  libraryLoading,
   libraryScanned,
-  groupAlbums,
-  sortAlbums,
   ALBUM_SORT_OPTIONS,
   scanLibrary,
+  fetchLibraryAlbums,
 } from '../stores/library.js'
 
 const ALBUM_SORT_KEY = 'lemon-library-album-sort'
 
 const router = useRouter()
 const albumSort = ref(localStorage.getItem(ALBUM_SORT_KEY) || 'recent')
+const albums = ref([])
+const total = ref(0)
+const page = ref(1)
+const pageSize = 48
+const loading = ref(false)
 
 const albumSortOptions = computed(() => ALBUM_SORT_OPTIONS.map(o => ({ value: o.id, label: o.label })))
-const albums = computed(() => sortAlbums(groupAlbums(libraryTracks.value), albumSort.value))
+const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize)))
+
+async function loadPage() {
+  loading.value = true
+  try {
+    const sort = albumSort.value === 'name' ? 'name'
+      : albumSort.value === 'artist' ? 'artist'
+      : albumSort.value === 'count' ? 'count'
+      : 'recent'
+    const res = await fetchLibraryAlbums(api, { page: page.value, limit: pageSize, sort })
+    albums.value = res.items
+    total.value = res.total
+  } catch {
+    albums.value = []
+    total.value = 0
+  } finally {
+    loading.value = false
+  }
+}
 
 watch(albumSort, (value) => {
   try { localStorage.setItem(ALBUM_SORT_KEY, value) } catch {}
+  page.value = 1
+  loadPage()
 })
+
+watch(page, () => { loadPage() })
 
 onMounted(async () => {
   if (!libraryScanned.value) {
-    try { await scanLibrary(api) } catch {}
+    try { await scanLibrary(api, { resync: true }) } catch {}
   }
+  await loadPage()
 })
 
 function openAlbum(album) {
@@ -169,6 +199,15 @@ function openAlbum(album) {
   text-overflow: ellipsis;
   white-space: nowrap;
   opacity: 0.92;
+}
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 18px;
+  font-size: 13px;
+  color: var(--text-muted);
 }
 
 @media (max-width: 768px) {

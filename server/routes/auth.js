@@ -22,6 +22,7 @@ import {
 } from '../utils/auth.js'
 import { requireAdmin, requireAuth } from '../middleware/auth.js'
 import { createAuthToken, consumeAuthToken } from '../utils/authTokens.js'
+import { setAuthCookie, clearAuthCookie } from '../utils/authCookie.js'
 import {
   isMailConfigured,
   sendVerificationEmail,
@@ -189,6 +190,7 @@ authRouter.post('/setup', async (req, res) => {
     if (hintFile) hintParts.push(`初始化说明已保存至：${hintFile}`)
 
     const session = createSession(user.id, true)
+    setAuthCookie(res, session.token, session.ttl || Math.max(0, session.expiresAt - Math.floor(Date.now() / 1000)))
     res.json({
       ok: true,
       token: session.token,
@@ -222,10 +224,12 @@ authRouter.post('/login', (req, res) => {
 
     recordLoginAttempt(req, true)
     const session = createSession(user.id, Boolean(remember))
+    setAuthCookie(res, session.token, session.ttl || Math.max(0, session.expiresAt - Math.floor(Date.now() / 1000)))
     res.json({
       ok: true,
       token: session.token,
       expiresAt: session.expiresAt,
+      remember: session.remember,
       user: toPublicUser(user),
     })
   } catch (e) {
@@ -235,11 +239,13 @@ authRouter.post('/login', (req, res) => {
 
 authRouter.post('/logout', requireAuth, (req, res) => {
   deleteSession(req.authToken)
+  clearAuthCookie(res)
   res.json({ ok: true })
 })
 
 authRouter.get('/me', requireAuth, (req, res) => {
-  res.json({ user: req.user })
+  // 返回 token，便于飞牛 WebView 清掉 localStorage 后从 Cookie 会话回填
+  res.json({ user: req.user, token: req.authToken })
 })
 
 authRouter.patch('/profile', requireAuth, (req, res) => {
