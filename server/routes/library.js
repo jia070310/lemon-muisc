@@ -13,6 +13,12 @@ import {
   syncLibraryIndex,
   scanBatchAndCache,
   removeCachePaths,
+  queryCachedTracks,
+  queryArtists,
+  queryAlbums,
+  queryGenres,
+  queryTracksByPaths,
+  countCachedTracks,
 } from '../utils/libraryCache.js'
 import {
   getLibraryScanStatus,
@@ -40,11 +46,118 @@ import {
 
 export const libraryRouter = Router()
 
-/** 读取已缓存的音乐库索引（秒开） */
-libraryRouter.get('/tracks', (_req, res) => {
+/** 读取音乐库曲目：默认分页；?all=1 仍返回全量（兼容整理等内部用途，前端勿用） */
+libraryRouter.get('/tracks', (req, res) => {
   try {
-    const data = getAllCachedTracks()
+    const wantAll = String(req.query.all || '') === '1'
+    if (wantAll) {
+      const data = getAllCachedTracks()
+      return res.json({ ok: true, data, total: data.length })
+    }
+    const result = queryCachedTracks({
+      page: req.query.page,
+      limit: req.query.limit,
+      q: req.query.q,
+      sort: req.query.sort,
+      artist: req.query.artist,
+      album: req.query.album,
+      albumArtist: req.query.albumArtist,
+      genre: req.query.genre,
+    })
+    res.json({
+      ok: true,
+      data: result.items,
+      total: result.total,
+      page: result.page,
+      limit: result.limit,
+    })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+/** 曲库总数 */
+libraryRouter.get('/tracks/count', (_req, res) => {
+  try {
+    res.json({ ok: true, total: countCachedTracks() })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+/** 按路径批量取曲（歌单 / 收藏解析） */
+libraryRouter.post('/tracks/by-paths', (req, res) => {
+  try {
+    const paths = Array.isArray(req.body?.paths) ? req.body.paths : []
+    if (paths.length > 2000) {
+      return res.status(400).json({ error: '单次最多 2000 条路径' })
+    }
+    const data = queryTracksByPaths(paths, { limit: paths.length || 500 })
     res.json({ ok: true, data })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+/** 歌手聚合分页 */
+libraryRouter.get('/artists', (req, res) => {
+  try {
+    const result = queryArtists({
+      page: req.query.page,
+      limit: req.query.limit,
+      q: req.query.q,
+      sort: req.query.sort,
+    })
+    res.json({
+      ok: true,
+      data: result.items,
+      total: result.total,
+      page: result.page,
+      limit: result.limit,
+    })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+/** 专辑聚合分页 */
+libraryRouter.get('/albums', (req, res) => {
+  try {
+    const result = queryAlbums({
+      page: req.query.page,
+      limit: req.query.limit,
+      q: req.query.q,
+      sort: req.query.sort,
+      artist: req.query.artist,
+    })
+    res.json({
+      ok: true,
+      data: result.items,
+      total: result.total,
+      page: result.page,
+      limit: result.limit,
+    })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+/** 风格聚合分页 */
+libraryRouter.get('/genres', (req, res) => {
+  try {
+    const result = queryGenres({
+      page: req.query.page,
+      limit: req.query.limit,
+      q: req.query.q,
+      sort: req.query.sort,
+    })
+    res.json({
+      ok: true,
+      data: result.items,
+      total: result.total,
+      page: result.page,
+      limit: result.limit,
+    })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
@@ -59,7 +172,19 @@ libraryRouter.post('/sync', (req, res) => {
     if (result.removed.length) {
       notifyLibraryRemoved(result.removed)
     }
-    res.json({ ok: true, data: result, scan: getLibraryScanStatus(), dirs })
+    res.json({
+      ok: true,
+      data: {
+        cached: [],
+        pending: [],
+        removed: result.removed || [],
+        cachedCount: result.cached?.length || 0,
+        pendingCount: result.pending?.length || 0,
+        total: result.total || 0,
+      },
+      scan: getLibraryScanStatus(),
+      dirs,
+    })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
@@ -99,7 +224,15 @@ libraryRouter.post('/scan-start', (req, res) => {
     const scan = startLibraryScanJob({ force, syncResult, dirs })
     res.json({
       ok: true,
-      data: syncResult,
+      data: {
+        // 不再下发全量 cached/pending，避免前端持有整库
+        cached: [],
+        pending: [],
+        removed: syncResult.removed || [],
+        cachedCount: syncResult.cached?.length || 0,
+        pendingCount: syncResult.pending?.length || 0,
+        total: syncResult.total || 0,
+      },
       scan,
       dirs,
     })

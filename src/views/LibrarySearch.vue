@@ -16,14 +16,14 @@
     <p v-if="query" class="result-summary">
       「{{ query }}」共
       <strong>{{ totalHits }}</strong> 条结果
-      · 歌曲 {{ matchedSongs.length }}
-      · 专辑 {{ matchedAlbums.length }}
-      · 歌手 {{ matchedArtists.length }}
+      · 歌曲 {{ songTotal }}
+      · 专辑 {{ albumTotal }}
+      · 歌手 {{ artistTotal }}
       · 歌单 {{ matchedPlaylists.length }}
     </p>
     <p v-else class="result-summary muted">输入关键词后回车搜索本地音乐库</p>
 
-    <div v-if="libraryLoading && !libraryTracks.length" class="loading card">正在加载音乐库…</div>
+    <div v-if="loading && !totalHits" class="loading card">正在搜索…</div>
 
     <template v-else-if="query">
       <div v-if="!totalHits" class="empty card">
@@ -207,16 +207,15 @@ import { formatTrackTags, formatAlbumTags } from '../utils/format.js'
 import { getTrackFilePath } from '../utils/trackPath.js'
 import { playItem, addToQueue, isPlayingItem } from '../stores/player.js'
 import {
-  libraryTracks,
-  libraryLoading,
   libraryScanned,
   librarySongColumns,
-  groupAlbums,
-  groupArtists,
   buildPlaylistCards,
   scanLibrary,
   isFavorite,
   toggleFavorite,
+  fetchLibraryTracksPage,
+  fetchLibraryArtists,
+  fetchLibraryAlbums,
 } from '../stores/library.js'
 
 const route = useRoute()
@@ -226,6 +225,7 @@ const keyword = ref(String(route.query.q || ''))
 const query = computed(() => String(route.query.q || '').trim())
 const activeTab = ref('songs')
 const page = ref(1)
+const loading = ref(false)
 /** 各分类每页固定条数 */
 const PAGE_SIZES = {
   songs: 20,
@@ -238,53 +238,36 @@ const pickPlaylistTrack = ref(null)
 const toast = ref(null)
 const songColumns = computed(() => librarySongColumns.value)
 
+const matchedSongs = ref([])
+const matchedAlbums = ref([])
+const matchedArtists = ref([])
+const songTotal = ref(0)
+const albumTotal = ref(0)
+const artistTotal = ref(0)
+
 function matchesQuery(values, q) {
   return values.some((v) => String(v || '').toLowerCase().includes(q))
 }
 
-const matchedSongs = computed(() => {
-  const q = query.value.toLowerCase()
-  if (!q) return []
-  return libraryTracks.value.filter((s) =>
-    matchesQuery([s.name, s.singer, s.album, s.albumArtist, s.genre, s.year], q),
-  )
-})
-
-const matchedAlbums = computed(() => {
-  const q = query.value.toLowerCase()
-  if (!q) return []
-  return groupAlbums(libraryTracks.value).filter((a) =>
-    matchesQuery([a.name, a.artist], q),
-  )
-})
-
-const matchedArtists = computed(() => {
-  const q = query.value.toLowerCase()
-  if (!q) return []
-  return groupArtists(libraryTracks.value).filter((a) =>
-    matchesQuery([a.name], q),
-  )
-})
-
 const matchedPlaylists = computed(() => {
   const q = query.value.toLowerCase()
   if (!q) return []
-  return buildPlaylistCards(libraryTracks.value)
+  return buildPlaylistCards([])
     .filter((c) => !c.hidden)
     .filter((c) => matchesQuery([c.name], q))
 })
 
 const totalHits = computed(() => (
-  matchedSongs.value.length
-  + matchedAlbums.value.length
-  + matchedArtists.value.length
+  songTotal.value
+  + albumTotal.value
+  + artistTotal.value
   + matchedPlaylists.value.length
 ))
 
 const resultTabs = computed(() => ([
-  { id: 'songs', label: '歌曲', count: matchedSongs.value.length },
-  { id: 'albums', label: '专辑', count: matchedAlbums.value.length },
-  { id: 'artists', label: '歌手', count: matchedArtists.value.length },
+  { id: 'songs', label: '歌曲', count: songTotal.value },
+  { id: 'albums', label: '专辑', count: albumTotal.value },
+  { id: 'artists', label: '歌手', count: artistTotal.value },
   { id: 'playlists', label: '歌单', count: matchedPlaylists.value.length },
 ]))
 
@@ -296,11 +279,71 @@ const activeList = computed(() => {
 })
 
 const pageSize = computed(() => PAGE_SIZES[activeTab.value] || 20)
-const totalPages = computed(() => Math.max(1, Math.ceil(activeList.value.length / pageSize.value)))
-const pagedItems = computed(() => {
-  const start = (page.value - 1) * pageSize.value
-  return activeList.value.slice(start, start + pageSize.value)
+const activeTotal = computed(() => {
+  if (activeTab.value === 'albums') return albumTotal.value
+  if (activeTab.value === 'artists') return artistTotal.value
+  if (activeTab.value === 'playlists') return matchedPlaylists.value.length
+  return songTotal.value
 })
+const totalPages = computed(() => Math.max(1, Math.ceil(activeTotal.value / pageSize.value)))
+const pagedItems = computed(() => {
+  if (activeTab.value === 'playlists') {
+    const start = (page.value - 1) * pageSize.value
+    return matchedPlaylists.value.slice(start, start + pageSize.value)
+  }
+  return activeList.value
+})
+
+async function runSearch() {
+  const q = query.value
+  if (!q) {
+    matchedSongs.value = []
+    matchedAlbums.value = []
+    matchedArtists.value = []
+    songTotal.value = 0
+    albumTotal.value = 0
+    artistTotal.value = 0
+    return
+  }
+  loading.value = true
+  try {
+    const tab = activeTab.value
+    if (tab === 'songs' || tab === 'albums' || tab === 'artists') {
+      // 先拉各分类总数摘要（首页），再按当前 tab 分页
+    }
+    const [songsRes, albumsRes, artistsRes] = await Promise.all([
+      fetchLibraryTracksPage(api, {
+        page: tab === 'songs' ? page.value : 1,
+        limit: tab === 'songs' ? pageSize.value : 1,
+        q,
+        sort: 'mtime',
+        replace: false,
+      }),
+      fetchLibraryAlbums(api, {
+        page: tab === 'albums' ? page.value : 1,
+        limit: tab === 'albums' ? pageSize.value : 1,
+        q,
+        sort: 'recent',
+      }),
+      fetchLibraryArtists(api, {
+        page: tab === 'artists' ? page.value : 1,
+        limit: tab === 'artists' ? pageSize.value : 1,
+        q,
+        sort: 'count',
+      }),
+    ])
+    songTotal.value = songsRes.total
+    albumTotal.value = albumsRes.total
+    artistTotal.value = artistsRes.total
+    if (tab === 'songs') matchedSongs.value = songsRes.items
+    if (tab === 'albums') matchedAlbums.value = albumsRes.items
+    if (tab === 'artists') matchedArtists.value = artistsRes.items
+  } catch {
+    /* keep previous */
+  } finally {
+    loading.value = false
+  }
+}
 
 function pickDefaultTab() {
   const first = resultTabs.value.find((t) => t.count > 0)
@@ -312,22 +355,28 @@ function setTab(tabId) {
   if (activeTab.value === tabId) return
   activeTab.value = tabId
   page.value = 1
+  runSearch()
 }
 
-watch(query, () => {
+watch(query, async () => {
   keyword.value = query.value
+  page.value = 1
+  await runSearch()
   pickDefaultTab()
+  await runSearch()
 })
 
-watch([activeList, pageSize], () => {
-  if (page.value > totalPages.value) page.value = 1
+watch(page, () => {
+  if (activeTab.value !== 'playlists') runSearch()
 })
 
 onMounted(async () => {
-  pickDefaultTab()
   if (!libraryScanned.value) {
     try { await scanLibrary(api, { resync: true }) } catch {}
   }
+  await runSearch()
+  pickDefaultTab()
+  await runSearch()
 })
 
 function submitSearch() {

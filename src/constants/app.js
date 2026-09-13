@@ -4,6 +4,7 @@ export const APP_DESCRIPTION = '音乐搜索、试听、下载与标签管理工
 export const APP_FEATURES = [
   '音乐搜索、试听、下载与标签管理',
   '支持同时激活多个落雪 / 澜音原生音源；多选批量下载（无对应音质时自动降档入队）',
+  '支持 PWA：iOS / 鸿蒙等可添加到桌面，接近全屏使用',
   '适用于飞牛 NAS 部署',
 ]
 export const REPO_URL = 'https://github.com/jia070310/lemon-muisc'

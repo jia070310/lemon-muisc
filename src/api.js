@@ -323,7 +323,60 @@ export const api = {
     }),
   },
   library: {
-    tracks: () => request('/library/tracks', { timeout: 60000 }),
+    tracks: (params = {}) => {
+      const q = new URLSearchParams()
+      for (const [k, v] of Object.entries(params || {})) {
+        if (v == null || v === '') continue
+        q.set(k, String(v))
+      }
+      if (
+        !q.has('all')
+        && !q.has('page')
+        && !q.has('limit')
+        && !q.has('q')
+        && !q.has('artist')
+        && !q.has('album')
+        && !q.has('genre')
+      ) {
+        q.set('page', '1')
+        q.set('limit', '50')
+      }
+      const qs = q.toString()
+      return request(`/library/tracks${qs ? `?${qs}` : ''}`, { timeout: 60000 })
+    },
+    tracksCount: () => request('/library/tracks/count'),
+    tracksByPaths: (paths) => request('/library/tracks/by-paths', {
+      method: 'POST',
+      body: { paths },
+      timeout: 60000,
+    }),
+    artists: (params = {}) => {
+      const q = new URLSearchParams()
+      for (const [k, v] of Object.entries(params || {})) {
+        if (v == null || v === '') continue
+        q.set(k, String(v))
+      }
+      const qs = q.toString()
+      return request(`/library/artists${qs ? `?${qs}` : ''}`, { timeout: 60000 })
+    },
+    albums: (params = {}) => {
+      const q = new URLSearchParams()
+      for (const [k, v] of Object.entries(params || {})) {
+        if (v == null || v === '') continue
+        q.set(k, String(v))
+      }
+      const qs = q.toString()
+      return request(`/library/albums${qs ? `?${qs}` : ''}`, { timeout: 60000 })
+    },
+    genres: (params = {}) => {
+      const q = new URLSearchParams()
+      for (const [k, v] of Object.entries(params || {})) {
+        if (v == null || v === '') continue
+        q.set(k, String(v))
+      }
+      const qs = q.toString()
+      return request(`/library/genres${qs ? `?${qs}` : ''}`, { timeout: 60000 })
+    },
     sync: () => request('/library/sync', { method: 'POST', timeout: 120000 }),
     scanStart: (force = false, { dirs = null, scanAll = false } = {}) => request('/library/scan-start', {
       method: 'POST',

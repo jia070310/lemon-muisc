@@ -6,8 +6,12 @@ import { listAudioFiles } from './audioScan.js'
 import { parseFilename } from './filenameParse.js'
 import { readMetaLite } from '../meta.js'
 import { mapWithConcurrency } from './asyncPool.js'
+import { splitArtists } from './artistTag.js'
 
 let tableReady = false
+let columnsReady = false
+
+const VARIOUS_ARTISTS_NAME = '群星 (Various Artists)'
 
 export function ensureLibraryCacheTable() {
   if (tableReady) return
@@ -23,7 +27,79 @@ export function ensureLibraryCacheTable() {
     );
     CREATE INDEX IF NOT EXISTS idx_library_index_mtime ON library_index(mtime DESC);
   `)
+  ensureSearchColumns(db)
   tableReady = true
+}
+
+function ensureSearchColumns(db) {
+  if (columnsReady) return
+  const cols = db.prepare('PRAGMA table_info(library_index)').all().map((c) => c.name)
+  const add = (name, ddl) => {
+    if (!cols.includes(name)) db.exec(`ALTER TABLE library_index ADD COLUMN ${ddl}`)
+  }
+  add('title', "title TEXT NOT NULL DEFAULT ''")
+  add('artist', "artist TEXT NOT NULL DEFAULT ''")
+  add('album_artist', "album_artist TEXT NOT NULL DEFAULT ''")
+  add('album', "album TEXT NOT NULL DEFAULT ''")
+  add('year', "year TEXT NOT NULL DEFAULT ''")
+  add('genre', "genre TEXT NOT NULL DEFAULT ''")
+  add('duration', 'duration REAL NOT NULL DEFAULT 0')
+  add('format', "format TEXT NOT NULL DEFAULT ''")
+  add('track_no', "track_no TEXT NOT NULL DEFAULT ''")
+  add('has_picture', 'has_picture INTEGER NOT NULL DEFAULT 0')
+  add('has_lyrics', 'has_lyrics INTEGER NOT NULL DEFAULT 0')
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_library_title ON library_index(title COLLATE NOCASE);
+    CREATE INDEX IF NOT EXISTS idx_library_artist ON library_index(artist COLLATE NOCASE);
+    CREATE INDEX IF NOT EXISTS idx_library_album ON library_index(album COLLATE NOCASE);
+    CREATE INDEX IF NOT EXISTS idx_library_genre ON library_index(genre COLLATE NOCASE);
+    CREATE INDEX IF NOT EXISTS idx_library_album_artist ON library_index(album_artist COLLATE NOCASE);
+  `)
+  // 从 meta_json 回填可查询列（只填仍为空的行，避免反复全表写）
+  try {
+    db.exec(`
+      UPDATE library_index SET
+        title = COALESCE(NULLIF(json_extract(meta_json, '$.title'), ''), NULLIF(json_extract(meta_json, '$.parsedTitle'), ''), title),
+        artist = COALESCE(NULLIF(json_extract(meta_json, '$.artist'), ''), NULLIF(json_extract(meta_json, '$.parsedArtist'), ''), artist),
+        album_artist = COALESCE(NULLIF(json_extract(meta_json, '$.albumArtist'), ''), album_artist),
+        album = COALESCE(NULLIF(json_extract(meta_json, '$.album'), ''), album),
+        year = COALESCE(NULLIF(json_extract(meta_json, '$.year'), ''), year),
+        genre = COALESCE(NULLIF(json_extract(meta_json, '$.genre'), ''), genre),
+        duration = COALESCE(json_extract(meta_json, '$.duration'), duration),
+        format = COALESCE(NULLIF(json_extract(meta_json, '$.format'), ''), format),
+        track_no = COALESCE(NULLIF(CAST(json_extract(meta_json, '$.track') AS TEXT), ''), track_no),
+        has_picture = CASE
+          WHEN json_extract(meta_json, '$.hasPicture') IN (1, '1', 'true', 'TRUE') THEN 1
+          ELSE has_picture
+        END,
+        has_lyrics = CASE
+          WHEN json_extract(meta_json, '$.hasLyrics') IN (1, '1', 'true', 'TRUE') THEN 1
+          ELSE has_lyrics
+        END
+      WHERE (title = '' AND artist = '' AND album = '')
+        AND meta_json IS NOT NULL
+        AND meta_json != '{}'
+        AND meta_json != ''
+    `)
+  } catch { /* 旧 SQLite 无 json_extract 时跳过，靠后续 upsert 写入 */ }
+  columnsReady = true
+}
+
+function extractSearchFields(meta = {}, filePath = '') {
+  const fileName = meta.fileName || (filePath ? path.basename(filePath) : '')
+  const parsed = fileName ? parseFilename(fileName) : { title: '', artist: '' }
+  const title = String(meta.title || meta.parsedTitle || parsed.title || fileName || '').trim()
+  const artist = String(meta.artist || meta.parsedArtist || parsed.artist || '').trim()
+  const albumArtist = String(meta.albumArtist || '').trim()
+  const album = String(meta.album || '').trim()
+  const year = String(meta.year || '').trim()
+  const genre = String(meta.genre || '').trim()
+  const duration = Number(meta.duration) || 0
+  const format = String(meta.format || '').trim()
+  const trackNo = String(meta.track ?? meta.trackNo ?? '').trim()
+  const hasPicture = meta.hasPicture ? 1 : 0
+  const hasLyrics = meta.hasLyrics || meta.lyric ? 1 : 0
+  return { title, artist, albumArtist, album, year, genre, duration, format, trackNo, hasPicture, hasLyrics }
 }
 
 function normalizePathKey(filePath) {
@@ -225,16 +301,48 @@ export function upsertCacheEntry(filePath, mtime, size, meta) {
   const db = getDB()
   const key = normalizePathKey(filePath)
   const { filePath: _fp, mtime: _mt, size: _sz, ok: _ok, error: _err, ...rest } = meta || {}
-  const metaJson = JSON.stringify(sanitizeCacheMeta(rest))
+  const clean = sanitizeCacheMeta(rest)
+  const metaJson = JSON.stringify(clean)
+  const fields = extractSearchFields(clean, key)
   db.prepare(`
-    INSERT INTO library_index (file_path, mtime, size, meta_json, scanned_at)
-    VALUES (?, ?, ?, ?, unixepoch())
+    INSERT INTO library_index (
+      file_path, mtime, size, meta_json, scanned_at,
+      title, artist, album_artist, album, year, genre, duration, format, track_no, has_picture, has_lyrics
+    )
+    VALUES (?, ?, ?, ?, unixepoch(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(file_path) DO UPDATE SET
       mtime = excluded.mtime,
       size = excluded.size,
       meta_json = excluded.meta_json,
-      scanned_at = excluded.scanned_at
-  `).run(key, mtime || 0, size || 0, metaJson)
+      scanned_at = excluded.scanned_at,
+      title = excluded.title,
+      artist = excluded.artist,
+      album_artist = excluded.album_artist,
+      album = excluded.album,
+      year = excluded.year,
+      genre = excluded.genre,
+      duration = excluded.duration,
+      format = excluded.format,
+      track_no = excluded.track_no,
+      has_picture = excluded.has_picture,
+      has_lyrics = excluded.has_lyrics
+  `).run(
+    key,
+    mtime || 0,
+    size || 0,
+    metaJson,
+    fields.title,
+    fields.artist,
+    fields.albumArtist,
+    fields.album,
+    fields.year,
+    fields.genre,
+    fields.duration,
+    fields.format,
+    fields.trackNo,
+    fields.hasPicture,
+    fields.hasLyrics,
+  )
 }
 
 export function removeCachePaths(paths) {
@@ -392,3 +500,411 @@ export function getFreshCacheEntry(filePath) {
   if (!entry || !isDiskEntryFresh(entry, filePath)) return null
   return entry
 }
+
+function clampInt(value, fallback, min, max) {
+  const n = Number.parseInt(value, 10)
+  if (!Number.isFinite(n)) return fallback
+  return Math.min(max, Math.max(min, n))
+}
+
+function escapeLike(text) {
+  return String(text || '').replace(/([%_\\])/g, '\\$1')
+}
+
+function tracksOrderSql(sort) {
+  switch (String(sort || 'mtime')) {
+    case 'title':
+      return 'title COLLATE NOCASE ASC, file_path ASC'
+    case 'artist':
+      return 'artist COLLATE NOCASE ASC, title COLLATE NOCASE ASC'
+    case 'album':
+      return 'album COLLATE NOCASE ASC, track_no ASC, title COLLATE NOCASE ASC'
+    case 'mtime':
+    case 'recent':
+    default:
+      return 'mtime DESC, file_path ASC'
+  }
+}
+
+function rowToQueryFile(row) {
+  const fileName = path.basename(row.file_path || '')
+  return {
+    filePath: row.file_path,
+    mtime: row.mtime,
+    size: row.size,
+    fileName,
+    title: row.title || '',
+    artist: row.artist || '',
+    albumArtist: row.album_artist || '',
+    album: row.album || '',
+    year: row.year || '',
+    genre: row.genre || '',
+    duration: row.duration || 0,
+    format: row.format || '',
+    track: row.track_no || '',
+    hasPicture: Boolean(row.has_picture),
+    hasLyrics: Boolean(row.has_lyrics),
+    parsedTitle: row.title || '',
+    parsedArtist: row.artist || '',
+  }
+}
+
+/**
+ * 分页曲目查询（不返回全库）
+ * @returns {{ items: object[], total: number, page: number, limit: number }}
+ */
+export function queryCachedTracks(opts = {}) {
+  ensureLibraryCacheTable()
+  const db = getDB()
+  if (!db) return { items: [], total: 0, page: 1, limit: 50 }
+
+  const page = clampInt(opts.page, 1, 1, 1_000_000)
+  const limit = clampInt(opts.limit, 50, 1, 200)
+  const offset = (page - 1) * limit
+
+  const dirs = getMusicPaths().filter(Boolean)
+  const clauses = []
+  const params = []
+  const filter = buildDirSqlFilter(dirs)
+  if (!filter) return { items: [], total: 0, page, limit }
+  clauses.push(`(${filter.where})`)
+  params.push(...filter.params)
+
+  const keyword = String(opts.q || '').trim()
+  if (keyword) {
+    const like = `%${escapeLike(keyword)}%`
+    clauses.push(`(
+      title LIKE ? ESCAPE '\\' OR artist LIKE ? ESCAPE '\\' OR album LIKE ? ESCAPE '\\'
+      OR album_artist LIKE ? ESCAPE '\\' OR genre LIKE ? ESCAPE '\\' OR file_path LIKE ? ESCAPE '\\'
+    )`)
+    params.push(like, like, like, like, like, like)
+  }
+
+  const artist = String(opts.artist || '').trim()
+  if (artist) {
+    if (artist === VARIOUS_ARTISTS_NAME) {
+      clauses.push(`(
+        instr(artist, ' / ') > 0 OR instr(artist, '/') > 0
+        OR instr(artist, ';') > 0 OR instr(artist, '|') > 0
+      )`)
+    } else {
+      const esc = escapeLike(artist)
+      clauses.push(`(
+        artist = ? COLLATE NOCASE
+        OR album_artist = ? COLLATE NOCASE
+        OR artist LIKE ? ESCAPE '\\'
+        OR artist LIKE ? ESCAPE '\\'
+        OR artist LIKE ? ESCAPE '\\'
+        OR artist LIKE ? ESCAPE '\\'
+      )`)
+      params.push(
+        artist,
+        artist,
+        esc,
+        `${esc} / %`,
+        `% / ${esc}`,
+        `% / ${esc} / %`,
+      )
+    }
+  }
+
+  const album = String(opts.album || '').trim()
+  if (album) {
+    clauses.push('album = ? COLLATE NOCASE')
+    params.push(album)
+  }
+  const albumArtist = String(opts.albumArtist || '').trim()
+  if (albumArtist) {
+    clauses.push('(NULLIF(album_artist, "") = ? COLLATE NOCASE OR (album_artist = "" AND artist = ? COLLATE NOCASE))')
+    params.push(albumArtist, albumArtist)
+  }
+  const genre = String(opts.genre || '').trim()
+  if (genre) {
+    const like = `%${escapeLike(genre)}%`
+    clauses.push("(genre = ? COLLATE NOCASE OR genre LIKE ? ESCAPE '\\')")
+    params.push(genre, like)
+  }
+
+  const where = clauses.join(' AND ')
+  const order = tracksOrderSql(opts.sort)
+  const total = db.prepare(`SELECT COUNT(*) AS n FROM library_index WHERE ${where}`).get(...params)?.n || 0
+  const rows = db.prepare(`
+    SELECT file_path, mtime, size, title, artist, album_artist, album, year, genre,
+           duration, format, track_no, has_picture, has_lyrics
+    FROM library_index
+    WHERE ${where}
+    ORDER BY ${order}
+    LIMIT ? OFFSET ?
+  `).all(...params, limit, offset)
+
+  return {
+    items: rows.map(rowToQueryFile),
+    total,
+    page,
+    limit,
+  }
+}
+
+/** 按路径批量取曲目（歌单 / 收藏解析，限制数量） */
+export function queryTracksByPaths(paths, { limit = 500 } = {}) {
+  ensureLibraryCacheTable()
+  const db = getDB()
+  if (!db) return []
+  const list = [...new Set((paths || []).map((p) => normalizePathKey(p)).filter(Boolean))].slice(0, clampInt(limit, 500, 1, 2000))
+  if (!list.length) return []
+  const placeholders = list.map(() => '?').join(',')
+  const rows = db.prepare(`
+    SELECT file_path, mtime, size, title, artist, album_artist, album, year, genre,
+           duration, format, track_no, has_picture, has_lyrics
+    FROM library_index
+    WHERE file_path IN (${placeholders})
+  `).all(...list)
+  const map = new Map(rows.map((r) => [normalizePathKey(r.file_path), rowToQueryFile(r)]))
+  return list.map((p) => map.get(p)).filter(Boolean)
+}
+
+function artistBucketName(artistRaw) {
+  const names = splitArtists(artistRaw || '')
+  if (names.length >= 2) return VARIOUS_ARTISTS_NAME
+  return names[0] || '未知艺术家'
+}
+
+function artistToId(name) {
+  return encodeURIComponent(String(name || ''))
+}
+
+/**
+ * 歌手聚合（服务端）；多歌手归「群星」
+ */
+export function queryArtists(opts = {}) {
+  ensureLibraryCacheTable()
+  const db = getDB()
+  const page = clampInt(opts.page, 1, 1, 1_000_000)
+  const limit = clampInt(opts.limit, 48, 1, 200)
+  if (!db) return { items: [], total: 0, page, limit }
+
+  const dirs = getMusicPaths().filter(Boolean)
+  const filter = buildDirSqlFilter(dirs)
+  if (!filter) return { items: [], total: 0, page, limit }
+
+  const rows = db.prepare(`
+    SELECT file_path, artist, album, mtime, has_picture
+    FROM library_index
+    WHERE ${filter.where}
+  `).all(...filter.params)
+
+  const map = new Map()
+  const q = String(opts.q || '').trim().toLowerCase()
+  for (const row of rows) {
+    const name = artistBucketName(row.artist)
+    if (name === '未知艺术家') continue
+    if (q && !name.toLowerCase().includes(q)) continue
+    const id = artistToId(name)
+    if (!map.has(id)) {
+      map.set(id, {
+        id,
+        name,
+        trackCount: 0,
+        albumSet: new Set(),
+        latestMtime: 0,
+        coverPath: '',
+      })
+    }
+    const entry = map.get(id)
+    entry.trackCount += 1
+    if (row.album) entry.albumSet.add(row.album)
+    if ((row.mtime || 0) > entry.latestMtime) entry.latestMtime = row.mtime || 0
+    if (!entry.coverPath && row.has_picture) entry.coverPath = row.file_path
+  }
+
+  let items = [...map.values()].map((a) => ({
+    id: a.id,
+    name: a.name,
+    trackCount: a.trackCount,
+    albumCount: a.albumSet.size,
+    latestMtime: a.latestMtime,
+    coverPath: a.coverPath,
+  }))
+
+  const sort = String(opts.sort || 'count')
+  items.sort((a, b) => {
+    if (a.name === VARIOUS_ARTISTS_NAME && b.name !== VARIOUS_ARTISTS_NAME) return -1
+    if (b.name === VARIOUS_ARTISTS_NAME && a.name !== VARIOUS_ARTISTS_NAME) return 1
+    if (sort === 'name') return a.name.localeCompare(b.name, 'zh-CN')
+    if (sort === 'recent') return (b.latestMtime || 0) - (a.latestMtime || 0)
+    return b.trackCount - a.trackCount || (b.latestMtime || 0) - (a.latestMtime || 0)
+  })
+
+  const total = items.length
+  const start = (page - 1) * limit
+  items = items.slice(start, start + limit)
+  return { items, total, page, limit }
+}
+
+/**
+ * 专辑聚合（服务端）
+ */
+export function queryAlbums(opts = {}) {
+  ensureLibraryCacheTable()
+  const db = getDB()
+  const page = clampInt(opts.page, 1, 1, 1_000_000)
+  const limit = clampInt(opts.limit, 48, 1, 200)
+  if (!db) return { items: [], total: 0, page, limit }
+
+  const dirs = getMusicPaths().filter(Boolean)
+  const filter = buildDirSqlFilter(dirs)
+  if (!filter) return { items: [], total: 0, page, limit }
+
+  const params = [...filter.params]
+  let where = filter.where
+  const q = String(opts.q || '').trim()
+  if (q) {
+    const like = `%${escapeLike(q)}%`
+    where = `(${where}) AND (album LIKE ? ESCAPE '\\' OR artist LIKE ? ESCAPE '\\' OR album_artist LIKE ? ESCAPE '\\')`
+    params.push(like, like, like)
+  }
+  const artist = String(opts.artist || '').trim()
+  if (artist && artist !== VARIOUS_ARTISTS_NAME) {
+    where = `(${where}) AND (artist = ? COLLATE NOCASE OR album_artist = ? COLLATE NOCASE)`
+    params.push(artist, artist)
+  }
+
+  const rows = db.prepare(`
+    SELECT
+      CASE WHEN NULLIF(album, '') IS NULL THEN '未知专辑' ELSE album END AS album_name,
+      CASE
+        WHEN NULLIF(album_artist, '') IS NOT NULL THEN album_artist
+        WHEN NULLIF(artist, '') IS NOT NULL THEN artist
+        ELSE '未知艺术家'
+      END AS artist_name,
+      COUNT(*) AS track_count,
+      MAX(mtime) AS latest_mtime,
+      MAX(year) AS year,
+      MAX(genre) AS genre,
+      MAX(CASE WHEN has_picture = 1 THEN file_path ELSE NULL END) AS cover_path
+    FROM library_index
+    WHERE ${where}
+    GROUP BY album_name, artist_name
+  `).all(...params)
+
+  let items = rows.map((r) => {
+    const albumName = r.album_name || '未知专辑'
+    const artistName = r.artist_name || '未知艺术家'
+    return {
+      id: `${artistName}::${albumName}`,
+      name: albumName,
+      artist: artistName,
+      trackCount: r.track_count || 0,
+      latestMtime: r.latest_mtime || 0,
+      year: r.year || '',
+      genre: r.genre || '',
+      coverPath: r.cover_path || '',
+    }
+  }).filter((a) => a.name !== '未知专辑' || a.trackCount > 0)
+
+  const sort = String(opts.sort || 'recent')
+  items.sort((a, b) => {
+    if (sort === 'name') return a.name.localeCompare(b.name, 'zh-CN')
+    if (sort === 'artist') return a.artist.localeCompare(b.artist, 'zh-CN') || a.name.localeCompare(b.name, 'zh-CN')
+    if (sort === 'count') return b.trackCount - a.trackCount
+    return (b.latestMtime || 0) - (a.latestMtime || 0)
+  })
+
+  const total = items.length
+  const start = (page - 1) * limit
+  items = items.slice(start, start + limit)
+  return { items, total, page, limit }
+}
+
+/** 曲库总数（轻量） */
+export function countCachedTracks() {
+  ensureLibraryCacheTable()
+  const db = getDB()
+  if (!db) return 0
+  const dirs = getMusicPaths().filter(Boolean)
+  const filter = buildDirSqlFilter(dirs)
+  if (!filter) return 0
+  return db.prepare(`SELECT COUNT(*) AS n FROM library_index WHERE ${filter.where}`).get(...filter.params)?.n || 0
+}
+
+function splitGenreTags(genreRaw) {
+  const raw = String(genreRaw || '').trim()
+  if (!raw) return []
+  const parts = raw.split(/[/;；、,，|]/).map((s) => s.trim()).filter(Boolean)
+  return parts.length ? parts : []
+}
+
+function genreToId(name) {
+  return encodeURIComponent(String(name || ''))
+}
+
+/**
+ * 风格聚合（一首歌可属多个标签）；排除「未知风格」
+ */
+export function queryGenres(opts = {}) {
+  ensureLibraryCacheTable()
+  const db = getDB()
+  const page = clampInt(opts.page, 1, 1, 1_000_000)
+  const limit = clampInt(opts.limit, 48, 1, 200)
+  if (!db) return { items: [], total: 0, page, limit }
+
+  const dirs = getMusicPaths().filter(Boolean)
+  const filter = buildDirSqlFilter(dirs)
+  if (!filter) return { items: [], total: 0, page, limit }
+
+  const rows = db.prepare(`
+    SELECT file_path, artist, genre, mtime, has_picture
+    FROM library_index
+    WHERE ${filter.where}
+  `).all(...filter.params)
+
+  const map = new Map()
+  const q = String(opts.q || '').trim().toLowerCase()
+  for (const row of rows) {
+    const tags = splitGenreTags(row.genre)
+    if (!tags.length) continue
+    for (const name of tags) {
+      if (name === '未知风格') continue
+      if (q && !name.toLowerCase().includes(q)) continue
+      const id = genreToId(name)
+      if (!map.has(id)) {
+        map.set(id, {
+          id,
+          name,
+          trackCount: 0,
+          artistSet: new Set(),
+          latestMtime: 0,
+          coverPath: '',
+        })
+      }
+      const entry = map.get(id)
+      entry.trackCount += 1
+      if (row.artist) entry.artistSet.add(row.artist)
+      if ((row.mtime || 0) > entry.latestMtime) entry.latestMtime = row.mtime || 0
+      if (!entry.coverPath && row.has_picture) entry.coverPath = row.file_path
+    }
+  }
+
+  let items = [...map.values()].map((g) => ({
+    id: g.id,
+    name: g.name,
+    trackCount: g.trackCount,
+    artistCount: g.artistSet.size,
+    latestMtime: g.latestMtime,
+    coverPath: g.coverPath,
+  }))
+
+  const sort = String(opts.sort || 'count')
+  items.sort((a, b) => {
+    if (sort === 'name') return a.name.localeCompare(b.name, 'zh-CN')
+    if (sort === 'recent') return (b.latestMtime || 0) - (a.latestMtime || 0)
+    return b.trackCount - a.trackCount || (b.latestMtime || 0) - (a.latestMtime || 0)
+  })
+
+  const total = items.length
+  const start = (page - 1) * limit
+  items = items.slice(start, start + limit)
+  return { items, total, page, limit }
+}
+
+export { VARIOUS_ARTISTS_NAME }

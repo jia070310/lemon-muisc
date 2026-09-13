@@ -3,7 +3,7 @@
     <header class="about-hero card">
       <div class="hero-brand">
         <div class="about-icon-wrap">
-          <img src="/icon.png" alt="" class="about-icon" />
+          <img :src="APP_ICON_URL" alt="" class="about-icon" />
         </div>
         <div class="hero-text">
           <div class="hero-title-row">
@@ -79,6 +79,35 @@
         </dl>
       </section>
     </div>
+
+    <section class="about-card card pwa-card">
+      <h2 class="section-title">添加到桌面（PWA）</h2>
+      <p class="pwa-desc">
+        支持标准渐进式 Web 应用：苹果 iOS 与鸿蒙等系统可「添加到主屏幕 / 桌面」，获得接近全屏、无地址栏的使用体验。
+        桌面图标使用暖色版；网页内与浏览器标题栏仍为原黑底图标。
+        推荐通过 <strong>HTTPS 域名</strong> 访问（反代到本应用）；纯局域网 HTTP 下，iOS Safari 仍可添加，安卓安装提示可能不可用。
+      </p>
+      <div v-if="pwa.standalone" class="pwa-status ok">当前已在桌面应用模式打开</div>
+      <div v-else class="pwa-actions">
+        <button
+          v-if="pwa.canInstall"
+          class="btn-primary btn-sm"
+          type="button"
+          :disabled="pwaInstalling"
+          @click="installPwa"
+        >
+          {{ pwaInstalling ? '请在系统弹窗中确认…' : '安装到桌面' }}
+        </button>
+        <ul class="pwa-steps">
+          <li><strong>iPhone / iPad</strong>：用 Safari 打开本站 → 分享 →「添加到主屏幕」</li>
+          <li><strong>鸿蒙 / 安卓</strong>：用系统浏览器打开 → 菜单「安装应用」或「添加到主屏幕」（需 HTTPS 时更稳）</li>
+          <li><strong>桌面 Chrome</strong>：地址栏右侧安装图标，或浏览器菜单「安装柠檬音乐」</li>
+        </ul>
+      </div>
+      <p v-if="!pwa.isSecureContext && !pwa.standalone" class="pwa-hint">
+        当前为非安全上下文（{{ pwa.protocol }}）。若需浏览器原生「安装」提示，请配置 HTTPS 反代后再试。
+      </p>
+    </section>
 
     <section v-if="isAdminUser" class="about-admin">
       <h2 class="section-title about-admin-heading">服务状态</h2>
@@ -208,20 +237,43 @@
 
 <script setup>
 defineOptions({ name: 'About' })
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { api } from '../api.js'
 import { checkForUpdate, hasUpdate } from '../composables/useUpdateCheck.js'
 import { APP_NAME, APP_DISPLAY_NAME, APP_DESCRIPTION, APP_FEATURES, REPO_URL } from '../constants/app.js'
 import { isAdmin as isAdminUser } from '../utils/auth.js'
+import { getPwaInstallState, onPwaInstallState, promptPwaInstall } from '../utils/pwa.js'
+import { APP_ICON_URL } from '../utils/appIcon.js'
 
 const info = ref(null)
 const loading = ref(false)
 const serverHealth = ref(null)
+const pwa = ref(getPwaInstallState())
+const pwaInstalling = ref(false)
+let stopPwaWatch = null
+
+async function installPwa() {
+  pwaInstalling.value = true
+  try {
+    await promptPwaInstall()
+  } finally {
+    pwaInstalling.value = false
+    pwa.value = getPwaInstallState()
+  }
+}
 const healthLoading = ref(false)
 
 onMounted(() => {
   loadInfo()
   if (isAdminUser.value) loadServerHealth()
+  stopPwaWatch = onPwaInstallState((state) => {
+    pwa.value = state
+  })
+})
+
+onUnmounted(() => {
+  if (typeof stopPwaWatch === 'function') stopPwaWatch()
+  stopPwaWatch = null
 })
 
 async function loadServerHealth() {
@@ -425,6 +477,45 @@ function formatDate(iso) {
   padding: 18px 20px;
   display: flex;
   flex-direction: column;
+}
+
+.pwa-card {
+  margin-top: 14px;
+}
+
+.pwa-desc {
+  margin: 0 0 12px;
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--text-secondary);
+}
+
+.pwa-status.ok {
+  font-size: 13px;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.pwa-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.pwa-steps {
+  margin: 0;
+  padding-left: 1.15rem;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+}
+
+.pwa-hint {
+  margin: 12px 0 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-muted, var(--text-secondary));
 }
 
 .section-title {

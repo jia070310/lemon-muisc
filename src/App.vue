@@ -1,14 +1,14 @@
 <template>
   <div class="app">
     <div v-if="showAuthSplash" class="auth-splash" aria-busy="true">
-      <img src="/icon.png" alt="" class="auth-splash-logo" />
+      <img :src="APP_ICON_URL" alt="" class="auth-splash-logo" />
       <p>柠檬音乐下载</p>
     </div>
     <router-view v-else-if="isPublicPage" class="public-page" />
     <template v-else-if="showAppShell">
     <aside class="sidebar">
       <div class="logo">
-        <img src="/icon.png" alt="柠檬音乐下载" class="logo-img" />
+        <img :src="APP_ICON_URL" alt="柠檬音乐下载" class="logo-img" />
         <div>
           <h1>柠檬音乐下载</h1>
           <span class="logo-sub">音乐下载工具</span>
@@ -74,7 +74,7 @@
 
     <header v-if="!showFullscreenPlayer" class="mobile-topbar">
       <div class="mobile-brand">
-        <img src="/icon.png" alt="" class="mobile-brand-icon" />
+        <img :src="APP_ICON_URL" alt="" class="mobile-brand-icon" />
         <span>柠檬音乐下载</span>
       </div>
       <button
@@ -433,6 +433,7 @@ import {
   prefetchRoute, startRouteLoading,
 } from './stores/navigation.js'
 import { isMobileUiContext } from './utils/device.js'
+import { APP_ICON_URL } from './utils/appIcon.js'
 
 const route = useRoute()
 const router = useRouter()

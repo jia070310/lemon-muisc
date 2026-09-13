@@ -938,6 +938,7 @@ async function selectArtist(artist) {
         parsedArtist: t.singer || '',
         title: t.title || t.name || '',
         artist: t.singer || '',
+        albumArtist: t.albumArtist || '',
         album: t.album || '',
         year: t.year || '',
         genre: t.genre || '',
@@ -1318,6 +1319,7 @@ function applyMetaRow(file, item) {
     Object.assign(file, {
       title: item.title || file.parsedTitle || file.title,
       artist: item.artist || file.parsedArtist || file.artist,
+      albumArtist: item.albumArtist || file.albumArtist || '',
       album: item.album || '',
       year: item.year || '',
       genre: item.genre || '',
@@ -1325,6 +1327,7 @@ function applyMetaRow(file, item) {
     })
     file._metaLoaded = true
   } else {
+    if (item.albumArtist) file.albumArtist = item.albumArtist
     if (item.year) file.year = item.year
     if (item.genre) file.genre = item.genre
     if (item.comment) file.comment = item.comment
@@ -1519,6 +1522,7 @@ async function openEdit(f) {
       editForm.value = reactive({
         title: f.title || f.parsedTitle || '',
         artist: f.artist || f.parsedArtist || '',
+        albumArtist: f.albumArtist || '',
         album: f.album || '',
         year: f.year ? String(f.year) : '',
         genre: f.genre || '',
@@ -1940,6 +1944,7 @@ async function saveCurrent() {
     const meta = {
       title: target.title,
       artist: target.artist,
+      albumArtist: target.albumArtist,
       album: target.album,
       year: target.year,
       genre: target.genre,
@@ -2097,7 +2102,8 @@ async function doFetchSearch() {
 function fetchFieldsForIntent(intent) {
   if (intent === 'cover') return ['cover', 'title', 'artist', 'albumArtist', 'album', 'year', 'genre', 'comment']
   if (intent === 'lyric') return ['lyric', 'title', 'artist', 'albumArtist', 'album', 'year', 'genre', 'comment']
-  return ['title', 'artist', 'albumArtist', 'album', 'year', 'genre', 'comment']
+  // 网络获取标签：一并拉歌词，预览区可直接确认写入
+  return ['title', 'artist', 'albumArtist', 'album', 'year', 'genre', 'comment', 'lyric']
 }
 
 async function previewFetchItem(item) {
@@ -2125,7 +2131,9 @@ function applyFetchedMetaToForm(meta) {
     else if (meta.picUrl) editForm.value.picUrl = meta.picUrl
     else if (fetchPreview.value?.picUrl) editForm.value.picUrl = fetchPreview.value.picUrl
     if (editingFile.value) editingFile.value._coverDirty = true
-  } else if (fetchIntent.value === 'lyric' && meta.lyric) {
+  }
+  // meta / lyric：有歌词则写入表单（封面意图不覆盖已有歌词）
+  if (fetchIntent.value !== 'cover' && typeof meta.lyric === 'string' && meta.lyric) {
     editForm.value.lyric = meta.lyric
   }
 }

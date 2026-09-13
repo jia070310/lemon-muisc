@@ -5,7 +5,7 @@
       <div class="page-title">音乐风格</div>
     </div>
 
-    <div v-if="libraryLoading && !libraryTracks.length" class="loading card">正在加载音乐库…</div>
+    <div v-if="loading && !genre" class="loading card">正在加载音乐库…</div>
     <div v-else-if="!genre" class="empty card">
       <p>未找到该风格</p>
       <router-link to="/library/genres" class="btn-ghost btn-sm">浏览全部风格</router-link>
@@ -147,18 +147,22 @@ import CoverArt from '../components/CoverArt.vue'
 import MobileRowActions from '../components/MobileRowActions.vue'
 import { playItem, addToQueue, isInQueue, isPlayingItem, isPaused } from '../stores/player.js'
 import {
-  libraryTracks,
-  libraryLoading,
   libraryScanned,
-  findGenreById,
+  genreFromId,
   getGenreTheme,
   scanLibrary,
   isFavorite,
   toggleFavorite,
+  fetchLibraryTracksPage,
+  fetchAllLibraryTracks,
+  fetchLibraryGenres,
+  localCoverUrl,
 } from '../stores/library.js'
 
 const route = useRoute()
 const genreId = ref('')
+const genre = ref(null)
+const loading = ref(false)
 const page = ref(1)
 const pageSize = 30
 const hoverKey = ref('')
@@ -174,7 +178,6 @@ const toast = ref(null)
 const pickPlaylistTrack = ref(null)
 let narrowMq = null
 
-const genre = computed(() => findGenreById(libraryTracks.value, genreId.value))
 const theme = computed(() => genre.value?.theme || getGenreTheme(genre.value?.name || ''))
 const heroStyle = computed(() => ({
   borderColor: theme.value.border,
@@ -185,20 +188,55 @@ const mixMainStyle = computed(() => ({
   background: `linear-gradient(135deg, ${theme.value.bg} 0%, rgba(0,0,0,0.04) 100%)`,
   '--genre-accent': theme.value.border,
 }))
-const totalPages = computed(() => Math.max(1, Math.ceil((genre.value?.tracks.length || 0) / pageSize)))
+const totalPages = computed(() => Math.max(1, Math.ceil((genre.value?.trackCount || genre.value?.tracks?.length || 0) / pageSize)))
 const listStart = computed(() => (page.value - 1) * pageSize)
-const pagedTracks = computed(() => {
-  const tracks = genre.value?.tracks || []
-  return tracks.slice(listStart.value, listStart.value + pageSize)
-})
+const pagedTracks = computed(() => genre.value?.tracks || [])
+
+async function loadGenre() {
+  const name = genreFromId(genreId.value)
+  if (!name) {
+    genre.value = null
+    return
+  }
+  loading.value = true
+  try {
+    const [tracksRes, metaRes] = await Promise.all([
+      fetchLibraryTracksPage(api, {
+        page: page.value,
+        limit: pageSize,
+        genre: name,
+        sort: 'mtime',
+        replace: false,
+      }),
+      fetchLibraryGenres(api, { page: 1, limit: 1, q: name, sort: 'count' }),
+    ])
+    const meta = metaRes.items.find((g) => g.name === name || g.id === genreId.value) || metaRes.items[0]
+    const cover = tracksRes.items.find((t) => t.picUrl)?.picUrl
+      || meta?.cover
+      || (tracksRes.items[0]?.filePath ? localCoverUrl(tracksRes.items[0].filePath) : '')
+    genre.value = {
+      id: genreId.value,
+      name,
+      cover,
+      trackCount: tracksRes.total || meta?.trackCount || 0,
+      artistCount: meta?.artistCount || 0,
+      theme: getGenreTheme(name),
+      tracks: tracksRes.items,
+    }
+  } catch {
+    genre.value = null
+  } finally {
+    loading.value = false
+  }
+}
 
 watch(() => route.query.id, (id) => {
   genreId.value = id ? String(id) : ''
   page.value = 1
 })
 
-watch(genreId, () => {
-  page.value = 1
+watch([genreId, page], () => {
+  if (genreId.value) loadGenre()
 })
 
 function updateNarrow() {
@@ -213,6 +251,7 @@ onMounted(async () => {
   if (!libraryScanned.value) {
     try { await scanLibrary(api, { resync: true }) } catch {}
   }
+  if (genreId.value) await loadGenre()
 })
 
 onUnmounted(() => {
@@ -280,20 +319,26 @@ async function onTrackCoverClick(song) {
   }
 }
 
+async function loadAllGenreTracks() {
+  const name = genre.value?.name || genreFromId(genreId.value)
+  if (!name) return []
+  return fetchAllLibraryTracks(api, { genre: name, sort: 'mtime' })
+}
+
 async function playAll() {
-  const list = genre.value?.tracks || []
+  const list = await loadAllGenreTracks()
   if (!list.length) return
   for (const s of list) addToQueue(trackPayload(s), 'local')
   try {
     await playItem(trackPayload(list[0]), 'local')
-    showToast(`开始播放：${genre.value.name}`, 'success')
+    showToast(`开始播放：${genre.value?.name || ''}`, 'success')
   } catch (e) {
     showToast(e.message || '播放失败', 'error')
   }
 }
 
 async function shufflePlay() {
-  const list = [...(genre.value?.tracks || [])]
+  const list = [...(await loadAllGenreTracks())]
   if (!list.length) return
   for (let i = list.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -302,7 +347,7 @@ async function shufflePlay() {
   for (const s of list) addToQueue(trackPayload(s), 'local')
   try {
     await playItem(trackPayload(list[0]), 'local')
-    showToast(`随机播放：${genre.value.name}`, 'success')
+    showToast(`随机播放：${genre.value?.name || ''}`, 'success')
   } catch (e) {
     showToast(e.message || '播放失败', 'error')
   }
@@ -328,8 +373,8 @@ function onAddedToPlaylist({ playlist, duplicate }) {
   else showToast(`已加入歌单：${playlist?.name || ''}`, 'success')
 }
 
-function queueAll() {
-  const list = genre.value?.tracks || []
+async function queueAll() {
+  const list = await loadAllGenreTracks()
   if (!list.length) return
   let added = 0
   for (const s of list) {

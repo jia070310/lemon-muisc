@@ -5,17 +5,17 @@
       <div class="page-title">歌手</div>
     </div>
 
-    <div v-if="libraryLoading && !libraryTracks.length" class="loading card">正在加载音乐库…</div>
-    <div v-else-if="!allArtists.length" class="empty card">
+    <div v-if="loading && !artists.length" class="loading card">正在加载音乐库…</div>
+    <div v-else-if="!artists.length" class="empty card">
       <p>暂无歌手</p>
       <p class="empty-hint">歌曲需包含歌手（Artist）标签信息</p>
       <router-link to="/library" class="btn-ghost btn-sm">返回音乐库</router-link>
     </div>
     <section v-else class="artists-panel">
-      <p class="artists-summary">共 {{ allArtists.length }} 位歌手</p>
+      <p class="artists-summary">共 {{ total }} 位歌手</p>
       <div class="artist-grid">
         <button
-          v-for="artist in pagedArtists"
+          v-for="artist in artists"
           :key="artist.id"
           type="button"
           class="artist-card"
@@ -39,33 +39,41 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../api.js'
 import CoverArt from '../components/CoverArt.vue'
-import {
-  libraryTracks,
-  libraryLoading,
-  libraryScanned,
-  groupArtists,
-  scanLibrary,
-} from '../stores/library.js'
+import { fetchLibraryArtists, scanLibrary, libraryScanned } from '../stores/library.js'
 
 const router = useRouter()
-
-const allArtists = computed(() => groupArtists(libraryTracks.value))
+const artists = ref([])
+const total = ref(0)
 const page = ref(1)
 const pageSize = 60
-const totalPages = computed(() => Math.max(1, Math.ceil(allArtists.value.length / pageSize)))
-const listStart = computed(() => (page.value - 1) * pageSize)
-const pagedArtists = computed(() =>
-  allArtists.value.slice(listStart.value, listStart.value + pageSize)
-)
+const loading = ref(false)
+const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize)))
+
+async function loadPage() {
+  loading.value = true
+  try {
+    const res = await fetchLibraryArtists(api, { page: page.value, limit: pageSize, sort: 'count' })
+    artists.value = res.items
+    total.value = res.total
+  } catch {
+    artists.value = []
+    total.value = 0
+  } finally {
+    loading.value = false
+  }
+}
+
+watch(page, () => { loadPage() })
 
 onMounted(async () => {
   if (!libraryScanned.value) {
     try { await scanLibrary(api, { resync: true }) } catch {}
   }
+  await loadPage()
 })
 
 function openArtist(artist) {
@@ -77,7 +85,6 @@ function artistInitial(name) {
   const n = String(name || '').trim()
   if (!n) return '?'
   const first = n[0]
-  // 拉丁字母取首字母大写
   if (/[a-zA-Z]/.test(first)) return first.toUpperCase()
   return first
 }

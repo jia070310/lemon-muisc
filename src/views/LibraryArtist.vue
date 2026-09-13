@@ -5,7 +5,7 @@
       <div class="page-title">歌手</div>
     </div>
 
-    <div v-if="libraryLoading && !libraryTracks.length" class="loading card">正在加载音乐库…</div>
+    <div v-if="loading && !artist" class="loading card">正在加载音乐库…</div>
     <div v-else-if="!artist" class="empty card">
       <p>未找到该歌手</p>
       <router-link to="/library/artists" class="btn-ghost btn-sm">浏览全部歌手</router-link>
@@ -130,17 +130,21 @@ import CoverArt from '../components/CoverArt.vue'
 import MobileRowActions from '../components/MobileRowActions.vue'
 import { playItem, addToQueue, isInQueue, isPlayingItem, isPaused } from '../stores/player.js'
 import {
-  libraryTracks,
-  libraryLoading,
   libraryScanned,
-  findArtistById,
+  artistFromId,
   scanLibrary,
   isFavorite,
   toggleFavorite,
+  fetchLibraryTracksPage,
+  fetchLibraryAlbums,
+  fetchAllLibraryTracks,
+  localCoverUrl,
 } from '../stores/library.js'
 
 const route = useRoute()
 const artistId = ref('')
+const artist = ref(null)
+const loading = ref(false)
 const page = ref(1)
 const pageSize = 30
 const hoverKey = ref('')
@@ -156,21 +160,52 @@ const toast = ref(null)
 const pickPlaylistTrack = ref(null)
 let narrowMq = null
 
-const artist = computed(() => findArtistById(libraryTracks.value, artistId.value))
-const totalPages = computed(() => Math.max(1, Math.ceil((artist.value?.tracks.length || 0) / pageSize)))
+const totalPages = computed(() => Math.max(1, Math.ceil((artist.value?.trackCount || artist.value?.tracks?.length || 0) / pageSize)))
 const listStart = computed(() => (page.value - 1) * pageSize)
-const pagedTracks = computed(() => {
-  const tracks = artist.value?.tracks || []
-  return tracks.slice(listStart.value, listStart.value + pageSize)
-})
+const pagedTracks = computed(() => artist.value?.tracks || [])
+
+async function loadArtist() {
+  const name = artistFromId(artistId.value)
+  if (!name) {
+    artist.value = null
+    return
+  }
+  loading.value = true
+  try {
+    const [tracksRes, albumsRes] = await Promise.all([
+      fetchLibraryTracksPage(api, {
+        page: page.value,
+        limit: pageSize,
+        artist: name,
+        sort: 'album',
+        replace: false,
+      }),
+      fetchLibraryAlbums(api, { page: 1, limit: 1, artist: name }),
+    ])
+    const cover = tracksRes.items.find((t) => t.picUrl)?.picUrl
+      || (tracksRes.items[0]?.filePath ? localCoverUrl(tracksRes.items[0].filePath) : '')
+    artist.value = {
+      id: artistId.value,
+      name,
+      cover,
+      trackCount: tracksRes.total,
+      albumCount: albumsRes.total,
+      tracks: tracksRes.items,
+    }
+  } catch {
+    artist.value = null
+  } finally {
+    loading.value = false
+  }
+}
 
 watch(() => route.query.id, (id) => {
   artistId.value = id ? String(id) : ''
   page.value = 1
 })
 
-watch(artistId, () => {
-  page.value = 1
+watch([artistId, page], () => {
+  if (artistId.value) loadArtist()
 })
 
 function updateNarrow() {
@@ -185,6 +220,7 @@ onMounted(async () => {
   if (!libraryScanned.value) {
     try { await scanLibrary(api, { resync: true }) } catch {}
   }
+  if (artistId.value) await loadArtist()
 })
 
 onUnmounted(() => {
@@ -256,20 +292,26 @@ async function onTrackCoverClick(song) {
   }
 }
 
+async function loadAllArtistTracks() {
+  const name = artist.value?.name || artistFromId(artistId.value)
+  if (!name) return []
+  return fetchAllLibraryTracks(api, { artist: name, sort: 'album' })
+}
+
 async function playAll() {
-  const list = artist.value?.tracks || []
+  const list = await loadAllArtistTracks()
   if (!list.length) return
   for (const s of list) addToQueue(trackPayload(s), 'local')
   try {
     await playItem(trackPayload(list[0]), 'local')
-    showToast(`开始播放：${artist.value.name}`, 'success')
+    showToast(`开始播放：${artist.value?.name || ''}`, 'success')
   } catch (e) {
     showToast(e.message || '播放失败', 'error')
   }
 }
 
 async function shufflePlay() {
-  const list = [...(artist.value?.tracks || [])]
+  const list = [...(await loadAllArtistTracks())]
   if (!list.length) return
   for (let i = list.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -278,7 +320,7 @@ async function shufflePlay() {
   for (const s of list) addToQueue(trackPayload(s), 'local')
   try {
     await playItem(trackPayload(list[0]), 'local')
-    showToast(`随机播放：${artist.value.name}`, 'success')
+    showToast(`随机播放：${artist.value?.name || ''}`, 'success')
   } catch (e) {
     showToast(e.message || '播放失败', 'error')
   }
@@ -304,8 +346,8 @@ function onAddedToPlaylist({ playlist, duplicate }) {
   else showToast(`已加入歌单：${playlist?.name || ''}`, 'success')
 }
 
-function queueAll() {
-  const list = artist.value?.tracks || []
+async function queueAll() {
+  const list = await loadAllArtistTracks()
   if (!list.length) return
   let added = 0
   for (const s of list) {

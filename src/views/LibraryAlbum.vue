@@ -5,7 +5,7 @@
       <div class="page-title">专辑</div>
     </div>
 
-    <div v-if="libraryLoading && !libraryTracks.length" class="loading card">正在加载音乐库…</div>
+    <div v-if="loading && !album" class="loading card">正在加载音乐库…</div>
     <div v-else-if="!album" class="empty card">
       <p>未找到该专辑</p>
       <router-link to="/library" class="btn-ghost btn-sm">返回音乐库</router-link>
@@ -19,7 +19,7 @@
           <h1 class="album-title">{{ album.name }}</h1>
           <p class="album-artist">{{ album.artist }}</p>
           <p v-if="albumTags" class="album-tags">{{ albumTags }}</p>
-          <p class="detail-meta">{{ album.tracks.length }} 首</p>
+          <p class="detail-meta">{{ album.trackCount || album.tracks.length }} 首</p>
           <div class="detail-actions">
             <button class="btn-primary btn-sm" :disabled="!album.tracks.length" @click="playAll">播放全部</button>
             <button class="btn-ghost btn-sm" :disabled="!album.tracks.length" @click="queueAll">加入试听列表</button>
@@ -122,17 +122,19 @@ import CoverArt from '../components/CoverArt.vue'
 import MobileRowActions from '../components/MobileRowActions.vue'
 import { playItem, addToQueue, isInQueue, isPlayingItem, isPaused } from '../stores/player.js'
 import {
-  libraryTracks,
-  libraryLoading,
   libraryScanned,
-  findAlbumById,
   scanLibrary,
   isFavorite,
   toggleFavorite,
+  fetchLibraryTracksPage,
+  fetchAllLibraryTracks,
+  localCoverUrl,
 } from '../stores/library.js'
 
 const route = useRoute()
 const albumId = ref('')
+const album = ref(null)
+const loading = ref(false)
 const page = ref(1)
 const pageSize = 30
 const hoverKey = ref('')
@@ -152,22 +154,73 @@ function updateNarrow() {
   isNarrow.value = narrowMq?.matches ?? window.innerWidth <= 768
 }
 
-const album = computed(() => findAlbumById(libraryTracks.value, albumId.value))
+function parseAlbumId(id) {
+  const raw = String(id || '')
+  const idx = raw.indexOf('::')
+  if (idx < 0) return { artist: '', name: raw }
+  return { artist: raw.slice(0, idx), name: raw.slice(idx + 2) }
+}
+
 const albumTags = computed(() => (album.value ? formatAlbumTags(album.value) : ''))
-const totalPages = computed(() => Math.max(1, Math.ceil((album.value?.tracks.length || 0) / pageSize)))
+const totalPages = computed(() => Math.max(1, Math.ceil((album.value?.trackCount || album.value?.tracks?.length || 0) / pageSize)))
 const listStart = computed(() => (page.value - 1) * pageSize)
-const pagedTracks = computed(() => {
-  const tracks = album.value?.tracks || []
-  return tracks.slice(listStart.value, listStart.value + pageSize)
-})
+const pagedTracks = computed(() => album.value?.tracks || [])
+
+async function loadAlbum() {
+  const { artist, name } = parseAlbumId(albumId.value)
+  if (!name) {
+    album.value = null
+    return
+  }
+  loading.value = true
+  try {
+    const tracksRes = await fetchLibraryTracksPage(api, {
+      page: page.value,
+      limit: pageSize,
+      album: name,
+      albumArtist: artist && artist !== '未知艺术家' ? artist : '',
+      sort: 'album',
+      replace: false,
+    })
+    let items = tracksRes.items
+    let total = tracksRes.total
+    if (!items.length && artist) {
+      const fallback = await fetchLibraryTracksPage(api, {
+        page: page.value,
+        limit: pageSize,
+        album: name,
+        sort: 'album',
+        replace: false,
+      })
+      items = fallback.items
+      total = fallback.total
+    }
+    const cover = items.find((t) => t.picUrl)?.picUrl
+      || (items[0]?.filePath ? localCoverUrl(items[0].filePath) : '')
+    album.value = {
+      id: albumId.value,
+      name,
+      artist: artist || items[0]?.singer || '未知艺术家',
+      cover,
+      year: items[0]?.year || '',
+      genre: items[0]?.genre || '',
+      trackCount: total,
+      tracks: items,
+    }
+  } catch {
+    album.value = null
+  } finally {
+    loading.value = false
+  }
+}
 
 watch(() => route.query.id, (id) => {
   albumId.value = id ? String(id) : ''
   page.value = 1
 })
 
-watch(albumId, () => {
-  page.value = 1
+watch([albumId, page], () => {
+  if (albumId.value) loadAlbum()
 })
 
 onMounted(async () => {
@@ -178,6 +231,7 @@ onMounted(async () => {
   if (!libraryScanned.value) {
     try { await scanLibrary(api, { resync: true }) } catch {}
   }
+  if (albumId.value) await loadAlbum()
 })
 
 onUnmounted(() => {
@@ -245,13 +299,27 @@ async function onTrackCoverClick(song) {
   }
 }
 
+async function loadAllAlbumTracks() {
+  const { artist, name } = parseAlbumId(albumId.value)
+  if (!name) return []
+  let list = await fetchAllLibraryTracks(api, {
+    album: name,
+    albumArtist: artist && artist !== '未知艺术家' ? artist : '',
+    sort: 'album',
+  })
+  if (!list.length && artist) {
+    list = await fetchAllLibraryTracks(api, { album: name, sort: 'album' })
+  }
+  return list
+}
+
 async function playAll() {
-  const list = album.value?.tracks || []
+  const list = await loadAllAlbumTracks()
   if (!list.length) return
   for (const s of list) addToQueue(trackPayload(s), 'local')
   try {
     await playItem(trackPayload(list[0]), 'local')
-    showToast(`开始播放专辑：${album.value.name}`, 'success')
+    showToast(`开始播放专辑：${album.value?.name || ''}`, 'success')
   } catch (e) {
     showToast(e.message || '播放失败', 'error')
   }
@@ -277,8 +345,8 @@ function onAddedToPlaylist({ playlist, duplicate }) {
   else showToast(`已加入歌单：${playlist?.name || ''}`, 'success')
 }
 
-function queueAll() {
-  const list = album.value?.tracks || []
+async function queueAll() {
+  const list = await loadAllAlbumTracks()
   if (!list.length) return
   let added = 0
   for (const s of list) {

@@ -47,6 +47,17 @@ app.use('/api', apiRouter)
 const publicDir = path.join(__dirname, '..', 'dist', 'public')
 const publicIndex = path.join(publicDir, 'index.html')
 if (fs.existsSync(publicIndex)) {
+  // PWA：避免浏览器强缓存旧 SW；允许根作用域
+  app.use((req, res, next) => {
+    if (req.path === '/sw.js') {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate')
+      res.setHeader('Service-Worker-Allowed', '/')
+    } else if (req.path === '/manifest.webmanifest') {
+      res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8')
+      res.setHeader('Cache-Control', 'no-cache')
+    }
+    next()
+  })
   app.use(express.static(publicDir))
   app.get(/^\/(?!api|ws).*/, (_req, res) => {
     res.sendFile(publicIndex)

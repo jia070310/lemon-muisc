@@ -26,6 +26,8 @@ function playlistsKey() { return storageKey(PLAYLISTS_KEY_BASE) }
 function userDataRevKey() { return storageKey(USER_DATA_REV_KEY_BASE) }
 
 export const libraryTracks = ref([])
+/** 服务端曲库总数（不再依赖前端持有全量） */
+export const libraryTrackTotal = ref(0)
 export const libraryLoading = ref(false)
 export const libraryMetaLoading = ref(false)
 export const libraryScanned = ref(false)
@@ -100,13 +102,170 @@ function applyServerScanProgress(scan = {}) {
 async function reloadTracksFromCache(api) {
   if (!api?.library?.tracks) return
   try {
-    const cachedRes = await api.library.tracks()
-    const cachedList = cachedRes.data || []
-    if (cachedList.length) {
+    const [pageRes, countRes] = await Promise.all([
+      api.library.tracks({ page: 1, limit: 50, sort: 'mtime' }),
+      api.library.tracksCount?.().catch(() => null),
+    ])
+    const cachedList = pageRes.data || []
+    const total = Number(countRes?.total ?? pageRes.total ?? cachedList.length) || 0
+    libraryTrackTotal.value = total
+    if (cachedList.length || total === 0) {
       libraryTracks.value = sortTracksByMtime(cachedList.map(fileToLibraryTrack))
       saveSessionTracks(libraryTracks.value)
     }
   } catch {}
+}
+
+/** 按服务端分页拉取曲目，写入 libraryTracks（当前页工作集） */
+export async function fetchLibraryTracksPage(api, {
+  page = 1,
+  limit = 50,
+  q = '',
+  sort = 'mtime',
+  artist = '',
+  album = '',
+  albumArtist = '',
+  genre = '',
+  replace = true,
+} = {}) {
+  if (!api?.library?.tracks) return { items: [], total: 0, page, limit }
+  const res = await api.library.tracks({ page, limit, q, sort, artist, album, albumArtist, genre })
+  const items = (res.data || []).map(fileToLibraryTrack)
+  libraryTrackTotal.value = Number(res.total) || 0
+  if (replace) libraryTracks.value = items
+  return {
+    items,
+    total: Number(res.total) || 0,
+    page: Number(res.page) || page,
+    limit: Number(res.limit) || limit,
+  }
+}
+
+export async function fetchLibraryArtists(api, params = {}) {
+  const res = await api.library.artists(params)
+  return {
+    items: (res.data || []).map((a) => ({
+      ...a,
+      cover: a.coverPath ? localCoverUrl(a.coverPath) : (a.cover || ''),
+      tracks: [],
+    })),
+    total: Number(res.total) || 0,
+    page: Number(res.page) || 1,
+    limit: Number(res.limit) || 48,
+  }
+}
+
+export async function fetchLibraryAlbums(api, params = {}) {
+  const res = await api.library.albums(params)
+  return {
+    items: (res.data || []).map((a) => ({
+      ...a,
+      cover: a.coverPath ? localCoverUrl(a.coverPath) : (a.cover || ''),
+      tracks: [],
+    })),
+    total: Number(res.total) || 0,
+    page: Number(res.page) || 1,
+    limit: Number(res.limit) || 48,
+  }
+}
+
+export async function fetchLibraryGenres(api, params = {}) {
+  const res = await api.library.genres(params)
+  return {
+    items: (res.data || []).map((g) => ({
+      ...g,
+      cover: g.coverPath ? localCoverUrl(g.coverPath) : (g.cover || ''),
+      theme: getGenreTheme(g.name),
+      tracks: [],
+    })),
+    total: Number(res.total) || 0,
+    page: Number(res.page) || 1,
+    limit: Number(res.limit) || 48,
+  }
+}
+
+export async function fetchLibraryTracksByPaths(api, paths) {
+  if (!api?.library?.tracksByPaths || !paths?.length) return []
+  const res = await api.library.tracksByPaths(paths)
+  return (res.data || []).map(fileToLibraryTrack)
+}
+
+function pathFromLibraryKey(key) {
+  const k = String(key || '')
+  if (k.startsWith('local:')) return k.slice(6)
+  return ''
+}
+
+function collectLocalPathsFromKeys(keys = []) {
+  const out = []
+  for (const key of keys) {
+    const p = pathFromLibraryKey(key)
+    if (p) out.push(p)
+  }
+  return out
+}
+
+/**
+ * 歌单卡片：从服务端拉「最新添加」+ 按路径解析收藏/最近/自定义歌单本地曲，
+ * 不再依赖前端持有全量 libraryTracks。
+ */
+export async function loadPlaylistCardsFromServer(api, { limit } = {}) {
+  const pathSet = new Set()
+  for (const f of favorites.value) {
+    const p = pathFromLibraryKey(f.key) || f.localPath || f.filePath
+    if (p) pathSet.add(p)
+  }
+  for (const r of recentPlays.value) {
+    const p = pathFromLibraryKey(r.key) || r.localPath || r.filePath
+    if (p) pathSet.add(p)
+  }
+  for (const pl of customPlaylists.value) {
+    const normalized = normalizePlaylist(pl)
+    for (const key of normalized.trackKeys || []) {
+      const p = pathFromLibraryKey(key)
+      if (p) pathSet.add(p)
+    }
+    for (const snap of Object.values(normalized.trackSnapshots || {})) {
+      const p = pathFromLibraryKey(snap?.key) || snap?.localPath || snap?.filePath
+      if (p) pathSet.add(p)
+    }
+  }
+
+  const [recentRes, resolved] = await Promise.all([
+    fetchLibraryTracksPage(api, { page: 1, limit: 80, sort: 'mtime', replace: false }),
+    fetchLibraryTracksByPaths(api, [...pathSet].slice(0, 2000)),
+  ])
+
+  const map = new Map()
+  for (const t of [...recentRes.items, ...resolved]) {
+    const fp = t.filePath || t.localPath
+    if (fp) map.set(fp, t)
+  }
+  const workingSet = [...map.values()]
+  return buildPlaylistCards(workingSet, { limit })
+}
+
+/** 按条件拉取全部曲目（分页拼合，有上限，供播放全部） */
+export async function fetchAllLibraryTracks(api, filter = {}, { max = 2000 } = {}) {
+  const limit = 200
+  let page = 1
+  let items = []
+  let total = Infinity
+  while (items.length < Math.min(total, max)) {
+    const res = await fetchLibraryTracksPage(api, {
+      ...filter,
+      page,
+      limit,
+      replace: false,
+    })
+    total = res.total
+    if (!res.items.length) break
+    items = items.concat(res.items)
+    if (items.length >= total) break
+    page += 1
+    if (page > 100) break
+  }
+  return items
 }
 
 async function finishBackgroundScan(api) {
@@ -1492,15 +1651,12 @@ export async function scanLibrary(api, { force = false, resync = false, dirs: re
         }
         try {
           if (!showedCache) setScanProgress('cache', { text: '加载缓存' })
-          const cachedRes = await api.library.tracks()
-          const cachedList = cachedRes.data || []
-          if (cachedList.length) {
-            libraryTracks.value = sortTracksByMtime(cachedList.map(fileToLibraryTrack))
+          await reloadTracksFromCache(api)
+          if (libraryTracks.value.length || libraryTrackTotal.value > 0) {
             libraryScanned.value = true
             showedCache = true
             libraryLoading.value = false
             libraryMetaLoading.value = true
-            saveSessionTracks(libraryTracks.value)
           }
         } catch {}
       }
@@ -1530,32 +1686,35 @@ export async function scanLibrary(api, { force = false, resync = false, dirs: re
 
       if (!softResync) setScanProgress('sync', { text: '比对文件，启动后台扫描' })
       const startRes = await api.library.scanStart(force, { dirs: requestDirs, scanAll })
-      const { cached = [], pending = [], removed = [] } = startRes.data || {}
+      const {
+        cached = [],
+        pending = [],
+        removed = [],
+        cachedCount = 0,
+        pendingCount: pendingCountFromServer = 0,
+        total = 0,
+      } = startRes.data || {}
       const scan = startRes.scan || {}
-      pendingCount = pending.length
+      pendingCount = pending.length || pendingCountFromServer
       tagScanned = scan.scanned || 0
-
-      const keysBeforeSync = new Set(
-        libraryTracks.value.map(t => t.filePath || t.localPath).filter(Boolean),
-      )
 
       if (removed.length) removeLibraryTracks(removed)
 
+      // 服务端不再下发全量列表：只更新总数并刷新首页工作集
+      if (total > 0) libraryTrackTotal.value = total
+      else if (cachedCount || pendingCount) {
+        libraryTrackTotal.value = Math.max(libraryTrackTotal.value, cachedCount + pendingCount)
+      }
+
       if (cached.length) {
         mergeLibraryTracks(cached.map(fileToLibraryTrack))
-      }
-
-      if (pending.length) {
+      } else if (pending.length) {
         mergeLibraryTracks(pending.map(f => fileToLibraryTrack(f)))
-      } else if (!libraryTracks.value.length && !cached.length) {
-        libraryTracks.value = []
+      } else {
+        await reloadTracksFromCache(api)
       }
 
-      let addedFromSync = 0
-      for (const f of pending) {
-        const fp = f.filePath
-        if (fp && !keysBeforeSync.has(fp)) addedFromSync++
-      }
+      const addedFromSync = pendingCount
       const showedBgScanInitHint = scan.running
         ? maybeShowBackgroundScanInitHint()
         : false
@@ -1581,14 +1740,14 @@ export async function scanLibrary(api, { force = false, resync = false, dirs: re
         await reloadTracksFromCache(api)
       }
 
-      if (!showedCache && !cached.length && !pending.length && !libraryTracks.value.length) {
+      if (!showedCache && !libraryTracks.value.length && libraryTrackTotal.value === 0) {
         libraryTracks.value = []
       }
 
       const result = {
-        totalTracks: libraryTracks.value.length,
+        totalTracks: libraryTrackTotal.value || libraryTracks.value.length,
         scannedTags: tagScanned,
-        hadPending: pendingCount > 0,
+        hadPending: pendingCount > 0 || Boolean(scan.running),
       }
       saveSessionTracks(libraryTracks.value)
       if (!serverScanActive) syncAllImportedPlaylists()

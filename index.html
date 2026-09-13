@@ -3,10 +3,19 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#f07018" />
+  <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="柠檬音乐" />
+  <meta name="application-name" content="柠檬音乐" />
+  <meta name="description" content="飞牛 NAS 柠檬音乐：搜索、下载与本地音乐库" />
   <title>柠檬音乐下载</title>
-  <link rel="icon" href="/favicon.png" type="image/png" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <!-- 网页/浏览器标题栏：黑底原图标（带版本参数避免缓存残留暖色图） -->
+  <link rel="icon" href="/favicon.png?v=legacy" type="image/png" sizes="any" />
+  <link rel="shortcut icon" href="/favicon.png?v=legacy" type="image/png" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=legacy" />
 </head>
 <body>
   <div id="app"></div>

@@ -2,7 +2,7 @@
   <div class="login-page">
     <div class="login-card card" :class="{ wide: setupMode && setupStep === 2 }">
       <div class="login-brand">
-        <img src="/icon.png" alt="柠檬音乐" class="login-logo" />
+        <img :src="APP_ICON_URL" alt="柠檬音乐" class="login-logo" />
         <h1>{{ title }}</h1>
         <p class="login-sub">{{ subtitle }}</p>
         <div v-if="setupMode" class="setup-steps">
@@ -150,6 +150,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { login, setupAdmin, needsSetup } from '../utils/auth.js'
 import { api } from '../api.js'
 import MailConfigGuide from '../components/MailConfigGuide.vue'
+import { APP_ICON_URL } from '../utils/appIcon.js'
 
 const route = useRoute()
 const router = useRouter()

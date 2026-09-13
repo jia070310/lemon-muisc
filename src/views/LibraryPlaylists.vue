@@ -316,9 +316,9 @@ import { playItem, addToQueue, isInQueue, isPlayingItem, isPaused } from '../sto
 import { formatTrackTags } from '../utils/format.js'
 import { countAutoFillColumns } from '../utils/grid.js'
 import {
-  libraryTracks,
   libraryScanned,
   buildPlaylistCards,
+  loadPlaylistCardsFromServer,
   SMART_PLAYLIST_IDS,
   updatePlaylist,
   removeTrackFromPlaylist,
@@ -402,7 +402,8 @@ function updateNarrow() {
   isNarrow.value = narrowMq?.matches ?? window.innerWidth <= 768
 }
 
-const allCards = computed(() => buildPlaylistCards(libraryTracks.value))
+const allCards = ref([])
+const cardsLoading = ref(false)
 /** 含隐藏卡，仅用于详情页查找；展示列表过滤 hidden */
 const visibleCards = computed(() => allCards.value.filter((c) => !c.hidden))
 const customCards = computed(() => visibleCards.value.filter((c) => !SMART_PLAYLIST_IDS.has(c.id)))
@@ -503,6 +504,14 @@ onMounted(async () => {
   if (q) selectedId.value = String(q)
   if (!libraryScanned.value) {
     try { await scanLibrary(api, { resync: true }) } catch {}
+  }
+  cardsLoading.value = true
+  try {
+    allCards.value = await loadPlaylistCardsFromServer(api)
+  } catch {
+    allCards.value = buildPlaylistCards([])
+  } finally {
+    cardsLoading.value = false
   }
 })
 
@@ -692,6 +701,7 @@ function onPlaylistCreated({ playlist }) {
   showCreateModal.value = false
   selectedId.value = playlist.id
   showToast(`已创建歌单：${playlist.name}`, 'success')
+  refreshPlaylistCards()
 }
 
 function onPlaylistImported({ playlist, total, localMatched }) {
@@ -699,6 +709,7 @@ function onPlaylistImported({ playlist, total, localMatched }) {
   selectedId.value = playlist?.id || ''
   const localText = localMatched > 0 ? `，已匹配本地 ${localMatched} 首` : ''
   showToast(`已导入 ${total} 首歌曲${localText}`, 'success')
+  refreshPlaylistCards()
 }
 
 async function syncLocal() {
@@ -736,6 +747,17 @@ async function syncRemote() {
   }
 }
 
+async function refreshPlaylistCards() {
+  cardsLoading.value = true
+  try {
+    allCards.value = await loadPlaylistCardsFromServer(api)
+  } catch {
+    allCards.value = buildPlaylistCards([])
+  } finally {
+    cardsLoading.value = false
+  }
+}
+
 function openCreate() {
   showCreateModal.value = true
 }
@@ -750,11 +772,13 @@ function confirmEdit(payload) {
   if (!pl) return
   showEditModal.value = false
   showToast('歌单已更新', 'success')
+  refreshPlaylistCards()
 }
 
 function removeSong(song) {
   removeTrackFromPlaylist(selectedId.value, song.key)
   showToast('已从歌单移除', 'info')
+  refreshPlaylistCards()
 }
 
 function openDeletePlaylistModal() {
@@ -766,12 +790,14 @@ function doDeletePlaylist() {
   const id = selectedId.value
   if (!deletePlaylist(id)) return
   showDeleteModal.value = false
+  refreshPlaylistCards()
   router.push('/library')
 }
 
 function onSongsAdded(res) {
   if (res.added > 0) showToast(`已添加 ${res.added} 首`, 'success')
   else showToast('所选歌曲已在歌单中', 'info')
+  refreshPlaylistCards()
 }
 
 function showToast(text, type = 'info') {

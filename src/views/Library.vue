@@ -334,13 +334,15 @@ import { getTrackFilePath } from '../utils/trackPath.js'
 import { countAutoFillColumns } from '../utils/grid.js'
 import { playItem, addToQueue, isInQueue, isPlayingItem, isPaused } from '../stores/player.js'
 import {
-  libraryTracks, libraryLoading, libraryMetaLoading, libraryLoadProgress,
+  libraryTracks, libraryTrackTotal, libraryLoading, libraryMetaLoading, libraryLoadProgress,
   libraryScanning, libraryScanPhase, libraryScanCurrent, libraryScanTotal, libraryScanPercent,
-  groupAlbums, groupGenres, getGenreTheme, groupArtists, buildPlaylistCards, sortPlaylistCards,
-  sortAlbums, sortLibrarySongs,
+  getGenreTheme, buildPlaylistCards, sortPlaylistCards,
+  sortLibrarySongs,
   PLAYLIST_SORT_OPTIONS, ALBUM_SORT_OPTIONS, SONG_SORT_OPTIONS,
   scanLibrary, isFavorite, toggleFavorite,
   librarySongColumns, loadLibrarySongColumns,
+  fetchLibraryTracksPage, fetchLibraryArtists, fetchLibraryAlbums, fetchLibraryGenres,
+  loadPlaylistCardsFromServer,
 } from '../stores/library.js'
 
 const PLAYLIST_SORT_KEY = 'lemon-library-playlist-sort'
@@ -415,21 +417,25 @@ function updateNarrow() {
 }
 
 const genrePreviewLimit = 16
+const previewArtists = ref([])
+const previewAlbums = ref([])
+const previewGenres = ref([])
+const playlistCards = ref([])
+const songTotal = ref(0)
+const songsLoading = ref(false)
 
-const allGenres = computed(() => (
-  groupGenres(libraryTracks.value).filter(g => g.name !== '未知风格')
-))
+const allGenres = computed(() => previewGenres.value)
 const visibleGenres = computed(() => allGenres.value.slice(0, genrePreviewLimit))
 
 const artistPreviewLimit = 20
-const allArtists = computed(() => groupArtists(libraryTracks.value))
+const allArtists = computed(() => previewArtists.value)
 const visibleArtists = computed(() => allArtists.value.slice(0, artistPreviewLimit))
 
-const allAlbums = computed(() => groupAlbums(libraryTracks.value))
+const allAlbums = computed(() => previewAlbums.value)
 const playlistSortOptions = computed(() => PLAYLIST_SORT_OPTIONS.map(o => ({ value: o.id, label: o.label })))
 const albumSortOptions = computed(() => ALBUM_SORT_OPTIONS.map(o => ({ value: o.id, label: o.label })))
 const songSortOptions = computed(() => SONG_SORT_OPTIONS.map(o => ({ value: o.id, label: o.label })))
-const allPlaylistCards = computed(() => buildPlaylistCards(libraryTracks.value))
+const allPlaylistCards = computed(() => playlistCards.value)
 const sortedPlaylistCards = computed(() =>
   sortPlaylistCards(allPlaylistCards.value, playlistSort.value).filter((c) => !c.hidden)
 )
@@ -444,7 +450,7 @@ const showPlaylistMoreBtn = computed(() => (
 ))
 
 const displayAlbums = computed(() => allAlbums.value)
-const sortedDisplayAlbums = computed(() => sortAlbums(displayAlbums.value, albumSort.value))
+const sortedDisplayAlbums = computed(() => displayAlbums.value)
 const visibleAlbums = computed(() => {
   const limit = isNarrow.value ? albumPreviewLimitMobile : albumPreviewLimit
   return sortedDisplayAlbums.value.slice(0, limit)
@@ -457,24 +463,68 @@ const showAlbumMoreBtn = computed(() => {
 const filteredSongs = computed(() => libraryTracks.value)
 const sortedFilteredSongs = computed(() => sortLibrarySongs(filteredSongs.value, songSort.value))
 
-const totalPages = computed(() => Math.max(1, Math.ceil(sortedFilteredSongs.value.length / pageSize)))
-const pagedSongs = computed(() => {
-  const start = (page.value - 1) * pageSize
-  return sortedFilteredSongs.value.slice(start, start + pageSize)
-})
+const totalPages = computed(() => Math.max(1, Math.ceil((songTotal.value || libraryTrackTotal.value || 0) / pageSize)))
+const pagedSongs = computed(() => sortedFilteredSongs.value)
 
+async function loadSongPage() {
+  songsLoading.value = true
+  try {
+    const sortMap = { recent: 'mtime', title: 'title', artist: 'artist', album: 'album' }
+    const res = await fetchLibraryTracksPage(api, {
+      page: page.value,
+      limit: pageSize,
+      sort: sortMap[songSort.value] || 'mtime',
+      replace: true,
+    })
+    songTotal.value = res.total
+  } catch {
+    /* 保留已有工作集 */
+  } finally {
+    songsLoading.value = false
+  }
+}
+
+async function loadBrowsePreviews() {
+  try {
+    const [artistsRes, albumsRes, genresRes, cards] = await Promise.all([
+      fetchLibraryArtists(api, { page: 1, limit: artistPreviewLimit, sort: 'count' }),
+      fetchLibraryAlbums(api, {
+        page: 1,
+        limit: Math.max(albumPreviewLimit, albumPreviewLimitMobile),
+        sort: albumSort.value === 'name' ? 'name' : (albumSort.value === 'artist' ? 'artist' : 'recent'),
+      }),
+      fetchLibraryGenres(api, { page: 1, limit: genrePreviewLimit, sort: 'count' }),
+      loadPlaylistCardsFromServer(api).catch(() => buildPlaylistCards([])),
+    ])
+    previewArtists.value = artistsRes.items
+    previewAlbums.value = albumsRes.items
+    previewGenres.value = genresRes.items
+    playlistCards.value = cards
+  } catch {
+    previewArtists.value = []
+    previewAlbums.value = []
+    previewGenres.value = []
+  }
+}
 watch(playlistSort, (value) => {
   try { localStorage.setItem(PLAYLIST_SORT_KEY, value) } catch {}
   showAllPlaylistCards.value = false
+  loadBrowsePreviews()
 })
 
 watch(albumSort, (value) => {
   try { localStorage.setItem(ALBUM_SORT_KEY, value) } catch {}
+  loadBrowsePreviews()
 })
 
 watch(songSort, (value) => {
   try { localStorage.setItem(SONG_SORT_KEY, value) } catch {}
   page.value = 1
+  loadSongPage()
+})
+
+watch(page, () => {
+  loadSongPage()
 })
 
 async function loadScanSummary() {
@@ -518,11 +568,15 @@ onMounted(() => {
   updatePlaylistCols()
   loadLibrarySongColumns(api).catch(() => {})
   loadScanSummary()
+  loadBrowsePreviews()
+  loadSongPage()
   scanLibrary(api, {
     resync: true,
     onError: (msg) => showToast(msg, 'error'),
     onComplete: (result, meta) => {
       loadScanSummary()
+      loadBrowsePreviews()
+      loadSongPage()
       notifyScanComplete(result, meta)
     },
   }).catch(() => {})
