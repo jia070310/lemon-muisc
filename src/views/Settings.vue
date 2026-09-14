@@ -674,7 +674,7 @@
         <div class="setting-item">
           <div class="setting-item-info">
             <div class="setting-item-label">音频可视化</div>
-            <div class="setting-item-desc">开启后，播放栏与全屏页将显示频谱动效。频谱需通过 Web Audio 分析音频，开启后无法在后台或锁屏时继续播放；关闭本选项后将自动切换为原生播放，支持后台与锁屏续播（部分手机浏览器仍可能受系统限制）</div>
+            <div class="setting-item-desc">开启后，播放栏与全屏页将显示频谱动效。频谱依赖 Web Audio，锁屏/切到后台时容易无声。关闭后走原生播放，便于后台续播；手机端或桌面 PWA 切到后台时也会临时改走原生。部分系统仍可能限制后台音频</div>
           </div>
           <label class="toggle">
             <input type="checkbox" :checked="settings['player.visualizer'] === 'true'" @change="toggleVisualizerSetting" />
@@ -742,7 +742,7 @@
         <div class="setting-item">
           <div class="setting-item-info">
             <div class="setting-item-label">下载分组</div>
-            <div class="setting-item-desc">在下载目录下创建子文件夹；按歌手时多位歌手归档到「群星 (Various Artists)」；歌手/专辑为两级目录</div>
+            <div class="setting-item-desc">在下载目录下创建子文件夹；按歌手时多位歌手归档到「群星 (Various Artists)」；歌手/专辑为两级目录。请把「下载目录」设在分组根（如 download），不要选进已生成的专辑/歌手子文件夹，否则容易一层层套娃</div>
           </div>
           <div class="setting-item-action">
             <AppSelect

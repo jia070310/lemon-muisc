@@ -34,9 +34,10 @@
           :fill="favorited ? 'currentColor' : 'none'"
           stroke="currentColor"
           stroke-width="2"
+          stroke-linejoin="round"
           aria-hidden="true"
         >
-          <path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8z"/>
+          <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
         </svg>
       </button>
 

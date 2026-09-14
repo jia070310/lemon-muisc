@@ -19,6 +19,7 @@ const ROUTE_PAGE_MAP = {
   LibraryGenre: 'library',
   LibraryArtists: 'library',
   LibraryArtist: 'library',
+  LibraryMood: 'library',
   Download: 'download',
   FileManager: 'file-manager',
   TagEditTrack: 'tag',
@@ -41,6 +42,7 @@ const prefetchers = {
   '/search': () => import('../views/Search.vue'),
   '/discover': () => import('../views/Discover.vue'),
   '/library': () => import('../views/Library.vue'),
+  '/library/mood': () => import('../views/LibraryMood.vue'),
   '/download': () => import('../views/Download.vue'),
   '/file-manager': () => import('../views/FileManager.vue'),
   '/tag': () => import('../views/FileManager.vue'),
@@ -80,4 +82,4 @@ export function prefetchRoute(path) {
   loader().catch(() => prefetched.delete(normalized))
 }
 
-export const MAIN_TAB_NAMES = ['Search', 'Discover', 'Library', 'Download', 'FileManager', 'Settings', 'About']
+export const MAIN_TAB_NAMES = ['Search', 'Discover', 'Library', 'LibraryMood', 'Download', 'FileManager', 'Settings', 'About']

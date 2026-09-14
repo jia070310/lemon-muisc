@@ -776,6 +776,37 @@ async function startOrganize() {
 .fm-tag-host :deep(.tag-layout) {
   min-width: 0;
 }
+
+/* 窄屏：取消固定高度嵌入，避免父级 height:auto 时 flex:1 塌成空白页 */
+@media (max-width: 1100px) {
+  .file-manager-page.fm-embed-tag {
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+    display: block;
+    padding-bottom: 24px;
+  }
+  .fm-tag-host {
+    flex: none;
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+    display: block;
+  }
+  .fm-tag-host :deep(.tag-page) {
+    flex: none;
+    height: auto;
+    max-height: none;
+    min-height: 0;
+    overflow: visible;
+  }
+  .fm-tag-host :deep(.tag-layout) {
+    grid-template-columns: 1fr;
+    overflow: visible;
+    min-height: auto;
+  }
+}
+
 .fm-head {
   margin-bottom: 16px;
 }

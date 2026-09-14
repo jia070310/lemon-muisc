@@ -406,9 +406,9 @@ a.btn-primary.btn-primary:disabled {
 }
 .icon-action-btn.fav-active,
 .icon-action-btn.fav-active:hover {
-  color: #ef4444;
-  border-color: rgba(239, 68, 68, 0.45);
-  background: rgba(239, 68, 68, 0.12);
+  color: #f5a623;
+  border-color: rgba(245, 166, 35, 0.5);
+  background: rgba(245, 166, 35, 0.12);
 }
 .icon-action-btn.danger:hover {
   color: var(--error);

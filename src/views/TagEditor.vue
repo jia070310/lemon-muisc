@@ -2332,9 +2332,12 @@ function showToast(text, type = 'info') {
   color: var(--text-muted);
   line-height: 1.4;
 }
-.tag-page.embedded .tag-layout {
-  grid-template-columns: minmax(168px, 220px) minmax(0, 1fr) minmax(260px, 340px);
-  overflow: auto;
+/* 仅宽屏嵌入时保持三栏；窄屏由下方 media 强制单列 */
+@media (min-width: 1101px) {
+  .tag-page.embedded .tag-layout {
+    grid-template-columns: minmax(168px, 220px) minmax(0, 1fr) minmax(260px, 340px);
+    overflow: auto;
+  }
 }
 .tag-page.embedded .edit-panel {
   min-width: 0;
@@ -3278,7 +3281,8 @@ tr.playing .play-btn,
 
 @media (max-width: 1100px) {
   .tag-page { height: auto; max-height: none; overflow: visible; }
-  .tag-layout {
+  .tag-layout,
+  .tag-page.embedded .tag-layout {
     grid-template-columns: 1fr;
     overflow: visible;
     min-height: auto;
@@ -3288,8 +3292,40 @@ tr.playing .play-btn,
     overflow: visible;
     min-height: auto;
   }
-  .dir-tree { max-height: 180px; }
+  .dir-tree,
+  .artist-list {
+    max-height: min(240px, 36vh);
+  }
   .desktop-file-table { display: none; }
+
+  .file-toolbar {
+    flex-wrap: wrap;
+    align-items: stretch;
+  }
+  .file-toolbar-actions {
+    flex: 1 1 100%;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    width: 100%;
+  }
+  .file-toolbar-actions .btn-ghost,
+  .file-toolbar-actions .btn-primary,
+  .file-toolbar-actions :deep(.app-select),
+  .file-toolbar-meta .check-all,
+  .file-toolbar-meta :deep(.app-select) {
+    flex: 1 1 calc(50% - 6px);
+    min-width: 0;
+    max-width: 100%;
+  }
+  .file-panel .empty {
+    writing-mode: horizontal-tb;
+    text-orientation: mixed;
+    white-space: normal;
+    padding: 24px 16px;
+    text-align: center;
+    min-height: 80px;
+  }
 
   /* 窄屏：编辑区改为底部抽屉，避免滚到屏外「看不到」 */
   .edit-sheet-backdrop {

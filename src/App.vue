@@ -25,9 +25,16 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
           <span>发现</span>
         </router-link>
-        <router-link to="/library" class="nav-item" active-class="active">
+        <router-link to="/library" class="nav-item" :class="{ active: isLibraryNav }">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
           <span>音乐库</span>
+        </router-link>
+        <router-link to="/library/mood" class="nav-item" active-class="active">
+          <svg class="mood-map-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path fill="#E53935" d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
+            <path fill="none" stroke="#fff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" d="M4.8 12h3.2l1.35-3.3 2.15 6.6 1.4-3.3h6.3"/>
+          </svg>
+          <span>情绪地图</span>
         </router-link>
         <router-link to="/download" class="nav-item" active-class="active">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
@@ -128,7 +135,7 @@
       </div>
     </div>
 
-    <main class="content" :class="{ 'content-fixed': isTagPage, 'content-navigating': isRouteLoading }">
+    <main class="content" :class="{ 'content-fixed': isTagPage || isMoodPage, 'content-navigating': isRouteLoading }">
       <div v-if="isRouteLoading" class="route-loading-bar" aria-hidden="true" />
       <PageSkeleton v-if="showRouteSkeleton" class="route-skeleton" :page="pendingRoutePage" />
       <router-view v-slot="{ Component }">
@@ -340,27 +347,79 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
         <span>发现</span>
       </router-link>
-      <router-link to="/library" class="tab-item" active-class="active" @touchstart.passive="onTabPrefetch('/library')" @mousedown="onTabPrefetch('/library')">
+      <router-link to="/library" class="tab-item" :class="{ active: isLibraryNav }" @touchstart.passive="onTabPrefetch('/library')" @mousedown="onTabPrefetch('/library')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
         <span>音乐库</span>
+      </router-link>
+      <router-link
+        to="/library/mood"
+        class="tab-item"
+        :class="{ active: isMoodPage }"
+        @touchstart.passive="onTabPrefetch('/library/mood')"
+        @mousedown="onTabPrefetch('/library/mood')"
+      >
+        <svg class="mood-map-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <path fill="#E53935" d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
+          <path fill="none" stroke="#fff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" d="M4.8 12h3.2l1.35-3.3 2.15 6.6 1.4-3.3h6.3"/>
+        </svg>
+        <span>情绪</span>
       </router-link>
       <router-link to="/download" class="tab-item" active-class="active" @touchstart.passive="onTabPrefetch('/download')" @mousedown="onTabPrefetch('/download')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
         <span>下载</span>
       </router-link>
-      <router-link to="/file-manager" class="tab-item" :class="{ active: isFileManagerNav }" @touchstart.passive="onTabPrefetch('/file-manager')" @mousedown="onTabPrefetch('/file-manager')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><polyline points="9 14 12 17 15 14"/></svg>
-        <span>文件</span>
-      </router-link>
-      <router-link to="/settings" class="tab-item" active-class="active" @touchstart.passive="onTabPrefetch('/settings')" @mousedown="onTabPrefetch('/settings')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-        <span>设置</span>
-      </router-link>
-      <router-link to="/about" class="tab-item" active-class="active" @touchstart.passive="onTabPrefetch('/about')" @mousedown="onTabPrefetch('/about')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
-        <span>关于</span>
-        <span v-if="hasUpdate" class="tab-dot"></span>
-      </router-link>
+      <div class="tab-more-wrap" ref="mobileMoreRef">
+        <button
+          type="button"
+          class="tab-item tab-more-btn"
+          :class="{ active: showMobileMore || isMobileMoreNav }"
+          aria-label="更多"
+          :aria-expanded="showMobileMore"
+          @click="toggleMobileMore"
+        >
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/>
+          </svg>
+          <span>更多</span>
+          <span v-if="hasUpdate" class="tab-dot"></span>
+        </button>
+        <div v-if="showMobileMore" class="mobile-more-sheet card" role="menu">
+          <router-link
+            to="/file-manager"
+            class="mobile-more-item"
+            :class="{ active: isFileManagerNav }"
+            role="menuitem"
+            @click="closeMobileMore"
+            @touchstart.passive="onTabPrefetch('/file-manager')"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><polyline points="9 14 12 17 15 14"/></svg>
+            <span>文件管理</span>
+          </router-link>
+          <router-link
+            to="/settings"
+            class="mobile-more-item"
+            active-class="active"
+            role="menuitem"
+            @click="closeMobileMore"
+            @touchstart.passive="onTabPrefetch('/settings')"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            <span>设置</span>
+          </router-link>
+          <router-link
+            to="/about"
+            class="mobile-more-item"
+            active-class="active"
+            role="menuitem"
+            @click="closeMobileMore"
+            @touchstart.passive="onTabPrefetch('/about')"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+            <span>关于</span>
+            <span v-if="hasUpdate" class="mobile-more-badge">新</span>
+          </router-link>
+        </div>
+      </div>
     </nav>
     </template>
 
@@ -457,8 +516,35 @@ const isTagPage = computed(() => {
   const tab = route.query.tab
   return !tab || tab === 'tag'
 })
+const isMoodPage = computed(() => route.path === '/library/mood')
 const isDiscoverNav = computed(() => route.path === '/discover' || route.path.startsWith('/discover/'))
+const isLibraryNav = computed(() => route.path === '/library' || (route.path.startsWith('/library/') && route.path !== '/library/mood'))
+const isMobileMoreNav = computed(() => (
+  isFileManagerNav.value
+  || route.path === '/settings'
+  || route.path === '/about'
+))
 const showRouteSkeleton = computed(() => isRouteLoading.value && isMobileUiContext(768))
+const showMobileMore = ref(false)
+const mobileMoreRef = ref(null)
+
+function closeMobileMore() {
+  showMobileMore.value = false
+}
+
+function toggleMobileMore() {
+  showMobileMore.value = !showMobileMore.value
+}
+
+function onMobileMorePointerDown(e) {
+  if (!showMobileMore.value) return
+  const root = mobileMoreRef.value
+  if (root && !root.contains(e.target)) closeMobileMore()
+}
+
+watch(() => route.fullPath, () => {
+  closeMobileMore()
+})
 
 function onTabPrefetch(path) {
   if (route.path === path) return
@@ -998,6 +1084,7 @@ onMounted(() => {
   loadPendingDowngradePrompts()
   loadPendingDownloadSourcePrompts()
   loadPendingExistFilePrompts()
+  document.addEventListener('pointerdown', onMobileMorePointerDown, true)
   offSourceFaultWS = onWS('source.fault', (fault) => {
     sourceFault.value = fault?.id ? fault : null
     faultResult.value = null
@@ -1065,6 +1152,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  document.removeEventListener('pointerdown', onMobileMorePointerDown, true)
   offSourceFaultWS?.()
   offDowngradeWS?.()
   offDownloadSourceWS?.()
@@ -1180,6 +1268,7 @@ onUnmounted(() => {
   border-radius: 0 2px 2px 0;
 }
 .nav-item svg { width: 18px; height: 18px; flex-shrink: 0; opacity: 0.85; }
+.nav-item .mood-map-icon { opacity: 1; }
 .nav-item.active svg { opacity: 1; }
 .nav-update-dot {
   width: 7px;
@@ -1308,6 +1397,10 @@ onUnmounted(() => {
 .content-fixed > * {
   flex: 1;
   min-height: 0;
+}
+/* 情绪地图：收紧边距，地图尽量铺满主区域 */
+.content-fixed:has(.mood-page) {
+  padding: 16px 16px 88px;
 }
 
 .app-notice-stack {
@@ -1555,6 +1648,12 @@ onUnmounted(() => {
     width: 22px;
     height: 22px;
   }
+  .tab-item .mood-map-icon {
+    opacity: 0.88;
+  }
+  .tab-item.active .mood-map-icon {
+    opacity: 1;
+  }
   .tab-item.active {
     color: var(--accent);
   }
@@ -1566,6 +1665,73 @@ onUnmounted(() => {
     height: 6px;
     border-radius: 50%;
     background: var(--lemon);
+  }
+
+  .tab-more-wrap {
+    flex: 1;
+    position: relative;
+    min-width: 0;
+    display: flex;
+  }
+
+  .tab-more-btn {
+    width: 100%;
+    border: 0;
+    background: transparent;
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .mobile-more-sheet {
+    position: absolute;
+    right: 4px;
+    bottom: calc(100% + 8px);
+    min-width: 168px;
+    padding: 6px;
+    z-index: 130;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.28);
+  }
+
+  .mobile-more-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    color: var(--text);
+    text-decoration: none;
+    font-size: 13px;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .mobile-more-item svg {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    color: var(--text-muted);
+  }
+
+  .mobile-more-item:active,
+  .mobile-more-item.active {
+    background: var(--bg-hover, rgba(255, 255, 255, 0.06));
+    color: var(--accent);
+  }
+
+  .mobile-more-item.active svg {
+    color: var(--accent);
+  }
+
+  .mobile-more-badge {
+    margin-left: auto;
+    font-size: 10px;
+    font-weight: 650;
+    color: var(--lemon);
+    background: color-mix(in srgb, var(--lemon) 18%, transparent);
+    border-radius: 999px;
+    padding: 1px 6px;
   }
 }
 

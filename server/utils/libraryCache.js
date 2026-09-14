@@ -32,10 +32,12 @@ export function ensureLibraryCacheTable() {
 }
 
 function ensureSearchColumns(db) {
-  if (columnsReady) return
   const cols = db.prepare('PRAGMA table_info(library_index)').all().map((c) => c.name)
   const add = (name, ddl) => {
-    if (!cols.includes(name)) db.exec(`ALTER TABLE library_index ADD COLUMN ${ddl}`)
+    if (!cols.includes(name)) {
+      db.exec(`ALTER TABLE library_index ADD COLUMN ${ddl}`)
+      cols.push(name)
+    }
   }
   add('title', "title TEXT NOT NULL DEFAULT ''")
   add('artist', "artist TEXT NOT NULL DEFAULT ''")
@@ -48,13 +50,24 @@ function ensureSearchColumns(db) {
   add('track_no', "track_no TEXT NOT NULL DEFAULT ''")
   add('has_picture', 'has_picture INTEGER NOT NULL DEFAULT 0')
   add('has_lyrics', 'has_lyrics INTEGER NOT NULL DEFAULT 0')
+  // SensMe 风格情绪地图（本地音频分析）
+  add('mood_valence', 'mood_valence REAL')
+  add('mood_arousal', 'mood_arousal REAL')
+  add('mood_bpm', 'mood_bpm REAL NOT NULL DEFAULT 0')
+  add('mood_status', "mood_status TEXT NOT NULL DEFAULT ''")
+  add('mood_version', 'mood_version INTEGER NOT NULL DEFAULT 0')
+  add('mood_analyzed_at', 'mood_analyzed_at INTEGER NOT NULL DEFAULT 0')
+  add('mood_file_mtime', 'mood_file_mtime REAL NOT NULL DEFAULT 0')
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_library_title ON library_index(title COLLATE NOCASE);
     CREATE INDEX IF NOT EXISTS idx_library_artist ON library_index(artist COLLATE NOCASE);
     CREATE INDEX IF NOT EXISTS idx_library_album ON library_index(album COLLATE NOCASE);
     CREATE INDEX IF NOT EXISTS idx_library_genre ON library_index(genre COLLATE NOCASE);
     CREATE INDEX IF NOT EXISTS idx_library_album_artist ON library_index(album_artist COLLATE NOCASE);
+    CREATE INDEX IF NOT EXISTS idx_library_mood_status ON library_index(mood_status);
+    CREATE INDEX IF NOT EXISTS idx_library_mood_xy ON library_index(mood_valence, mood_arousal);
   `)
+  if (columnsReady) return
   // 从 meta_json 回填可查询列（只填仍为空的行，避免反复全表写）
   try {
     db.exec(`
@@ -905,6 +918,218 @@ export function queryGenres(opts = {}) {
   const start = (page - 1) * limit
   items = items.slice(start, start + limit)
   return { items, total, page, limit }
+}
+
+/** 需要情绪分析的曲目（未分析 / 版本过期 / 文件已变） */
+export function listMoodAnalyzePending({ algoVersion = 1, limit = 0 } = {}) {
+  ensureLibraryCacheTable()
+  const db = getDB()
+  if (!db) return []
+  const ver = Number(algoVersion) || 1
+  const sql = `
+    SELECT file_path, mtime, size, title, artist, album, duration
+    FROM library_index
+    WHERE mood_status = ''
+       OR mood_status = 'pending'
+       OR mood_status = 'error'
+       OR mood_version != ?
+       OR ABS(mood_file_mtime - mtime) > 0.5
+    ORDER BY mtime DESC
+  `
+  const rows = limit > 0
+    ? db.prepare(`${sql} LIMIT ?`).all(ver, limit)
+    : db.prepare(sql).all(ver)
+  return rows.map((r) => ({
+    filePath: r.file_path,
+    mtime: r.mtime || 0,
+    size: r.size || 0,
+    title: r.title || '',
+    artist: r.artist || '',
+    album: r.album || '',
+    duration: r.duration || 0,
+  }))
+}
+
+export function getMoodAnalyzeStats({ algoVersion = 1 } = {}) {
+  ensureLibraryCacheTable()
+  const db = getDB()
+  if (!db) {
+    return { total: 0, analyzed: 0, pending: 0, skipped: 0, error: 0 }
+  }
+  const ver = Number(algoVersion) || 1
+  const total = db.prepare('SELECT COUNT(*) AS c FROM library_index').get()?.c || 0
+  const analyzed = db.prepare(`
+    SELECT COUNT(*) AS c FROM library_index
+    WHERE mood_status = 'ok' AND mood_version = ? AND ABS(mood_file_mtime - mtime) <= 0.5
+  `).get(ver)?.c || 0
+  const skipped = db.prepare(`
+    SELECT COUNT(*) AS c FROM library_index WHERE mood_status = 'skipped' AND mood_version = ?
+  `).get(ver)?.c || 0
+  const error = db.prepare(`
+    SELECT COUNT(*) AS c FROM library_index WHERE mood_status = 'error'
+  `).get()?.c || 0
+  const pending = Math.max(0, total - analyzed - skipped)
+  return { total, analyzed, pending, skipped, error }
+}
+
+export function updateMoodResult(filePath, result = {}) {
+  ensureLibraryCacheTable()
+  const db = getDB()
+  if (!db) return false
+  const key = normalizePathKey(filePath)
+  const status = String(result.status || '').trim() || 'ok'
+  const valence = result.valence == null ? null : Number(result.valence)
+  const arousal = result.arousal == null ? null : Number(result.arousal)
+  const bpm = Number(result.bpm) || 0
+  const version = Number(result.version) || 0
+  const fileMtime = Number(result.fileMtime) || 0
+  db.prepare(`
+    UPDATE library_index SET
+      mood_valence = ?,
+      mood_arousal = ?,
+      mood_bpm = ?,
+      mood_status = ?,
+      mood_version = ?,
+      mood_analyzed_at = unixepoch(),
+      mood_file_mtime = ?
+    WHERE file_path = ?
+  `).run(
+    Number.isFinite(valence) ? valence : null,
+    Number.isFinite(arousal) ? arousal : null,
+    bpm,
+    status,
+    version,
+    fileMtime,
+    key,
+  )
+  return true
+}
+
+/**
+ * 已分析的情绪地图点
+ * @returns {{ points: object[], total: number }}
+ */
+export function queryMoodMapPoints({ limit = 5000 } = {}) {
+  ensureLibraryCacheTable()
+  const db = getDB()
+  if (!db) return { points: [], total: 0 }
+  const max = Math.min(20000, Math.max(1, Number(limit) || 5000))
+  const total = db.prepare(`
+    SELECT COUNT(*) AS c FROM library_index
+    WHERE mood_status = 'ok'
+      AND mood_valence IS NOT NULL
+      AND mood_arousal IS NOT NULL
+  `).get()?.c || 0
+  const rows = db.prepare(`
+    SELECT file_path, title, artist, album, duration, mood_valence, mood_arousal, mood_bpm, has_picture
+    FROM library_index
+    WHERE mood_status = 'ok'
+      AND mood_valence IS NOT NULL
+      AND mood_arousal IS NOT NULL
+    ORDER BY mtime DESC
+    LIMIT ?
+  `).all(max)
+  return {
+    total,
+    points: rows.map((r) => ({
+      filePath: r.file_path,
+      title: r.title || path.basename(r.file_path || ''),
+      artist: r.artist || '',
+      album: r.album || '',
+      duration: r.duration || 0,
+      x: Number(r.mood_valence),
+      y: Number(r.mood_arousal),
+      bpm: Number(r.mood_bpm) || 0,
+      hasPicture: Boolean(r.has_picture),
+    })),
+  }
+}
+
+function pointInPolygon(x, y, polygon) {
+  if (!Array.isArray(polygon) || polygon.length < 3) return false
+  let inside = false
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const xi = Number(polygon[i]?.x)
+    const yi = Number(polygon[i]?.y)
+    const xj = Number(polygon[j]?.x)
+    const yj = Number(polygon[j]?.y)
+    if (![xi, yi, xj, yj].every(Number.isFinite)) continue
+    const intersect = ((yi > y) !== (yj > y))
+      && (x < ((xj - xi) * (y - yi)) / ((yj - yi) || 1e-12) + xi)
+    if (intersect) inside = !inside
+  }
+  return inside
+}
+
+function pointInBBox(x, y, bbox) {
+  if (!bbox) return false
+  const minX = Math.min(Number(bbox.x1), Number(bbox.x2))
+  const maxX = Math.max(Number(bbox.x1), Number(bbox.x2))
+  const minY = Math.min(Number(bbox.y1), Number(bbox.y2))
+  const maxY = Math.max(Number(bbox.y1), Number(bbox.y2))
+  if (![minX, maxX, minY, maxY].every(Number.isFinite)) return false
+  return x >= minX && x <= maxX && y >= minY && y <= maxY
+}
+
+/**
+ * 按圈选区域返回曲目（坐标为 valence/arousal，范围约 [-1,1]）
+ */
+export function queryMoodTracksInRegion({ bbox = null, polygon = null, limit = 500 } = {}) {
+  ensureLibraryCacheTable()
+  const db = getDB()
+  if (!db) return { items: [], total: 0 }
+  const max = Math.min(2000, Math.max(1, Number(limit) || 500))
+
+  let minX = -1
+  let maxX = 1
+  let minY = -1
+  let maxY = 1
+  if (bbox) {
+    minX = Math.min(Number(bbox.x1), Number(bbox.x2))
+    maxX = Math.max(Number(bbox.x1), Number(bbox.x2))
+    minY = Math.min(Number(bbox.y1), Number(bbox.y2))
+    maxY = Math.max(Number(bbox.y1), Number(bbox.y2))
+  } else if (Array.isArray(polygon) && polygon.length) {
+    const xs = polygon.map((p) => Number(p.x)).filter(Number.isFinite)
+    const ys = polygon.map((p) => Number(p.y)).filter(Number.isFinite)
+    if (xs.length && ys.length) {
+      minX = Math.min(...xs)
+      maxX = Math.max(...xs)
+      minY = Math.min(...ys)
+      maxY = Math.max(...ys)
+    }
+  }
+
+  const rows = db.prepare(`
+    SELECT file_path, title, artist, album, album_artist, year, genre, duration, format,
+           mood_valence, mood_arousal, mood_bpm, has_picture, has_lyrics, mtime, size
+    FROM library_index
+    WHERE mood_status = 'ok'
+      AND mood_valence IS NOT NULL
+      AND mood_arousal IS NOT NULL
+      AND mood_valence BETWEEN ? AND ?
+      AND mood_arousal BETWEEN ? AND ?
+    ORDER BY title COLLATE NOCASE ASC
+    LIMIT ?
+  `).all(minX, maxX, minY, maxY, Math.min(5000, max * 4))
+
+  const filtered = []
+  for (const r of rows) {
+    const x = Number(r.mood_valence)
+    const y = Number(r.mood_arousal)
+    const ok = polygon?.length
+      ? pointInPolygon(x, y, polygon)
+      : pointInBBox(x, y, bbox || { x1: minX, x2: maxX, y1: minY, y2: maxY })
+    if (!ok) continue
+    filtered.push({
+      ...rowToQueryFile(r),
+      x,
+      y,
+      bpm: Number(r.mood_bpm) || 0,
+    })
+    if (filtered.length >= max) break
+  }
+  return { items: filtered, total: filtered.length }
 }
 
 export { VARIOUS_ARTISTS_NAME }

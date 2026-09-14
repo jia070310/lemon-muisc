@@ -397,6 +397,24 @@ export const api = {
       body: { files },
       timeout: 180000,
     }),
+    moodAnalyzeStart: (force = false) => request('/library/mood/analyze-start', {
+      method: 'POST',
+      body: { force },
+      timeout: 60000,
+    }),
+    moodAnalyzeStop: () => request('/library/mood/analyze-stop', { method: 'POST' }),
+    moodAnalyzeStatus: () => request('/library/mood/analyze-status'),
+    moodMap: (params = {}) => {
+      const q = new URLSearchParams()
+      if (params.limit != null) q.set('limit', String(params.limit))
+      const qs = q.toString()
+      return request(`/library/mood-map${qs ? `?${qs}` : ''}`, { timeout: 60000 })
+    },
+    moodMapTracks: (body) => request('/library/mood-map/tracks', {
+      method: 'POST',
+      body,
+      timeout: 60000,
+    }),
     playlists: {
       list: () => request('/library/playlists'),
       save: (playlists) => request('/library/playlists', {
