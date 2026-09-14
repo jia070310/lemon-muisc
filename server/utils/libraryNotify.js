@@ -29,6 +29,16 @@ export function notifyLibraryScanComplete(payload = {}) {
   broadcastAll('library:scan-complete', payload)
 }
 
+/** 情绪分析进度 */
+export function notifyLibraryMoodProgress(payload = {}) {
+  broadcastAll('library:mood-progress', payload)
+}
+
+/** 情绪分析完成 */
+export function notifyLibraryMoodComplete(payload = {}) {
+  broadcastAll('library:mood-complete', payload)
+}
+
 /** @deprecated 使用 notifyLibraryUserDataChanged */
 export function notifyLibraryPlaylistsChanged(extra = {}) {
   notifyLibraryUserDataChanged(extra)

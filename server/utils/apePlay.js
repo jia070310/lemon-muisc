@@ -3,14 +3,44 @@ import crypto from 'crypto'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
+import { createRequire } from 'module'
+
+const require = createRequire(import.meta.url)
 
 let cachedFfmpeg = undefined
+
+function bundledFfmpegCandidates() {
+  const list = []
+  try {
+    // 可选依赖：未安装时忽略
+    const bin = require('ffmpeg-static')
+    if (bin && fs.existsSync(bin)) list.push(bin)
+  } catch {}
+  const home = os.homedir()
+  const extras = [
+    path.join(process.cwd(), 'tools', 'ffmpeg', 'ffmpeg.exe'),
+    path.join(process.cwd(), 'tools', 'ffmpeg', 'ffmpeg'),
+    'C:\\ffmpeg\\bin\\ffmpeg.exe',
+    'C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe',
+    'C:\\ProgramData\\chocolatey\\bin\\ffmpeg.exe',
+    path.join(home, 'scoop', 'apps', 'ffmpeg', 'current', 'bin', 'ffmpeg.exe'),
+    path.join(home, 'AppData', 'Local', 'Microsoft', 'WinGet', 'Links', 'ffmpeg.exe'),
+    '/usr/bin/ffmpeg',
+    '/usr/local/bin/ffmpeg',
+    '/opt/homebrew/bin/ffmpeg',
+  ]
+  for (const p of extras) {
+    if (p && fs.existsSync(p)) list.push(p)
+  }
+  return list
+}
 
 /** @returns {Promise<string|null>} */
 export async function resolveFfmpegBin() {
   if (cachedFfmpeg !== undefined) return cachedFfmpeg
   const candidates = [
     process.env.FFMPEG_PATH,
+    ...bundledFfmpegCandidates(),
     'ffmpeg',
     'ffmpeg.exe',
   ].filter(Boolean)
@@ -24,6 +54,11 @@ export async function resolveFfmpegBin() {
   }
   cachedFfmpeg = null
   return null
+}
+
+/** 测试后清缓存（例如刚装完 ffmpeg） */
+export function resetFfmpegBinCache() {
+  cachedFfmpeg = undefined
 }
 
 function canRun(bin) {

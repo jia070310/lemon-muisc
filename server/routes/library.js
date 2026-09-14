@@ -19,11 +19,20 @@ import {
   queryGenres,
   queryTracksByPaths,
   countCachedTracks,
+  getMoodAnalyzeStats,
+  queryMoodMapPoints,
+  queryMoodTracksInRegion,
 } from '../utils/libraryCache.js'
 import {
   getLibraryScanStatus,
   startLibraryScanJob,
 } from '../utils/libraryScanJob.js'
+import {
+  getMoodAnalyzeStatus,
+  startMoodAnalyzeJob,
+  stopMoodAnalyzeJob,
+} from '../utils/moodAnalyzeJob.js'
+import { MOOD_ALGO_VERSION } from '../utils/moodAnalyze.js'
 import {
   getLibraryScanSettings,
   setLibraryScanSettings,
@@ -245,6 +254,74 @@ libraryRouter.post('/scan-start', (req, res) => {
 libraryRouter.get('/scan-status', (_req, res) => {
   try {
     res.json({ ok: true, scan: getLibraryScanStatus() })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+/** 启动本地情绪分析（SensMe 风格） */
+libraryRouter.post('/mood/analyze-start', (req, res) => {
+  try {
+    const force = Boolean(req.body?.force)
+    const mood = startMoodAnalyzeJob({ force })
+    if (mood.blocked) {
+      return res.status(409).json({ error: mood.errorMsg || '曲库正在扫描', mood })
+    }
+    res.json({ ok: true, mood })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+libraryRouter.post('/mood/analyze-stop', (_req, res) => {
+  try {
+    const mood = stopMoodAnalyzeJob()
+    res.json({ ok: true, mood })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+libraryRouter.get('/mood/analyze-status', (_req, res) => {
+  try {
+    res.json({ ok: true, mood: getMoodAnalyzeStatus() })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+/** 情绪地图散点 */
+libraryRouter.get('/mood-map', (req, res) => {
+  try {
+    const limit = Number.parseInt(req.query.limit, 10) || 5000
+    const data = queryMoodMapPoints({ limit })
+    const stats = getMoodAnalyzeStats({ algoVersion: MOOD_ALGO_VERSION })
+    res.json({
+      ok: true,
+      data: {
+        ...data,
+        stats,
+        algoVersion: MOOD_ALGO_VERSION,
+      },
+    })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+/** 圈选区域查轨 */
+libraryRouter.post('/mood-map/tracks', (req, res) => {
+  try {
+    const { bbox, polygon, limit } = req.body || {}
+    if (!bbox && !(Array.isArray(polygon) && polygon.length >= 3)) {
+      return res.status(400).json({ error: '请提供 bbox 或 polygon' })
+    }
+    const data = queryMoodTracksInRegion({
+      bbox: bbox || null,
+      polygon: Array.isArray(polygon) ? polygon : null,
+      limit: Number.parseInt(limit, 10) || 500,
+    })
+    res.json({ ok: true, data })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }

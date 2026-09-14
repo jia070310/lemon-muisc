@@ -84,9 +84,110 @@ export function showPlayerNotice(text, ms = 10000) {
 /** 试听列表 @type {import('vue').Ref<Array<{ key: string, item: object, source: string }>>} */
 export const playQueue = ref([])
 export const currentQueueIndex = ref(-1)
+/** 当前列表来源：main=普通试听，mood=心情地图试听（互不混用） */
+export const queueSource = ref('main')
 /** @type {import('vue').Ref<'list'|'loop'|'single'|'random'>} */
 export const playMode = ref('list')
 export const showQueuePanel = ref(false)
+
+export const queuePanelTitle = computed(() => (
+  queueSource.value === 'mood' ? '心情试听' : '试听列表'
+))
+
+const PARKED_MAIN_QUEUE_KEY = 'lx-music-nas:play-queue-main-parked'
+/** @type {null | { queue: any[], index: number, history: number[] }} */
+let parkedMainQueue = null
+
+function cloneQueueEntries(list) {
+  return (list || []).map((e) => ({
+    key: e.key,
+    source: e.source,
+    item: e.item ? { ...e.item } : e.item,
+  }))
+}
+
+function persistParkedMainQueue() {
+  try {
+    if (!parkedMainQueue) {
+      sessionStorage.removeItem(PARKED_MAIN_QUEUE_KEY)
+      return
+    }
+    sessionStorage.setItem(PARKED_MAIN_QUEUE_KEY, JSON.stringify({
+      queue: parkedMainQueue.queue.map((e) => ({
+        key: e.key,
+        source: e.source,
+        item: pickItemFields(e.item, e.key),
+      })),
+      index: parkedMainQueue.index,
+      history: parkedMainQueue.history || [],
+    }))
+  } catch {}
+}
+
+function loadParkedMainQueue() {
+  if (parkedMainQueue) return parkedMainQueue
+  try {
+    const raw = sessionStorage.getItem(PARKED_MAIN_QUEUE_KEY)
+    if (!raw) return null
+    const data = JSON.parse(raw)
+    if (!Array.isArray(data?.queue)) return null
+    parkedMainQueue = {
+      queue: data.queue.filter((e) => e?.key && e?.item?.name).map((e) => ({
+        key: e.key,
+        source: e.source || e.item?.source || '',
+        item: e.item,
+      })),
+      index: typeof data.index === 'number' ? data.index : -1,
+      history: Array.isArray(data.history) ? data.history : [],
+    }
+    return parkedMainQueue
+  } catch {
+    return null
+  }
+}
+
+/** 进入心情试听：暂存普通列表，改用独立心情列表 */
+export function enterMoodQueueMode() {
+  if (queueSource.value === 'mood') return
+  parkedMainQueue = {
+    queue: cloneQueueEntries(playQueue.value),
+    index: currentQueueIndex.value,
+    history: [...playHistory],
+  }
+  persistParkedMainQueue()
+  playQueue.value = []
+  playHistory = []
+  currentQueueIndex.value = -1
+  queueSource.value = 'mood'
+  saveQueueState({ immediate: true })
+}
+
+/** 退出心情试听：恢复普通试听列表 */
+export function exitMoodQueueMode({ restore = true } = {}) {
+  const wasMood = queueSource.value === 'mood'
+  const snap = parkedMainQueue || loadParkedMainQueue()
+  parkedMainQueue = null
+  persistParkedMainQueue()
+  queueSource.value = 'main'
+  if (!wasMood && !snap) return
+  if (restore && snap) {
+    playQueue.value = cloneQueueEntries(snap.queue)
+    playHistory = Array.isArray(snap.history) ? [...snap.history] : []
+    currentQueueIndex.value = Math.min(
+      snap.index,
+      Math.max(-1, playQueue.value.length - 1),
+    )
+  } else if (wasMood) {
+    playQueue.value = []
+    playHistory = []
+    currentQueueIndex.value = -1
+  }
+  saveQueueState({ immediate: true })
+}
+
+export function isMoodQueueMode() {
+  return queueSource.value === 'mood'
+}
 
 
 export const playModeLabel = computed(() => {
@@ -172,9 +273,43 @@ let playIntentToken = 0
 let playHistory = []
 let lastSessionSave = 0
 let mediaSessionInited = false
+/** 切后台时临时改走原生输出（频谱开启时 Web Audio 在 PWA/手机上无法续播） */
+let backgroundNativeOverride = false
+let lastMediaSessionPosAt = 0
+/** @type {ReturnType<typeof setTimeout> | null} */
+let playbackKickTimer = null
+let playbackKickToken = 0
+
+function clearPlaybackKickWatch() {
+  playbackKickToken++
+  if (playbackKickTimer) {
+    clearTimeout(playbackKickTimer)
+    playbackKickTimer = null
+  }
+}
+
+function isStandalonePwa() {
+  try {
+    return Boolean(
+      window.matchMedia('(display-mode: standalone)').matches
+      || window.navigator.standalone === true,
+    )
+  } catch {
+    return false
+  }
+}
+
+function isMobileLike() {
+  try {
+    return window.matchMedia('(max-width: 900px), (pointer: coarse)').matches
+      || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '')
+  } catch {
+    return false
+  }
+}
 
 function isBackgroundPlayActive() {
-  return !visualizerEnabled.value
+  return !visualizerEnabled.value || backgroundNativeOverride
 }
 
 const QUEUE_STORAGE_KEY = 'lx-music-nas:play-queue'
@@ -670,6 +805,7 @@ function clearPlaybackError() {
 
 function cancelPlaybackIntent() {
   playIntentToken++
+  clearPlaybackKickWatch()
   endPlaybackBuffer()
   isPaused.value = true
   loadingPlay.value = null
@@ -717,6 +853,7 @@ function recreateMainAudioElement() {
       old.pause()
       old.removeAttribute('src')
       old.load()
+      old.remove()
     } catch {}
   }
 }
@@ -729,15 +866,42 @@ function stopPlaybackGraph() {
 }
 
 function bindAudioElementEvents(el) {
+  el.addEventListener('playing', () => {
+    if (audio !== el) return
+    if ((el.currentTime || 0) > 0.02) {
+      clearPlaybackKickWatch()
+      endPlaybackBuffer()
+      if (visualizerEnabled.value && !backgroundNativeOverride) scheduleAudioAnalyserRefresh()
+    } else {
+      // 假 playing（仍停在 0）：继续缓冲，等 timeupdate 再挂频谱
+      beginPlaybackBuffer()
+    }
+    clearPlaybackError()
+    isPaused.value = false
+    updateMediaSession()
+    syncMediaSessionPlaybackState()
+    syncMediaSessionPosition()
+  })
   el.addEventListener('timeupdate', () => {
     if (audio !== el) return
     currentTime.value = audio.currentTime
     updateActiveLyric(audio.currentTime)
     syncDurationFromAudio()
+    if ((audio.currentTime || 0) > 0.05 && !audio.paused) {
+      clearPlaybackKickWatch()
+      endPlaybackBuffer()
+      if (visualizerEnabled.value && !backgroundNativeOverride && !audioGraphReady) {
+        scheduleAudioAnalyserRefresh()
+      }
+    }
     const now = Date.now()
     if (now - lastSessionSave > 5000) {
       lastSessionSave = now
       saveQueueState()
+    }
+    if (now - lastMediaSessionPosAt > 1500) {
+      lastMediaSessionPosAt = now
+      syncMediaSessionPosition()
     }
   })
   el.addEventListener('loadedmetadata', () => {
@@ -755,21 +919,22 @@ function bindAudioElementEvents(el) {
     syncDurationFromAudio()
     maybeWarnPreviewClip(currentPlaying.value, currentPlaying.value?.source)
   })
-  el.addEventListener('playing', () => {
-    if (audio !== el) return
-    endPlaybackBuffer()
-    clearPlaybackError()
-    isPaused.value = false
-    syncMediaSessionPlaybackState()
-    if (visualizerEnabled.value) scheduleAudioAnalyserRefresh()
-  })
   el.addEventListener('waiting', () => {
     if (audio !== el || isPaused.value) return
     if (!audio.paused) beginPlaybackBuffer()
   })
   el.addEventListener('pause', () => {
     if (audio !== el) return
-    if (isPaused.value) endPlaybackBuffer()
+    if (isPaused.value) {
+      endPlaybackBuffer()
+      syncMediaSessionPlaybackState()
+      return
+    }
+    // 系统在后台误暂停：用户仍想播时主动续上（PWA 常见）
+    if (isBackgroundPlayActive() && hasMediaSrc && document.visibilityState === 'hidden') {
+      el.play().catch(() => {})
+      return
+    }
   })
   el.addEventListener('ended', () => {
     if (audio === el) onTrackEnded()
@@ -784,9 +949,24 @@ function bindAudioElementEvents(el) {
 }
 
 function createAudioElement() {
-  const el = new Audio()
+  const el = document.createElement('audio')
   el.setAttribute('playsinline', '')
   el.setAttribute('webkit-playsinline', '')
+  el.setAttribute('x-webkit-airplay', 'allow')
+  el.playsInline = true
+  el.preload = 'auto'
+  // 挂到 DOM：部分 Android PWA 对纯 JS Audio() 后台会被系统杀掉
+  try {
+    let host = document.getElementById('lemon-audio-host')
+    if (!host) {
+      host = document.createElement('div')
+      host.id = 'lemon-audio-host'
+      host.setAttribute('aria-hidden', 'true')
+      host.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0;overflow:hidden;opacity:0;pointer-events:none;z-index:-1'
+      ;(document.body || document.documentElement).appendChild(host)
+    }
+    host.appendChild(el)
+  } catch {}
   bindAudioElementEvents(el)
   return el
 }
@@ -840,12 +1020,15 @@ async function restoreNativeAudioOutput() {
 
 /** 主音频 Web Audio 直通：播放与频谱共用同一时钟，同步最佳 */
 async function ensurePlaybackGraph() {
-  if (!visualizerEnabled.value) {
+  // 关闭频谱或 PWA 后台临时原生输出时，禁止再挂 MediaElementSource（否则无声）
+  if (!visualizerEnabled.value || backgroundNativeOverride) {
     if (isMainAudioTapped()) await restoreNativeAudioOutput()
     return null
   }
   if (!audio || !hasPlayableAudioSrc() || audio.paused || isPaused.value) return null
   if (audio.readyState < 2) return null
+  // 进度未动时挂图容易把本地流卡成「暂停键 + 00:00」假播放
+  if ((audio.currentTime || 0) < 0.02 && isBuffering.value) return null
 
   const token = playbackGraphToken
   const src = audio.src || ''
@@ -909,7 +1092,7 @@ async function ensurePlaybackGraph() {
 }
 
 async function resumeAudioPlayback() {
-  if (visualizerEnabled.value) {
+  if (visualizerEnabled.value && !backgroundNativeOverride) {
     try {
       if (audioCtx?.state === 'suspended') await audioCtx.resume()
     } catch {}
@@ -917,13 +1100,15 @@ async function resumeAudioPlayback() {
   if (!audio || isPaused.value || !hasMediaSrc) return
   if (isBackgroundPlayActive() && !audio.paused) {
     syncMediaSessionPlaybackState()
+    syncMediaSessionPosition()
     return
   }
   if (audio.paused) {
     try { await audio.play() } catch {}
   }
-  if (visualizerEnabled.value) await ensurePlaybackGraph()
+  if (visualizerEnabled.value && !backgroundNativeOverride) await ensurePlaybackGraph()
   syncMediaSessionPlaybackState()
+  if (isBackgroundPlayActive()) syncMediaSessionPosition()
 }
 
 /** 在用户手势同步调用栈内解锁 AudioContext */
@@ -982,6 +1167,16 @@ function initMediaSession() {
         seekTo(details.seekTime)
       }
     })
+    try {
+      navigator.mediaSession.setActionHandler('seekbackward', (details) => {
+        const off = Number(details?.seekOffset) || 10
+        if (audio) seekTo(Math.max(0, (audio.currentTime || 0) - off))
+      })
+      navigator.mediaSession.setActionHandler('seekforward', (details) => {
+        const off = Number(details?.seekOffset) || 10
+        if (audio) seekTo((audio.currentTime || 0) + off)
+      })
+    } catch {}
   } catch {}
 }
 
@@ -1018,6 +1213,20 @@ function syncMediaSessionPlaybackState() {
   } catch {}
 }
 
+function syncMediaSessionPosition() {
+  if (!isBackgroundPlayActive() || !('mediaSession' in navigator) || !audio) return
+  try {
+    const dur = Number(duration.value) || Number(audio.duration) || 0
+    const pos = Number(audio.currentTime) || 0
+    if (!(dur > 0) || !Number.isFinite(pos)) return
+    navigator.mediaSession.setPositionState({
+      duration: dur,
+      playbackRate: audio.playbackRate || 1,
+      position: Math.max(0, Math.min(pos, dur)),
+    })
+  } catch {}
+}
+
 function clearMediaSession() {
   if (!('mediaSession' in navigator)) return
   try {
@@ -1035,6 +1244,38 @@ async function applyBackgroundPlayMode() {
     await restoreNativeAudioOutput()
   }
   updateMediaSession()
+  syncMediaSessionPosition()
+}
+
+async function prepareNativeOutputForBackground() {
+  if (!audio || isPaused.value || !hasMediaSrc) return
+  // Web Audio 在 hidden 时会被挂起：只要已经 createMediaElementSource，必须重建为原生 <audio>
+  if (isMainAudioTapped()) {
+    backgroundNativeOverride = true
+    await restoreNativeAudioOutput()
+  } else if (visualizerEnabled.value) {
+    // 尚未建图也先占住 override，避免切后台瞬间又被 ensurePlaybackGraph 挂上
+    backgroundNativeOverride = true
+  }
+  updateMediaSession()
+  syncMediaSessionPlaybackState()
+  syncMediaSessionPosition()
+  if (audio.paused && !isPaused.value) {
+    try { await audio.play() } catch {}
+  }
+}
+
+async function restoreVisualizerAfterBackground() {
+  if (!backgroundNativeOverride) return
+  backgroundNativeOverride = false
+  if (visualizerEnabled.value && audio && !audio.paused && !isPaused.value) {
+    await ensurePlaybackGraph()
+    scheduleAudioAnalyserRefresh()
+  } else if (!visualizerEnabled.value) {
+    updateMediaSession()
+  } else {
+    clearMediaSession()
+  }
 }
 
 function pickItemFields(item, queueKey = '') {
@@ -1085,6 +1326,7 @@ function persistQueueState() {
       })),
       currentIndex: currentQueueIndex.value,
       playMode: playMode.value,
+      queueSource: queueSource.value,
     }))
     localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({
       currentPlaying: currentPlaying.value ? pickItemFields(currentPlaying.value) : null,
@@ -1178,6 +1420,11 @@ function loadQueueState() {
     }
     if (data.playMode && ['list', 'loop', 'single', 'random'].includes(data.playMode)) {
       playMode.value = data.playMode
+    }
+    if (data.queueSource === 'mood' && loadParkedMainQueue()) {
+      queueSource.value = 'mood'
+    } else {
+      queueSource.value = 'main'
     }
   } catch {}
 }
@@ -1522,15 +1769,27 @@ export function initPlayer() {
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') {
       saveQueueState({ immediate: true })
-      if (isBackgroundPlayActive() && audio && !audio.paused && !isPaused.value) {
+      // 手机 / 桌面 PWA：切后台时改原生输出，否则 Web Audio 会被挂起
+      if ((isStandalonePwa() || isMobileLike()) && audio && !isPaused.value && hasMediaSrc) {
+        prepareNativeOutputForBackground().catch(() => {})
+      } else if (isBackgroundPlayActive() && audio && !audio.paused && !isPaused.value) {
         syncMediaSessionPlaybackState()
+        syncMediaSessionPosition()
       }
       return
     }
-    if (audio && !audio.paused && hasMediaSrc && visualizerEnabled.value) {
+    restoreVisualizerAfterBackground().catch(() => {})
+    if (audio && !audio.paused && hasMediaSrc && visualizerEnabled.value && !backgroundNativeOverride) {
       ensureAudioContextRunning().then(() => ensurePlaybackGraph()).catch(() => {})
-    } else if (isBackgroundPlayActive() && audio && !audio.paused) {
+    } else if (isBackgroundPlayActive() && audio && !isPaused.value) {
+      if (audio.paused) audio.play().catch(() => {})
       syncMediaSessionPlaybackState()
+      syncMediaSessionPosition()
+    }
+  })
+  window.addEventListener('pagehide', () => {
+    if ((isStandalonePwa() || isMobileLike()) && audio && !isPaused.value && hasMediaSrc) {
+      prepareNativeOutputForBackground().catch(() => {})
     }
   })
   window.addEventListener('focus', () => { resumeAudioPlayback() })
@@ -1551,6 +1810,13 @@ async function onTrackEnded() {
 }
 
 async function playNextAuto() {
+  try {
+    const { isMoodRadioActive, playMoodRadioNext } = await import('./moodRadio.js')
+    if (isMoodRadioActive()) {
+      const ok = await playMoodRadioNext()
+      if (ok) return
+    }
+  } catch {}
   if (!playQueue.value.length) {
     isPaused.value = true
     return
@@ -1628,7 +1894,7 @@ export async function ensureAudioAnalyser() {
 export function prepareAnalyserSample() {}
 
 export function scheduleAudioAnalyserRefresh() {
-  if (!visualizerEnabled.value || !audio || audio.paused) return
+  if (!visualizerEnabled.value || backgroundNativeOverride || !audio || audio.paused) return
   const trySetup = () => { ensurePlaybackGraph().catch(() => {}) }
   trySetup()
   requestAnimationFrame(trySetup)
@@ -1691,6 +1957,21 @@ function cancelPlayUrlFetch() {
 
 async function resolvePlayUrl(item, source, quality = DEFAULT_PLAY_QUALITY, options = {}) {
   if (isLocalTrack(item, source)) {
+    // 普通本地文件直接拼同源流地址，省掉 /api/play/url 往返（情绪地图连播尤其明显）
+    // APE 需服务端转码，仍走接口
+    const filePath = getTrackFilePath(item)
+    if (filePath) {
+      const ext = (() => {
+        const base = String(filePath).replace(/\\/g, '/').split('/').pop() || ''
+        const i = base.lastIndexOf('.')
+        return i >= 0 ? base.slice(i + 1).toLowerCase() : ''
+      })()
+      if (ext && ext !== 'ape') {
+        const url = `/api/play/local?path=${encodeURIComponent(filePath)}`
+        if (!options.refresh) setCachedPlayUrl(item, 'local', quality, url)
+        return url
+      }
+    }
     const res = await api.play.getUrl(buildPlayPayload(item, 'local', quality), { signal: options.signal })
     return res.url || ''
   }
@@ -1765,6 +2046,7 @@ async function startPlaybackFromUrl(url, { resumeTime = 0, item, source, isLocal
     applyAudioOutput()
   }
 
+  clearPlaybackKickWatch()
   if (!resumeTime) currentTime.value = 0
   duration.value = 0
   if (item) applyDurationFallback(item)
@@ -1776,7 +2058,7 @@ async function startPlaybackFromUrl(url, { resumeTime = 0, item, source, isLocal
   applyAudioCrossOrigin(audio, url)
   audio.src = authedUrl
   hasMediaSrc = true
-  // 换源后务必等待就绪；勿用旧 readyState 跳过，否则本地大 FLAC 会假播放卡在 00:00
+  // 本地：至少等 HAVE_CURRENT_DATA / canplay，避免 metadata 假播放卡死 00:00
   await waitForAudioReady(authedUrl, { isLocal })
 
   applyAudioOutput()
@@ -1801,17 +2083,102 @@ async function startPlaybackFromUrl(url, { resumeTime = 0, item, source, isLocal
   }
 
   clearPlaybackError()
-  endPlaybackBuffer()
   isPaused.value = false
   applyAudioOutput()
   rememberLoadedPlayUrl(item, source, url, DEFAULT_PLAY_QUALITY)
-  if (visualizerEnabled.value) {
-    await ensurePlaybackGraph()
-    scheduleAudioAnalyserRefresh()
+
+  // 真正出声前进度前进前保持「缓冲中」；本地先走原生输出，出声后再挂频谱，避免 MediaElementSource 卡死
+  if ((audio.currentTime || 0) > 0.05) {
+    endPlaybackBuffer()
+    if (visualizerEnabled.value && !backgroundNativeOverride) {
+      await ensurePlaybackGraph()
+      scheduleAudioAnalyserRefresh()
+    }
+  } else {
+    beginPlaybackBuffer()
+    watchPlaybackKickstart({
+      intent: playIntentToken,
+      isLocal,
+      url: authedUrl,
+      item,
+      source,
+    })
   }
 }
 
-export function addToQueue(item, source, { play = false, replace = false } = {}) {
+/**
+ * 开播后若长时间停在 00:00：保持缓冲态；本地再强制等 canplay 后重试一次，并推迟挂频谱。
+ */
+function watchPlaybackKickstart({ intent, isLocal, url, item, source }) {
+  clearPlaybackKickWatch()
+  const token = playbackKickToken
+  const startedAt = Date.now()
+  let recovered = false
+
+  const tick = async () => {
+    if (token !== playbackKickToken || intent !== playIntentToken) return
+    if (!audio || isPaused.value) {
+      endPlaybackBuffer()
+      return
+    }
+    const t = audio.currentTime || 0
+    if (t > 0.05 && !audio.paused) {
+      endPlaybackBuffer()
+      if (visualizerEnabled.value && !backgroundNativeOverride) {
+        scheduleAudioAnalyserRefresh()
+      }
+      return
+    }
+
+    beginPlaybackBuffer()
+    const waited = Date.now() - startedAt
+
+    if (isLocal && !recovered && waited >= 1600) {
+      recovered = true
+      try {
+        // 拆掉可能已挂上的坏图，强制等 canplay 再播
+        invalidatePlaybackGraph()
+        if (isMainAudioTapped()) {
+          try { await restoreNativeAudioOutput() } catch {}
+        }
+        if (intent !== playIntentToken || token !== playbackKickToken) return
+        if (!urlsMatch(audio?.src || '', url)) {
+          applyAudioCrossOrigin(audio, url)
+          audio.src = url
+          hasMediaSrc = true
+        }
+        await waitForAudioReady(url, { isLocal: true, preferCanPlay: true })
+        if (intent !== playIntentToken || token !== playbackKickToken) return
+        unlockAudioFromGesture()
+        await ensureAudioContextRunning()
+        await audio.play()
+        isPaused.value = false
+        applyAudioOutput()
+      } catch {
+        // 交给外层重试 / 错误态
+      }
+      playbackKickTimer = setTimeout(tick, 250)
+      return
+    }
+
+    if (waited >= 12000) {
+      // 仍无进度：保持缓冲结束，让 waiting/error 或用户操作接手
+      return
+    }
+    playbackKickTimer = setTimeout(tick, 250)
+  }
+
+  playbackKickTimer = setTimeout(tick, 300)
+}
+
+export function addToQueue(item, source, { play = false, replace = false, mood = false } = {}) {
+  if (mood) {
+    enterMoodQueueMode()
+  } else if (queueSource.value === 'mood') {
+    // 从其它入口加入普通试听：退出心情列表并恢复主列表
+    import('./moodRadio.js').then((m) => { try { m.stopMoodRadio() } catch {} }).catch(() => {})
+    exitMoodQueueMode({ restore: true })
+  }
   const cleaned = cleanTrackItem(item)
   const src = cleaned.source || source
   const key = getTrackKey(cleaned, src)
@@ -1850,6 +2217,7 @@ export function clearQueue() {
   playHistory = []
   currentQueueIndex.value = -1
   stopPlay()
+  // 清空的是当前模式列表；心情模式下不销毁已暂存的主列表
   saveQueueState()
 }
 
@@ -1860,7 +2228,17 @@ export function togglePlayMode() {
   saveQueueState()
 }
 
-export async function playItem(item, activeSource) {
+export async function playItem(item, activeSource, { mood = false } = {}) {
+  if (mood) {
+    enterMoodQueueMode()
+  } else if (queueSource.value === 'mood') {
+    try {
+      const { stopMoodRadio } = await import('./moodRadio.js')
+      stopMoodRadio()
+    } catch {}
+    exitMoodQueueMode({ restore: true })
+  }
+
   const key = getTrackKey(item, activeSource)
   const idx = playQueue.value.findIndex(q => q.key === key)
 
@@ -1880,7 +2258,7 @@ export async function playItem(item, activeSource) {
     return
   }
 
-  await addToQueue(item, activeSource, { play: true, replace: true })
+  await addToQueue(item, activeSource, { play: true, replace: true, mood })
 }
 
 export async function resumeOrTogglePause() {
@@ -2013,6 +2391,10 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 }
         updateActiveLyric(audio?.currentTime || 0)
         saveQueueState()
         updateMediaSession()
+        try {
+          const { isMoodRadioActive, syncMoodRadioFromPlaying } = await import('./moodRadio.js')
+          if (isMoodRadioActive()) syncMoodRadioFromPlaying(currentPlaying.value)
+        } catch {}
         return
       } catch (e) {
         if (e.aborted || intent !== playIntentToken) throw e
@@ -2074,10 +2456,12 @@ function isBenignPlayInterrupt(error) {
     || /play\(\) request was interrupted/i.test(text)
 }
 
-function waitForAudioReady(expectedUrl = '', { isLocal = false } = {}) {
-  const timeoutMs = isLocal ? 45000 : 8000
-  /** 本地大文件需等到有可播数据；仅 metadata 就 play 容易一直卡在 00:00 */
-  const minReady = isLocal ? 2 : 1
+function waitForAudioReady(expectedUrl = '', { isLocal = false, preferCanPlay = false } = {}) {
+  const timeoutMs = isLocal ? 20000 : 8000
+  // 本地：默认等 HAVE_CURRENT_DATA(2)；卡住重试时升到 canplay(3)
+  // 在线：metadata(1) 即可
+  const minReady = isLocal ? (preferCanPlay ? 3 : 2) : 1
+  const softCanPlayMs = isLocal && !preferCanPlay ? 2800 : 0
   return new Promise((resolve, reject) => {
     if (!audio) { resolve(); return }
     const matchesExpected = () => !expectedUrl || urlsMatch(audio.src, expectedUrl)
@@ -2087,8 +2471,14 @@ function waitForAudioReady(expectedUrl = '', { isLocal = false } = {}) {
       return
     }
     let settled = false
+    let softTimer = null
+    const metaAt = Date.now()
     const isStale = () => expectedUrl && audio && !urlsMatch(audio.src, expectedUrl)
     const cleanup = () => {
+      if (softTimer) {
+        clearTimeout(softTimer)
+        softTimer = null
+      }
       audio?.removeEventListener('loadedmetadata', onMaybeReady)
       audio?.removeEventListener('canplay', onMaybeReady)
       audio?.removeEventListener('canplaythrough', onMaybeReady)
@@ -2122,7 +2512,24 @@ function waitForAudioReady(expectedUrl = '', { isLocal = false } = {}) {
       syncDurationFromAudio()
       resolve()
     }
-    const onMaybeReady = () => { finish() }
+    const onMaybeReady = () => {
+      if (!audio || audio.error) {
+        finish()
+        return
+      }
+      // 本地：已到 canplay 立刻开播；否则等满 soft 窗口再接受 HAVE_CURRENT_DATA
+      if (isLocal && softCanPlayMs > 0 && audio.readyState >= 2 && audio.readyState < 3) {
+        if (!softTimer) {
+          const left = Math.max(0, softCanPlayMs - (Date.now() - metaAt))
+          softTimer = setTimeout(() => {
+            softTimer = null
+            if (audio && audio.readyState >= 2 && !audio.error) finish()
+          }, left)
+        }
+        return
+      }
+      finish()
+    }
     const onError = () => {
       if (isStale()) {
         fail(Object.assign(new Error('播放已取消'), { aborted: true }))
@@ -2136,6 +2543,8 @@ function waitForAudioReady(expectedUrl = '', { isLocal = false } = {}) {
     audio.addEventListener('canplaythrough', onMaybeReady)
     audio.addEventListener('durationchange', onMaybeReady)
     audio.addEventListener('error', onError)
+    // 已有部分状态时主动踢一次
+    onMaybeReady()
     setTimeout(() => {
       if (settled) return
       if (isStale()) {
@@ -2147,12 +2556,20 @@ function waitForAudioReady(expectedUrl = '', { isLocal = false } = {}) {
         return
       }
       if (audio.readyState >= minReady) finish()
+      else if (isLocal && audio.readyState >= 2) finish()
       else fail(new Error(isLocal ? '本地音频加载超时，请检查文件是否存在或路径是否有效' : '音频加载超时，请检查网络或文件路径'))
     }, timeoutMs)
   })
 }
 
 export async function playNext() {
+  try {
+    const { isMoodRadioActive, playMoodRadioNext } = await import('./moodRadio.js')
+    if (isMoodRadioActive()) {
+      const ok = await playMoodRadioNext()
+      if (ok) return
+    }
+  } catch {}
   if (!playQueue.value.length) return
   const next = resolveNextIndex(false)
   if (next < 0) {
@@ -2220,18 +2637,22 @@ export async function togglePause() {
     applyAudioOutput()
     try {
       unlockAudioFromGesture()
-      // 暂停后 AudioContext 可能仍是 suspended，续播前先拉起
-      await ensureAudioContextRunning()
+      // 仅频谱模式需要拉起 AudioContext；后台原生模式不要碰 Web Audio
+      if (visualizerEnabled.value && !backgroundNativeOverride) {
+        await ensureAudioContextRunning()
+      }
       await audio.play()
       clearPlaybackError()
       // 勿只等 playing 事件：本地流/代理偶发不触发时 UI 会一直卡在缓冲（显示暂停图标却无声）
       endPlaybackBuffer()
       isPaused.value = false
       saveQueueState()
-      if (visualizerEnabled.value) {
+      if (visualizerEnabled.value && !backgroundNativeOverride) {
         await ensurePlaybackGraph()
         scheduleAudioAnalyserRefresh()
       }
+      updateMediaSession()
+      syncMediaSessionPosition()
     } catch (e) {
       endPlaybackBuffer()
       isPaused.value = true

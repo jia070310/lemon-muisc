@@ -119,6 +119,40 @@
         <span v-if="sleepTimerMinutes" class="sleep-left">{{ sleepTimerLeftLabel || `${sleepTimerMinutes}m` }}</span>
         <span v-else class="sleep-hint">定时</span>
       </button>
+      <div v-if="moodRadioActive && currentPlaying" class="mood-fb-group" title="心情反馈">
+        <button
+          class="ctrl-btn ctrl-mood-like"
+          :class="{ active: moodRadioFeedback === 'like' }"
+          type="button"
+          title="喜欢这类心情：多播相近"
+          aria-label="喜欢这类心情"
+          @click="onMoodLike"
+        >
+          <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+            <path
+              :fill="moodRadioFeedback === 'like' ? 'currentColor' : 'none'"
+              stroke="currentColor"
+              stroke-width="2"
+              d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8z"
+            />
+          </svg>
+        </button>
+        <span class="mood-fb-sep" aria-hidden="true" />
+        <button
+          class="ctrl-btn ctrl-mood-dislike"
+          :class="{ active: moodRadioFeedback === 'dislike' }"
+          type="button"
+          title="不喜欢这类心情：跳过并切下一首"
+          aria-label="不喜欢这类心情"
+          @click="onMoodDislike"
+        >
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 21s-6.7-5.4-9.3-9.2C1.2 9.6 1.5 5.8 4.2 4.2 6.2 3 8.8 3.5 10.4 5.2L12 7l1.6-1.8C15.2 3.5 17.8 3 19.8 4.2c2.7 1.6 3 5.4 1.5 7.6C18.7 15.6 12 21 12 21z"/>
+            <path d="m8.5 8.5 7 7"/>
+            <path d="m13.5 9.5-4 4"/>
+          </svg>
+        </button>
+      </div>
       <button
         v-if="currentPlaying"
         class="ctrl-btn ctrl-fav desktop-extra"
@@ -127,7 +161,9 @@
         :title="isCurrentFavorite ? '取消收藏' : '收藏'"
         @click="onToggleFavorite"
       >
-        <svg viewBox="0 0 24 24" width="16" height="16" :fill="isCurrentFavorite ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8z"/></svg>
+        <svg viewBox="0 0 24 24" width="16" height="16" :fill="isCurrentFavorite ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true">
+          <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+        </svg>
       </button>
       <button
         v-if="currentPlaying"
@@ -178,7 +214,7 @@
           <line x1="7" y1="7" x2="7.01" y2="7"/>
         </svg>
       </button>
-      <button ref="queueBtnRef" class="ctrl-btn ctrl-queue desktop-extra" @click="onToggleQueuePanel" :title="`试听列表 (${playQueue.length})`" :class="{ active: showQueuePanel }">
+      <button ref="queueBtnRef" class="ctrl-btn ctrl-queue desktop-extra" @click="onToggleQueuePanel" :title="`${queuePanelTitle} (${playQueue.length})`" :class="{ active: showQueuePanel }">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
           <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/>
           <circle cx="4" cy="6" r="1" fill="currentColor"/><circle cx="4" cy="12" r="1" fill="currentColor"/><circle cx="4" cy="18" r="1" fill="currentColor"/>
@@ -217,13 +253,48 @@
             <span>{{ sleepTimerMinutes ? `定时 ${sleepTimerLeftLabel || sleepTimerMinutes + 'm'}` : '睡眠定时' }}</span>
           </button>
           <button
+            v-if="moodRadioActive"
+            type="button"
+            class="more-item"
+            :class="{ active: moodRadioFeedback === 'like' }"
+            :disabled="!currentPlaying"
+            @click="onMoodLike"
+          >
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+              <path
+                :fill="moodRadioFeedback === 'like' ? 'currentColor' : 'none'"
+                stroke="currentColor"
+                stroke-width="2"
+                d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8z"
+              />
+            </svg>
+            <span>喜欢这类心情</span>
+          </button>
+          <button
+            v-if="moodRadioActive"
+            type="button"
+            class="more-item"
+            :class="{ active: moodRadioFeedback === 'dislike' }"
+            :disabled="!currentPlaying"
+            @click="onMoodDislike"
+          >
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 21s-6.7-5.4-9.3-9.2C1.2 9.6 1.5 5.8 4.2 4.2 6.2 3 8.8 3.5 10.4 5.2L12 7l1.6-1.8C15.2 3.5 17.8 3 19.8 4.2c2.7 1.6 3 5.4 1.5 7.6C18.7 15.6 12 21 12 21z"/>
+              <path d="m8.5 8.5 7 7"/>
+              <path d="m13.5 9.5-4 4"/>
+            </svg>
+            <span>不喜欢这类心情</span>
+          </button>
+          <button
             type="button"
             class="more-item"
             :class="{ active: isCurrentFavorite }"
             :disabled="!currentPlaying"
             @click="onToggleFavorite"
           >
-            <svg viewBox="0 0 24 24" width="16" height="16" :fill="isCurrentFavorite ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8z"/></svg>
+            <svg viewBox="0 0 24 24" width="16" height="16" :fill="isCurrentFavorite ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true">
+              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+            </svg>
             <span>{{ isCurrentFavorite ? '取消收藏' : '收藏' }}</span>
           </button>
           <button
@@ -282,7 +353,7 @@
               <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/>
               <circle cx="4" cy="6" r="1" fill="currentColor"/><circle cx="4" cy="12" r="1" fill="currentColor"/><circle cx="4" cy="18" r="1" fill="currentColor"/>
             </svg>
-            <span>试听列表{{ playQueue.length ? ` (${playQueue.length})` : '' }}</span>
+            <span>{{ queuePanelTitle }}{{ playQueue.length ? ` (${playQueue.length})` : '' }}</span>
           </button>
         </div>
       </div>
@@ -335,9 +406,15 @@
 
     <div class="queue-panel card" v-if="showQueuePanel" ref="queuePanelRef" @click.stop>
       <div class="queue-header">
-        <span class="queue-title">试听列表 <em>{{ playQueue.length }}</em></span>
+        <span class="queue-title">{{ queuePanelTitle }} <em>{{ playQueue.length }}</em></span>
         <div class="queue-header-actions">
           <span class="queue-mode">{{ playModeLabel }}</span>
+          <button
+            v-if="queueSource === 'mood'"
+            class="btn-ghost btn-sm"
+            type="button"
+            @click="exitMoodListening"
+          >退出心情试听</button>
           <button class="btn-ghost btn-sm" @click="clearQueue" :disabled="!playQueue.length">清空</button>
           <button class="btn-icon" @click="showQueuePanel = false">×</button>
         </div>
@@ -362,7 +439,9 @@
               @click.stop="onToggleQueueFavorite(entry.item, entry.source)"
               :title="isQueueFavorite(entry.item, entry.source) ? '取消收藏' : '收藏'"
             >
-              <svg viewBox="0 0 24 24" width="14" height="14" :fill="isQueueFavorite(entry.item, entry.source) ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8z"/></svg>
+              <svg viewBox="0 0 24 24" width="14" height="14" :fill="isQueueFavorite(entry.item, entry.source) ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true">
+                <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+              </svg>
             </button>
             <button
               type="button"
@@ -378,7 +457,7 @@
           </div>
         </div>
       </div>
-      <div v-else class="queue-empty">列表为空，在搜索页点击 + 或试听添加歌曲</div>
+      <div v-else class="queue-empty">{{ queueSource === 'mood' ? '心情试听为空，在情绪地图点击封面加入' : '列表为空，在搜索页点击 + 或试听添加歌曲' }}</div>
     </div>
 
     <PickPlaylistModal
@@ -396,12 +475,14 @@ import {
   currentPlaying, isPaused, isBuffering, currentTime, displayDuration, volume, isMuted,
   coverUrl, coverStyle, currentLyricText, visualizerEnabled, showFullscreenPlayer,
   playQueue, currentQueueIndex, playMode, playModeLabel, showQueuePanel, playerError, playerNotice,
+  queueSource, queuePanelTitle,
   sleepTimerMinutes, sleepTimerLeftLabel, setSleepTimer, clearSleepTimer,
   currentPlayPlatformLabel,
   togglePause, stopPlay, seekTo, setVolume, toggleMute, fmtTime, initPlayer,
   playNext, playPrev, togglePlayMode, resumeOrTogglePause, unlockAudioFromGesture,
-  removeFromQueue, clearQueue, playTrackAt, openFullscreenPlayer,
+  removeFromQueue,   clearQueue, playTrackAt, openFullscreenPlayer,
   currentLocalTrackPath, tryFillCoverFromNetwork, showPlayerNotice,
+  exitMoodQueueMode,
 } from '../stores/player.js'
 import { onMounted, onUnmounted, ref, computed, watch } from 'vue'
 import { cleanText, formatArtists } from '../utils/text.js'
@@ -409,6 +490,13 @@ import SpectrumVisualizer from './SpectrumVisualizer.vue'
 import CoverArt from './CoverArt.vue'
 import PickPlaylistModal from './PickPlaylistModal.vue'
 import { isFavorite, toggleFavorite } from '../stores/library.js'
+import {
+  moodRadioActive,
+  moodRadioFeedback,
+  moodRadioLike,
+  moodRadioDislike,
+  stopMoodRadio,
+} from '../stores/moodRadio.js'
 import { openTagEditTrack } from '../utils/tagEdit.js'
 import { isMobileUiContext } from '../utils/device.js'
 import { api } from '../api.js'
@@ -518,6 +606,24 @@ function onToggleFavorite() {
   })
 }
 
+function onMoodLike() {
+  if (!moodRadioActive.value) return
+  moodRadioLike()
+  showPlayerNotice('已喜欢这类心情，将多播相近', 2500)
+}
+
+async function onMoodDislike() {
+  if (!moodRadioActive.value) return
+  showPlayerNotice('已避开这类心情，切换下一首…', 2500)
+  await moodRadioDislike()
+}
+
+function exitMoodListening() {
+  stopMoodRadio({ restoreQueue: false })
+  exitMoodQueueMode({ restore: true })
+  showPlayerNotice('已恢复普通试听列表', 2500)
+}
+
 const SLEEP_STEPS = [0, 15, 30, 45, 60, 90]
 function cycleSleepTimer() {
   const cur = sleepTimerMinutes.value || 0
@@ -590,7 +696,7 @@ const moreBtnTitle = computed(() => {
   const parts = ['更多']
   if (sleepTimerMinutes.value) parts.push(`定时 ${sleepTimerLeftLabel.value || sleepTimerMinutes.value + 'm'}`)
   if (currentLocalPath.value) parts.push('可编辑标签')
-  if (playQueue.value.length) parts.push(`列表 ${playQueue.value.length}`)
+  if (playQueue.value.length) parts.push(`${queueSource.value === 'mood' ? '心情' : '列表'} ${playQueue.value.length}`)
   return parts.join(' · ')
 })
 
@@ -1085,14 +1191,60 @@ async function onQueuePlayClick(index) {
   flex-shrink: 0;
 }
 .ctrl-fav:hover {
-  color: #ef4444;
-  border-color: rgba(239, 68, 68, 0.45);
-  background: rgba(239, 68, 68, 0.1);
+  color: #f5a623;
+  border-color: rgba(245, 166, 35, 0.5);
+  background: rgba(245, 166, 35, 0.12);
 }
 .ctrl-fav.active {
-  color: #ef4444;
-  border-color: rgba(239, 68, 68, 0.45);
-  background: rgba(239, 68, 68, 0.1);
+  color: #f5a623;
+  border-color: rgba(245, 166, 35, 0.5);
+  background: rgba(245, 166, 35, 0.12);
+}
+.mood-fb-group {
+  display: inline-flex;
+  align-items: stretch;
+  flex-shrink: 0;
+  height: 34px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: transparent;
+}
+.mood-fb-sep {
+  width: 1px;
+  align-self: stretch;
+  background: var(--border);
+  flex-shrink: 0;
+}
+.ctrl-mood-like,
+.ctrl-mood-dislike {
+  width: 32px;
+  height: 100%;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+.ctrl-mood-like svg,
+.ctrl-mood-dislike svg {
+  display: block;
+  flex-shrink: 0;
+}
+.ctrl-mood-like:hover,
+.ctrl-mood-like.active {
+  color: #e85d75;
+  background: rgba(232, 93, 117, 0.12);
+}
+.ctrl-mood-dislike:hover,
+.ctrl-mood-dislike.active {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 .ctrl-tag {
   width: 34px;
@@ -1451,9 +1603,9 @@ async function onQueuePlayClick(index) {
 
 .queue-fav-btn:hover,
 .queue-fav-btn.active {
-  color: #ef4444;
-  border-color: rgba(239, 68, 68, 0.45);
-  background: rgba(239, 68, 68, 0.1);
+  color: #f5a623;
+  border-color: rgba(245, 166, 35, 0.5);
+  background: rgba(245, 166, 35, 0.12);
 }
 
 .queue-play-btn:not(.playing) svg {
