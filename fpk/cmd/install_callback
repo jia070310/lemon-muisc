@@ -87,7 +87,7 @@ fi
 
 update_install_ui "检查 Node.js v22 依赖（应用中心 install_dep_apps）…"
 if ! ensure_store_node; then
-  fail_install "未检测到 Node.js v22。请在应用中心安装「Node.js v22」后再装本应用（或重新安装本 FPK 让系统自动拉取依赖）。"
+  fail_install "未检测到 Node.js v22。请在应用中心先安装「Node.js v22」，或重新安装本 FPK 让系统自动拉取依赖。"
 fi
 
 # 若 FPK 已内置 node_modules，则跳过联网 npm
@@ -95,9 +95,9 @@ if [ -d "${APP_ROOT}/node_modules/express" ]; then
   update_install_ui "检测到内置依赖，跳过 npm 安装…"
   log_line "bundled node_modules present, skip npm"
 else
-  update_install_ui "正在安装依赖（npm，registry.npmmirror.com）…"
+  update_install_ui "正在安装依赖（npm 国内源）… 进度可能停在 55% 附近几分钟，属正常，请勿取消"
   if ! install_node_modules; then
-    fail_install "npm 依赖安装失败。请查看 ${TRIM_PKGVAR}/log/npm-install.log"
+    fail_install "npm 依赖安装失败。请查看 ${TRIM_PKGVAR}/log/npm-install.log（常见：未装 Node.js v22，或无法访问 registry.npmmirror.com）"
   fi
 fi
 
@@ -108,5 +108,5 @@ fi
 
 ensure_desktop_entry || true
 mark_install_complete
-update_install_ui "【安装完成】请点「启用」。若打不开请 SSH：tail -n 80 ${TRIM_PKGVAR}/log/app.log"
+update_install_ui "【安装完成】请点「启用」。若一直「启用中」，SSH：tail -n 80 ${TRIM_PKGVAR}/log/app.log"
 exit 0

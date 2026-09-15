@@ -108,6 +108,67 @@ ensure_store_node() {
   return 1
 }
 
+#
+# 飞牛安装回调常以受限用户跑脚本：默认 HOME=/home/xxx 无写权限 → npm 卡死/EACCES，
+# 应用中心进度会一直停在约 55%。缓存必须落到应用可写目录。
+#
+prepare_npm_env() {
+  local cache_root="${TRIM_PKGVAR}/npm"
+  mkdir -p "${cache_root}/cache" "${cache_root}/tmp" "${cache_root}/home" 2>/dev/null || true
+  export HOME="${cache_root}/home"
+  export npm_config_cache="${cache_root}/cache"
+  export npm_config_tmp="${cache_root}/tmp"
+  export npm_config_registry="https://registry.npmmirror.com"
+  export npm_config_disturl="https://npmmirror.com/mirrors/node"
+  export npm_config_fetch_timeout=120000
+  export npm_config_fetch_retries=3
+  export npm_config_better_sqlite3_binary_host="https://npmmirror.com/mirrors/better-sqlite3"
+  # 跳过 ffmpeg-static 等可选大包，避免安装卡死；APE/情绪分析优先用系统 ffmpeg
+  export npm_config_optional=false
+  export npm_config_fund=false
+  export npm_config_audit=false
+  export npm_config_update_notifier=false
+}
+
+update_npm_ui() {
+  local msg="$1"
+  if [ -n "${TRIM_TEMP_LOGFILE:-}" ]; then
+    echo "${msg}" > "${TRIM_TEMP_LOGFILE}" 2>/dev/null || true
+  fi
+}
+
+# 后台心跳：安装进度条停在 55% 时至少刷新文案，避免像「卡死」
+npm_progress_heartbeat() {
+  local pid="$1"
+  local phase="$2"
+  local n=0
+  while kill -0 "${pid}" 2>/dev/null; do
+    n=$((n + 1))
+    update_npm_ui "正在${phase}依赖（npm，约 ${n}0 秒）… 国内源 npmmirror，请耐心等待"
+    sleep 10
+  done
+}
+
+run_npm_with_timeout() {
+  local npm_bin="$1"
+  shift
+  local log_file="$1"
+  shift
+  local timeout_sec="${NPM_INSTALL_TIMEOUT_SEC:-900}"
+  local rc=0
+
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "${timeout_sec}" "${npm_bin}" "$@" >> "${log_file}" 2>&1
+    rc=$?
+    if [ "${rc}" -eq 124 ]; then
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] npm 超时（${timeout_sec}s）: $*" >> "${log_file}"
+    fi
+    return "${rc}"
+  fi
+
+  "${npm_bin}" "$@" >> "${log_file}" 2>&1
+}
+
 # 若缺少 better-sqlite3 原生库，在 NAS 上用商店 Node 重建（走 prebuild 或本地编译）
 ensure_better_sqlite3_native() {
   local root npm_bin log_file binding
@@ -123,13 +184,13 @@ ensure_better_sqlite3_native() {
 
   npm_bin="$(resolve_npm_bin)" || return 1
   prepend_store_node_path || true
+  prepare_npm_env
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] rebuilding better-sqlite3…" >> "${log_file}"
+  update_npm_ui "正在重建 better-sqlite3 原生模块…"
   (
     cd "${root}" || exit 1
-    export npm_config_registry="https://registry.npmmirror.com"
-    export npm_config_disturl="https://npmmirror.com/mirrors/node"
-    "${npm_bin}" rebuild better-sqlite3 >> "${log_file}" 2>&1 \
-      || "${npm_bin}" install better-sqlite3 --omit=dev >> "${log_file}" 2>&1
+    run_npm_with_timeout "${npm_bin}" "${log_file}" rebuild better-sqlite3 \
+      || run_npm_with_timeout "${npm_bin}" "${log_file}" install better-sqlite3 --omit=dev --omit=optional
   ) || true
 
   binding="$(find "${root}/node_modules/better-sqlite3" -name '*.node' 2>/dev/null | head -n 1 || true)"
@@ -164,11 +225,26 @@ install_node_runtime() {
   ensure_store_node
 }
 
-# 安装生产依赖（npm 走国内源）
+deps_fingerprint() {
+  local root="$1"
+  if [ -f "${root}/package-lock.json" ]; then
+    # 短指纹即可：升级时对比是否需要重装
+    cksum "${root}/package-lock.json" 2>/dev/null | awk '{print $1"-"$2}'
+    return 0
+  fi
+  if [ -f "${root}/package.json" ]; then
+    cksum "${root}/package.json" 2>/dev/null | awk '{print $1"-"$2}'
+    return 0
+  fi
+  echo "none"
+}
+
+# 安装生产依赖（npm 走国内源；缓存放应用目录；跳过 optional）
 install_node_modules() {
-  local root npm_bin log_file
+  local root npm_bin log_file fp stamp force="${1:-}"
   root="$(app_root)"
   log_file="${TRIM_PKGVAR}/log/npm-install.log"
+  stamp="${TRIM_PKGVAR}/npm.deps.stamp"
   mkdir -p "${TRIM_PKGVAR}/log" 2>/dev/null || true
 
   if [ ! -f "${root}/package.json" ]; then
@@ -176,31 +252,62 @@ install_node_modules() {
     return 1
   fi
 
-  if [ -d "${root}/node_modules/express" ] && [ -d "${root}/node_modules/better-sqlite3" ]; then
+  fp="$(deps_fingerprint "${root}")"
+  if [ "${force}" = "force" ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] force reinstall: 清理旧 node_modules" >> "${log_file}"
+    rm -rf "${root}/node_modules" 2>/dev/null || true
+    rm -f "${stamp}" 2>/dev/null || true
+  fi
+
+  if [ "${force}" != "force" ] \
+    && [ -d "${root}/node_modules/express" ] \
+    && [ -d "${root}/node_modules/better-sqlite3" ] \
+    && [ -f "${stamp}" ] \
+    && [ "$(cat "${stamp}" 2>/dev/null)" = "${fp}" ]
+  then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] node_modules 已是当前依赖，跳过 npm install" >> "${log_file}"
+    return 0
+  fi
+
+  if [ "${force}" != "force" ] \
+    && [ -d "${root}/node_modules/express" ] \
+    && [ -d "${root}/node_modules/better-sqlite3" ]
+  then
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] node_modules 已存在，跳过 npm install" >> "${log_file}"
+    echo "${fp}" > "${stamp}" 2>/dev/null || true
     return 0
   fi
 
   npm_bin="$(resolve_npm_bin)" || return 1
   prepend_store_node_path || true
+  prepare_npm_env
 
   local rc=0
+  local npm_pid=""
+  update_npm_ui "正在安装依赖（npm，国内源）… 首次可能需几分钟，请勿关闭"
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] npm install start root=${root} cache=${npm_config_cache}" >> "${log_file}"
+
   (
     cd "${root}" || exit 1
-    export npm_config_registry="https://registry.npmmirror.com"
-    export npm_config_disturl="https://npmmirror.com/mirrors/node"
-    export npm_config_fetch_timeout=600000
-    export npm_config_better_sqlite3_binary_host="https://npmmirror.com/mirrors/better-sqlite3"
+    # 不跑 scripts（避免 postinstall 再下二进制卡住）；随后单独确保 better-sqlite3
     if [ -f package-lock.json ]; then
-      "${npm_bin}" ci --omit=dev >> "${log_file}" 2>&1 || "${npm_bin}" install --omit=dev >> "${log_file}" 2>&1
+      run_npm_with_timeout "${npm_bin}" "${log_file}" ci --omit=dev --omit=optional --ignore-scripts \
+        || run_npm_with_timeout "${npm_bin}" "${log_file}" install --omit=dev --omit=optional --ignore-scripts
     else
-      "${npm_bin}" install --omit=dev >> "${log_file}" 2>&1
+      run_npm_with_timeout "${npm_bin}" "${log_file}" install --omit=dev --omit=optional --ignore-scripts
     fi
-  ) || rc=$?
+  ) &
+  npm_pid=$!
+  npm_progress_heartbeat "${npm_pid}" "安装"
+  wait "${npm_pid}" || rc=$?
 
   if [ ! -d "${root}/node_modules/express" ]; then
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] npm 结束后仍无 express (rc=${rc})" >> "${log_file}"
+    update_npm_ui "依赖安装失败。请查看 ${log_file}；或确认可访问 registry.npmmirror.com，并已安装 Node.js v22。"
     return 1
   fi
+
+  echo "${fp}" > "${stamp}" 2>/dev/null || true
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] npm install ok (rc=${rc})" >> "${log_file}"
   return 0
 }
