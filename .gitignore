@@ -21,6 +21,7 @@ Thumbs.db
 server/telemetry.local.json
 server/telemetry.local.json.example
 config/telemetry.local.json
+config/bin/
 docs/telemetry-stats-guide.md
 tools/lemon-telemetry-php/
 tools/lemon-telemetry-php/config.php

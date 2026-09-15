@@ -113,6 +113,8 @@ function scoreMatchForTag(item, parsed) {
   const name = String(item?.name || '').trim().toLowerCase()
   const artist = String(parsed?.artist || '').trim().toLowerCase()
   const singer = String(item?.singer || '').trim().toLowerCase()
+  const album = String(parsed?.album || '').trim().toLowerCase()
+  const itemAlbum = String(item?.album || item?.albumName || '').trim().toLowerCase()
   if (title && name && !name.includes(title)) {
     score = Math.max(0, score - 6)
   }
@@ -120,11 +122,18 @@ function scoreMatchForTag(item, parsed) {
     const mainArtist = artist.split(/[\s/、,，]+/).filter(Boolean)[0]
     if (mainArtist && !singer.includes(mainArtist)) score = Math.max(0, score - 5)
   }
+  if (album && itemAlbum) {
+    if (itemAlbum === album) score += 6
+    else if (itemAlbum.includes(album) || album.includes(itemAlbum)) score += 3
+    else score = Math.max(0, score - 5)
+  }
   return score
 }
 
 async function fetchCrossSourceTagFallback(match, primarySource) {
-  const keyword = [match?.name, match?.singer].filter(Boolean).join(' ')
+  // 优先「歌名 专辑名」，减少同名多专辑误匹配
+  const keyword = [match?.name, match?.album || match?.albumName].filter(Boolean).join(' ')
+    || [match?.name, match?.singer].filter(Boolean).join(' ')
   if (!keyword) return {}
 
   const trySources = ['tx', 'wy', 'kg', 'kw', 'mg'].filter(src => src !== primarySource)
@@ -132,7 +141,15 @@ async function fetchCrossSourceTagFallback(match, primarySource) {
     try {
       const result = await searchMusic(keyword, src, 1, 8)
       const hit = (result.list || [])
-        .map(item => ({ item, score: scoreMatchForTag(item, { title: match.name, artist: match.singer, keyword }) }))
+        .map(item => ({
+          item,
+          score: scoreMatchForTag(item, {
+            title: match.name,
+            artist: match.singer,
+            album: match.album || match.albumName || '',
+            keyword,
+          }),
+        }))
         .filter(row => row.score > 0)
         .sort((a, b) => b.score - a.score)[0]?.item
       if (!hit) continue
@@ -240,28 +257,42 @@ async function fetchTagTextExtras(match, source) {
   return extras
 }
 
-export async function matchByFilename(fileName, source = 'wy', limit = 8) {
+export async function matchByFilename(fileName, source = 'wy', limit = 8, album = '') {
   const parsed = parseFilename(fileName)
-  return matchByArtistTitle(parsed.artist, parsed.title, source, limit, parsed)
+  return matchByArtistTitle(parsed.artist, parsed.title, source, limit, parsed, album)
 }
 
-export async function matchByArtistTitle(artist = '', title = '', source = 'wy', limit = 8, parsedOverride = null) {
+export async function matchByArtistTitle(artist = '', title = '', source = 'wy', limit = 8, parsedOverride = null, album = '') {
   const sdkSource = normalizeTagSource(source)
   const a = String(artist || '').trim()
   const t = String(title || '').trim()
-  const parsed = parsedOverride || {
-    title: t,
-    artist: a,
-    keyword: [a, t].filter(Boolean).join(' '),
-    altKeyword: a && t ? `${t} ${a}` : '',
-    swapped: a && t ? { title: a, artist: t, keyword: `${t} ${a}` } : null,
-  }
+  const alb = String(album || parsedOverride?.album || '').trim()
+  const parsed = parsedOverride
+    ? { ...parsedOverride, album: alb || String(parsedOverride.album || '').trim() }
+    : {
+      title: t,
+      artist: a,
+      album: alb,
+      keyword: [a, t].filter(Boolean).join(' '),
+      altKeyword: a && t ? `${t} ${a}` : '',
+      swapped: a && t ? { title: a, artist: t, keyword: `${t} ${a}` } : null,
+    }
+  if (!parsed.title && t) parsed.title = t
+  if (!parsed.artist && a) parsed.artist = a
+  if (!parsed.album && alb) parsed.album = alb
 
   const keywords = []
+  // 默认优先「歌名 专辑名」，同名多专辑时更准（issue #23）
+  if (parsed.title && parsed.album) {
+    keywords.push(`${parsed.title} ${parsed.album}`)
+  }
   if (parsed.title) keywords.push(parsed.title)
   if (parsed.title && parsed.artist) {
     keywords.push(`${parsed.title} ${parsed.artist}`)
     keywords.push(`${parsed.artist} ${parsed.title}`)
+  }
+  if (parsed.title && parsed.artist && parsed.album) {
+    keywords.push(`${parsed.title} ${parsed.artist} ${parsed.album}`)
   }
   if (parsed.artist && !parsed.title) keywords.push(parsed.artist)
   if (!keywords.length && parsed.keyword) keywords.push(parsed.keyword)
@@ -290,7 +321,7 @@ export async function matchByArtistTitle(artist = '', title = '', source = 'wy',
       .filter(i => i._score > 0)
   let finalPool = pool
   if (!finalPool.length && sdkSource !== 'tx' && (parsed.title || parsed.artist)) {
-    return matchByArtistTitle(artist, title, 'tx', limit, parsedOverride)
+    return matchByArtistTitle(artist, title, 'tx', limit, parsedOverride, album)
   }
   if (!finalPool.length) finalPool = fallback.slice(0, limit)
   const seen = new Set()

@@ -6,6 +6,7 @@ import {
   isAllowedMediaPath,
   addMusicPath,
   resolveReal,
+  getDownloadSavePath,
 } from '../utils/filePaths.js'
 import { listAudioFiles } from '../utils/audioScan.js'
 import {
@@ -260,8 +261,10 @@ libraryRouter.get('/scan-status', (_req, res) => {
 })
 
 /** 启动本地情绪分析（SensMe 风格） */
-libraryRouter.post('/mood/analyze-start', (req, res) => {
+libraryRouter.post('/mood/analyze-start', async (req, res) => {
   try {
+    const { assertFfmpegFeatureReady } = await import('../utils/apePlay.js')
+    await assertFfmpegFeatureReady('进行情绪分析')
     const force = Boolean(req.body?.force)
     const mood = startMoodAnalyzeJob({ force })
     if (mood.blocked) {
@@ -269,7 +272,8 @@ libraryRouter.post('/mood/analyze-start', (req, res) => {
     }
     res.json({ ok: true, mood })
   } catch (e) {
-    res.status(500).json({ error: e.message })
+    const status = /未找到 ffmpeg|尚未启用|尚未检测到 ffmpeg/i.test(String(e?.message || '')) ? 400 : 500
+    res.status(status).json({ error: e.message })
   }
 })
 
@@ -593,6 +597,53 @@ function moveFile(src, dest) {
   }
 }
 
+/** 整理后清理空源目录：向上删除空文件夹，但不碰音乐库根 / 下载根 / 目标目录 */
+function pruneEmptyDirsAfterOrganize(movedFromPaths, targetDir) {
+  const stopRoots = new Set()
+  for (const p of getMusicPaths()) {
+    try { if (p) stopRoots.add(resolveReal(p)) } catch {}
+  }
+  try {
+    const dl = getDownloadSavePath()
+    if (dl) stopRoots.add(resolveReal(dl))
+  } catch {}
+  try {
+    if (targetDir) stopRoots.add(resolveReal(targetDir))
+  } catch {}
+
+  const candidates = [...new Set(
+    (movedFromPaths || [])
+      .map((p) => {
+        try { return path.dirname(path.resolve(String(p))) } catch { return '' }
+      })
+      .filter(Boolean),
+  )].sort((a, b) => b.length - a.length)
+
+  let removed = 0
+  for (const start of candidates) {
+    let dir = start
+    while (dir) {
+      let real = ''
+      try { real = resolveReal(dir) } catch { break }
+      if (!real || stopRoots.has(real)) break
+      if (!isAllowedMediaPath(dir)) break
+      try {
+        if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) break
+        const entries = fs.readdirSync(dir)
+        if (entries.length > 0) break
+        fs.rmdirSync(dir)
+        removed += 1
+        const parent = path.dirname(dir)
+        if (!parent || parent === dir) break
+        dir = parent
+      } catch {
+        break
+      }
+    }
+  }
+  return removed
+}
+
 /** 解析整理范围，返回待整理的文件路径数组 */
 function resolveOrganizeFiles(body = {}) {
   const mode = body.scope || 'all' // all | files | dir
@@ -707,6 +758,7 @@ libraryRouter.post('/organize', async (req, res) => {
     }
 
     // 更新缓存：旧路径移除，新路径加入待扫描
+    let cleanedDirs = 0
     if (moved.length) {
       removeCachePaths(moved.map((m) => m.from))
       const pending = moved
@@ -723,6 +775,9 @@ libraryRouter.post('/organize', async (req, res) => {
           addMusicPath(targetDir)
         }
       } catch {}
+      try {
+        cleanedDirs = pruneEmptyDirsAfterOrganize(moved.map((m) => m.from), targetDir)
+      } catch {}
       notifyLibraryRemoved(moved.map((m) => m.from), { reason: 'organize' })
       notifyLibraryChanged(moved.map((m) => m.to), { reason: 'organize' })
     }
@@ -734,6 +789,7 @@ libraryRouter.post('/organize', async (req, res) => {
         moved: moved.length,
         failed: failed.length,
         skipped: skipped.length,
+        cleanedDirs,
         movedList: moved,
         failedList: failed,
         skippedList: skipped,

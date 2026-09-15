@@ -108,6 +108,11 @@ const RULES = [
     test: /检测为试听时长|仅提供约.*试听片段|仅支持试听约|时长不完整/i,
     keepRaw: true,
   },
+  {
+    test: /未找到 ffmpeg|尚未检测到 ffmpeg|尚未启用.*ffmpeg|已检测到系统 ffmpeg/i,
+    keepRaw: true,
+    maxLen: 480,
+  },
 ]
 
 function stripNoise(text) {
@@ -144,7 +149,7 @@ export function formatUserError(error, fallback = '操作失败，请稍后重�
 
   for (const rule of RULES) {
     if (rule.test.test(raw)) {
-      if (rule.keepRaw) return raw.slice(0, 200)
+      if (rule.keepRaw) return raw.slice(0, rule.maxLen || 200)
       return rule.message
     }
   }
