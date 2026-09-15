@@ -167,6 +167,12 @@ export const api = {
   settings: {
     get: () => request('/settings'),
     update: (data) => request('/settings', { method: 'PUT', body: data }),
+    ffmpegStatus: () => request('/settings/ffmpeg'),
+    ffmpegDetect: () => request('/settings/ffmpeg/detect', { method: 'POST' }),
+    ffmpegInstall: () => request('/settings/ffmpeg/install', { method: 'POST', timeout: 15000 }),
+    ffmpegInstallStatus: () => request('/settings/ffmpeg/install-status'),
+    ffmpegEnable: () => request('/settings/ffmpeg/enable', { method: 'POST' }),
+    ffmpegDisable: () => request('/settings/ffmpeg/disable', { method: 'POST' }),
   },
   source: {
     list: () => request('/source/list'),

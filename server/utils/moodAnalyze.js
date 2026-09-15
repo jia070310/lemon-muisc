@@ -1,6 +1,6 @@
 import { spawn } from 'child_process'
 import fs from 'fs'
-import { resolveFfmpegBin } from './apePlay.js'
+import { assertFfmpegFeatureReady } from './apePlay.js'
 
 /** 算法版本： bump 后会触发全库重分析 */
 export const MOOD_ALGO_VERSION = 1
@@ -17,10 +17,7 @@ function clamp(n, lo, hi) {
 
 function decodePcmS16le(filePath, { sampleRate = SAMPLE_RATE, maxSeconds = MAX_SECONDS } = {}) {
   return (async () => {
-    const ffmpeg = await resolveFfmpegBin()
-    if (!ffmpeg) {
-      throw new Error('未找到 ffmpeg，无法进行情绪分析')
-    }
+    const ffmpeg = await assertFfmpegFeatureReady('进行情绪分析')
     if (!fs.existsSync(filePath)) {
       throw new Error('文件不存在')
     }

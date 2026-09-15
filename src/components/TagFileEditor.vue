@@ -90,13 +90,17 @@
             <span>歌名</span>
             <ClearableInput v-model="fetchTitle" variant="plain" placeholder="歌曲名" @enter="doFetchSearch" />
           </label>
+          <label class="search-field">
+            <span>专辑</span>
+            <ClearableInput v-model="fetchAlbum" variant="plain" placeholder="专辑名（可选）" @enter="doFetchSearch" />
+          </label>
           <button class="btn-primary btn-sm search-btn" @click="doFetchSearch" :disabled="fetchLoading">
             {{ fetchLoading ? '搜索中...' : '搜索' }}
           </button>
         </div>
         <div class="fetch-body">
           <div class="fetch-list">
-            <div v-if="!fetchResults.length && !fetchLoading" class="fetch-empty">暂无结果，请调整歌手或歌名后重试</div>
+            <div v-if="!fetchResults.length && !fetchLoading" class="fetch-empty">暂无结果，请调整歌手、歌名或专辑后重试</div>
             <div
               v-for="(item, i) in fetchResults" :key="i"
               :class="['fetch-item', { active: fetchPreview?.id === item.id && fetchPreview?.source === item.source }]"
@@ -186,6 +190,7 @@ const fetchPreviewMeta = ref(null)
 const showFetchModal = ref(false)
 const fetchArtist = ref('')
 const fetchTitle = ref('')
+const fetchAlbum = ref('')
 const fetchIntent = ref('cover')
 
 const fetchSourceLabel = computed(() => (fetchSource.value === 'tx' ? 'QQ音乐' : '网易云'))
@@ -407,7 +412,8 @@ async function openFetchModal(intent) {
   })
   fetchArtist.value = resolved.artist
   fetchTitle.value = resolved.title
-  if (fetchArtist.value || fetchTitle.value) {
+  fetchAlbum.value = String(editForm.value.album || '').trim()
+  if (fetchArtist.value || fetchTitle.value || fetchAlbum.value) {
     await doFetchSearch()
   }
 }
@@ -433,15 +439,16 @@ function fetchFieldsForIntent(intent) {
 async function doFetchSearch() {
   const artist = fetchArtist.value.trim()
   const title = fetchTitle.value.trim()
-  if (!artist && !title) {
-    showToast('请至少填写歌手或歌名', 'info')
+  const album = fetchAlbum.value.trim()
+  if (!artist && !title && !album) {
+    showToast('请至少填写歌手、歌名或专辑', 'info')
     return
   }
   fetchLoading.value = true
   fetchPreview.value = null
   fetchPreviewMeta.value = null
   try {
-    const res = await api.tag.match({ artist, title }, fetchSource.value)
+    const res = await api.tag.match({ artist, title, album }, fetchSource.value)
     fetchResults.value = res.data || []
     if (!fetchResults.value.length) showToast('未找到匹配结果', 'info')
     else if (fetchResults.value.length === 1) await previewFetchItem(fetchResults.value[0])

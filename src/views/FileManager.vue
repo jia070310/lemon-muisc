@@ -254,6 +254,7 @@
             placeholder="例如 /vol1/1000/MusicOrganized 或 D:/Music/Organized"
             :disabled="organizing"
           />
+          <p class="org-hint">上次填写的目标目录会自动记住（本机浏览器缓存）。</p>
         </div>
         <div class="org-actions">
           <button
@@ -285,6 +286,7 @@
           </span>
           <span>共 <strong>{{ organizeResult.artists }}</strong> 位艺术家</span>
           <span v-if="organizeResult.albums"> · <strong>{{ organizeResult.albums }}</strong> 张专辑</span>
+          <span v-if="organizeResult.cleanedDirs"> · 清理空目录 <strong>{{ organizeResult.cleanedDirs }}</strong> 个</span>
         </p>
         <p class="org-target-done">目标目录：<code>{{ organizeResult.targetDir }}</code></p>
 
@@ -547,9 +549,26 @@ async function runBatchDelete(list) {
 }
 
 /* ---------- 整理 ---------- */
-const organizeTarget = ref('')
+const ORG_TARGET_KEY = 'lemon.fileManager.organizeTarget'
+function loadOrganizeTarget() {
+  try {
+    return String(localStorage.getItem(ORG_TARGET_KEY) || '').trim()
+  } catch {
+    return ''
+  }
+}
+function persistOrganizeTarget(value) {
+  try {
+    const v = String(value || '').trim()
+    if (v) localStorage.setItem(ORG_TARGET_KEY, v)
+    else localStorage.removeItem(ORG_TARGET_KEY)
+  } catch {}
+}
+const organizeTarget = ref(loadOrganizeTarget())
 const organizing = ref(false)
 const organizeResult = ref(null)
+
+watch(organizeTarget, (v) => persistOrganizeTarget(v))
 
 // 仅文件模式：勾选文件整理
 
@@ -720,7 +739,7 @@ async function startOrganize() {
   try {
     const res = await api.library.organize(target, { scope: 'files', filePaths })
     organizeResult.value = res?.data || {}
-    alert(`整理完成：迁移 ${organizeResult.value.moved || 0} 首，跳过 ${organizeResult.value.skipped || 0} 首${organizeResult.value.failed ? `，失败 ${organizeResult.value.failed} 首` : ''}`)
+    alert(`整理完成：迁移 ${organizeResult.value.moved || 0} 首，跳过 ${organizeResult.value.skipped || 0} 首${organizeResult.value.failed ? `，失败 ${organizeResult.value.failed} 首` : ''}${organizeResult.value.cleanedDirs ? `，清理空目录 ${organizeResult.value.cleanedDirs} 个` : ''}`)
     if (organizeResult.value.moved) {
       selectedPaths.value = new Set()
       orgPickedFiles.value = new Set()
@@ -1204,6 +1223,12 @@ async function startOrganize() {
 .org-field .input:focus {
   outline: none;
   border-color: var(--accent);
+}
+.org-hint {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.4;
 }
 .org-actions {
   display: flex;

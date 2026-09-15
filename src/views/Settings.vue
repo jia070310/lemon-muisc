@@ -147,6 +147,73 @@
           <p class="summary-tip">修改路径：飞牛应用设置 → 运行设置（或访问权限授权两个文件夹）→ 保存后停用再启用。</p>
         </div>
 
+        <div v-if="isAdminUser" class="config-summary card-inner ffmpeg-panel">
+          <div class="block-label">ffmpeg（APE 试听 / 情绪分析，按需）</div>
+          <ol class="ffmpeg-steps">
+            <li class="done">应用安装时不下载 ffmpeg</li>
+            <li :class="{ done: ffmpegStatus.source === 'system' || (ffmpegStatus.enabled && ffmpegStatus.source === 'system') }">
+              优先用系统自带（有则相关功能直接可用）
+            </li>
+            <li :class="{ done: ffmpegStatus.source === 'managed', active: ffmpegInstall.running && ffmpegInstall.phase === 'download' }">
+              系统没有、又要用到相关功能时，再点下方准备便携版
+            </li>
+          </ol>
+          <div class="summary-row">
+            <span class="summary-key">状态</span>
+            <span class="summary-val" :class="ffmpegStatusClass">{{ ffmpegStatusLabel }}</span>
+          </div>
+          <div v-if="ffmpegStatus.path" class="summary-row">
+            <span class="summary-key">路径</span>
+            <code class="summary-val">{{ ffmpegStatus.path }}</code>
+          </div>
+          <div v-if="ffmpegStatus.source && ffmpegStatus.source !== 'none'" class="summary-row">
+            <span class="summary-key">来源</span>
+            <span class="summary-val">{{ ffmpegStatus.source === 'system' ? '系统自带（优先）' : '应用便携版（回退）' }}</span>
+          </div>
+          <div v-if="ffmpegInstall.running || ffmpegInstall.phase === 'error'" class="ffmpeg-progress-block">
+            <div class="ffmpeg-progress-bar">
+              <div class="ffmpeg-progress-fill" :style="{ width: `${ffmpegInstall.progress || 0}%` }" />
+            </div>
+            <p class="ffmpeg-progress-text">{{ ffmpegInstall.message || '处理中…' }}</p>
+          </div>
+          <div class="ffmpeg-actions">
+            <button
+              type="button"
+              class="btn-primary btn-sm"
+              :disabled="ffmpegBusy || ffmpegInstall.running"
+              @click="installFfmpeg"
+            >
+              {{
+                ffmpegInstall.running || ffmpegBusy === 'install'
+                  ? '准备中…'
+                  : ffmpegStatus.enabled
+                    ? '重新检测 / 准备'
+                    : '检测并准备 ffmpeg'
+              }}
+            </button>
+            <button
+              type="button"
+              class="btn-ghost btn-sm"
+              :disabled="ffmpegBusy || ffmpegInstall.running"
+              @click="detectFfmpeg"
+            >
+              {{ ffmpegBusy === 'detect' ? '检测中…' : '仅检测' }}
+            </button>
+            <button
+              v-if="ffmpegStatus.enabled && !ffmpegStatus.settingDisabled"
+              type="button"
+              class="btn-ghost btn-sm"
+              :disabled="ffmpegBusy || ffmpegInstall.running"
+              @click="disableFfmpeg"
+            >
+              {{ ffmpegBusy === 'disable' ? '停用中…' : '停用相关功能' }}
+            </button>
+          </div>
+          <p class="summary-tip">
+            不用 APE / 情绪分析可忽略本项。装包不会下载 ffmpeg；有系统自带时一般无需操作。
+          </p>
+        </div>
+
         <div class="paths-layout">
           <section v-if="isAdminUser" class="paths-section paths-section-block">
             <h4 class="paths-section-title">音乐库</h4>
@@ -992,7 +1059,7 @@
 
 <script setup>
 defineOptions({ name: 'Settings' })
-import { ref, reactive, computed, onMounted, watch } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from '../api.js'
 import { loadCoverStyle, loadPlayerSettings, setAutoMatchOnPlay, PLAYER_AUTO_MATCH_ON_PLAY_KEY } from '../stores/player.js'
@@ -1129,6 +1196,43 @@ const activeTab = ref('paths')
 const needsPathSetup = ref(false)
 const mountInfo = ref(null)
 const mountProbeText = ref('')
+const ffmpegStatus = ref({
+  available: false,
+  path: '',
+  enabled: false,
+  settingEnabled: false,
+  settingDisabled: false,
+  source: 'none',
+  installHint: '',
+  steps: [],
+})
+const ffmpegInstall = ref({
+  phase: 'idle',
+  progress: 0,
+  message: '',
+  error: '',
+  running: false,
+})
+const ffmpegBusy = ref('')
+let ffmpegPollTimer = 0
+const ffmpegStatusLabel = computed(() => {
+  if (ffmpegInstall.value.running) return ffmpegInstall.value.message || '准备中…'
+  if (ffmpegInstall.value.phase === 'error') return ffmpegInstall.value.error || '准备失败'
+  if (ffmpegStatus.value.settingDisabled) return '已停用相关功能'
+  if (ffmpegStatus.value.enabled) {
+    if (ffmpegStatus.value.source === 'system') return '可用 · 系统自带'
+    if (ffmpegStatus.value.source === 'managed') return '可用 · 便携版回退'
+    return '可用'
+  }
+  return '未就绪（不用 APE / 情绪分析可忽略；要用时再点「检测并准备」）'
+})
+const ffmpegStatusClass = computed(() => {
+  if (ffmpegInstall.value.phase === 'error') return 'ffmpeg-bad'
+  if (ffmpegStatus.value.settingDisabled) return 'ffmpeg-warn'
+  if (ffmpegStatus.value.enabled) return 'ffmpeg-ok'
+  if (ffmpegInstall.value.running) return 'ffmpeg-warn'
+  return 'ffmpeg-bad'
+})
 const libraryStats = ref(null)
 const libraryStatsLoading = ref(false)
 const scanAutoMode = ref('all')
@@ -1398,6 +1502,7 @@ watch(activeTab, async (tab) => {
     await loadScanSettings()
     initScanTreeExpansion()
   }
+  if (tab === 'paths' && isAdminUser.value) loadFfmpegStatus()
   if (tab === 'users') loadManagedUsers()
   if (tab === 'account') loadAccountInfo()
 })
@@ -1821,7 +1926,114 @@ onMounted(async () => {
     if (fromList.length) activeSourceIds.value = fromList
   } catch {}
   await loadPaths()
+  if (isAdminUser.value) loadFfmpegStatus()
 })
+
+onUnmounted(() => {
+  stopFfmpegPoll()
+})
+
+async function applyFfmpegStatus(res) {
+  ffmpegStatus.value = {
+    available: Boolean(res?.available),
+    path: res?.path || '',
+    enabled: Boolean(res?.enabled),
+    settingEnabled: Boolean(res?.settingEnabled),
+    settingDisabled: Boolean(res?.settingDisabled),
+    source: res?.source || 'none',
+    installHint: res?.installHint || '',
+    steps: Array.isArray(res?.steps) ? res.steps : ffmpegStatus.value.steps,
+  }
+  if (res?.install) {
+    ffmpegInstall.value = {
+      phase: res.install.phase || 'idle',
+      progress: Number(res.install.progress) || 0,
+      message: res.install.message || '',
+      error: res.install.error || '',
+      running: Boolean(res.install.running),
+    }
+  }
+}
+
+function stopFfmpegPoll() {
+  if (ffmpegPollTimer) {
+    clearInterval(ffmpegPollTimer)
+    ffmpegPollTimer = 0
+  }
+}
+
+function startFfmpegPoll() {
+  stopFfmpegPoll()
+  ffmpegPollTimer = setInterval(async () => {
+    try {
+      const res = await api.settings.ffmpegStatus()
+      await applyFfmpegStatus(res)
+      if (!res?.install?.running) {
+        stopFfmpegPoll()
+        ffmpegBusy.value = ''
+        if (res?.install?.phase === 'done' || res?.enabled) {
+          showToast(res?.source === 'system' ? '已使用系统自带 ffmpeg' : 'ffmpeg 已就绪', 'success')
+        } else if (res?.install?.phase === 'error') {
+          showToast(res.install.error || '准备失败', 'error')
+        }
+      }
+    } catch {}
+  }, 1000)
+}
+
+async function loadFfmpegStatus() {
+  try {
+    const res = await api.settings.ffmpegStatus()
+    await applyFfmpegStatus(res)
+    if (res?.install?.running) {
+      ffmpegBusy.value = 'install'
+      startFfmpegPoll()
+    }
+  } catch {}
+}
+
+async function detectFfmpeg() {
+  ffmpegBusy.value = 'detect'
+  try {
+    const res = await api.settings.ffmpegDetect()
+    await applyFfmpegStatus(res)
+    if (res.available) {
+      showToast(res.enabled ? '已检测到 ffmpeg，且功能已启用' : '已检测到 ffmpeg，可点击「安装并启用」完成启用', 'success')
+    } else {
+      showToast('仍未检测到，请点击「安装并启用 ffmpeg」自动下载', 'info')
+    }
+  } catch (e) {
+    showToast(e.message || '检测失败', 'error')
+  } finally {
+    ffmpegBusy.value = ''
+  }
+}
+
+async function installFfmpeg() {
+  ffmpegBusy.value = 'install'
+  try {
+    const res = await api.settings.ffmpegInstall()
+    await applyFfmpegStatus(res)
+    startFfmpegPoll()
+  } catch (e) {
+    showToast(e.message || '无法开始准备', 'error')
+    ffmpegBusy.value = ''
+    await loadFfmpegStatus()
+  }
+}
+
+async function disableFfmpeg() {
+  ffmpegBusy.value = 'disable'
+  try {
+    const res = await api.settings.ffmpegDisable()
+    await applyFfmpegStatus(res)
+    showToast('已停用 ffmpeg 相关功能', 'info')
+  } catch (e) {
+    showToast(e.message || '停用失败', 'error')
+  } finally {
+    ffmpegBusy.value = ''
+  }
+}
 
 async function loadPaths() {
   try {
@@ -2567,6 +2779,51 @@ function showToast(text, type = 'info') {
   font-size: 12px;
   color: var(--text-muted);
 }
+.ffmpeg-panel {
+  margin-top: 0;
+}
+.ffmpeg-steps {
+  margin: 6px 0 10px;
+  padding-left: 1.25rem;
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.7;
+}
+.ffmpeg-steps li.done {
+  color: #2f9e44;
+}
+.ffmpeg-steps li.active {
+  color: var(--text);
+  font-weight: 600;
+}
+.ffmpeg-progress-block {
+  margin-top: 10px;
+}
+.ffmpeg-progress-bar {
+  height: 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+  overflow: hidden;
+}
+.ffmpeg-progress-fill {
+  height: 100%;
+  background: var(--accent, #e85d4c);
+  transition: width 0.25s ease;
+}
+.ffmpeg-progress-text {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.ffmpeg-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+.ffmpeg-ok { color: #2f9e44; font-weight: 600; }
+.ffmpeg-warn { color: #e67700; font-weight: 600; }
+.ffmpeg-bad { color: #e03131; font-weight: 600; }
 .setup-hint {
   margin-bottom: 16px;
   padding: 10px 14px;

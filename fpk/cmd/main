@@ -115,10 +115,11 @@ start_service() {
   fi
 
   if [ ! -d "${root}/node_modules/express" ]; then
+    echo "正在补装依赖（首次启用可能需几分钟）…" > "${TRIM_TEMP_LOGFILE}"
     install_node_modules || true
   fi
   if [ ! -d "${root}/node_modules/express" ]; then
-    echo "依赖未安装成功。请查看 ${TRIM_PKGVAR}/log/npm-install.log ；或确认 NAS 可访问 registry.npmmirror.com。" > "${TRIM_TEMP_LOGFILE}"
+    echo "依赖未安装成功。请查看 ${TRIM_PKGVAR}/log/npm-install.log ；确认已安装 Node.js v22，且 NAS 可访问 registry.npmmirror.com。" > "${TRIM_TEMP_LOGFILE}"
     return 1
   fi
 
