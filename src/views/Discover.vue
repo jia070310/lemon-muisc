@@ -792,6 +792,7 @@ function openHomeRank(item) {
     query: {
       source: item.source || discoverState.activeSource,
       id: String(item.id),
+      name: item.name ? String(item.name) : undefined,
     },
   })
 }

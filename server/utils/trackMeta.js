@@ -159,6 +159,31 @@ export async function fetchTrackCover({
     } catch {}
   }
 
+  // 酷我榜单回退源常无封面字段：用 musicInfo 补
+  if (!candidates.length && src === 'kw') {
+    const mid = merged.rid || merged.musicId || merged.songId || merged.id
+    if (mid) {
+      try {
+        const { default: needle } = await import('needle')
+        const resp = await needle('get',
+          `http://wapi.kuwo.cn/api/www/music/musicInfo?mid=${encodeURIComponent(String(mid))}&httpsStatus=1`,
+          {
+            headers: {
+              Referer: 'https://www.kuwo.cn/',
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            },
+            parse_response: false,
+            timeout: 12000,
+          },
+        )
+        const text = Buffer.isBuffer(resp.body) ? resp.body.toString('utf8') : String(resp.body || '')
+        const json = JSON.parse(text.replace(/^\uFEFF/, '').trim() || '{}')
+        const pic = json?.data?.pic || json?.data?.albumpic || ''
+        if (pic) candidates.push(String(pic).replace(/\/120\//, '/500/'))
+      } catch {}
+    }
+  }
+
   if (asBuffer) {
     for (const url of candidates) {
       const pic = await fetchPicBuffer(url)

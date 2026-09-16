@@ -2,7 +2,7 @@
   <div class="discover-more-page">
     <div class="more-toolbar">
       <button type="button" class="btn-ghost btn-sm" @click="onBack">← {{ detailId ? '返回榜单' : '返回发现' }}</button>
-      <h1 class="more-title">{{ detailInfo?.name || '排行榜' }}</h1>
+      <h1 class="more-title">{{ detailId ? detailTitle : (detailInfo?.name || '排行榜') }}</h1>
     </div>
 
     <div v-if="!detailId" class="more-filters card">
@@ -64,6 +64,7 @@
     <template v-else>
       <div v-if="detailLoading && !detailTracks.length" class="state">正在加载榜单歌曲...</div>
       <div v-else-if="detailError && !detailTracks.length" class="state error">{{ detailError }}</div>
+      <div v-else-if="!detailTracks.length" class="state">暂无歌曲，请稍后重试或换其他榜单</div>
       <div v-else class="song-list card">
         <div class="detail-actions">
           <button type="button" class="btn-primary btn-sm" :disabled="!detailTracks.length" @click="playAll">播放全部</button>
@@ -131,6 +132,12 @@ const detailInfo = ref(null)
 const detailTracks = ref([])
 const detailLoading = ref(false)
 const detailError = ref('')
+
+const detailTitle = computed(() => {
+  return detailInfo.value?.name
+    || String(route.query.name || '').trim()
+    || '排行榜'
+})
 
 useProgressiveTrackCovers(() => detailTracks.value, {
   getSource: () => source.value,
@@ -242,7 +249,11 @@ function onBack() {
 function openDetail(item) {
   router.push({
     path: '/discover/ranks',
-    query: { source: item.source || source.value, id: String(item.id) },
+    query: {
+      source: item.source || source.value,
+      id: String(item.id),
+      name: item.name ? String(item.name) : undefined,
+    },
   })
 }
 
@@ -279,17 +290,26 @@ async function loadDetail() {
   detailLoading.value = true
   detailError.value = ''
   detailTracks.value = []
+  const queryName = String(route.query.name || '').trim()
+  if (queryName) detailInfo.value = { name: queryName }
   startProgress('detail')
   try {
     const pageSize = 100
     let page = 1
     let total = Infinity
     const all = []
-    let info = { name: '排行榜' }
+    let info = { name: queryName || '排行榜' }
     while (all.length < total) {
       const res = await api.discover.toplist(source.value, detailId.value, page, pageSize)
       const data = res.data || {}
-      if (data.info) info = data.info
+      if (data.info) {
+        info = {
+          ...data.info,
+          name: data.info.name && data.info.name !== '排行榜'
+            ? data.info.name
+            : (info.name || queryName || '排行榜'),
+        }
+      }
       const batch = data.list || []
       all.push(...batch)
       total = Number(data.total) || all.length
@@ -303,6 +323,9 @@ async function loadDetail() {
     }
     detailInfo.value = info
     detailTracks.value = all
+    if (!all.length) {
+      detailError.value = '榜单暂无歌曲或接口暂时不可用，请稍后重试'
+    }
   } catch (e) {
     detailError.value = e.message || '加载榜单失败'
   } finally {

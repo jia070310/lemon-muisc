@@ -10,7 +10,6 @@
           @clear="clearSearch"
         />
       </form>
-      <router-link to="/library/mood" class="btn-ghost btn-sm">情绪地图</router-link>
       <button type="button" class="btn-ghost btn-sm" :disabled="libraryScanning" @click="refreshLibrary">
         {{ scanButtonLabel }}
       </button>
