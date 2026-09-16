@@ -9,88 +9,117 @@
           <div class="hero-title-row">
             <h1 class="about-title">{{ APP_DISPLAY_NAME }}</h1>
             <span class="version-pill">v{{ info?.currentVersion || '—' }}</span>
+            <span v-if="info?.updateAvailable" class="badge-new">有新版</span>
+            <span v-else-if="info?.latestVersion && !loading" class="badge-ok">已最新</span>
           </div>
           <p class="about-desc">{{ APP_DESCRIPTION }}</p>
-          <p class="about-privacy-hint">
-            为改进产品，默认会上报日活与使用时长（匿名安装 ID，不含歌单、路径、账号与歌曲信息）。管理员可在「设置 → 邮件服务」底部的「日活统计」中关闭。
-          </p>
-          <a :href="REPO_URL" target="_blank" rel="noopener" class="about-repo">{{ REPO_URL }}</a>
         </div>
       </div>
       <div class="hero-actions">
-        <button class="btn-ghost btn-sm" @click="loadInfo" :disabled="loading">
-          {{ loading ? '检测中...' : '重新检测更新' }}
+        <button class="btn-ghost btn-sm" type="button" @click="loadInfo" :disabled="loading">
+          {{ loading ? '检测中…' : '检测更新' }}
         </button>
-        <a :href="REPO_URL" target="_blank" rel="noopener" class="btn-primary btn-sm">打开 GitHub 仓库</a>
+        <a :href="REPO_URL" target="_blank" rel="noopener" class="btn-ghost btn-sm">GitHub</a>
       </div>
     </header>
 
-    <div v-if="info?.updateAvailable" class="update-banner card">
-      <div class="update-banner-text">
-        <strong>发现新版本 v{{ info.latestVersion }}</strong>
-        <span>当前版本 v{{ info.currentVersion }}，建议更新以获得最新功能与修复。</span>
+    <!-- 更新：版本 + 说明 + 加速，一块说完 -->
+    <section v-if="info?.updateAvailable" class="update-card card">
+      <div class="update-head">
+        <div class="update-head-text">
+          <h2 class="update-title">新版本 v{{ info.latestVersion }}</h2>
+          <p class="update-sub">
+            当前 v{{ info.currentVersion }}
+            <template v-if="info.publishedAt"> · {{ formatDate(info.publishedAt) }}</template>
+          </p>
+        </div>
+        <a :href="info.releaseUrl || REPO_URL" target="_blank" rel="noopener" class="btn-primary btn-sm">打开 Release</a>
       </div>
-      <a :href="info.releaseUrl || REPO_URL" target="_blank" rel="noopener" class="btn-primary btn-sm">前往更新</a>
-    </div>
 
-    <div class="about-grid">
-      <section class="about-card card">
-        <h2 class="section-title">功能特性</h2>
-        <ul class="feature-list">
-          <li v-for="(line, i) in APP_FEATURES" :key="i" class="feature-item">
-            <span class="feature-dot" aria-hidden="true" />
-            <span>{{ line }}</span>
-          </li>
+      <details v-if="info.releaseNotes" class="update-notes">
+        <summary>发布说明</summary>
+        <pre class="update-notes-body">{{ info.releaseNotes }}</pre>
+      </details>
+      <p v-else class="update-notes-empty">暂无正文说明，可到 GitHub Release 查看。</p>
+
+      <div v-if="info.installHints" class="update-install">
+        <div class="update-install-title">FPK 安装包</div>
+        <div v-if="fpkAssets.length" class="fpk-actions">
+          <template v-for="asset in fpkAssets" :key="asset.name">
+            <a
+              class="btn-primary btn-sm fpk-btn"
+              :href="asset.url"
+              target="_blank"
+              rel="noopener"
+              :download="asset.name"
+            >
+              下载 {{ asset.label }}
+              <span v-if="asset.sizeLabel" class="fpk-size">{{ asset.sizeLabel }}</span>
+            </a>
+            <a
+              class="btn-ghost btn-sm fpk-btn"
+              :href="asset.mirrorUrl"
+              target="_blank"
+              rel="noopener"
+              title="国内加速下载"
+            >
+              {{ asset.label }} 加速
+            </a>
+          </template>
+        </div>
+        <p v-else class="update-install-line">
+          暂未解析到 FPK 附件，请
+          <a :href="info.releaseUrl || REPO_URL" target="_blank" rel="noopener">打开 Release</a>
+          手动下载。
+        </p>
+        <p class="fpk-tip">
+          {{ info.installHints.fpkHint }}
+        </p>
+
+        <div class="update-mirror">
+          <div class="update-mirror-label">
+            <span>国内加速（Docker）</span>
+            <button type="button" class="btn-ghost btn-xs" @click="copyMirrorCmd">
+              {{ mirrorCopied ? '已复制' : '复制命令' }}
+            </button>
+          </div>
+          <code class="update-mirror-cmd">{{ info.installHints.dockerPullMirror }}</code>
+          <p class="update-mirror-note">{{ info.installHints.mirrorNote }}</p>
+        </div>
+      </div>
+    </section>
+
+    <section v-else class="about-meta card">
+      <div class="meta-compact">
+        <span>仓库最新
+          <template v-if="loading">检测中…</template>
+          <template v-else-if="info?.latestVersion"><code>v{{ info.latestVersion }}</code></template>
+          <template v-else-if="info?.checkError">获取失败</template>
+          <template v-else>暂无发布</template>
+        </span>
+        <span v-if="info?.checkedAt" class="text-muted">检测于 {{ formatDate(info.checkedAt) }}</span>
+      </div>
+      <p v-if="info?.checkError" class="text-muted meta-error">{{ info.checkError }}</p>
+    </section>
+
+    <div class="about-row">
+      <section class="about-card card about-brief">
+        <ul class="feature-list compact">
+          <li v-for="(line, i) in APP_FEATURES" :key="i">{{ line }}</li>
         </ul>
+        <p class="privacy-one-liner">
+          默认可选上报匿名日活（不含歌单/路径/账号）；可在「设置 → 日活统计」关闭。
+        </p>
       </section>
 
-      <section class="about-card card">
-        <h2 class="section-title">版本信息</h2>
-        <dl class="meta-list">
-          <div class="meta-row">
-            <dt>当前版本</dt>
-            <dd><code>v{{ info?.currentVersion || '—' }}</code></dd>
-          </div>
-          <div class="meta-row">
-            <dt>仓库最新版</dt>
-            <dd>
-              <template v-if="loading">检测中...</template>
-              <template v-else-if="info?.latestVersion">
-                <code>v{{ info.latestVersion }}</code>
-                <span v-if="info.updateAvailable" class="badge-new">可更新</span>
-                <span v-else class="badge-ok">已是最新</span>
-              </template>
-              <template v-else-if="info?.checkError">
-                <span class="text-muted">获取失败：{{ info.checkError }}</span>
-              </template>
-              <template v-else>
-                <span class="text-muted">仓库暂无发布版本</span>
-              </template>
-            </dd>
-          </div>
-          <div v-if="info?.publishedAt" class="meta-row">
-            <dt>最新发布时间</dt>
-            <dd class="text-muted">{{ formatDate(info.publishedAt) }}</dd>
-          </div>
-          <div v-if="info?.checkedAt" class="meta-row">
-            <dt>检测时间</dt>
-            <dd class="text-muted">{{ formatDate(info.checkedAt) }}</dd>
-          </div>
-        </dl>
-      </section>
-    </div>
-
-    <section class="about-card card pwa-card">
-      <h2 class="section-title">添加到桌面（PWA）</h2>
-      <p class="pwa-desc">
-        支持标准渐进式 Web 应用：苹果 iOS 与鸿蒙等系统可「添加到主屏幕 / 桌面」，获得接近全屏、无地址栏的使用体验。
-        桌面图标使用暖色版；网页内与浏览器标题栏仍为原黑底图标。
-        推荐通过 <strong>HTTPS 域名</strong> 访问（反代到本应用）；纯局域网 HTTP 下，iOS Safari 仍可添加，安卓安装提示可能不可用。
-      </p>
-      <div v-if="pwa.standalone" class="pwa-status ok">当前已在桌面应用模式打开</div>
-      <div v-else class="pwa-actions">
+      <section class="about-card card pwa-card">
+        <h2 class="section-title">添加到桌面</h2>
+        <p class="pwa-desc">
+          支持 PWA：Safari / 系统浏览器可「添加到主屏幕」。推荐 HTTPS 访问；桌面 Chrome 可用地址栏安装。
+        </p>
+        <div v-if="pwa.standalone" class="pwa-status ok">当前已在桌面应用模式</div>
         <button
-          v-if="pwa.canInstall"
+          v-else-if="pwa.canInstall"
           class="btn-primary btn-sm"
           type="button"
           :disabled="pwaInstalling"
@@ -98,16 +127,11 @@
         >
           {{ pwaInstalling ? '请在系统弹窗中确认…' : '安装到桌面' }}
         </button>
-        <ul class="pwa-steps">
-          <li><strong>iPhone / iPad</strong>：用 Safari 打开本站 → 分享 →「添加到主屏幕」</li>
-          <li><strong>鸿蒙 / 安卓</strong>：用系统浏览器打开 → 菜单「安装应用」或「添加到主屏幕」（需 HTTPS 时更稳）</li>
-          <li><strong>桌面 Chrome</strong>：地址栏右侧安装图标，或浏览器菜单「安装柠檬音乐」</li>
-        </ul>
-      </div>
-      <p v-if="!pwa.isSecureContext && !pwa.standalone" class="pwa-hint">
-        当前为非安全上下文（{{ pwa.protocol }}）。若需浏览器原生「安装」提示，请配置 HTTPS 反代后再试。
-      </p>
-    </section>
+        <p v-else-if="!pwa.isSecureContext" class="pwa-hint">
+          当前非 HTTPS，部分浏览器可能无法弹出安装提示。
+        </p>
+      </section>
+    </div>
 
     <section v-if="isAdminUser" class="about-admin">
       <h2 class="section-title about-admin-heading">服务状态</h2>
@@ -237,7 +261,7 @@
 
 <script setup>
 defineOptions({ name: 'About' })
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { api } from '../api.js'
 import { checkForUpdate, hasUpdate } from '../composables/useUpdateCheck.js'
 import { APP_NAME, APP_DISPLAY_NAME, APP_DESCRIPTION, APP_FEATURES, REPO_URL } from '../constants/app.js'
@@ -250,7 +274,26 @@ const loading = ref(false)
 const serverHealth = ref(null)
 const pwa = ref(getPwaInstallState())
 const pwaInstalling = ref(false)
+const mirrorCopied = ref(false)
 let stopPwaWatch = null
+let mirrorCopyTimer = null
+
+const fpkAssets = computed(() => {
+  const fromHints = info.value?.installHints?.fpkAssets
+  if (Array.isArray(fromHints) && fromHints.length) return fromHints
+  return Array.isArray(info.value?.fpkAssets) ? info.value.fpkAssets : []
+})
+
+async function copyMirrorCmd() {
+  const cmd = info.value?.installHints?.dockerPullMirror
+  if (!cmd) return
+  try {
+    await navigator.clipboard.writeText(cmd)
+    mirrorCopied.value = true
+    if (mirrorCopyTimer) clearTimeout(mirrorCopyTimer)
+    mirrorCopyTimer = setTimeout(() => { mirrorCopied.value = false }, 2000)
+  } catch {}
+}
 
 async function installPwa() {
   pwaInstalling.value = true
@@ -274,6 +317,7 @@ onMounted(() => {
 onUnmounted(() => {
   if (typeof stopPwaWatch === 'function') stopPwaWatch()
   stopPwaWatch = null
+  if (mirrorCopyTimer) clearTimeout(mirrorCopyTimer)
 })
 
 async function loadServerHealth() {
@@ -337,11 +381,19 @@ function formatDate(iso) {
 <style scoped>
 .about-page {
   width: 100%;
-  max-width: 960px;
-  margin: 0 auto;
+  max-width: none;
+  margin: 0;
   display: flex;
   flex-direction: column;
   gap: 14px;
+  box-sizing: border-box;
+}
+
+.about-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  align-items: stretch;
 }
 
 /* ── 顶部横条品牌区 ── */
@@ -349,8 +401,8 @@ function formatDate(iso) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 20px;
-  padding: 20px 22px;
+  gap: 16px;
+  padding: 16px 18px;
 }
 
 .hero-brand {
@@ -421,8 +473,9 @@ function formatDate(iso) {
 .about-desc {
   font-size: 13px;
   color: var(--text-secondary);
-  line-height:  1.5;
-  margin: 0 0 4px;
+  line-height: 1.5;
+  margin: 0;
+  max-width: none;
 }
 
 .about-repo {
@@ -440,32 +493,186 @@ function formatDate(iso) {
   flex-shrink: 0;
 }
 
-/* ── 更新横幅 ── */
-.update-banner {
+/* ── 更新卡片 ── */
+.update-card {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 14px 18px;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 18px;
   background: var(--accent-muted);
   border-color: var(--brand-border);
 }
-
-.update-banner-text {
+.update-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.update-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--accent);
+}
+.update-sub {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.update-notes {
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 0 12px;
+}
+.update-notes summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 10px 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  user-select: none;
+}
+.update-notes summary::-webkit-details-marker { display: none; }
+.update-notes summary::after {
+  content: '展开';
+  float: right;
+  font-weight: 500;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.update-notes[open] summary::after { content: '收起'; }
+.update-notes-body {
+  margin: 0 0 12px;
+  padding: 0;
+  max-height: min(40vh, 320px);
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+.update-notes-empty {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.update-install {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 8px;
+}
+.update-install-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.update-install-line {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+.fpk-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.fpk-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  text-decoration: none;
+}
+.fpk-size {
+  font-size: 11px;
+  opacity: 0.75;
+  font-weight: 500;
+}
+.fpk-tip {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text);
+  background: rgba(255, 180, 60, 0.12);
+  border: 1px solid rgba(255, 180, 60, 0.28);
+}
+.update-mirror {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.update-mirror-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+.update-mirror-cmd {
+  display: block;
+  font-size: 12px;
+  line-height: 1.45;
+  word-break: break-all;
+  color: var(--accent);
+}
+.update-mirror-note {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-muted, var(--text-secondary));
+}
+.btn-xs {
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
+.about-meta {
+  padding: 12px 16px;
+}
+.meta-compact {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   font-size: 13px;
   color: var(--text-secondary);
-  min-width: 0;
+}
+.meta-error { margin: 6px 0 0; font-size: 12px; }
+
+.about-brief {
+  padding: 14px 18px;
+  gap: 10px;
+}
+.feature-list.compact {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+.privacy-one-liner {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted, var(--text-secondary));
 }
 
-.update-banner-text strong {
-  color: var(--accent);
-  font-size: 14px;
-}
-
-/* ── 双列内容区 ── */
+/* ── 双列内容区（旧样式保留兼容） ── */
 .about-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -480,13 +687,13 @@ function formatDate(iso) {
 }
 
 .pwa-card {
-  margin-top: 14px;
+  padding: 14px 18px;
 }
 
 .pwa-desc {
-  margin: 0 0 12px;
+  margin: 0 0 10px;
   font-size: 13px;
-  line-height: 1.65;
+  line-height: 1.55;
   color: var(--text-secondary);
 }
 
@@ -496,30 +703,15 @@ function formatDate(iso) {
   font-weight: 600;
 }
 
-.pwa-actions {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 12px;
-}
-
-.pwa-steps {
-  margin: 0;
-  padding-left: 1.15rem;
-  font-size: 13px;
-  line-height: 1.7;
-  color: var(--text-secondary);
-}
-
 .pwa-hint {
-  margin: 12px 0 0;
+  margin: 8px 0 0;
   font-size: 12px;
-  line-height: 1.55;
+  line-height: 1.5;
   color: var(--text-muted, var(--text-secondary));
 }
 
 .section-title {
-  margin: 0 0 14px;
+  margin: 0 0 10px;
   font-size: 14px;
   font-weight: 600;
   color: var(--text);
@@ -876,6 +1068,10 @@ function formatDate(iso) {
 }
 
 @media (max-width: 768px) {
+  .about-row {
+    grid-template-columns: 1fr;
+  }
+
   .about-hero {
     flex-direction: column;
     align-items: stretch;

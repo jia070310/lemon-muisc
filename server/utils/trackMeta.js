@@ -5,6 +5,7 @@ import { lyricLookupExtra } from './musicInfo.js'
 import { resolveCoverCandidates } from './cover.js'
 import { fetchPicBuffer } from './fetchPic.js'
 import { fixKgLyric } from './lyric.js'
+import { fetchKugouWordLyricByKeyword } from './krcFetch.js'
 
 function normalizeLyricSearchName(name) {
   if (!name) return ''
@@ -55,6 +56,7 @@ export function pickLyricSongId(source, songId, extra = {}) {
  * 1) 内置 SDK（按平台正确 ID）
  * 2) 音源脚本 lyric
  * 3) 按歌名搜索补全（可跨平台）
+ * 4) preferWords 时若无逐字轴，尝试用网易云 YRC 补全
  */
 export async function fetchTrackLyric({
   source,
@@ -64,6 +66,7 @@ export async function fetchTrackLyric({
   task = {},
   settings = {},
   useOtherSource = true,
+  preferWords = false,
   userId = null,
   allowedSourceIds = null,
 } = {}) {
@@ -73,12 +76,18 @@ export async function fetchTrackLyric({
   const extra = lyricLookupExtra(merged)
   const allowIds = allowedSourceIds || (userId ? getStoredActiveSourceIds(userId) : null)
 
+  const finish = async (lrc) => {
+    if (!lrc) return null
+    if (!preferWords || lrc.ylyric) return lrc
+    return attachWordLyric(lrc, merged, task)
+  }
+
   if (id && src) {
     try {
       const lrc = await getLyric(id, src, { ...extra, ...merged })
-      if (lrc?.lyric) {
-        if (src === 'kg') lrc.lyric = fixKgLyric(lrc.lyric)
-        return lrc
+      if (lrc?.lyric || lrc?.ylyric) {
+        if (src === 'kg' && lrc.lyric) lrc.lyric = fixKgLyric(lrc.lyric)
+        return finish(lrc)
       }
     } catch (e) {
       console.warn('SDK 获取歌词失败:', e?.message || e)
@@ -88,12 +97,13 @@ export async function fetchTrackLyric({
   if (src && hasActiveSource(allowIds)) {
     try {
       const fromSource = await requestSource(src, 'lyric', { musicInfo: merged }, { allowedSourceIds: allowIds })
-      if (fromSource?.lyric) {
-        return {
-          lyric: src === 'kg' ? fixKgLyric(fromSource.lyric) : fromSource.lyric,
+      if (fromSource?.lyric || fromSource?.ylyric) {
+        return finish({
+          lyric: src === 'kg' && fromSource.lyric ? fixKgLyric(fromSource.lyric) : (fromSource.lyric || ''),
           tlyric: fromSource.tlyric || '',
           rlyric: fromSource.rlyric || '',
-        }
+          ylyric: fromSource.ylyric || '',
+        })
       }
     } catch (e) {
       console.warn('音源获取歌词失败:', e?.message || e)
@@ -104,6 +114,7 @@ export async function fetchTrackLyric({
     const keywords = lyricSearchKeywords(merged, task)
     if (!keywords.length) return null
     const allowOther = !src || (useOtherSource && settings?.['download.isUseOtherSource'] !== 'false')
+    // 需要逐字时优先搜网易（YRC）
     const fallbackSources = (allowOther ? ['wy', 'tx', 'kw', 'kg', 'mg'] : [src]).filter(isOnlineSource)
     const seen = new Set()
     for (const keyword of keywords) {
@@ -115,9 +126,9 @@ export async function fetchTrackLyric({
           const hitId = pickLyricSongId(hit.source || trySrc, hit.songmid || hit.hash || hit.songId || hit.copyrightId || hit.id, hit)
           if (!hitId) continue
           const lrc = await getLyric(hitId, hit.source || trySrc, lyricLookupExtra(hit))
-          if (lrc?.lyric) {
-            if ((hit.source || trySrc) === 'kg') lrc.lyric = fixKgLyric(lrc.lyric)
-            return lrc
+          if (lrc?.lyric || lrc?.ylyric) {
+            if ((hit.source || trySrc) === 'kg' && lrc.lyric) lrc.lyric = fixKgLyric(lrc.lyric)
+            return finish(lrc)
           }
         }
       }
@@ -127,6 +138,73 @@ export async function fetchTrackLyric({
   }
 
   return null
+}
+
+/**
+ * 缺少逐字轴时补全（优先酷狗 KRC，参考 LDDC；再试网易 YRC）
+ * https://github.com/chenmozhijin/LDDC
+ */
+async function attachWordLyric(lrc, merged = {}, task = {}) {
+  if (!lrc || lrc.ylyric) return lrc
+
+  // 1) 酷狗 KRC：覆盖面广、解密简单，多数曲目有逐字
+  try {
+    const durationMs = Number(merged.duration || task.duration || 0)
+    const intervalSec = parseIntervalToMs(merged.interval || task.interval)
+    const ylyric = await fetchKugouWordLyricByKeyword(
+      merged.name || task?.name || '',
+      merged.singer || task?.singer || '',
+      durationMs || intervalSec || 0,
+    )
+    if (ylyric) {
+      return {
+        ...lrc,
+        lyric: lrc.lyric || '',
+        ylyric,
+      }
+    }
+  } catch (e) {
+    console.warn('补全酷狗逐字歌词失败:', e?.message || e)
+  }
+
+  // 2) 网易云 YRC（无登录时经常为空，作为兜底）
+  try {
+    const keywords = lyricSearchKeywords(merged, task)
+    for (const keyword of keywords.slice(0, 2)) {
+      const result = await searchMusic(keyword, 'wy', 1, 6)
+      for (const hit of result.list || []) {
+        const hitId = pickLyricSongId('wy', hit.songId || hit.songmid || hit.id, hit)
+        if (!hitId) continue
+        const wy = await getLyric(hitId, 'wy', lyricLookupExtra(hit))
+        if (wy?.ylyric) {
+          return {
+            ...lrc,
+            lyric: lrc.lyric || wy.lyric || '',
+            ylyric: wy.ylyric,
+            tlyric: lrc.tlyric || wy.tlyric || '',
+            rlyric: lrc.rlyric || wy.rlyric || '',
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('补全网易逐字歌词失败:', e?.message || e)
+  }
+  return lrc
+}
+
+function parseIntervalToMs(interval) {
+  const s = String(interval || '').trim()
+  if (!s) return 0
+  if (/^\d+(\.\d+)?$/.test(s)) return Math.round(Number(s) * (Number(s) > 1000 ? 1 : 1000))
+  const m = s.match(/^(\d+):(\d{1,2})(?:\.(\d+))?$/)
+  if (!m) return 0
+  return (parseInt(m[1], 10) * 60 + parseInt(m[2], 10)) * 1000
+}
+
+/** @deprecated 使用 attachWordLyric */
+async function attachWyYlyric(lrc, merged = {}, task = {}) {
+  return attachWordLyric(lrc, merged, task)
 }
 
 /**

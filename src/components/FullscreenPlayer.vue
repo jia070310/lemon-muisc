@@ -69,20 +69,68 @@
             </div>
           </div>
 
-          <div class="fs-lyric-col" ref="lyricPanelRef">
-            <div v-if="!lyricLines.length" class="fs-lyric-empty">暂无歌词</div>
+          <div class="fs-lyric-wrap">
             <div
-              v-else
-              class="fs-lyric-list"
-              ref="lyricListRef"
+              v-if="displayLyricLines.length"
+              class="fs-lyric-toolbar fs-chrome"
+              @pointerdown.stop
+              @click.stop
             >
-              <p
-                v-for="(line, i) in lyricLines"
-                :key="`${line.time}-${i}`"
-                class="fs-lyric-line"
-                :class="{ active: i === activeLyricIdx, near: Math.abs(i - activeLyricIdx) === 1 }"
-                :ref="(el) => setLyricLineRef(el, i)"
-              >{{ line.text || ' ' }}</p>
+              <div class="fs-lyric-mode" role="group" aria-label="歌词显示模式">
+                <button
+                  type="button"
+                  class="fs-lyric-mode-btn"
+                  :class="{ active: lyricDisplayMode === 'line' }"
+                  title="逐行显示"
+                  @click.stop="onSelectLyricMode('line')"
+                >逐行</button>
+                <button
+                  type="button"
+                  class="fs-lyric-mode-btn"
+                  :class="{ active: lyricDisplayMode === 'word', busy: lyricModeBusy }"
+                  :title="hasWordLyrics ? '官方逐字高亮' : (canShowWordLyrics ? '按歌词时间推算逐字高亮' : '尝试获取逐字歌词')"
+                  @click.stop="onSelectLyricMode('word')"
+                >{{ lyricModeBusy ? '获取中' : '逐字' }}</button>
+              </div>
+            </div>
+            <div
+              class="fs-lyric-col"
+              ref="lyricPanelRef"
+              @wheel.passive="onLyricUserInteract"
+              @touchstart.passive="onLyricUserInteract"
+              @pointerdown="onLyricPanelPointerDown"
+            >
+              <div v-if="!displayLyricLines.length" class="fs-lyric-empty">暂无歌词</div>
+              <div
+                v-else
+                class="fs-lyric-list"
+                ref="lyricListRef"
+              >
+                <p
+                  v-for="(line, i) in displayLyricLines"
+                  :key="`${line.time}-${i}`"
+                  class="fs-lyric-line"
+                  :class="{
+                    active: i === activeLyricIdx,
+                    near: Math.abs(i - activeLyricIdx) === 1,
+                    'is-word-mode': showWordLyrics && line.words?.length,
+                  }"
+                  :ref="(el) => setLyricLineRef(el, i)"
+                >
+                  <template v-if="showWordLyrics && line.words?.length">
+                    <span
+                      v-for="(w, wi) in line.words"
+                      :key="wi"
+                      class="fs-lyric-word"
+                      :class="{
+                        sung: i === activeLyricIdx && wi <= liveWordIdx,
+                        current: i === activeLyricIdx && wi === liveWordIdx,
+                      }"
+                    >{{ w.text || ' ' }}</span>
+                  </template>
+                  <template v-else>{{ line.text || ' ' }}</template>
+                </p>
+              </div>
             </div>
           </div>
         </div>
@@ -331,7 +379,9 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   currentPlaying, isPaused, isBuffering, currentTime, displayDuration, coverUrl, coverStyle,
-  lyricLines, activeLyricIdx, playQueue, currentQueueIndex, playMode, playModeLabel,
+  displayLyricLines, activeLyricIdx, hasWordLyrics, canShowWordLyrics,
+  lyricDisplayMode, effectiveLyricDisplayMode, setLyricDisplayMode, refreshLyricsPreferWords,
+  playQueue, currentQueueIndex, playMode, playModeLabel,
   showFullscreenPlayer, visualizerEnabled, volume, isMuted, playerError,
   currentPlayPlatformLabel,
   togglePause, seekTo, setVolume, toggleMute, fmtTime, playNext, playPrev, togglePlayMode,
@@ -340,6 +390,7 @@ import {
   showPlayerNotice,
 } from '../stores/player.js'
 import { cleanText, formatArtists } from '../utils/text.js'
+import { resolveActiveWordIndex, getLyricLineEndTime } from '../utils/lrc.js'
 import { openTagEditTrack } from '../utils/tagEdit.js'
 import { showTagEditModal } from '../stores/tagEditModal.js'
 import { isMobileUiContext } from '../utils/device.js'
@@ -368,6 +419,41 @@ const chromeHidden = ref(false)
 const CONTROLS_IDLE_MS = 3200
 let chromeIdleTimer = null
 let lastPointerStamp = 0
+
+const showWordLyrics = computed(() => effectiveLyricDisplayMode.value === 'word')
+const lyricModeBusy = ref(false)
+
+/** 用 currentTime 在组件内重算字下标，避免 store 侧漏更新导致卡在首字 */
+const liveWordIdx = computed(() => {
+  if (!showWordLyrics.value) return -1
+  const lines = displayLyricLines.value
+  const idx = activeLyricIdx.value
+  if (idx < 0 || !lines[idx]?.words?.length) return -1
+  const t = Number(currentTime.value)
+  if (!Number.isFinite(t)) return -1
+  return resolveActiveWordIndex(
+    lines[idx],
+    lines[idx].words,
+    t,
+    getLyricLineEndTime(lines, idx),
+  )
+})
+
+async function onSelectLyricMode(mode) {
+  setLyricDisplayMode(mode)
+  if (mode !== 'word' || lyricModeBusy.value) return
+  if (hasWordLyrics.value) return
+  // 强制拉取官方逐字（酷狗 KRC / 网易 YRC），避免长期停留在推算轴
+  lyricModeBusy.value = true
+  try {
+    const ok = await refreshLyricsPreferWords()
+    if (!ok && !canShowWordLyrics.value) {
+      showPlayerNotice('当前曲目暂无逐字歌词，已使用逐行/推算显示', 2800)
+    }
+  } finally {
+    lyricModeBusy.value = false
+  }
+}
 const {
   menuStyle: downloadMenuStyle,
   positionMenu: positionDownloadMenu,
@@ -613,7 +699,42 @@ function onAddedToPlaylist({ playlist, duplicate }) {
   else showPlayerNotice(`已加入歌单：${playlist?.name || ''}`, 2500)
 }
 
-function scrollActiveLyric() {
+/** 手动浏览歌词后，多久自动回到当前播放行 */
+const LYRIC_AUTO_RESUME_MS = 3500
+const lyricUserBrowsing = ref(false)
+let lyricBrowseTimer = null
+
+function clearLyricBrowseTimer() {
+  if (lyricBrowseTimer != null) {
+    clearTimeout(lyricBrowseTimer)
+    lyricBrowseTimer = null
+  }
+}
+
+function resetLyricBrowseState() {
+  clearLyricBrowseTimer()
+  lyricUserBrowsing.value = false
+}
+
+/** 用户拖动/滚轮查看歌词：暂停跟随，空闲后自动回位 */
+function onLyricUserInteract() {
+  lyricUserBrowsing.value = true
+  clearLyricBrowseTimer()
+  lyricBrowseTimer = setTimeout(() => {
+    lyricBrowseTimer = null
+    lyricUserBrowsing.value = false
+    scrollActiveLyric(true)
+  }, LYRIC_AUTO_RESUME_MS)
+}
+
+function onLyricPanelPointerDown(e) {
+  // 工具栏切换不打断自动跟随
+  if (e.target?.closest?.('.fs-lyric-toolbar')) return
+  onLyricUserInteract()
+}
+
+function scrollActiveLyric(force = false) {
+  if (!force && lyricUserBrowsing.value) return
   const idx = activeLyricIdx.value
   if (idx < 0) return
   const el = lyricLineEls.value[idx]
@@ -622,6 +743,7 @@ function scrollActiveLyric() {
   const panelRect = panel.getBoundingClientRect()
   const elRect = el.getBoundingClientRect()
   const delta = (elRect.top + elRect.height / 2) - (panelRect.top + panelRect.height / 2)
+  if (Math.abs(delta) < 2) return
   const nextTop = panel.scrollTop + delta
   panel.scrollTo({ top: Math.max(0, nextTop), behavior: 'smooth' })
 }
@@ -715,27 +837,31 @@ function onKeydown(e) {
 
 watch(activeLyricIdx, async () => {
   if (!showFullscreenPlayer.value) return
+  if (lyricUserBrowsing.value) return
   await nextTick()
   scrollActiveLyric()
 })
 
-watch(lyricLines, async () => {
+watch(displayLyricLines, async () => {
   lyricLineEls.value = []
   if (!showFullscreenPlayer.value) return
+  resetLyricBrowseState()
   await nextTick()
-  scrollActiveLyric()
+  scrollActiveLyric(true)
 })
 
 watch(showFullscreenPlayer, async (open) => {
   document.body.style.overflow = open ? 'hidden' : ''
   document.documentElement.classList.toggle('player-fs-open', open)
   if (open) {
+    resetLyricBrowseState()
     await nextTick()
     updateMobileViewport()
-    scrollActiveLyric()
+    scrollActiveLyric(true)
     resetChromeIdleState()
     return
   }
+  resetLyricBrowseState()
   resetChromeIdleState()
   clearChromeIdleTimer()
   chromeHidden.value = false
@@ -767,6 +893,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   clearChromeIdleTimer()
+  resetLyricBrowseState()
   mobileViewportMq?.removeEventListener('change', updateMobileViewport)
   window.removeEventListener('resize', bumpMobileLayout)
   document.removeEventListener('fullscreenchange', syncNativeFullscreenState)
@@ -810,6 +937,9 @@ watch(currentPlaying, () => closeDownloadMenu())
 .fs-player.fs-chrome-hidden .fs-top-left,
 .fs-player.fs-chrome-hidden .fs-close {
   transform: translateY(-8px);
+}
+.fs-player.fs-chrome-hidden .fs-lyric-toolbar {
+  transform: translateY(-6px);
 }
 .fs-bg {
   position: absolute;
@@ -956,7 +1086,16 @@ watch(currentPlaying, () => closeDownloadMenu())
   color: #ff8b8b;
 }
 
+.fs-lyric-wrap {
+  position: relative;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
 .fs-lyric-col {
+  position: relative;
   height: min(62vh, 560px);
   overflow-x: hidden;
   overflow-y: auto;
@@ -971,8 +1110,61 @@ watch(currentPlaying, () => closeDownloadMenu())
   height: 0;
   display: none;
 }
+/* 放在歌词滚动区上方，不再挡住当前行 */
+.fs-lyric-toolbar {
+  position: relative;
+  z-index: 20;
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: center;
+  padding: 0 8px;
+  margin: 0;
+  pointer-events: none;
+  isolation: isolate;
+}
+.fs-lyric-mode {
+  pointer-events: auto;
+  display: inline-flex;
+  padding: 3px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+.fs-lyric-mode-btn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 12px;
+  line-height: 1;
+  padding: 7px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  position: relative;
+  z-index: 1;
+}
+.fs-lyric-mode-btn:hover:not(:disabled) {
+  color: #fff;
+}
+.fs-lyric-mode-btn.active {
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+  font-weight: 600;
+}
+.fs-lyric-mode-btn.busy {
+  opacity: 0.8;
+}
+.fs-lyric-mode-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
 .fs-lyric-list {
-  padding: 30% 12px;
+  position: relative;
+  z-index: 0;
+  padding: 18% 12px 30%;
   text-align: center;
   max-width: 100%;
   overflow-x: hidden;
@@ -994,6 +1186,25 @@ watch(currentPlaying, () => closeDownloadMenu())
   color: #fff;
   font-size: 32px;
   font-weight: 600;
+}
+.fs-lyric-line.is-word-mode {
+  letter-spacing: 0.02em;
+}
+.fs-lyric-word {
+  display: inline;
+  color: inherit;
+  transition: color 0.12s ease, text-shadow 0.12s ease;
+}
+/* 未唱到：略淡；已唱/当前：保持与逐行相同的亮白，避免整行发暗 */
+.fs-lyric-line.active.is-word-mode .fs-lyric-word {
+  color: rgba(255, 255, 255, 0.48);
+}
+.fs-lyric-line.active.is-word-mode .fs-lyric-word.sung {
+  color: #fff;
+}
+.fs-lyric-line.active.is-word-mode .fs-lyric-word.current {
+  color: #fff;
+  text-shadow: 0 0 16px rgba(255, 255, 255, 0.45);
 }
 .fs-lyric-empty {
   height: 100%;
@@ -1427,6 +1638,14 @@ watch(currentPlaying, () => closeDownloadMenu())
   .fs-meta { max-width: 100%; }
   .fs-title { font-size: 17px; margin-bottom: 4px; }
   .fs-artist { font-size: 13px; }
+  .fs-lyric-wrap {
+    flex: 1 1 0;
+    min-height: 0;
+    gap: 8px;
+  }
+  .fs-lyric-toolbar {
+    top: auto;
+  }
   .fs-lyric-col {
     flex: 1 1 0;
     height: 0;

@@ -2334,6 +2334,7 @@ function normalizeLyricResult(result) {
     lyric,
     tlyric: String(result?.tlyric || '').replace(/\r/g, '').trim(),
     rlyric: String(result?.rlyric || '').replace(/\r/g, '').trim(),
+    ylyric: String(result?.ylyric || '').replace(/\r/g, '').trim(),
   }
 }
 
@@ -2390,12 +2391,13 @@ async function fetchKwLyricById(musicId) {
 }
 
 async function wyLyric(songId) {
-  const buf = await req('get', `https://music.163.com/api/song/lyric?id=${songId}&lv=1&tv=1&rv=1`, null, { Referer: 'https://music.163.com' })
+  const buf = await req('get', `https://music.163.com/api/song/lyric?id=${songId}&lv=1&tv=1&rv=1&yv=1&kv=1`, null, { Referer: 'https://music.163.com' })
   const data = parseJSON(buf)
   return normalizeLyricResult({
     lyric: data?.lrc?.lyric || '',
     tlyric: data?.tlyric?.lyric || '',
     rlyric: data?.romalrc?.lyric || '',
+    ylyric: data?.yrc?.lyric || '',
   })
 }
 
@@ -2466,18 +2468,39 @@ async function kwLyric(songId, extra = {}) {
 
 async function kgDownloadLyric(candidate) {
   const clients = ['pc', 'mobi']
+  let lyric = ''
+  let ylyric = ''
+
+  // 先拉 KRC 逐字（LDDC 同款），再拉 LRC 保底
   for (const client of clients) {
+    if (ylyric) break
+    try {
+      const krcBuf = await req('get',
+        `https://lyrics.kugou.com/download?ver=1&client=${client}&id=${candidate.id}&accesskey=${candidate.accesskey}&fmt=krc&charset=utf8`,
+        null, LYRIC_HEADERS.kg)
+      const krcData = parseJSON(krcBuf)
+      if (!krcData?.content || Number(krcData.contenttype) === 2) continue
+      const { decryptKrcToYlyric } = await import('./utils/krc.js')
+      const text = decryptKrcToYlyric(krcData.content)
+      if (text && /\(\d+\s*,\s*\d+/.test(text)) ylyric = text
+    } catch {}
+  }
+
+  for (const client of clients) {
+    if (lyric) break
     try {
       const lrcBuf = await req('get',
         `https://lyrics.kugou.com/download?ver=1&client=${client}&id=${candidate.id}&accesskey=${candidate.accesskey}&fmt=lrc&charset=utf8`,
         null, LYRIC_HEADERS.kg)
       const lrcData = parseJSON(lrcBuf)
       if (!lrcData?.content) continue
-      const lyric = Buffer.from(lrcData.content, 'base64').toString('utf-8').trim()
-      if (lyric) return normalizeLyricResult({ lyric })
+      const text = Buffer.from(lrcData.content, 'base64').toString('utf-8').trim()
+      if (text) lyric = text
     } catch {}
   }
-  return null
+
+  if (!lyric && !ylyric) return null
+  return normalizeLyricResult({ lyric, ylyric })
 }
 
 async function kgSearchLyricCandidates(hash, extra = {}) {
@@ -2507,12 +2530,36 @@ async function kgLyric(hash, extra = {}) {
   const candidates = await kgSearchLyricCandidates(hash, extra)
   for (const c of candidates) {
     const parsed = await kgDownloadLyric(c)
-    if (parsed?.lyric) return parsed
+    if (parsed?.lyric || parsed?.ylyric) return parsed
   }
 
   const keyword = [extra.name, extra.singer].filter(Boolean).join(' ')
   if (keyword) {
     try {
+      // 无 hash 候选时按歌名搜 KRC（与 LDDC 类似）
+      const { fetchKugouWordLyricByKeyword } = await import('./utils/krcFetch.js')
+      const durationMs = Number(extra.duration || 0) || parseKgIntervalMs(extra.interval)
+      const ylyric = await fetchKugouWordLyricByKeyword(extra.name || keyword, extra.singer || '', durationMs)
+      if (ylyric) {
+        const result = await kgSearch(keyword, 1, 8)
+        // 仍尝试补一行 LRC；没有也可用
+        let lyric = ''
+        for (const hit of result.list || []) {
+          const hitHash = hit.hash || hit.songId || hit.id
+          if (!hitHash) continue
+          const more = await kgSearchLyricCandidates(hitHash, {
+            ...extra,
+            albumAudioId: hit.albumAudioId || extra.albumAudioId,
+            duration: hit.duration || extra.duration,
+          })
+          for (const c of more) {
+            const parsed = await kgDownloadLyric(c)
+            if (parsed?.ylyric || parsed?.lyric) return parsed
+          }
+        }
+        return normalizeLyricResult({ lyric, ylyric })
+      }
+
       const result = await kgSearch(keyword, 1, 8)
       for (const hit of result.list || []) {
         const hitHash = hit.hash || hit.songId || hit.id
@@ -2524,13 +2571,25 @@ async function kgLyric(hash, extra = {}) {
         })
         for (const c of more) {
           const parsed = await kgDownloadLyric(c)
-          if (parsed?.lyric) return parsed
+          if (parsed?.lyric || parsed?.ylyric) return parsed
         }
       }
     } catch {}
   }
 
   return normalizeLyricResult({})
+}
+
+function parseKgIntervalMs(interval) {
+  const s = String(interval || '').trim()
+  if (!s) return 0
+  if (/^\d+(\.\d+)?$/.test(s)) {
+    const n = Number(s)
+    return Math.round(n > 10000 ? n : n * 1000)
+  }
+  const m = s.match(/^(\d+):(\d{1,2})/)
+  if (!m) return 0
+  return (parseInt(m[1], 10) * 60 + parseInt(m[2], 10)) * 1000
 }
 
 async function mgLyric(copyrightId) {
