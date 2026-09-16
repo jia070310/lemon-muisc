@@ -391,16 +391,20 @@ playRouter.get('/proxy', (req, res) => {
 
 playRouter.post('/lyric', async (req, res) => {
   try {
-    const { lyric } = req.body
+    const clientLyric = typeof req.body?.lyric === 'string' ? req.body.lyric : ''
+    const clientYlyric = typeof req.body?.ylyric === 'string' ? req.body.ylyric : ''
     const source = req.body.source
     const songId = req.body.songId || req.body.songmid || req.body.hash || req.body.copyrightId || req.body.musicId
-    if (typeof lyric === 'string' && lyric) {
-      return res.json({ ok: true, lyric, tlyric: '', rlyric: '' })
-    }
     const musicInfo = buildMusicInfo(req.body)
     const lookupSource = source === 'local' ? '' : (source || '')
-    if (!songId && !musicInfo.name) {
-      return res.json({ ok: true, lyric: '', tlyric: '', rlyric: '' })
+    const canLookup = Boolean(songId || musicInfo.name)
+
+    // 仅本地嵌入/无法在线检索时，直接回传客户端歌词；勿因已有逐行 LRC 跳过拉取（否则永远拿不到 YRC）
+    if (clientLyric && !canLookup) {
+      return res.json({ ok: true, lyric: clientLyric, tlyric: '', rlyric: '', ylyric: clientYlyric })
+    }
+    if (!canLookup) {
+      return res.json({ ok: true, lyric: '', tlyric: '', rlyric: '', ylyric: '' })
     }
 
     const result = await playMetaLimiter(() => withTimeout(
@@ -410,18 +414,22 @@ playRouter.post('/lyric', async (req, res) => {
         musicInfo: { ...musicInfo, source: lookupSource || musicInfo.source },
         meta: { ...req.body, source: lookupSource },
         useOtherSource: true,
+        preferWords: Boolean(req.body?.preferWords),
         userId: req.user?.id,
       }),
       PLAY_META_TIMEOUT_MS,
       '获取歌词超时，请稍后重试',
     ))
 
-    if (result?.lyric) {
+    if (result?.lyric || result?.ylyric) {
       return res.json({ ok: true, ...result })
     }
-    res.json({ ok: true, lyric: '', tlyric: '', rlyric: '' })
+    if (clientLyric) {
+      return res.json({ ok: true, lyric: clientLyric, tlyric: '', rlyric: '', ylyric: clientYlyric })
+    }
+    res.json({ ok: true, lyric: '', tlyric: '', rlyric: '', ylyric: '' })
   } catch {
-    res.json({ ok: true, lyric: '', tlyric: '', rlyric: '' })
+    res.json({ ok: true, lyric: '', tlyric: '', rlyric: '', ylyric: '' })
   }
 })
 

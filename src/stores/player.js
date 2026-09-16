@@ -1,4 +1,4 @@
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { api } from '../api.js'
 import { cleanTrackItem } from '../utils/text.js'
 import { buildPlayPayload } from '../utils/musicPayload.js'
@@ -15,7 +15,7 @@ import {
   localCoverUrl,
   bumpLibraryCoverVersion,
 } from './library.js'
-import { parseLyric } from '../utils/lrc.js'
+import { parseLyricRich, lyricHasWords, lyricHasTiming, synthesizeWordTimings, resolveActiveWordIndex, getLyricLineEndTime } from '../utils/lrc.js'
 import { formatArtists } from '../utils/text.js'
 import { getTrackFilePath, isLocalTrack, isSameTrackPath } from '../utils/trackPath.js'
 import { withStreamAuth, stripStreamAuth } from '../utils/streamAuth.js'
@@ -51,6 +51,47 @@ function setCoverUrl(url) {
 
 export const lyricLines = ref([])
 export const activeLyricIdx = ref(-1)
+/** 当前行内逐字高亮下标（仅有 words 时有效） */
+export const activeWordIdx = ref(-1)
+/** 是否存在官方逐字时间轴（YRC / 增强 LRC） */
+export const hasWordLyrics = computed(() => lyricHasWords(lyricLines.value))
+/** 可否进入逐字展示：官方轴或可推算的行级时间轴 */
+export const canShowWordLyrics = computed(() => hasWordLyrics.value || lyricHasTiming(lyricLines.value))
+
+const LYRIC_DISPLAY_MODE_KEY = 'lemon.lyricDisplayMode'
+function loadLyricDisplayMode() {
+  try {
+    const v = String(localStorage.getItem(LYRIC_DISPLAY_MODE_KEY) || '').trim()
+    return v === 'line' ? 'line' : 'word'
+  } catch {
+    return 'word'
+  }
+}
+/** 全屏歌词：word=逐字（有数据时） / line=逐行 */
+export const lyricDisplayMode = ref(loadLyricDisplayMode())
+
+export function setLyricDisplayMode(mode) {
+  const next = mode === 'line' ? 'line' : 'word'
+  lyricDisplayMode.value = next
+  try { localStorage.setItem(LYRIC_DISPLAY_MODE_KEY, next) } catch {}
+}
+
+export function toggleLyricDisplayMode() {
+  setLyricDisplayMode(lyricDisplayMode.value === 'word' ? 'line' : 'word')
+}
+
+/** 实际用于渲染：逐字偏好 + 有轴（官方或推算） */
+export const effectiveLyricDisplayMode = computed(() => {
+  if (lyricDisplayMode.value === 'word' && canShowWordLyrics.value) return 'word'
+  return 'line'
+})
+
+/** 渲染用歌词行：逐字模式下补齐/校正逐字时间轴 */
+export const displayLyricLines = computed(() => {
+  const lines = lyricLines.value
+  if (effectiveLyricDisplayMode.value !== 'word') return lines
+  return synthesizeWordTimings(lines)
+})
 export const coverStyle = ref('disc')
 export const visualizerEnabled = ref(true)
 /** 关闭频谱时自动启用后台播放（与 visualizerEnabled 互斥） */
@@ -577,21 +618,23 @@ function resetLyricState() {
   coverFetchToken++
   lyricLines.value = []
   activeLyricIdx.value = -1
+  activeWordIdx.value = -1
   lyricTrackKey = ''
   coverNetworkTried.clear()
 }
 
-function bindLyricsToTrack(trackKey, lyric) {
+function bindLyricsToTrack(trackKey, lyric, ylyric = '') {
   lyricTrackKey = trackKey || ''
-  lyricLines.value = lyric ? parseLyric(lyric) : []
+  lyricLines.value = (lyric || ylyric) ? parseLyricRich(lyric, ylyric) : []
   activeLyricIdx.value = -1
+  activeWordIdx.value = -1
 }
 
 function applyLyricStateFromTagMeta(data, { announce = false } = {}) {
   if (!currentPlaying.value) return
   const key = getTrackKey(currentPlaying.value, currentPlaying.value.source)
   if (data.lyric !== undefined) {
-    bindLyricsToTrack(key, data.lyric)
+    bindLyricsToTrack(key, data.lyric, data.ylyric || '')
     if (audio && !audio.paused && lyricLines.value.some((line) => line.time > 0)) {
       updateActiveLyric(audio.currentTime)
     }
@@ -1358,7 +1401,7 @@ function syncCurrentPlayingFromQueue(forcePaused = false) {
   const cleaned = cleanTrackItem({ ...item, source: item.source || source })
   currentPlaying.value = cleaned
   setCoverUrl(cleaned.picUrl || cleaned.img || '')
-  bindLyricsToTrack(getTrackKey(cleaned, source), cleaned.lyric || '')
+  bindLyricsToTrack(getTrackKey(cleaned, source), cleaned.lyric || '', cleaned.ylyric || '')
   applyDurationFallback(cleaned)
   if (forcePaused) isPaused.value = true
 }
@@ -1374,6 +1417,7 @@ function restoreSessionState() {
         bindLyricsToTrack(
           getTrackKey(currentPlaying.value, currentPlaying.value.source),
           data.currentPlaying.lyric || '',
+          data.currentPlaying.ylyric || '',
         )
         currentTime.value = Number(data.currentTime) || 0
         applyDurationFallback(currentPlaying.value)
@@ -2379,7 +2423,7 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 }
         recordRecentPlay({ ...currentPlaying.value, source })
         setCoverUrl(item.picUrl || item.img || '')
         if (isLocal) {
-          if (item.lyric) bindLyricsToTrack(trackKey, item.lyric)
+          if (item.lyric || item.ylyric) bindLyricsToTrack(trackKey, item.lyric || '', item.ylyric || '')
           if (!coverUrl.value && filePath && item.hasPicture !== false) {
             setCoverUrl(item.picUrl || item.img || localCoverUrl(filePath))
           }
@@ -2750,31 +2794,44 @@ export function toggleQueuePanel() {
 }
 
 function ensureLyricsForTrack(item, source, trackKey) {
-  if (lyricTrackKey === trackKey && lyricLines.value.length) return
-  if (item.lyric) {
-    bindLyricsToTrack(trackKey, item.lyric)
+  if (lyricTrackKey === trackKey && lyricLines.value.length) {
+    if (lyricDisplayMode.value === 'word' && !lyricHasWords(lyricLines.value)) {
+      fetchLyric(item, source, { preferWords: true })
+    }
     return
   }
-  fetchLyric(item, source)
+  if (item.lyric || item.ylyric) {
+    bindLyricsToTrack(trackKey, item.lyric || '', item.ylyric || '')
+    if (lyricDisplayMode.value === 'word' && !lyricHasWords(lyricLines.value)) {
+      fetchLyric(item, source, { preferWords: true })
+    }
+    return
+  }
+  fetchLyric(item, source, { preferWords: lyricDisplayMode.value === 'word' })
 }
 
-async function fetchLyric(item, activeSource) {
+async function fetchLyric(item, activeSource, { preferWords = false } = {}) {
   const source = item.source || activeSource
   const trackKey = getTrackKey(item, source)
   const token = ++lyricFetchToken
 
-  const applyLyric = (lyric) => {
-    if (!lyric || token !== lyricFetchToken) return
+  const applyLyric = (lyric, ylyric = '') => {
+    if ((!lyric && !ylyric) || token !== lyricFetchToken) return
     if (!currentPlaying.value) return
     if (getTrackKey(currentPlaying.value, currentPlaying.value.source) !== trackKey) return
-    bindLyricsToTrack(trackKey, lyric)
-    currentPlaying.value = { ...currentPlaying.value, lyric }
-    patchQueueItem(trackKey, { lyric })
+    bindLyricsToTrack(trackKey, lyric, ylyric)
+    currentPlaying.value = { ...currentPlaying.value, lyric, ylyric }
+    patchQueueItem(trackKey, { lyric, ylyric })
     saveQueueState()
     if (audio && !audio.paused) updateActiveLyric(audio.currentTime)
   }
 
   const payload = buildPlayPayload(item, source, '128k')
+  // 避免把已缓存的逐行 lyric 回传导致服务端跳过拉取
+  delete payload.lyric
+  delete payload.ylyric
+  if (preferWords) payload.preferWords = true
+
   const nameForSearch = normalizeLyricSearchName(item.name)
   for (let attempt = 0; attempt < 2; attempt++) {
     if (token !== lyricFetchToken) return
@@ -2783,8 +2840,8 @@ async function fetchLyric(item, activeSource) {
         ...payload,
         name: attempt > 0 && nameForSearch ? nameForSearch : payload.name,
       })
-      if (res.lyric) {
-        applyLyric(res.lyric)
+      if (res.lyric || res.ylyric) {
+        applyLyric(res.lyric || '', res.ylyric || '')
         return
       }
     } catch {}
@@ -2792,6 +2849,15 @@ async function fetchLyric(item, activeSource) {
       await new Promise(resolve => setTimeout(resolve, 500))
     }
   }
+}
+
+/** 切换到逐字时：若当前无逐字轴，强制重新拉取（优先网易 YRC） */
+export async function refreshLyricsPreferWords() {
+  const item = currentPlaying.value
+  if (!item) return false
+  lyricTrackKey = ''
+  await fetchLyric(item, item.source, { preferWords: true })
+  return lyricHasWords(lyricLines.value)
 }
 
 async function fetchCover(item, activeSource, { force = false } = {}) {
@@ -2829,14 +2895,40 @@ function normalizeLyricSearchName(name) {
 }
 
 function updateActiveLyric(time) {
-  if (!lyricLines.value.length) return
-  if (lyricLines.value.every((line) => line.time === 0)) {
+  const lines = displayLyricLines.value
+  if (!lines.length) return
+  if (lines.every((line) => line.time === 0)) {
     if (activeLyricIdx.value !== -1) activeLyricIdx.value = -1
+    if (activeWordIdx.value !== -1) activeWordIdx.value = -1
     return
   }
   let idx = -1
-  for (let i = lyricLines.value.length - 1; i >= 0; i--) {
-    if (time >= lyricLines.value[i].time) { idx = i; break }
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (time >= lines[i].time) { idx = i; break }
   }
   if (idx !== activeLyricIdx.value) activeLyricIdx.value = idx
+
+  if (effectiveLyricDisplayMode.value !== 'word') {
+    if (activeWordIdx.value !== -1) activeWordIdx.value = -1
+    return
+  }
+
+  const line = idx >= 0 ? lines[idx] : null
+  const words = line?.words
+  if (!Array.isArray(words) || !words.length) {
+    if (activeWordIdx.value !== -1) activeWordIdx.value = -1
+    return
+  }
+  const wi = resolveActiveWordIndex(
+    line,
+    words,
+    time,
+    getLyricLineEndTime(lines, idx),
+  )
+  if (wi !== activeWordIdx.value) activeWordIdx.value = wi
 }
+
+watch([lyricDisplayMode, displayLyricLines], () => {
+  const t = Number(audio?.currentTime ?? currentTime.value)
+  if (Number.isFinite(t)) updateActiveLyric(t)
+})
