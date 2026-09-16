@@ -66,6 +66,14 @@ export function getNextLowerQuality(current, available, floor = '') {
     next = ordered[idx + 1] || ''
   }
 
+  // 列表声明的音质常不完整（只标 flac）：仍按标准阶梯允许降到有损档
+  if (!next) {
+    const ladderIdx = QUALITY_LADDER.indexOf(cur)
+    if (ladderIdx >= 0 && ladderIdx < QUALITY_LADDER.length - 1) {
+      next = QUALITY_LADDER[ladderIdx + 1] || ''
+    }
+  }
+
   if (!next) return ''
   if (floor && !isQualityWithinFloor(next, floor)) return ''
   return next
@@ -89,6 +97,9 @@ export function isRetryableDownloadError(error) {
   // 假无损 / 试听片段：换其他激活音源再试同一音质
   if (code === 'FAKE_LOSSLESS' || /假无损|假 FLAC|不是有效 FLAC|不是 FLAC/i.test(message)) return true
   if (code === 'PREVIEW_CLIP' || /仅提供约.*试听片段|时长不完整/i.test(message)) return true
+  // 单源拒绝 / 链接失效：同档换其它激活音源再试
+  if (/HTTP\s*40[134]|statusCode[:\s]*40[134]|\b40[134]\b|拒绝访问|下载响应异常/i.test(text)) return true
+  if (/HTTP\s*429|statusCode[:\s]*429|\b429\b|请求过于频繁/i.test(text)) return true
   if (/socket hang up|ECONNRESET|ETIMEDOUT|EPIPE|ECONNABORTED|ERR_SOCKET/i.test(text)) return true
   if (/timeout|timed out|请求超时|后端失败/i.test(text) && !/音源初始化超时/i.test(text)) return true
   if (/获取.*音质.*失败|获取播放链接失败|未获取到URL|获取URL失败/i.test(text)) return true

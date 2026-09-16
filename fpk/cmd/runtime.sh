@@ -1,7 +1,13 @@
 #!/bin/bash
-# 原生运行时：优先使用飞牛应用中心依赖「Node.js v22」(nodejs_v22)
-# manifest 需声明：install_dep_apps = nodejs_v22
-# 安装本应用时，应用中心会自动安装缺失的依赖，无需自行调商店下载接口。
+# 原生运行时：依赖飞牛应用中心「Node.js v22」(nodejs_v22)
+# 正确调用方式：manifest 声明 install_dep_apps = nodejs_v22
+# → 安装/升级本应用时，由应用中心自动拉取并安装商店内置 Node，脚本侧等待就绪即可。
+# 第三方应用不要自下 Node 安装包；也没有稳定公开的「商店下载 API」可替代声明依赖。
+
+STORE_NODE_APP="nodejs_v22"
+# 等待应用中心装完依赖的最长时间（秒）；商店下 Node 包可能较慢
+STORE_NODE_WAIT_SEC="${STORE_NODE_WAIT_SEC:-600}"
+STORE_NODE_POLL_SEC="${STORE_NODE_POLL_SEC:-5}"
 
 # 应用代码目录（打包进 FPK 的 dist/server）
 app_root() {
@@ -29,19 +35,21 @@ store_node_candidates() {
 /vol1/@appcenter/nodejs_v22/bin/node
 /vol2/@appcenter/nodejs_v22/bin/node
 /vol3/@appcenter/nodejs_v22/bin/node
+/vol4/@appcenter/nodejs_v22/bin/node
 EOF
 }
 
 # 把商店 Node 的 bin 目录插入 PATH
 prepend_store_node_path() {
-  local bin_dir d
+  local d
   for d in \
     "/var/apps/nodejs_v22/target/bin" \
     "/var/apps/nodejs_v22/bin" \
     "/usr/local/apps/@appcenter/nodejs_v22/bin" \
     "/vol1/@appcenter/nodejs_v22/bin" \
     "/vol2/@appcenter/nodejs_v22/bin" \
-    "/vol3/@appcenter/nodejs_v22/bin"
+    "/vol3/@appcenter/nodejs_v22/bin" \
+    "/vol4/@appcenter/nodejs_v22/bin"
   do
     if [ -x "${d}/node" ]; then
       case ":${PATH}:" in
@@ -89,23 +97,102 @@ resolve_npm_bin() {
   return 1
 }
 
-is_node_ready() {
-  resolve_node_bin >/dev/null 2>&1
+# 商店依赖「安装完成」判定：node + npm 均可执行
+is_store_node_ready() {
+  local node_bin npm_bin
+  node_bin="$(resolve_node_bin)" || return 1
+  npm_bin="$(resolve_npm_bin)" || return 1
+  "${node_bin}" -v >/dev/null 2>&1 || return 1
+  "${npm_bin}" -v >/dev/null 2>&1 || return 1
+  return 0
 }
 
-# 安装回调：只检查商店依赖是否已就绪（由 install_dep_apps 触发安装）
-ensure_store_node() {
+is_node_ready() {
+  is_store_node_ready
+}
+
+store_ui() {
+  local msg="$1"
+  if [ -n "${TRIM_TEMP_LOGFILE:-}" ]; then
+    echo "${msg}" > "${TRIM_TEMP_LOGFILE}" 2>/dev/null || true
+  fi
+}
+
+#
+# 尽力触发应用中心安装商店包 nodejs_v22。
+# 正式路径仍是 manifest 的 install_dep_apps；此处仅作回调里「未就绪」时的补救。
+#
+try_trigger_store_nodejs_install() {
   local log_file="${TRIM_PKGVAR}/log/runtime-install.log"
-  local node_bin
+  local cli=""
   mkdir -p "${TRIM_PKGVAR}/log" 2>/dev/null || true
 
-  if node_bin="$(resolve_node_bin)"; then
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 使用商店/系统 Node: ${node_bin} ($("${node_bin}" -v 2>/dev/null))" >> "${log_file}"
+  for cli in appcenter-cli trim-appcenter-cli; do
+    if ! command -v "${cli}" >/dev/null 2>&1; then
+      continue
+    fi
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 尝试 ${cli} 安装商店依赖 ${STORE_NODE_APP}" >> "${log_file}"
+    "${cli}" install "${STORE_NODE_APP}" >> "${log_file}" 2>&1 \
+      || "${cli}" install --app "${STORE_NODE_APP}" >> "${log_file}" 2>&1 \
+      || "${cli}" start "${STORE_NODE_APP}" >> "${log_file}" 2>&1 \
+      || true
+    return 0
+  done
+
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] 无 appcenter-cli，仅等待 install_dep_apps 装好 ${STORE_NODE_APP}" >> "${log_file}"
+  return 1
+}
+
+#
+# 硬门槛：阻塞直到商店依赖 Node.js v22 安装完成（或超时失败）。
+# 安装/升级回调必须先过此关，才允许继续本应用的 npm / 收尾。
+#
+wait_for_store_dependencies() {
+  local log_file="${TRIM_PKGVAR}/log/runtime-install.log"
+  local node_bin npm_bin
+  local waited=0
+  local step="${STORE_NODE_POLL_SEC}"
+  local max="${STORE_NODE_WAIT_SEC}"
+  mkdir -p "${TRIM_PKGVAR}/log" 2>/dev/null || true
+
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] wait_for_store_dependencies: 开始（最长 ${max}s）" >> "${log_file}"
+
+  if is_store_node_ready; then
+    node_bin="$(resolve_node_bin)"
+    npm_bin="$(resolve_npm_bin)"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 商店依赖已就绪: node=${node_bin} ($("${node_bin}" -v 2>/dev/null)) npm=${npm_bin}" >> "${log_file}"
+    store_ui "等待商店安装依赖 Node.js — 已就绪"
     return 0
   fi
 
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] 未找到 nodejs_v22" >> "${log_file}"
+  store_ui "等待商店安装依赖 Node.js"
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] 商店依赖未就绪，阻塞等待 install_dep_apps=${STORE_NODE_APP}" >> "${log_file}"
+  try_trigger_store_nodejs_install || true
+
+  while [ "${waited}" -lt "${max}" ]; do
+    sleep "${step}"
+    waited=$((waited + step))
+    if is_store_node_ready; then
+      node_bin="$(resolve_node_bin)"
+      npm_bin="$(resolve_npm_bin)"
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] 商店依赖就绪（等待 ${waited}s）: node=${node_bin} ($("${node_bin}" -v 2>/dev/null))" >> "${log_file}"
+      store_ui "等待商店安装依赖 Node.js — 已完成，继续安装本应用"
+      return 0
+    fi
+    store_ui "等待商店安装依赖 Node.js"
+    if [ $((waited % 60)) -eq 0 ]; then
+      try_trigger_store_nodejs_install || true
+    fi
+  done
+
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] 等待商店依赖超时（${max}s）" >> "${log_file}"
+  store_ui "等待商店安装依赖 Node.js 超时，请在应用中心手动安装后再试"
   return 1
+}
+
+# 兼容旧名
+ensure_store_node() {
+  wait_for_store_dependencies
 }
 
 #

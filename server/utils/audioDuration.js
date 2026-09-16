@@ -3,6 +3,7 @@
  * 试听源返回的音频「总时长」本身常为短片段，可据此在落盘前拦截。
  */
 import needle from 'needle'
+import { buildMusicCdnHeaders } from './musicCdnHeaders.js'
 
 export function parseDurationSeconds(value) {
   if (value == null || value === '') return 0
@@ -110,18 +111,25 @@ export async function probeFileDurationSeconds(filePath) {
 
 /**
  * 落盘前探测远程音频自带的总时长（Range 拉头部解析，不完整下载）
+ * @param {string} url
+ * @param {{ timeoutMs?: number, maxBytes?: number, source?: string, quality?: string, headers?: Record<string, string> }} [opts]
  */
-export async function probeRemoteAudioDurationSeconds(url, { timeoutMs = 12000, maxBytes = 512 * 1024 } = {}) {
+export async function probeRemoteAudioDurationSeconds(url, {
+  timeoutMs = 12000,
+  maxBytes = 512 * 1024,
+  source = '',
+  quality = '',
+  headers: extraHeaders = {},
+} = {}) {
   if (!url || typeof url !== 'string') return 0
   if (!/^https?:\/\//i.test(url)) return 0
 
   try {
     const resp = await needle('get', url, null, {
-      headers: {
+      headers: buildMusicCdnHeaders(source, {
         Range: `bytes=0-${Math.max(64 * 1024, maxBytes) - 1}`,
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        Accept: '*/*',
-      },
+        ...extraHeaders,
+      }),
       follow_max: 5,
       open_timeout: timeoutMs,
       response_timeout: timeoutMs,
@@ -141,7 +149,7 @@ export async function probeRemoteAudioDurationSeconds(url, { timeoutMs = 12000, 
 
     const { parseBuffer } = await import('music-metadata')
     const metadata = await parseBuffer(buf, {
-      mimeType: guessMimeFromUrl(url, resp.headers?.['content-type']),
+      mimeType: guessMimeFromUrl(url, resp.headers?.['content-type'], quality),
       size: buf.length,
       duration: true,
     })
@@ -152,15 +160,20 @@ export async function probeRemoteAudioDurationSeconds(url, { timeoutMs = 12000, 
   }
 }
 
-function guessMimeFromUrl(url, contentType) {
+function guessMimeFromUrl(url, contentType, quality = '') {
+  if (String(quality || '').toLowerCase().includes('flac')
+    || /hires|master|atmos/i.test(String(quality || ''))) {
+    return 'audio/flac'
+  }
   const ct = String(contentType || '').split(';')[0].trim()
-  if (ct && /^audio\//i.test(ct)) return ct
+  if (ct && /^audio\//i.test(ct) && !/mpeg|mp3/i.test(ct)) return ct
   const lower = String(url).toLowerCase()
   if (lower.includes('.flac')) return 'audio/flac'
   if (lower.includes('.m4a') || lower.includes('.mp4')) return 'audio/mp4'
   if (lower.includes('.ogg') || lower.includes('.opus')) return 'audio/ogg'
   if (lower.includes('.wav')) return 'audio/wav'
   if (lower.includes('.aac')) return 'audio/aac'
+  if (ct && /^audio\//i.test(ct)) return ct
   return 'audio/mpeg'
 }
 

@@ -133,7 +133,7 @@ export function trackSelectKey(item, index = 0) {
 /** 构建下载任务 payload */
 export function buildDownloadTask(item, source, quality, extra = {}) {
   const preferred = quality || '320k'
-  // 批量策略任务固定用目标音质入队；单曲选无损时默认「不降档」，避免 QQ 假 flac 后再糊成 mp3
+  // 批量策略任务固定用目标音质入队；单曲选无损时默认「不降档」（失败时可确认改用更低音质）
   const policy = extra.qualityPolicy
     || (isLosslessQuality(preferred) ? 'none' : '')
   const q = policy ? preferred : resolveItemQuality(item, preferred)

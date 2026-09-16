@@ -22,7 +22,7 @@ export function createFakeLosslessError(detail = '') {
  */
 export function detectAudioContainer(filePath) {
   if (!filePath || !fs.existsSync(filePath)) return 'unknown'
-  const buf = Buffer.alloc(32)
+  const buf = Buffer.alloc(256)
   let n = 0
   try {
     const fd = fs.openSync(filePath, 'r')
@@ -36,17 +36,46 @@ export function detectAudioContainer(filePath) {
   }
   if (n < 4) return 'unknown'
 
-  if (buf.slice(0, 4).toString('ascii') === 'fLaC') return 'flac'
-  if (buf.slice(0, 4).toString('ascii') === 'OggS') return 'ogg'
-  if (buf.slice(0, 4).toString('ascii') === 'RIFF' && n >= 12 && buf.slice(8, 12).toString('ascii') === 'WAVE') {
+  return detectAudioContainerFromBuffer(buf.subarray(0, n))
+}
+
+/**
+ * 从缓冲区识别容器。部分音源会在 FLAC 前塞 ID3，需跳过后再认 fLaC。
+ * @returns {'flac'|'mp3'|'ogg'|'wav'|'m4a'|'ape'|'unknown'}
+ */
+export function detectAudioContainerFromBuffer(buf) {
+  if (!buf || buf.length < 4) return 'unknown'
+
+  let offset = 0
+  // ID3v2：跳过标签再判（否则带标签的真 FLAC 会被误判成 MP3）
+  if (buf.slice(0, 3).toString('ascii') === 'ID3' && buf.length >= 10) {
+    const size = ((buf[6] & 0x7f) << 21)
+      | ((buf[7] & 0x7f) << 14)
+      | ((buf[8] & 0x7f) << 7)
+      | (buf[9] & 0x7f)
+    const next = 10 + size
+    if (next > 0 && next < buf.length) offset = next
+  }
+
+  const slice = (start, len) => buf.slice(offset + start, offset + start + len)
+  const head = slice(0, 4)
+  if (head.length < 4) {
+    // 只有 ID3、后面读不到：按 mp3 处理
+    if (offset > 0) return 'mp3'
+    return 'unknown'
+  }
+
+  if (head.toString('ascii') === 'fLaC') return 'flac'
+  if (head.toString('ascii') === 'OggS') return 'ogg'
+  if (head.toString('ascii') === 'RIFF' && buf.length >= offset + 12 && slice(8, 4).toString('ascii') === 'WAVE') {
     return 'wav'
   }
-  if (buf.slice(0, 4).toString('ascii') === 'MAC ') return 'ape'
-  if (buf.slice(0, 3).toString('ascii') === 'ID3') return 'mp3'
+  if (head.toString('ascii') === 'MAC ') return 'ape'
+  if (slice(0, 3).toString('ascii') === 'ID3') return 'mp3'
   // MPEG frame sync
-  if (buf[0] === 0xff && (buf[1] & 0xe0) === 0xe0) return 'mp3'
+  if (buf[offset] === 0xff && (buf[offset + 1] & 0xe0) === 0xe0) return 'mp3'
   // ISO BMFF (m4a/mp4): ....ftyp
-  if (n >= 8 && buf.slice(4, 8).toString('ascii') === 'ftyp') return 'm4a'
+  if (buf.length >= offset + 8 && slice(4, 4).toString('ascii') === 'ftyp') return 'm4a'
   return 'unknown'
 }
 
@@ -84,13 +113,16 @@ export function assertLosslessFile(filePath, quality) {
   throw createFakeLosslessError('无法识别为有效 FLAC')
 }
 
-/** 响应头提前拦截明显的有损 Content-Type */
+/**
+ * 响应头粗检：只拦明显不是音频的错误页。
+ * 国内 CDN 常把真实 FLAC 标成 audio/mpeg / octet-stream，不能据此判假无损；
+ * 真假无损一律等落盘后用 assertLosslessFile 看文件头。
+ */
 export function assertLosslessContentType(contentType, quality) {
   if (!isLosslessQuality(quality)) return
-  const ct = String(contentType || '').toLowerCase()
+  const ct = String(contentType || '').toLowerCase().split(';')[0].trim()
   if (!ct) return
-  if (/flac|ogg|wav|x-flac/.test(ct)) return
-  if (/mpeg|mp3|aac|mp4|m4a/.test(ct)) {
-    throw createFakeLosslessError(`Content-Type=${ct.split(';')[0]}`)
+  if (/^(text\/|application\/(json|xml|javascript)|image\/)/.test(ct)) {
+    throw createFakeLosslessError(`Content-Type=${ct}（像是错误页而非音频）`)
   }
 }

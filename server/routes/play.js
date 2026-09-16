@@ -17,6 +17,7 @@ import { buildSourceFallbackOffer, buildSourceInfoPayload, getSourceFallbackMode
 import { extractMusicUrl } from '../utils/sourceResult.js'
 import { appendStreamToken } from '../utils/streamAuth.js'
 import { ensureApePlayWav } from '../utils/apePlay.js'
+import { buildMusicCdnHeaders } from '../utils/musicCdnHeaders.js'
 
 export const playRouter = Router()
 
@@ -47,14 +48,6 @@ const AUDIO_MIME = {
   '.wav': 'audio/wav',
   '.ape': 'audio/ape',
   '.webm': 'audio/webm',
-}
-
-const SOURCE_HEADERS = {
-  tx: { Referer: 'https://y.qq.com/', Origin: 'https://y.qq.com' },
-  kw: { Referer: 'https://www.kuwo.cn/' },
-  kg: { Referer: 'https://www.kugou.com/' },
-  wy: { Referer: 'https://music.163.com/' },
-  mg: { Referer: 'https://music.migu.cn/' },
 }
 
 function isAllowedRemoteUrl(raw) {
@@ -345,11 +338,7 @@ playRouter.get('/proxy', (req, res) => {
     activePlayProxies = Math.max(0, activePlayProxies - 1)
   }
 
-  const headers = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    ...(SOURCE_HEADERS[source] || {}),
-  }
-  if (req.headers.range) headers.Range = req.headers.range
+  const headers = buildMusicCdnHeaders(source, req.headers.range ? { Range: req.headers.range } : {})
 
   const upstream = needle.get(url, { follow_max: 5, headers, parse_response: false })
   let aborted = false

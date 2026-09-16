@@ -31,6 +31,7 @@ import {
   assertLosslessFile,
   isLosslessQuality,
 } from '../utils/audioFormat.js'
+import { buildMusicCdnHeaders } from '../utils/musicCdnHeaders.js'
 import { formatUserError } from '../utils/userError.js'
 import { buildSourceFallbackOffer } from '../utils/sourceFallback.js'
 import { extractMusicUrl } from '../utils/sourceResult.js'
@@ -671,6 +672,34 @@ function saveTaskMeta(taskId, meta) {
   getDB().prepare('UPDATE download_tasks SET meta = ? WHERE id = ?').run(JSON.stringify(meta), taskId)
 }
 
+/** 当前音源本档失败：记入 skip，后续同档尝试换其它激活音源 */
+function skipCurrentDownloadSource(meta, taskId, platform, { preview = true } = {}) {
+  if (!meta?.sourceApiId) return
+  recordSourceHealthOutcome(meta.sourceApiId, preview, platform || '')
+  const skipped = new Set([...(meta.skipSourceIds || []), meta.sourceApiId].filter(Boolean))
+  meta.skipSourceIds = [...skipped]
+  if (taskId) saveTaskMeta(taskId, meta)
+}
+
+/** 本档失败后跳过当前音源，下一轮用其它激活音源 */
+function skipFailedSource(meta, taskId, platform = '', { markPreview = true } = {}) {
+  const sourceId = meta?.sourceApiId
+  if (!sourceId) return false
+  if (markPreview) recordSourceHealthOutcome(sourceId, true, platform)
+  const skipped = new Set([...(meta.skipSourceIds || []), sourceId].filter(Boolean))
+  meta.skipSourceIds = [...skipped]
+  if (taskId) saveTaskMeta(taskId, meta)
+  return true
+}
+
+function shouldSkipSourceAfterError(error) {
+  const message = error?.message || String(error || '')
+  const code = error?.code || ''
+  if (code === 'FAKE_LOSSLESS' || code === 'PREVIEW_CLIP') return true
+  if (/假无损|试听片段|时长不完整|HTTP\s*40[134]|拒绝访问|下载响应异常/i.test(message)) return true
+  return false
+}
+
 function applyQualityDowngrade(row, toQuality, { autoCascade = false, reason = '' } = {}) {
   const meta = parseTaskMeta(row)
   delete meta.downgradeOffer
@@ -766,13 +795,14 @@ async function resolveDownloadUrl(source, quality, musicInfo, settings, meta = {
   return { url, sourceInfo: result }
 }
 
-async function streamToFile(url, partPath, taskId, abort, quality = '') {
+async function streamToFile(url, partPath, taskId, abort, quality = '', source = '') {
   const { default: needlePkg } = await import('needle')
   const stream = needlePkg.get(url, {
     follow_max: 5,
     signal: abort.signal,
     response_timeout: 60000,
     read_timeout: 120000,
+    headers: buildMusicCdnHeaders(source),
   })
   safeUnlink(partPath)
   const writer = fs.createWriteStream(partPath)
@@ -1387,20 +1417,15 @@ async function downloadTask(task, settings) {
         )
 
         // 落盘前：用音源音频自带的总时长判断（试听源常为短片段）
-        const remoteSec = await probeRemoteAudioDurationSeconds(url)
+        const remoteSec = await probeRemoteAudioDurationSeconds(url, { source, quality })
         const preErr = assertNotPreviewClip(remoteSec, expectedSec, { forDownload: true })
         if (preErr) {
-          if (meta.sourceApiId) {
-            recordSourceHealthOutcome(meta.sourceApiId, true, source)
-            const skipped = new Set([...(meta.skipSourceIds || []), meta.sourceApiId].filter(Boolean))
-            meta.skipSourceIds = [...skipped]
-            saveTaskMeta(task.id, meta)
-          }
+          skipCurrentDownloadSource(meta, task.id, source)
           throw preErr
         }
 
         // 先在应用配置目录内写完（含标签），再一次性发布到下载目录，降低夸克等网盘挂载产生 name(1) 的概率
-        await streamToFile(url, partPath, task.id, abort, quality)
+        await streamToFile(url, partPath, task.id, abort, quality, source)
         finalizePartFile(partPath, stagedPath)
 
         // 落盘后必检实际文件时长（远程 Range 探测可能偏短/失败，不能只依赖它）
@@ -1411,12 +1436,7 @@ async function downloadTask(task, settings) {
           if (postErr) {
             cleanupDownloadPath(stagedPath)
             cleanupStagingDir(task.id)
-            if (meta.sourceApiId) {
-              recordSourceHealthOutcome(meta.sourceApiId, true, source)
-              const skipped = new Set([...(meta.skipSourceIds || []), meta.sourceApiId].filter(Boolean))
-              meta.skipSourceIds = [...skipped]
-              saveTaskMeta(task.id, meta)
-            }
+            skipCurrentDownloadSource(meta, task.id, source)
             throw postErr
           }
         }
@@ -1427,11 +1447,8 @@ async function downloadTask(task, settings) {
         } catch (formatErr) {
           cleanupDownloadPath(stagedPath)
           cleanupStagingDir(task.id)
-          if (formatErr?.code === 'FAKE_LOSSLESS' && meta.sourceApiId) {
-            recordSourceHealthOutcome(meta.sourceApiId, true, source)
-            const skipped = new Set([...(meta.skipSourceIds || []), meta.sourceApiId].filter(Boolean))
-            meta.skipSourceIds = [...skipped]
-            saveTaskMeta(task.id, meta)
+          if (formatErr?.code === 'FAKE_LOSSLESS') {
+            skipCurrentDownloadSource(meta, task.id, source)
           }
           throw formatErr
         }
@@ -1464,6 +1481,11 @@ async function downloadTask(task, settings) {
         if (e.name === 'AbortError') return
         lastError = e
         const retryable = isRetryableDownloadError(e)
+        // 流式下载 403/假无损等：跳过当前音源，避免同档重试仍打同一源
+        if (retryable && meta.sourceApiId) {
+          const alreadySkipped = (meta.skipSourceIds || []).includes(meta.sourceApiId)
+          if (!alreadySkipped) skipCurrentDownloadSource(meta, task.id, source)
+        }
         console.warn(`[下载] ${task.name} ${quality} 第 ${attempt}/${SAME_QUALITY_ATTEMPTS} 次失败: ${e.message}`)
         if (!retryable || attempt >= SAME_QUALITY_ATTEMPTS) break
       }
@@ -1492,6 +1514,7 @@ async function downloadTask(task, settings) {
       ...(Array.isArray(meta.types) ? meta.types.map(t => t?.type || t).filter(Boolean) : []),
     ]
 
+    // 「不降档」策略：拿不到目标音质则直接失败（降档交互另议，此处不强行改档）
     if (policy === 'none') {
       const msg = lastError?.code === 'FAKE_LOSSLESS'
         ? (lastError.message || formatMissingQualityError(preferred, '', reason))

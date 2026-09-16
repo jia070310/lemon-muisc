@@ -1,5 +1,5 @@
 #!/bin/bash
-# 原生安装：准备目录 → 下载 Node（国内镜像）→ npm 安装依赖 → 不启动长时间服务（交给启用）
+# 原生安装：准备目录 → 等待商店 Node.js v22（install_dep_apps）→ npm 安装业务依赖 → 交由「启用」启动
 
 . "$(dirname "$0")/paths.sh"
 . "$(dirname "$0")/runtime.sh"
@@ -81,29 +81,31 @@ if [ ! -f "${APP_ROOT}/server/index.js" ]; then
   fail_install "安装包缺少应用代码（server/index.js）。请使用完整构建的 FPK。"
 fi
 if [ ! -f "${APP_ROOT}/package.json" ]; then
-  # 兼容：从 cmd 上级仓库拷贝失败时的提示
   fail_install "安装包缺少 package.json。请重新用 scripts/build-fpk.ps1 打包。"
 fi
 
-update_install_ui "检查 Node.js v22 依赖（应用中心 install_dep_apps）…"
-if ! ensure_store_node; then
-  fail_install "未检测到 Node.js v22。请在应用中心先安装「Node.js v22」，或重新安装本 FPK 让系统自动拉取依赖。"
+# —— 硬门槛：商店依赖未装完前，不进入本应用后续安装 ——
+update_install_ui "等待商店安装依赖 Node.js"
+log_line "gate: wait_for_store_dependencies begin"
+if ! wait_for_store_dependencies; then
+  fail_install "等待商店安装依赖 Node.js 失败。请在应用中心安装「Node.js v22」后重新安装本应用。"
 fi
+log_line "gate: wait_for_store_dependencies ok，继续本应用安装"
 
 # 若 FPK 已内置 node_modules，则跳过联网 npm
 if [ -d "${APP_ROOT}/node_modules/express" ]; then
-  update_install_ui "检测到内置依赖，跳过 npm 安装…"
+  update_install_ui "商店依赖已就绪；检测到内置依赖，跳过 npm…"
   log_line "bundled node_modules present, skip npm"
 else
-  update_install_ui "正在安装依赖（npm 国内源）… 进度可能停在 55% 附近几分钟，属正常，请勿取消"
+  update_install_ui "商店依赖已就绪；正在安装本应用 npm 依赖… 进度可能停在 55% 附近几分钟，请勿取消"
   if ! install_node_modules; then
-    fail_install "npm 依赖安装失败。请查看 ${TRIM_PKGVAR}/log/npm-install.log（常见：未装 Node.js v22，或无法访问 registry.npmmirror.com）"
+    fail_install "本应用 npm 依赖安装失败（商店 Node 已就绪）。请查看 ${TRIM_PKGVAR}/log/npm-install.log；确认可访问 registry.npmmirror.com"
   fi
 fi
 
 update_install_ui "检查 better-sqlite3 原生模块…"
 if ! ensure_better_sqlite3_native; then
-  fail_install "better-sqlite3 原生库缺失。请确认 Node.js v22 可用，并查看 ${TRIM_PKGVAR}/log/npm-install.log"
+  fail_install "better-sqlite3 原生库缺失。请确认商店 Node.js v22 可用，并查看 ${TRIM_PKGVAR}/log/npm-install.log"
 fi
 
 ensure_desktop_entry || true
