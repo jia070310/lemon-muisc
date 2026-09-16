@@ -155,7 +155,7 @@ async function mapWithConcurrency(items, limit, mapper) {
  * 后台批量自动匹配（有限并发；切换页面不中断；支持暂停 / 停止）
  * @returns {Promise<{ ok: boolean, reason?: string, stopped?: boolean }>}
  */
-export async function startTagMatchBatch(targets, source) {
+export async function startTagMatchBatch(targets, source, options = {}) {
   if (!targets?.length) return { ok: false, reason: 'empty' }
   if (tagMatchRunning.value) return { ok: false, reason: 'busy' }
 
@@ -184,6 +184,12 @@ export async function startTagMatchBatch(targets, source) {
   let withLyric = 0
   let done = 0
   const savedLibraryFiles = []
+  const matchOpts = {
+    forceOverwrite: Boolean(options.forceOverwrite),
+    preferFolderAlbum: options.preferFolderAlbum,
+    fillMissingOnly: options.fillMissingOnly,
+    rejectForeignArtist: options.rejectForeignArtist,
+  }
 
   try {
     await mapWithConcurrency(targets, concurrency, async (sel) => {
@@ -194,8 +200,15 @@ export async function startTagMatchBatch(targets, source) {
 
       try {
         const res = await api.tag.matchBatch(
-          [{ filePath: sel.filePath, fileName: sel.fileName }],
+          [{
+            filePath: sel.filePath,
+            fileName: sel.fileName,
+            title: sel.title,
+            artist: sel.artist,
+            album: sel.album,
+          }],
           source,
+          matchOpts,
         )
         const item = (res.data || [])[0]
         if (item?.ok && item.meta) {

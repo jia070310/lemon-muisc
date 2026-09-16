@@ -286,7 +286,7 @@ downloadRouter.post('/reject-downgrade/:id', (req, res) => {
   }
 })
 
-/** 同名文件已存在：仍下载当前音质（覆盖本地同名文件） */
+/** 同名文件已存在：仍下载当前音质（与本地其它格式并存，不删已有文件） */
 downloadRouter.post('/confirm-exist/:id', (req, res) => {
   try {
     const row = getTaskForUser(req.user, req.params.id)
@@ -298,7 +298,7 @@ downloadRouter.post('/confirm-exist/:id', (req, res) => {
     if (applyToRest && req.user?.id) {
       autoExistActionByUser.set(req.user.id, 'overwrite')
     }
-    confirmExistOverwrite(row)
+    confirmExistKeepAndDownload(row)
     if (applyToRest && req.user?.id) {
       confirmPendingExistForUser(req.user.id, { exceptId: row.id, action: 'overwrite' })
     }
@@ -547,12 +547,15 @@ function requeueTask(id, { allowedStatuses = ['paused', 'error', 'await_confirm'
   return true
 }
 
-function confirmExistOverwrite(row) {
+function confirmExistKeepAndDownload(row) {
   const meta = parseTaskMeta(row)
   delete meta.existFileOffer
   meta.existFileConfirmed = true
   meta.forceRedownload = true
-  cleanupTaskDownloadArtifacts(row, meta, taskSettings(row))
+  // 与本地其它格式并存：不删 flac/mp3 等同名异扩展名文件
+  meta.keepOtherFormats = true
+  // 只清本任务已跟踪的半成品 / 旧产物，不动目录里其它同名音频
+  cleanupTaskDownloadArtifacts(row, meta, taskSettings(row), { onlyTracked: true })
   clearTaskStoredFilePath(row.id)
   getDB().prepare(`
     UPDATE download_tasks
@@ -566,6 +569,11 @@ function confirmExistOverwrite(row) {
     progress: 0,
     existFileOffer: null,
   })
+}
+
+/** @deprecated 旧名，行为已改为并存下载 */
+function confirmExistOverwrite(row) {
+  confirmExistKeepAndDownload(row)
 }
 
 function completeTaskWithExistingFile(row) {
@@ -944,7 +952,9 @@ async function handleExistingSameNameFile(task, meta, settings) {
   if (effectiveMode === 'overwrite') {
     meta.existFileConfirmed = true
     meta.forceRedownload = true
-    cleanupTaskDownloadArtifacts(task, meta, settings)
+    // 设置里的「覆盖」或「仍下载」：与其它格式并存，只替换即将写入的目标扩展名
+    meta.keepOtherFormats = true
+    cleanupTaskDownloadArtifacts(task, meta, settings, { onlyTracked: true })
     clearTaskStoredFilePath(task.id)
     saveTaskMeta(task.id, meta)
     return false
@@ -1348,9 +1358,17 @@ async function downloadTask(task, settings) {
         fs.mkdirSync(path.dirname(filePath), { recursive: true })
 
         const forceRedownload = meta.forceRedownload === true
+        const keepOtherFormats = meta.keepOtherFormats === true
         if (forceRedownload) {
-          cleanupTaskDownloadArtifacts(task, meta, settings)
+          if (keepOtherFormats) {
+            // 并存：只清理即将写入的目标路径（及 .part），保留同名 flac/mp3 等其它格式
+            cleanupDownloadPath(filePath)
+            cleanupGroupDirPartFiles(task, settings, new Set([filePath]))
+          } else {
+            cleanupTaskDownloadArtifacts(task, meta, settings)
+          }
           delete meta.forceRedownload
+          delete meta.keepOtherFormats
           saveTaskMeta(task.id, meta)
         }
 

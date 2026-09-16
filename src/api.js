@@ -482,7 +482,11 @@ export const api = {
       return request('/tag/match', { method: 'POST', body: { ...params, source } })
     },
     matchApply: (match, source, fields) => request('/tag/match-apply', { method: 'POST', body: { match, source, fields } }),
-    matchBatch: (files, source) => request('/tag/match-batch', { method: 'POST', body: { files, source }, timeout: 60000 }),
+    matchBatch: (files, source, options = {}) => request('/tag/match-batch', {
+      method: 'POST',
+      body: { files, source, ...options },
+      timeout: 60000,
+    }),
   },
   about: {
     get: () => request('/about'),

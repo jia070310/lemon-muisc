@@ -10,6 +10,12 @@ import { listAudioFiles, listDirEntries, probeDir } from '../utils/audioScan.js'
 import { mapWithConcurrency } from '../utils/asyncPool.js'
 import { notifyLibraryChanged } from '../utils/libraryNotify.js'
 import { scanBatchAndCache, enrichFilesFromCache, readBatchFromCacheOrScan, getAllCachedTracks } from '../utils/libraryCache.js'
+import { getMergedSettings } from '../utils/userSettings.js'
+import {
+  albumHintFromFilePath,
+  isMatchArtistAcceptable,
+  mergeMatchMetaFillMissing,
+} from '../utils/pathAlbumHint.js'
 
 export const tagRouter = Router()
 
@@ -317,6 +323,20 @@ tagRouter.post('/match-batch', async (req, res) => {
     if (!Array.isArray(files)) return res.status(400).json({ error: '请提供文件列表' })
     if (files.length > 50) return res.status(400).json({ error: '单次最多 50 个文件' })
 
+    const settings = getMergedSettings(req.user?.id)
+    const forceOverwrite = req.body.forceOverwrite === true
+    const preferFolderAlbum = req.body.preferFolderAlbum != null
+      ? req.body.preferFolderAlbum !== false
+      : settings['tag.matchPreferFolderAlbum'] !== 'false'
+    const fillMissingOnly = forceOverwrite
+      ? false
+      : (req.body.fillMissingOnly != null
+        ? req.body.fillMissingOnly !== false
+        : settings['tag.matchFillMissingOnly'] !== 'false')
+    const rejectForeignArtist = req.body.rejectForeignArtist != null
+      ? req.body.rejectForeignArtist !== false
+      : settings['tag.matchRejectForeignArtist'] !== 'false'
+
     const sdkSource = normalizeTagSource(source)
     const cacheMap = new Map(
       (getAllCachedTracks() || []).map((t) => [path.resolve(String(t.filePath || '')), t]),
@@ -328,15 +348,47 @@ tagRouter.post('/match-batch', async (req, res) => {
         const cached = cacheMap.get(path.resolve(String(file.filePath || ''))) || {}
         const artist = String(file.artist || cached.artist || '').trim()
         const title = String(file.title || cached.title || '').trim()
-        const album = String(file.album || cached.album || '').trim()
+        const taggedAlbum = String(file.album || cached.album || '').trim()
+        const folderAlbum = preferFolderAlbum ? albumHintFromFilePath(file.filePath) : ''
+        const album = taggedAlbum || folderAlbum
         const matches = (title || artist || album)
-          ? await matchByArtistTitle(artist, title, sdkSource, 1, null, album)
-          : await matchByFilename(file.fileName, sdkSource, 1, album)
+          ? await matchByArtistTitle(artist, title, sdkSource, 8, null, taggedAlbum, folderAlbum)
+          : await matchByFilename(file.fileName, sdkSource, 8, taggedAlbum, folderAlbum)
         if (!matches.length) {
           return { filePath: file.filePath, ok: false, error: '未找到匹配' }
         }
-        const meta = await fetchMatchMeta(matches[0], sdkSource)
-        return { filePath: file.filePath, ok: true, meta, match: matches[0] }
+        let picked = matches[0]
+        if (rejectForeignArtist) {
+          const acceptable = matches.find((m) => isMatchArtistAcceptable(m.singer, artist, file.filePath))
+          if (!acceptable) {
+            return { filePath: file.filePath, ok: false, error: '未找到与本地歌手/目录相符的结果' }
+          }
+          picked = acceptable
+        }
+        let meta = await fetchMatchMeta(picked, sdkSource)
+        if (fillMissingOnly) {
+          meta = mergeMatchMetaFillMissing({
+            title: cached.title || title,
+            artist: cached.artist || artist,
+            albumArtist: cached.albumArtist || '',
+            album: taggedAlbum,
+            year: cached.year || '',
+            genre: cached.genre || '',
+            comment: cached.comment || '',
+            lyric: cached.lyric || '',
+            hasPicture: Boolean(cached.hasPicture),
+            picUrl: cached.picUrl || '',
+          }, meta)
+        } else if (!taggedAlbum && folderAlbum && !String(meta.album || '').trim()) {
+          meta.album = folderAlbum
+        }
+        return {
+          filePath: file.filePath,
+          ok: true,
+          meta,
+          match: picked,
+          hints: { folderAlbum: folderAlbum || undefined, fillMissingOnly },
+        }
       } catch (e) {
         return { filePath: file.filePath, ok: false, error: e.message }
       }

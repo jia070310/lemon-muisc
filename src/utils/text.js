@@ -26,7 +26,7 @@ export function formatArtists(str) {
   if (s.includes('\0')) {
     return s.split('\0').map((p) => p.trim()).filter(Boolean).join(' / ')
   }
-  const parts = s.split(/(?:\s*\/\s*|\s*[;|]\s*|\s*[&＆]\s*|、|，|,)+/)
+  const parts = s.split(/(?:\s*\/\s*|\s*[;|]\s*|\s*[&＆×]\s*|\s+[xX]\s+|_+|、|，|,|(?<=\S)(?:和|与)(?=\S)|\s+(?:feat\.?|ft\.?|featuring)\s+)/i)
     .map((p) => p.trim())
     .filter(Boolean)
   if (!parts.length) return s

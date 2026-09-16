@@ -5,8 +5,8 @@
 
 export const ARTIST_DISPLAY_SEP = ' / '
 
-/** 可拆成多歌手的分隔符（读旧标签 / 用户输入） */
-const SPLIT_RE = /(?:\s*\/\s*|\s*[;|]\s*|\s*[&＆]\s*|、|，|,)+/
+/** 可拆成多歌手的分隔符（读旧标签 / 用户输入；含中文「和/与」、下划线、feat） */
+const SPLIT_RE = /(?:\s*\/\s*|\s*[;|]\s*|\s*[&＆×]\s*|\s+[xX]\s+|_+|、|，|,|(?<=\S)(?:和|与)(?=\S)|\s+(?:feat\.?|ft\.?|featuring)\s+)/i
 
 /**
  * @param {unknown} input 字符串、数组，或含 name 的对象数组

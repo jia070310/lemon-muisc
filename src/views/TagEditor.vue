@@ -568,6 +568,15 @@
         </div>
 
         <div v-if="editForm && !loadingDetail" class="edit-actions">
+          <div v-if="isBatchMode" class="batch-field-picker">
+            <div class="batch-field-label">批量写入字段（默认不改歌名）</div>
+            <div class="batch-field-grid">
+              <label v-for="item in batchFieldOptions" :key="item.key" class="batch-field-item">
+                <input v-model="batchApplyFields[item.key]" type="checkbox" />
+                <span>{{ item.label }}</span>
+              </label>
+            </div>
+          </div>
           <button class="btn-primary" @click="saveCurrent" :disabled="saving" title="只写入当前正在编辑的这一首">
             {{ saving ? '保存中...' : '保存当前到文件' }}
           </button>
@@ -576,7 +585,7 @@
             @click="applyToFiles"
             :disabled="!editForm"
             :title="isBatchMode
-              ? `把当前表单复制到选中的 ${selectedFiles.length} 个文件（仅列表，需再点顶部「保存全部修改」写盘）`
+              ? `把勾选字段复制到选中的 ${selectedFiles.length} 个文件（仅列表，需再点顶部「保存全部修改」写盘）`
               : '仅更新列表显示，不会写入磁盘'"
           >
             应用到{{ isBatchMode ? `选中(${selectedFiles.length})` : '当前' }}
@@ -1051,6 +1060,28 @@ const missingMatchCount = computed(() => {
 const selectedFiles = computed(() => files.value.filter(f => f._selected))
 const isBatchMode = computed(() => selectedFiles.value.length > 1)
 const hasChanges = computed(() => files.value.some(f => f._modified))
+const batchFieldOptions = [
+  { key: 'title', label: '标题' },
+  { key: 'artist', label: '歌手' },
+  { key: 'albumArtist', label: '专辑艺术家' },
+  { key: 'album', label: '专辑' },
+  { key: 'year', label: '年份' },
+  { key: 'genre', label: '流派' },
+  { key: 'comment', label: '备注' },
+  { key: 'lyric', label: '歌词' },
+  { key: 'cover', label: '封面' },
+]
+const batchApplyFields = reactive({
+  title: false,
+  artist: true,
+  albumArtist: true,
+  album: true,
+  year: true,
+  genre: true,
+  comment: false,
+  lyric: false,
+  cover: false,
+})
 const fetchSourceLabel = computed(() => fetchSource.value === 'tx' ? 'QQ音乐' : '网易云')
 const fetchIntentLabel = computed(() => {
   if (fetchIntent.value === 'cover') return '网络获取封面'
@@ -1417,15 +1448,22 @@ function selectMissingFiles() {
   showToast(`已选中 ${targets.length} 个缺失文件`, 'success')
 }
 
-function runTagMatch(targets) {
+function runTagMatch(targets, options = {}) {
   if (!targets.length) return
   if (tagChecking.value) {
     showToast('请先等待或停止手动检测', 'info')
     return
   }
   startTagMatchBatch(
-    targets.map(f => ({ filePath: f.filePath, fileName: f.fileName })),
+    targets.map(f => ({
+      filePath: f.filePath,
+      fileName: f.fileName,
+      title: f.title,
+      artist: f.artist,
+      album: f.album,
+    })),
     fetchSource.value,
+    options,
   ).then((res) => {
     if (res.reason === 'busy') showToast('已有自动匹配任务进行中', 'info')
     else if (res.reason === 'empty') showToast('请先选择要匹配的文件', 'info')
@@ -1459,11 +1497,11 @@ async function autoRematchSelectedByFilename() {
   const ok = await appConfirm({
     title: '按文件名重设',
     message: `将按文件名重新搜索（音源：${srcLabel}），并为已勾选的 ${targets.length} 个文件重写：\n标题、歌手、专辑、封面、歌词等，并直接保存到磁盘。`,
-    hint: '现有标签会被覆盖。确定继续？',
+    hint: '现有标签会被覆盖（不受「仅补全缺失」限制）。确定继续？',
     confirmText: '开始重设',
   })
   if (!ok) return
-  runTagMatch(targets)
+  runTagMatch(targets, { forceOverwrite: true })
 }
 
 async function openEdit(f) {
@@ -1872,20 +1910,19 @@ function buildMetaFromForm() {
   return m
 }
 
-function applyMetaToFile(f, meta) {
-  if (meta.title) f.title = meta.title
-  if (meta.artist) f.artist = meta.artist
-  if (meta.albumArtist != null) f.albumArtist = meta.albumArtist
-  if (meta.album) f.album = meta.album
-  if (meta.year) f.year = meta.year
-  if (meta.genre) f.genre = meta.genre
-  if (meta.comment) f.comment = meta.comment
-  if (meta.lyric) f.lyric = meta.lyric
-  if (meta.pic) {
-    f.pictureBase64 = meta.pic
-  }
-  if (meta.picUrl) {
-    f.picUrl = meta.picUrl
+function applyMetaToFile(f, meta, fieldSet = null) {
+  const allow = (key) => !fieldSet || fieldSet.has(key)
+  if (allow('title') && meta.title != null) f.title = meta.title
+  if (allow('artist') && meta.artist != null) f.artist = meta.artist
+  if (allow('albumArtist') && meta.albumArtist != null) f.albumArtist = meta.albumArtist
+  if (allow('album') && meta.album != null) f.album = meta.album
+  if (allow('year') && meta.year != null) f.year = meta.year
+  if (allow('genre') && meta.genre != null) f.genre = meta.genre
+  if (allow('comment') && meta.comment != null) f.comment = meta.comment
+  if (allow('lyric') && meta.lyric != null) f.lyric = meta.lyric
+  if (allow('cover')) {
+    if (meta.pic) f.pictureBase64 = meta.pic
+    if (meta.picUrl) f.picUrl = meta.picUrl
   }
   f.hasPicture = Boolean(f.pictureBase64 || f.picUrl || f.hasPicture)
   f.hasLyrics = Boolean(f.lyric)
@@ -1908,23 +1945,35 @@ async function applyToFiles({ silent = false } = {}) {
   // 多选时：必须明确「应用到选中」，并二次确认，防止误把同一首歌信息刷到全部文件
   if (isBatchMode.value) {
     const n = selectedFiles.value.length
-    const title = String(editForm.value.title || '').trim() || '(空标题)'
+    const fields = new Set(
+      Object.entries(batchApplyFields)
+        .filter(([, on]) => on)
+        .map(([key]) => key),
+    )
+    if (!fields.size) {
+      showToast('请先勾选要批量写入的字段', 'info')
+      return
+    }
+    const fieldLabels = batchFieldOptions
+      .filter((item) => fields.has(item.key))
+      .map((item) => item.label)
+      .join('、')
     const ok = await appConfirm({
       title: '应用到选中文件',
-      message: `确定把当前编辑内容应用到选中的 ${n} 个文件？\n\n将统一写入标题「${title}」等字段。\n若这些文件不是同一首歌，请点「取消」。`,
-      hint: '此步只更新列表，还需再点顶部「保存全部修改」才会写进磁盘。',
+      message: `确定把勾选字段应用到选中的 ${n} 个文件？\n\n将写入：${fieldLabels}`,
+      hint: '此步只更新列表，还需再点顶部「保存全部修改」才会写进磁盘。未勾选的字段（如标题）保持各文件原值。',
       confirmText: '应用到选中',
     })
     if (!ok) return
 
     const meta = buildMetaFromForm()
-    const coverDirty = Boolean(editingFile.value?._coverDirty || meta.pic || meta.picUrl)
+    const coverDirty = Boolean(fields.has('cover') && (editingFile.value?._coverDirty || meta.pic || meta.picUrl))
     selectedFiles.value.forEach((f) => {
-      applyMetaToFile(f, meta)
+      applyMetaToFile(f, meta, fields)
       if (coverDirty) f._coverDirty = true
     })
     if (!silent) {
-      showToast(`已应用到 ${n} 个文件的列表显示。请确认无误后再点「保存全部修改」写入磁盘`, 'info')
+      showToast(`已将「${fieldLabels}」应用到 ${n} 个文件。请确认后点「保存全部修改」`, 'info')
     }
     return
   }
@@ -3240,7 +3289,43 @@ tr.playing .play-btn,
   background: var(--bg-elevated);
 }
 
-.edit-actions { display: flex; gap: 8px; margin-top: 8px; flex-shrink: 0; }
+.edit-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+  flex-shrink: 0;
+  align-items: center;
+}
+.batch-field-picker {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+}
+.batch-field-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+.batch-field-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+.batch-field-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+.batch-field-item input {
+  accent-color: var(--accent);
+}
 
 .detail-loading {
   flex: 1;

@@ -517,17 +517,26 @@ libraryRouter.put('/playlists', (req, res) => {
 /** 多歌手合辑归档目录名 */
 const VARIOUS_ARTISTS_DIR = '群星 (Various Artists)'
 
-/** 将歌手/专辑艺术家安全化为目录名；多歌手统一归档到「群星 (Various Artists)」 */
-function artistToDirName(singerRaw) {
-  const artists = splitArtists(singerRaw)
-  if (artists.length >= 2) return VARIOUS_ARTISTS_DIR
-  const first = artists[0] || '未知歌手'
-  const cleaned = first
+function sanitizeArtistDirSegment(name) {
+  const cleaned = String(name || '')
     .replace(/[<>:"/\\|?*\x00-\x1f]/g, '')
     .replace(/[. ]+$/g, '')
     .trim()
     .slice(0, 80)
   return cleaned || '未知歌手'
+}
+
+/** 将歌手/专辑艺术家安全化为目录名；多歌手统一归档到「群星 (Various Artists)」 */
+function artistToDirName(singerRaw) {
+  const artists = splitArtists(singerRaw)
+  if (artists.length >= 2) return VARIOUS_ARTISTS_DIR
+  return sanitizeArtistDirSegment(artists[0] || '未知歌手')
+}
+
+/** 多歌手取第一位（合唱归主唱专辑） */
+function primaryArtistToDirName(singerRaw) {
+  const artists = splitArtists(singerRaw)
+  return sanitizeArtistDirSegment(artists[0] || '未知歌手')
 }
 
 /** 专辑目录名 */
@@ -542,12 +551,17 @@ function albumToDirName(albumRaw) {
   return cleaned || '未知专辑'
 }
 
-/** 优先专辑艺术家，否则歌手；再配专辑名 → 目标/<艺术家>/<专辑>/ */
-function resolveOrganizeDestDirs(cached = {}) {
+/**
+ * 优先专辑艺术家，否则歌手；再配专辑名 → 目标/<艺术家>/<专辑>/
+ * @param {'primary'|'various'} mode primary=多歌手取第一位；various=多歌手进群星（旧行为）
+ */
+function resolveOrganizeDestDirs(cached = {}, mode = 'primary') {
   const albumArtist = String(cached.albumArtist || '').trim()
   const singer = cached.artist || cached.singer || cached.parsedArtist || ''
+  const raw = albumArtist || singer
+  const artistMode = mode === 'various' ? 'various' : 'primary'
   return {
-    artistDir: artistToDirName(albumArtist || singer),
+    artistDir: artistMode === 'various' ? artistToDirName(raw) : primaryArtistToDirName(raw),
     albumDir: albumToDirName(cached.album),
   }
 }
@@ -693,6 +707,8 @@ libraryRouter.post('/organize', async (req, res) => {
     const rawDir = req.body?.targetDir
     const targetDir = assertOrganizeTargetAllowed(rawDir)
 
+    const artistMode = String(req.body?.artistMode || '').trim() === 'various' ? 'various' : 'primary'
+
     const srcPaths = resolveOrganizeFiles(req.body || {})
     if (!srcPaths.length) {
       return res.status(400).json({ error: '音乐库为空，无可整理的歌曲' })
@@ -730,7 +746,7 @@ libraryRouter.post('/organize', async (req, res) => {
       }
 
       const cached = tracksByPath.get(path.resolve(src)) || {}
-      const { artistDir, albumDir } = resolveOrganizeDestDirs(cached)
+      const { artistDir, albumDir } = resolveOrganizeDestDirs(cached, artistMode)
       const albumFolder = path.join(targetDir, artistDir, albumDir)
       const srcExt = path.extname(src).toLowerCase()
       const fileName = safeBaseName(path.basename(src, srcExt)) + srcExt

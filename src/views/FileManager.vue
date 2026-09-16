@@ -241,9 +241,22 @@
       <div class="org-form">
         <h3>迁移目标</h3>
         <p class="org-desc">
-          按「目标目录 / 专辑艺术家 / 专辑 / 歌曲文件」整理。无专辑艺术家时用歌手；多歌手归档至「群星 (Various Artists)」。
+          按「目标目录 / 专辑艺术家 / 专辑 / 歌曲文件」整理。无专辑艺术家时用歌手。
           迁移后目标目录会自动加入音乐库扫描。
         </p>
+        <div class="org-field">
+          <label for="org-artist-mode">多歌手归属</label>
+          <select
+            id="org-artist-mode"
+            v-model="organizeArtistMode"
+            class="input"
+            :disabled="organizing"
+          >
+            <option value="primary">取第一位歌手（合唱归主唱专辑，推荐）</option>
+            <option value="various">多歌手归档到「群星 (Various Artists)」</option>
+          </select>
+          <p class="org-hint">例如「A和B」合唱且专辑属于 A：选「取第一位」会进 A/专辑/，而不会单独建「A和B」或进群星。</p>
+        </div>
         <div class="org-field">
           <label for="org-target">目标目录</label>
           <input
@@ -550,6 +563,7 @@ async function runBatchDelete(list) {
 
 /* ---------- 整理 ---------- */
 const ORG_TARGET_KEY = 'lemon.fileManager.organizeTarget'
+const ORG_ARTIST_MODE_KEY = 'lemon.fileManager.organizeArtistMode'
 function loadOrganizeTarget() {
   try {
     return String(localStorage.getItem(ORG_TARGET_KEY) || '').trim()
@@ -564,11 +578,26 @@ function persistOrganizeTarget(value) {
     else localStorage.removeItem(ORG_TARGET_KEY)
   } catch {}
 }
+function loadOrganizeArtistMode() {
+  try {
+    const v = String(localStorage.getItem(ORG_ARTIST_MODE_KEY) || '').trim()
+    return v === 'various' ? 'various' : 'primary'
+  } catch {
+    return 'primary'
+  }
+}
+function persistOrganizeArtistMode(value) {
+  try {
+    localStorage.setItem(ORG_ARTIST_MODE_KEY, value === 'various' ? 'various' : 'primary')
+  } catch {}
+}
 const organizeTarget = ref(loadOrganizeTarget())
+const organizeArtistMode = ref(loadOrganizeArtistMode())
 const organizing = ref(false)
 const organizeResult = ref(null)
 
 watch(organizeTarget, (v) => persistOrganizeTarget(v))
+watch(organizeArtistMode, (v) => persistOrganizeArtistMode(v))
 
 // 仅文件模式：勾选文件整理
 
@@ -727,9 +756,12 @@ async function startOrganize() {
   const filePaths = [...orgPickedFiles.value]
   const scopeLabel = `已选 ${filePaths.length} 个文件`
 
+  const modeLabel = organizeArtistMode.value === 'various'
+    ? '多歌手进「群星」'
+    : '多歌手取第一位（合唱归主唱）'
   const ok = await appConfirm({
     title: '按歌手整理',
-    message: `将 ${scopeLabel} 中的歌曲迁移到：\n${target}\n\n按「目标目录/专辑艺术家/专辑/歌曲」结构整理（无专辑艺术家则用歌手）。迁移后原文件将被移动到新位置。`,
+    message: `将 ${scopeLabel} 中的歌曲迁移到：\n${target}\n\n结构：目标目录/专辑艺术家/专辑/歌曲\n归属：${modeLabel}`,
     hint: '建议先备份重要文件。此操作会物理移动文件。',
     confirmText: '开始整理',
   })
@@ -737,7 +769,11 @@ async function startOrganize() {
   organizing.value = true
   organizeResult.value = null
   try {
-    const res = await api.library.organize(target, { scope: 'files', filePaths })
+    const res = await api.library.organize(target, {
+      scope: 'files',
+      filePaths,
+      artistMode: organizeArtistMode.value,
+    })
     organizeResult.value = res?.data || {}
     alert(`整理完成：迁移 ${organizeResult.value.moved || 0} 首，跳过 ${organizeResult.value.skipped || 0} 首${organizeResult.value.failed ? `，失败 ${organizeResult.value.failed} 首` : ''}${organizeResult.value.cleanedDirs ? `，清理空目录 ${organizeResult.value.cleanedDirs} 个` : ''}`)
     if (organizeResult.value.moved) {

@@ -114,18 +114,25 @@ function scoreMatchForTag(item, parsed) {
   const artist = String(parsed?.artist || '').trim().toLowerCase()
   const singer = String(item?.singer || '').trim().toLowerCase()
   const album = String(parsed?.album || '').trim().toLowerCase()
+  const folderAlbum = String(parsed?.folderAlbum || '').trim().toLowerCase()
   const itemAlbum = String(item?.album || item?.albumName || '').trim().toLowerCase()
   if (title && name && !name.includes(title)) {
     score = Math.max(0, score - 6)
   }
   if (artist && singer && !singer.includes(artist)) {
-    const mainArtist = artist.split(/[\s/、,，]+/).filter(Boolean)[0]
+    const mainArtist = artist.split(/[\s/、,，和与]+/).filter(Boolean)[0]
     if (mainArtist && !singer.includes(mainArtist)) score = Math.max(0, score - 5)
   }
   if (album && itemAlbum) {
     if (itemAlbum === album) score += 6
     else if (itemAlbum.includes(album) || album.includes(itemAlbum)) score += 3
     else score = Math.max(0, score - 5)
+  }
+  // 本地文件夹名（如演唱会）与结果专辑一致时强力加分，冲突则降权
+  if (folderAlbum && itemAlbum) {
+    if (itemAlbum === folderAlbum) score += 8
+    else if (itemAlbum.includes(folderAlbum) || folderAlbum.includes(itemAlbum)) score += 4
+    else if (!album || album === folderAlbum) score = Math.max(0, score - 6)
   }
   return score
 }
@@ -257,22 +264,28 @@ async function fetchTagTextExtras(match, source) {
   return extras
 }
 
-export async function matchByFilename(fileName, source = 'wy', limit = 8, album = '') {
+export async function matchByFilename(fileName, source = 'wy', limit = 8, album = '', folderAlbum = '') {
   const parsed = parseFilename(fileName)
-  return matchByArtistTitle(parsed.artist, parsed.title, source, limit, parsed, album)
+  return matchByArtistTitle(parsed.artist, parsed.title, source, limit, parsed, album, folderAlbum)
 }
 
-export async function matchByArtistTitle(artist = '', title = '', source = 'wy', limit = 8, parsedOverride = null, album = '') {
+export async function matchByArtistTitle(artist = '', title = '', source = 'wy', limit = 8, parsedOverride = null, album = '', folderAlbum = '') {
   const sdkSource = normalizeTagSource(source)
   const a = String(artist || '').trim()
   const t = String(title || '').trim()
-  const alb = String(album || parsedOverride?.album || '').trim()
+  const folderAlb = String(folderAlbum || parsedOverride?.folderAlbum || '').trim()
+  const alb = String(album || parsedOverride?.album || '').trim() || folderAlb
   const parsed = parsedOverride
-    ? { ...parsedOverride, album: alb || String(parsedOverride.album || '').trim() }
+    ? {
+      ...parsedOverride,
+      album: alb || String(parsedOverride.album || '').trim(),
+      folderAlbum: folderAlb || String(parsedOverride.folderAlbum || '').trim(),
+    }
     : {
       title: t,
       artist: a,
       album: alb,
+      folderAlbum: folderAlb,
       keyword: [a, t].filter(Boolean).join(' '),
       altKeyword: a && t ? `${t} ${a}` : '',
       swapped: a && t ? { title: a, artist: t, keyword: `${t} ${a}` } : null,
@@ -280,6 +293,7 @@ export async function matchByArtistTitle(artist = '', title = '', source = 'wy',
   if (!parsed.title && t) parsed.title = t
   if (!parsed.artist && a) parsed.artist = a
   if (!parsed.album && alb) parsed.album = alb
+  if (!parsed.folderAlbum && folderAlb) parsed.folderAlbum = folderAlb
 
   const keywords = []
   // 默认优先「歌名 专辑名」，同名多专辑时更准（issue #23）
@@ -321,7 +335,7 @@ export async function matchByArtistTitle(artist = '', title = '', source = 'wy',
       .filter(i => i._score > 0)
   let finalPool = pool
   if (!finalPool.length && sdkSource !== 'tx' && (parsed.title || parsed.artist)) {
-    return matchByArtistTitle(artist, title, 'tx', limit, parsedOverride, album)
+    return matchByArtistTitle(artist, title, 'tx', limit, parsed, album, folderAlb)
   }
   if (!finalPool.length) finalPool = fallback.slice(0, limit)
   const seen = new Set()
