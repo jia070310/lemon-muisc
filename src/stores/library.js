@@ -1872,31 +1872,33 @@ export function artistFromId(id) {
 /** 多歌手合辑在歌手浏览中的归档名（与文件整理一致） */
 export const VARIOUS_ARTISTS_NAME = '群星 (Various Artists)'
 
-/** 按歌手分组；多歌手歌曲归入「群星 (Various Artists)」 */
+/** 按歌手分组；多歌手曲目计入每位歌手，并额外进入「群星 (Various Artists)」 */
 export function groupArtists(tracks) {
   const cached = getCachedGroup(groupCacheArtists, tracks, (source) => {
     const map = new Map()
     for (const track of source) {
       const names = splitArtists(track.singer || track.artist || '')
-      const bucketName = names.length >= 2
-        ? VARIOUS_ARTISTS_NAME
-        : (names[0] || '未知艺术家')
-      const id = artistToId(bucketName)
-      if (!map.has(id)) {
-        map.set(id, {
-          id,
-          name: bucketName,
-          cover: track.picUrl || '',
-          tracks: [],
-          latestMtime: track.mtime || 0,
-          albumSet: new Set(),
-        })
+        .filter((n) => n && n !== '未知艺术家')
+      if (!names.length) continue
+      const buckets = names.length >= 2 ? [...names, VARIOUS_ARTISTS_NAME] : names
+      for (const bucketName of buckets) {
+        const id = artistToId(bucketName)
+        if (!map.has(id)) {
+          map.set(id, {
+            id,
+            name: bucketName,
+            cover: track.picUrl || '',
+            tracks: [],
+            latestMtime: track.mtime || 0,
+            albumSet: new Set(),
+          })
+        }
+        const entry = map.get(id)
+        entry.tracks.push(track)
+        if (track.album && track.album !== '未知专辑') entry.albumSet.add(track.album)
+        if (!entry.cover && track.picUrl) entry.cover = track.picUrl
+        if ((track.mtime || 0) > entry.latestMtime) entry.latestMtime = track.mtime || 0
       }
-      const entry = map.get(id)
-      entry.tracks.push(track)
-      if (track.album && track.album !== '未知专辑') entry.albumSet.add(track.album)
-      if (!entry.cover && track.picUrl) entry.cover = track.picUrl
-      if ((track.mtime || 0) > entry.latestMtime) entry.latestMtime = track.mtime || 0
     }
     return [...map.values()].map((a) => ({
       id: a.id,

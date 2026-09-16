@@ -522,36 +522,6 @@
       <div v-if="activeTab === 'source'" class="panel-body">
         <p v-if="isAdminUser" class="source-tip">支持同时激活多个音源（落雪兼容 / 澜音原生 .js）。每个账号的激活状态相互独立；试听 / 下载时按平台匹配，同一平台有多个音源时优先使用最近激活的。系统会根据近期播放/下载是否为「试听片段」评估音源健康度；聚合音源若部分平台完整、部分多为试听，会单独标注。试听检测到短片段时会自动换音源/其它平台，并累计学习各平台是否可用。</p>
         <p v-else class="source-tip">音源脚本由管理员导入。你可以自行激活或停用音源，状态仅对自己生效。列表旁的健康标注来自本机近期播放/下载是否多为试听片段（含「部分平台试听」）；试听遇短片段会自动尝试其它音源或平台。</p>
-        <div class="setting-item">
-          <div class="setting-item-info">
-            <div class="setting-item-label">标签匹配并发</div>
-            <div class="setting-item-desc">按文件名批量匹配 / 重设时同时处理的文件数。越高越快，过高可能被音源限流</div>
-          </div>
-          <div class="setting-item-action">
-            <AppSelect
-              v-model="settings['tag.matchConcurrency']"
-              :options="tagMatchConcurrencyOptions"
-              min-width="100px"
-              @change="saveTagMatchConcurrency"
-            />
-          </div>
-        </div>
-        <div class="setting-item">
-          <div class="setting-item-info">
-            <div class="setting-item-label">播放自动匹配</div>
-            <div class="setting-item-desc">播放本地音乐时，若文件标签缺失（无专辑 / 封面 / 歌词等），自动联网匹配并保存到文件</div>
-          </div>
-          <div class="setting-item-action">
-            <label class="toggle">
-              <input
-                type="checkbox"
-                :checked="settings[AUTO_MATCH_ON_PLAY_KEY] === 'true'"
-                @change="toggleAutoMatchOnPlay"
-              />
-              <span class="slider"></span>
-            </label>
-          </div>
-        </div>
         <div v-if="isAdminUser" class="setting-item">
           <div class="setting-item-info">
             <div class="setting-item-label">音源切换方式</div>
@@ -640,6 +610,89 @@
               min-width="140px"
               @change="savePlaylistRemoteSyncDays"
             />
+          </div>
+        </div>
+      </div>
+
+      <!-- 标签管理 -->
+      <div v-if="activeTab === 'tag'" class="panel-body">
+        <p class="source-tip">控制文件管理中的标签刮削 / 匹配行为，以及播放时自动补全缺失标签。可与「文件管理 → 编辑标签」配合使用。</p>
+        <div class="setting-item">
+          <div class="setting-item-info">
+            <div class="setting-item-label">标签匹配并发</div>
+            <div class="setting-item-desc">按文件名批量匹配 / 重设时同时处理的文件数。越高越快，过高可能被音源限流</div>
+          </div>
+          <div class="setting-item-action">
+            <AppSelect
+              v-model="settings['tag.matchConcurrency']"
+              :options="tagMatchConcurrencyOptions"
+              min-width="100px"
+              @change="saveTagMatchConcurrency"
+            />
+          </div>
+        </div>
+        <div class="setting-item">
+          <div class="setting-item-info">
+            <div class="setting-item-label">匹配参考文件夹名</div>
+            <div class="setting-item-desc">批量刮削时把父文件夹名当作专辑提示（如演唱会目录），减少刮成录音室专辑</div>
+          </div>
+          <div class="setting-item-action">
+            <label class="toggle">
+              <input
+                type="checkbox"
+                :checked="settings['tag.matchPreferFolderAlbum'] !== 'false'"
+                @change="toggleTagMatchFlag('tag.matchPreferFolderAlbum', $event)"
+              />
+              <span class="slider"></span>
+            </label>
+          </div>
+        </div>
+        <div class="setting-item">
+          <div class="setting-item-info">
+            <div class="setting-item-label">仅补全缺失标签</div>
+            <div class="setting-item-desc">匹配后只写入本地为空的字段；已有专辑 / 歌手 / 封面等不会被覆盖。「按文件名重设」仍会整份覆盖</div>
+          </div>
+          <div class="setting-item-action">
+            <label class="toggle">
+              <input
+                type="checkbox"
+                :checked="settings['tag.matchFillMissingOnly'] !== 'false'"
+                @change="toggleTagMatchFlag('tag.matchFillMissingOnly', $event)"
+              />
+              <span class="slider"></span>
+            </label>
+          </div>
+        </div>
+        <div class="setting-item">
+          <div class="setting-item-info">
+            <div class="setting-item-label">过滤不符的网络歌手</div>
+            <div class="setting-item-desc">结果歌手需与本地标签或路径中的歌手相关，避免刮成无关网络艺人</div>
+          </div>
+          <div class="setting-item-action">
+            <label class="toggle">
+              <input
+                type="checkbox"
+                :checked="settings['tag.matchRejectForeignArtist'] !== 'false'"
+                @change="toggleTagMatchFlag('tag.matchRejectForeignArtist', $event)"
+              />
+              <span class="slider"></span>
+            </label>
+          </div>
+        </div>
+        <div class="setting-item">
+          <div class="setting-item-info">
+            <div class="setting-item-label">播放自动匹配</div>
+            <div class="setting-item-desc">播放本地音乐时，若文件标签缺失（无专辑 / 封面 / 歌词等），自动联网匹配并保存到文件</div>
+          </div>
+          <div class="setting-item-action">
+            <label class="toggle">
+              <input
+                type="checkbox"
+                :checked="settings[AUTO_MATCH_ON_PLAY_KEY] === 'true'"
+                @change="toggleAutoMatchOnPlay"
+              />
+              <span class="slider"></span>
+            </label>
           </div>
         </div>
       </div>
@@ -795,13 +848,13 @@
         <div class="setting-item">
           <div class="setting-item-info">
             <div class="setting-item-label">同名文件处理</div>
-            <div class="setting-item-desc">按文件名（忽略扩展名）检测本地已有文件；询问时会显示本地音质</div>
+            <div class="setting-item-desc">按文件名（忽略扩展名）检测本地已有文件；询问时会显示本地音质。「仍下载」会与其它格式并存，不删已有 FLAC/MP3 等</div>
           </div>
           <div class="setting-item-action">
             <AppSelect
               v-model="settings['download.existFileMode']"
               :options="existFileModeOptions"
-              min-width="140px"
+              min-width="160px"
               @change="saveExistFileMode"
             />
           </div>
@@ -1106,7 +1159,7 @@ const downloadGroupOptions = [
 const existFileModeOptions = [
   { value: 'ask', label: '询问确认' },
   { value: 'skip', label: '自动跳过' },
-  { value: 'overwrite', label: '直接覆盖' },
+  { value: 'overwrite', label: '下载并并存' },
 ]
 const librarySongColumnsOptions = [
   { value: '2', label: '两列' },
@@ -1455,6 +1508,7 @@ const tabs = computed(() => {
     { id: 'account', label: '我的账号' },
     { id: 'paths', label: '文件路径' },
     { id: 'source', label: '音源管理' },
+    { id: 'tag', label: '标签管理' },
     { id: 'appearance', label: '风格样式' },
     { id: 'download', label: '下载设置' },
     { id: 'embed', label: '内嵌数据' },
@@ -1463,7 +1517,7 @@ const tabs = computed(() => {
     { id: 'mail', label: '邮件服务' },
   ]
   if (isAdminUser.value) return all
-  return all.filter(t => ['account', 'paths', 'source', 'appearance'].includes(t.id))
+  return all.filter(t => ['account', 'paths', 'source', 'tag', 'appearance'].includes(t.id))
 })
 
 const embedItems = [
@@ -1894,6 +1948,9 @@ onMounted(async () => {
     activeSourceIds.value = parseActiveIds(settings['source.active'])
     if (!settings['tag.matchConcurrency']) settings['tag.matchConcurrency'] = '3'
     else settings['tag.matchConcurrency'] = String(Math.min(6, Math.max(1, parseInt(settings['tag.matchConcurrency'], 10) || 3)))
+    if (settings['tag.matchPreferFolderAlbum'] == null) settings['tag.matchPreferFolderAlbum'] = 'true'
+    if (settings['tag.matchFillMissingOnly'] == null) settings['tag.matchFillMissingOnly'] = 'true'
+    if (settings['tag.matchRejectForeignArtist'] == null) settings['tag.matchRejectForeignArtist'] = 'true'
     if (!settings['player.coverStyle']) settings['player.coverStyle'] = 'disc'
     if (settings['player.visualizer'] == null) settings['player.visualizer'] = 'true'
     if (!settings[THEME_KEY]) settings[THEME_KEY] = currentTheme.value
@@ -2293,6 +2350,17 @@ async function saveTagMatchConcurrency() {
   await saveSetting('tag.matchConcurrency')
 }
 
+async function toggleTagMatchFlag(key, event) {
+  const next = event?.target?.checked ? 'true' : 'false'
+  settings[key] = next
+  try {
+    await api.settings.update({ [key]: next })
+    showToast('已保存', 'success')
+  } catch (e) {
+    showToast(e.message || '保存失败', 'error')
+  }
+}
+
 async function saveDownloadGroupBy() {
   const mode = settings[DOWNLOAD_GROUP_BY_KEY] || 'none'
   settings['download.isSavePathGroupByListName'] = mode === 'album' ? 'true' : 'false'
@@ -2629,15 +2697,18 @@ function showToast(text, type = 'info') {
   gap: 24px;
   width: 100%;
   max-width: none;
-  min-height: calc(100vh - 160px);
-  align-items: flex-start;
+  height: 100%;
+  min-height: 0;
+  align-items: stretch;
+  overflow: hidden;
 }
 
 .settings-nav {
   width: 200px;
   flex-shrink: 0;
-  position: sticky;
-  top: 0;
+  align-self: flex-start;
+  max-height: 100%;
+  overflow-y: auto;
 }
 .nav-title { font-size: 22px; font-weight: 600; margin-bottom: 4px; }
 .nav-sub { font-size: 12px; color: var(--text-muted); margin-bottom: 20px; line-height: 1.5; }
@@ -2673,7 +2744,15 @@ function showToast(text, type = 'info') {
   border-radius: 0 2px 2px 0;
 }
 
-.settings-panel { flex: 1; min-width: 0; padding: 24px 28px; width: 100%; }
+.settings-panel {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  padding: 24px 28px;
+  width: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
 .panel-title { font-size: 18px; font-weight: 600; margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--border-light); }
 .panel-body { display: flex; flex-direction: column; gap: 16px; }
 
@@ -3315,9 +3394,17 @@ function showToast(text, type = 'info') {
 }
 
 @media (max-width: 768px) {
-  .settings-page { flex-direction: column; gap: 12px; }
+  .settings-page {
+    flex-direction: column;
+    gap: 12px;
+    height: auto;
+    min-height: calc(100vh - 160px);
+    overflow: visible;
+  }
   .settings-nav {
     width: 100%;
+    max-height: none;
+    overflow: visible;
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
@@ -3326,6 +3413,9 @@ function showToast(text, type = 'info') {
     top: 0;
     z-index: 5;
     background: var(--bg);
+  }
+  .settings-panel {
+    overflow: visible;
   }
   .nav-title { width: 100%; font-size: 18px; margin-bottom: 0; }
   .nav-sub { width: 100%; margin-bottom: 4px; }

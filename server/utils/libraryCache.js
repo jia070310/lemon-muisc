@@ -595,30 +595,7 @@ export function queryCachedTracks(opts = {}) {
 
   const artist = String(opts.artist || '').trim()
   if (artist) {
-    if (artist === VARIOUS_ARTISTS_NAME) {
-      clauses.push(`(
-        instr(artist, ' / ') > 0 OR instr(artist, '/') > 0
-        OR instr(artist, ';') > 0 OR instr(artist, '|') > 0
-      )`)
-    } else {
-      const esc = escapeLike(artist)
-      clauses.push(`(
-        artist = ? COLLATE NOCASE
-        OR album_artist = ? COLLATE NOCASE
-        OR artist LIKE ? ESCAPE '\\'
-        OR artist LIKE ? ESCAPE '\\'
-        OR artist LIKE ? ESCAPE '\\'
-        OR artist LIKE ? ESCAPE '\\'
-      )`)
-      params.push(
-        artist,
-        artist,
-        esc,
-        `${esc} / %`,
-        `% / ${esc}`,
-        `% / ${esc} / %`,
-      )
-    }
+    pushArtistMatchFilter(clauses, params, artist)
   }
 
   const album = String(opts.album || '').trim()
@@ -676,18 +653,90 @@ export function queryTracksByPaths(paths, { limit = 500 } = {}) {
   return list.map((p) => map.get(p)).filter(Boolean)
 }
 
-function artistBucketName(artistRaw) {
-  const names = splitArtists(artistRaw || '')
-  if (names.length >= 2) return VARIOUS_ARTISTS_NAME
-  return names[0] || '未知艺术家'
+function artistNamesForIndex(artistRaw) {
+  const names = splitArtists(artistRaw || '').filter((n) => n && n !== '未知艺术家')
+  if (!names.length) return []
+  if (names.length === 1) return names
+  return [...names, VARIOUS_ARTISTS_NAME]
 }
 
 function artistToId(name) {
   return encodeURIComponent(String(name || ''))
 }
 
+/** SQL：判定多歌手署名（与 splitArtists 分隔符大致对齐） */
+const MULTI_ARTIST_SQL = `(
+  instr(artist, ' / ') > 0 OR instr(artist, '/') > 0
+  OR instr(artist, ';') > 0 OR instr(artist, '|') > 0
+  OR instr(artist, '_') > 0
+  OR instr(artist, '、') > 0 OR instr(artist, '，') > 0 OR instr(artist, ',') > 0
+  OR instr(artist, '&') > 0 OR instr(artist, '＆') > 0 OR instr(artist, '×') > 0
+  OR instr(artist, '和') > 0 OR instr(artist, '与') > 0
+  OR instr(lower(artist), ' feat') > 0 OR instr(lower(artist), ' ft') > 0
+  OR instr(lower(artist), ' featuring') > 0
+)`
+
+/** 单歌手：精确匹配，或作为多歌手串中的一员 */
+function pushArtistMatchFilter(clauses, params, artist) {
+  const name = String(artist || '').trim()
+  if (!name) return
+  if (name === VARIOUS_ARTISTS_NAME) {
+    clauses.push(MULTI_ARTIST_SQL)
+    return
+  }
+  const esc = escapeLike(name)
+  clauses.push(`(
+    artist = ? COLLATE NOCASE
+    OR album_artist = ? COLLATE NOCASE
+    OR artist LIKE ? ESCAPE '\\'
+    OR artist LIKE ? ESCAPE '\\'
+    OR artist LIKE ? ESCAPE '\\'
+    OR artist LIKE ? ESCAPE '\\'
+    OR artist LIKE ? ESCAPE '\\'
+    OR artist LIKE ? ESCAPE '\\'
+    OR artist LIKE ? ESCAPE '\\'
+    OR artist LIKE ? ESCAPE '\\'
+    OR artist LIKE ? ESCAPE '\\'
+    OR artist LIKE ? ESCAPE '\\'
+    OR artist LIKE ? ESCAPE '\\'
+    OR artist LIKE ? ESCAPE '\\'
+    OR artist LIKE ? ESCAPE '\\'
+    OR artist LIKE ? ESCAPE '\\'
+    OR artist LIKE ? ESCAPE '\\'
+    OR artist LIKE ? ESCAPE '\\'
+    OR artist LIKE ? ESCAPE '\\'
+    OR artist LIKE ? ESCAPE '\\'
+  )`)
+  params.push(
+    name,
+    name,
+    // A / B
+    `${esc} / %`,
+    `% / ${esc}`,
+    `% / ${esc} / %`,
+    // A_B
+    `${esc}\\_%`,
+    `%\\_${esc}`,
+    `%\\_${esc}\\_%`,
+    // A和B / A与B
+    `${esc}和%`,
+    `%和${esc}`,
+    `%和${esc}和%`,
+    `${esc}与%`,
+    `%与${esc}`,
+    `%与${esc}与%`,
+    // 、 ， ,
+    `${esc}、%`,
+    `%、${esc}`,
+    `${esc}，%`,
+    `%，${esc}`,
+    `${esc},%`,
+    `%,${esc}`,
+  )
+}
+
 /**
- * 歌手聚合（服务端）；多歌手归「群星」
+ * 歌手聚合（服务端）；多歌手归「群星」，同时每位歌手下独立出现
  */
 export function queryArtists(opts = {}) {
   ensureLibraryCacheTable()
@@ -709,25 +758,26 @@ export function queryArtists(opts = {}) {
   const map = new Map()
   const q = String(opts.q || '').trim().toLowerCase()
   for (const row of rows) {
-    const name = artistBucketName(row.artist)
-    if (name === '未知艺术家') continue
-    if (q && !name.toLowerCase().includes(q)) continue
-    const id = artistToId(name)
-    if (!map.has(id)) {
-      map.set(id, {
-        id,
-        name,
-        trackCount: 0,
-        albumSet: new Set(),
-        latestMtime: 0,
-        coverPath: '',
-      })
+    const names = artistNamesForIndex(row.artist)
+    for (const name of names) {
+      if (q && !name.toLowerCase().includes(q)) continue
+      const id = artistToId(name)
+      if (!map.has(id)) {
+        map.set(id, {
+          id,
+          name,
+          trackCount: 0,
+          albumSet: new Set(),
+          latestMtime: 0,
+          coverPath: '',
+        })
+      }
+      const entry = map.get(id)
+      entry.trackCount += 1
+      if (row.album) entry.albumSet.add(row.album)
+      if ((row.mtime || 0) > entry.latestMtime) entry.latestMtime = row.mtime || 0
+      if (!entry.coverPath && row.has_picture) entry.coverPath = row.file_path
     }
-    const entry = map.get(id)
-    entry.trackCount += 1
-    if (row.album) entry.albumSet.add(row.album)
-    if ((row.mtime || 0) > entry.latestMtime) entry.latestMtime = row.mtime || 0
-    if (!entry.coverPath && row.has_picture) entry.coverPath = row.file_path
   }
 
   let items = [...map.values()].map((a) => ({
@@ -777,9 +827,14 @@ export function queryAlbums(opts = {}) {
     params.push(like, like, like)
   }
   const artist = String(opts.artist || '').trim()
-  if (artist && artist !== VARIOUS_ARTISTS_NAME) {
-    where = `(${where}) AND (artist = ? COLLATE NOCASE OR album_artist = ? COLLATE NOCASE)`
-    params.push(artist, artist)
+  if (artist) {
+    const albumClauses = []
+    const albumParams = []
+    pushArtistMatchFilter(albumClauses, albumParams, artist)
+    if (albumClauses.length) {
+      where = `(${where}) AND (${albumClauses.join(' AND ')})`
+      params.push(...albumParams)
+    }
   }
 
   const rows = db.prepare(`

@@ -135,7 +135,7 @@
       </div>
     </div>
 
-    <main class="content" :class="{ 'content-fixed': isTagPage || isMoodPage, 'content-navigating': isRouteLoading }">
+    <main class="content" :class="{ 'content-fixed': isTagPage || isMoodPage || isSettingsPage, 'content-navigating': isRouteLoading }">
       <div v-if="isRouteLoading" class="route-loading-bar" aria-hidden="true" />
       <PageSkeleton v-if="showRouteSkeleton" class="route-skeleton" :page="pendingRoutePage" />
       <router-view v-slot="{ Component }">
@@ -285,7 +285,10 @@
           </div>
         </div>
         <p v-if="existFilePrompt.offer?.localBetterOrEqual" class="downgrade-desc" style="margin-top: 8px">
-          本地音质已不低于当前选择，通常无需重复下载。
+          本地音质已不低于当前选择，通常无需重复下载。若仍下载，将与本地文件并存（不同扩展名互不删除，如已有 FLAC 再下 MP3）。
+        </p>
+        <p v-else class="downgrade-desc" style="margin-top: 8px">
+          仍下载时与本地文件并存：不会删除已有文件；仅当目标扩展名已存在时才会覆盖该文件。
         </p>
         <label class="exist-apply-rest" style="display:flex;align-items:center;gap:8px;margin:12px 0 4px;font-size:13px;opacity:.9">
           <input v-model="existApplyToRest" type="checkbox" />
@@ -297,7 +300,7 @@
             {{ existFileBusy === 'skip' ? '处理中…' : '跳过（用本地文件）' }}
           </button>
           <button class="btn-primary" :disabled="existFileBusy" @click="confirmExistFilePrompt">
-            {{ existFileBusy === 'overwrite' ? '处理中…' : '仍下载当前音质' }}
+            {{ existFileBusy === 'overwrite' ? '处理中…' : '仍下载并并存' }}
           </button>
         </div>
       </div>
@@ -329,7 +332,7 @@
             {{ existSummaryBusy === 'skip' ? '处理中…' : '全部跳过' }}
           </button>
           <button class="btn-ghost" :disabled="existSummaryBusy" @click="overwriteAllExistFromSummary">
-            {{ existSummaryBusy === 'overwrite' ? '处理中…' : '全部重新下载' }}
+            {{ existSummaryBusy === 'overwrite' ? '处理中…' : '全部下载并并存' }}
           </button>
           <button class="btn-primary" :disabled="existSummaryBusy" @click="startExistHandlingFromSummary">
             逐首处理
@@ -517,6 +520,7 @@ const isTagPage = computed(() => {
   return !tab || tab === 'tag'
 })
 const isMoodPage = computed(() => route.path === '/library/mood')
+const isSettingsPage = computed(() => route.path === '/settings')
 const isDiscoverNav = computed(() => route.path === '/discover' || route.path.startsWith('/discover/'))
 const isLibraryNav = computed(() => route.path === '/library' || (route.path.startsWith('/library/') && route.path !== '/library/mood'))
 const isMobileMoreNav = computed(() => (
@@ -775,7 +779,7 @@ async function overwriteAllExistFromSummary() {
     existSummaryPrompt.value = null
     existFileQueue.length = 0
   } catch (e) {
-    await appAlert({ title: '操作失败', message: e.message || '全部重新下载失败' })
+    await appAlert({ title: '操作失败', message: e.message || '全部下载并并存失败' })
   } finally {
     existSummaryBusy.value = false
   }

@@ -52,6 +52,10 @@ export const USER_SETTING_KEYS = new Set([
   'download.savePathPersonal',
   'source.active',
   'tag.matchConcurrency',
+  'tag.matchPreferFolderAlbum',
+  'tag.matchFillMissingOnly',
+  'tag.matchRejectForeignArtist',
+  'library.organizeArtistMode',
   'player.autoMatchOnPlay',
 ])
 
