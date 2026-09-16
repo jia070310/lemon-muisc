@@ -16,7 +16,7 @@
 
 GitHub Release：https://github.com/jia070310/lemon-muisc/releases/tag/v1.2.15
 仓库地址：https://github.com/jia070310/lemon-muisc
-
+夸克链接：https://pan.quark.cn/s/f160b6e5e5d9 提取码：QFJT
 ---
 
 【本版亮点】

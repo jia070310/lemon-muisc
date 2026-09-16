@@ -34,7 +34,10 @@
     <div v-if="loading && !points.length" class="loading card">正在加载情绪地图…</div>
     <div v-else-if="!points.length" class="empty card">
       <p>{{ stats.pending ? '尚未分析完成' : '暂无已分析曲目' }}</p>
-      <p class="empty-hint">分析在服务端后台进行（需 ffmpeg；已内置 ffmpeg-static 回退）。可离开此页，完成后刷新地图。</p>
+      <p class="empty-hint">
+        分析在服务端后台进行，可离开此页，完成后刷新地图。
+        若提示需要 ffmpeg，再到「设置 → 文件路径」点「检测并准备 ffmpeg」（优先系统自带）。
+      </p>
       <button class="btn-primary btn-sm" type="button" :disabled="starting || analyzing" @click="startAnalyze">
         {{ analyzing ? '分析中…' : '开始分析' }}
       </button>
@@ -1129,6 +1132,8 @@ onUnmounted(() => {
   color: var(--text);
   font-size: 0.88rem;
   flex-shrink: 0;
+  white-space: pre-wrap;
+  line-height: 1.5;
 }
 .mood-map-wrap {
   position: relative;
@@ -1342,7 +1347,16 @@ onUnmounted(() => {
 .empty-hint {
   color: var(--text-muted);
   font-size: 0.88rem;
-  margin: 8px 0 16px;
+  margin: 8px auto 16px;
+  line-height: 1.55;
+  text-align: left;
+  max-width: 42rem;
+}
+.empty-hint code {
+  font-size: 0.82em;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
 }
 @media (max-width: 720px) {
   .mood-page {

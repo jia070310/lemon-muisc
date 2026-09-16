@@ -34,6 +34,7 @@ export const GLOBAL_SETTING_KEYS = new Set([
   'mail.from',
   'mail.appUrl',
   'telemetry.enabled',
+  'ffmpeg.enabled',
 ])
 
 /** 用户个人设置 */

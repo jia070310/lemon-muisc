@@ -172,21 +172,79 @@ function mapWySong(item) {
   })
 }
 
+function pickKwInterval(item) {
+  const ordered = [
+    item.song_duration,
+    item.songDuration,
+    item.songTimeMinutes,
+    item.duration,
+  ]
+  for (const raw of ordered) {
+    if (raw == null || raw === '') continue
+    const s = String(raw).trim()
+    if (!s) continue
+    if (s.includes(':')) return s
+    const n = Number(s)
+    if (!Number.isFinite(n) || n <= 0) continue
+    // kbang 的 duration 常为 "0"/"1" 这类标记，真实秒数在 song_duration
+    if (n < 30 && (item.song_duration || item.songDuration)) continue
+    if (n > 10000) return formatTime(Math.floor(n / 1000))
+    return formatTime(n)
+  }
+  return ''
+}
+
+function pickKwPic(item) {
+  const raw = item.pic || item.albumpic || item.pic120 || item.pic500
+    || item.hts_img || item.img || item.cover || ''
+  if (!raw) return ''
+  return String(raw).replace(/\/120\//, '/500/')
+}
+
 function mapKwSong(item) {
+  const rid = item.rid || item.id || String(item.musicrid || '').replace(/^MUSIC_/i, '')
+  const pic = pickKwPic(item)
   return attachSongTypes('kw', item, {
-    id: String(item.rid || item.id || ''),
-    name: cleanHtml(item.name),
-    singer: formatArtists(item.artist),
-    album: cleanHtml(item.album),
-    albumName: cleanHtml(item.album),
-    interval: formatTime(item.duration),
+    id: String(rid || ''),
+    name: cleanHtml(item.name || item.songname || item.SONGNAME || ''),
+    singer: formatArtists(item.artist || item.ARTIST || item.singer || ''),
+    album: cleanHtml(item.album || item.ALBUM || item.albumname || ''),
+    albumName: cleanHtml(item.album || item.ALBUM || item.albumname || ''),
+    albumId: String(item.albumid || item.ALBUMID || item.albumId || ''),
+    interval: pickKwInterval(item),
     source: 'kw',
-    songId: String(item.rid || item.id || ''),
-    musicId: String(item.rid || item.id || ''),
-    rid: String(item.rid || item.id || ''),
-    img: item.pic || item.albumpic || '',
-    picUrl: item.pic || item.albumpic || '',
+    songId: String(rid || ''),
+    musicId: String(rid || ''),
+    rid: String(rid || ''),
+    img: pic,
+    picUrl: pic,
   })
+}
+
+/** kbang 列表无封面时，用 musicInfo 批量补全 */
+async function kwFillMissingCovers(songs, concurrency = 6) {
+  const need = (songs || []).filter((s) => s && !(s.img || s.picUrl) && (s.rid || s.songId || s.id))
+  if (!need.length) return songs
+  await mapWithConcurrency(need, concurrency, async (song) => {
+    const mid = song.rid || song.songId || song.id
+    try {
+      const buf = await req('get',
+        `http://wapi.kuwo.cn/api/www/music/musicInfo?mid=${encodeURIComponent(mid)}&httpsStatus=1`,
+        null, KW_HEADERS)
+      const info = parseJSON(buf)?.data
+      const pic = pickKwPic(info || {})
+      if (pic) {
+        song.img = pic
+        song.picUrl = pic
+      }
+      if (!song.interval && info) {
+        const interval = pickKwInterval(info)
+        if (interval) song.interval = interval
+      }
+    } catch {}
+    return song
+  })
+  return songs
 }
 
 function mapKgSong(item) {
@@ -667,14 +725,75 @@ async function kwNewAlbums(_region = '', page = 1, limit = 20) {
 }
 
 async function kwFetchRankPreview(id) {
-  const buf = await req('get',
-    `http://wapi.kuwo.cn/api/www/bang/bang/musicList?bangId=${id}&pn=1&rn=3&httpsStatus=1`,
-    null, KW_HEADERS)
-  const list = parseJSON(buf)?.data?.musicList || []
-  return list.slice(0, 3).map((item) => ({
-    name: cleanHtml(item.name),
-    singer: formatArtists(item.artist),
+  const data = await kwBangMusicList(id, 1, 3)
+  return (data.list || []).slice(0, 3).map((item) => ({
+    name: cleanHtml(item.name || item.songname || ''),
+    singer: formatArtists(item.artist || item.singer || ''),
   }))
+}
+
+/**
+ * 酷我榜单歌曲：wapi 常因限流/错误 bangId 返回 code:-1 空数据；
+ * 失败时回退 kbangserver（与新碟逻辑一致，分页从 0 起）。
+ */
+async function kwBangMusicList(id, page = 1, limit = 50) {
+  const bangId = String(id || '').trim()
+  if (!bangId) return { list: [], total: 0, name: '', cover: '', updateTime: '' }
+
+  const tryWapi = async () => {
+    const buf = await req('get',
+      `http://wapi.kuwo.cn/api/www/bang/bang/musicList?bangId=${encodeURIComponent(bangId)}&pn=${page}&rn=${limit}&httpsStatus=1`,
+      null, KW_HEADERS)
+    const data = parseJSON(buf)
+    if (Number(data?.code) !== 200) return null
+    const list = data?.data?.musicList || []
+    if (!list.length) return null
+    return {
+      list,
+      total: Number(data?.data?.num) || list.length,
+      name: cleanHtml(data?.data?.name || data?.data?.title || ''),
+      cover: data?.data?.pic || data?.data?.img || '',
+      updateTime: data?.data?.pub || '',
+    }
+  }
+
+  const tryKbang = async () => {
+    const pn = Math.max(0, Number(page) - 1)
+    const buf = await req('get',
+      `http://kbangserver.kuwo.cn/ksong.s?from=pc&fmt=json&pn=${pn}&rn=${limit}&type=bang&data=content&id=${encodeURIComponent(bangId)}&show_copyright_off=0&pcmp4=1&isbang=1&userid=0`,
+      null, KW_HEADERS)
+    const data = parseJSON(buf)
+    const list = data?.musiclist || data?.data?.musicList || data?.list || []
+    if (!list.length) return null
+    return {
+      list,
+      total: Number(data?.num || data?.data?.num) || list.length,
+      name: cleanHtml(data?.name || data?.leader || data?.data?.name || ''),
+      cover: data?.pic || data?.v9_pic2 || data?.data?.pic || '',
+      updateTime: data?.pub || data?.data?.pub || '',
+    }
+  }
+
+  try {
+    const hit = await tryWapi()
+    if (hit) {
+      // wapi 列表常不带榜名；仅首页补一次 kbang 元数据
+      if (!hit.name && Number(page) <= 1) {
+        try {
+          const meta = await tryKbang()
+          if (meta?.name) hit.name = meta.name
+          if (!hit.cover && meta?.cover) hit.cover = meta.cover
+          if (!hit.updateTime && meta?.updateTime) hit.updateTime = meta.updateTime
+        } catch {}
+      }
+      return hit
+    }
+  } catch {}
+  try {
+    const hit = await tryKbang()
+    if (hit) return hit
+  } catch {}
+  return { list: [], total: 0, name: '', cover: '', updateTime: '' }
 }
 
 async function kwToplists() {
@@ -686,8 +805,11 @@ async function kwToplists() {
   const cards = []
   for (const g of groups) {
     for (const item of g.list || []) {
+      // sourceid 才是 bangId；误用内部 id（如 489927）会导致 musicList 返回 code:-1
+      const bangId = item.sourceid || item.bangId || item.bangid
+      if (!bangId) continue
       cards.push(mapRankCard({
-        id: item.sourceid || item.id,
+        id: bangId,
         name: item.name,
         cover: item.pic || item.img,
         songs: [],
@@ -701,21 +823,20 @@ async function kwToplists() {
 }
 
 async function kwToplistDetail(id, page = 1, limit = 50) {
-  const buf = await req('get',
-    `http://wapi.kuwo.cn/api/www/bang/bang/musicList?bangId=${id}&pn=${page}&rn=${limit}&httpsStatus=1`,
-    null, KW_HEADERS)
-  const data = parseJSON(buf)
-  const list = data?.data?.musicList || []
-  const total = data?.data?.num || list.length
+  const raw = await kwBangMusicList(id, page, limit)
+  const list = raw.list || []
+  const total = Number(raw.total) || list.length
+  const mapped = list.map(mapKwSong).filter((s) => s.id && s.name)
+  await kwFillMissingCovers(mapped, 8)
   return {
     info: {
       id: String(id),
-      name: cleanHtml(data?.data?.name || '排行榜'),
-      cover: data?.data?.pic || '',
-      updateTime: '',
+      name: raw.name || '排行榜',
+      cover: raw.cover || '',
+      updateTime: raw.updateTime || '',
       source: 'kw',
     },
-    list: list.map(mapKwSong),
+    list: mapped,
     total,
     page,
     source: 'kw',

@@ -610,6 +610,10 @@
             <span>歌名</span>
             <ClearableInput v-model="fetchTitle" variant="plain" placeholder="歌曲名" @enter="doFetchSearch" />
           </label>
+          <label class="search-field">
+            <span>专辑</span>
+            <ClearableInput v-model="fetchAlbum" variant="plain" placeholder="专辑名（可选，同名多专辑时建议填写）" @enter="doFetchSearch" />
+          </label>
           <button class="btn-primary btn-sm search-btn" @click="doFetchSearch" :disabled="fetchLoading">
             {{ fetchLoading ? '搜索中...' : '搜索' }}
           </button>
@@ -617,7 +621,7 @@
 
         <div class="fetch-body">
           <div class="fetch-list">
-            <div v-if="!fetchResults.length && !fetchLoading" class="fetch-empty">暂无结果，请调整歌手或歌名后重试</div>
+            <div v-if="!fetchResults.length && !fetchLoading" class="fetch-empty">暂无结果，请调整歌手、歌名或专辑后重试</div>
             <div
               v-for="(item, i) in fetchResults" :key="i"
               :class="['fetch-item', { active: fetchPreview?.id === item.id && fetchPreview?.source === item.source }]"
@@ -759,6 +763,7 @@ const fetchPreviewMeta = ref(null)
 const showFetchModal = ref(false)
 const fetchArtist = ref('')
 const fetchTitle = ref('')
+const fetchAlbum = ref('')
 const fetchIntent = ref('cover')
 const editingFile = ref(null)
 const editForm = ref(null)
@@ -1679,7 +1684,11 @@ async function inspectFileTagAccuracy(file, formSnapshot = null) {
     return { ok: false, reason: 'parse', mismatches: {}, suggested: {}, parsed }
   }
 
-  const res = await api.tag.match(file.fileName, fetchSource.value)
+  const res = await api.tag.match({
+    artist: parsed.artist || '',
+    title: parsed.title || '',
+    album: String(file.album || formSnapshot?.album || '').trim(),
+  }, fetchSource.value)
   const matches = res.data || []
   if (!matches.length) {
     return { ok: false, reason: 'no-match', mismatches: {}, suggested: {}, parsed }
@@ -2061,8 +2070,9 @@ async function openFetchModal(intent) {
   })
   fetchArtist.value = resolved.artist
   fetchTitle.value = resolved.title
+  fetchAlbum.value = String(editForm.value?.album || f?.album || '').trim()
 
-  if (fetchArtist.value || fetchTitle.value) await doFetchSearch()
+  if (fetchArtist.value || fetchTitle.value || fetchAlbum.value) await doFetchSearch()
 }
 
 function swapFetchArtistTitle() {
@@ -2080,15 +2090,16 @@ function closeFetchModal() {
 async function doFetchSearch() {
   const artist = fetchArtist.value.trim()
   const title = fetchTitle.value.trim()
-  if (!artist && !title) {
-    showToast('请至少填写歌手或歌名', 'info')
+  const album = fetchAlbum.value.trim()
+  if (!artist && !title && !album) {
+    showToast('请至少填写歌手、歌名或专辑', 'info')
     return
   }
   fetchLoading.value = true
   fetchPreview.value = null
   fetchPreviewMeta.value = null
   try {
-    const res = await api.tag.match({ artist, title }, fetchSource.value)
+    const res = await api.tag.match({ artist, title, album }, fetchSource.value)
     fetchResults.value = res.data || []
     if (!fetchResults.value.length) showToast('未找到匹配结果', 'info')
     else if (fetchResults.value.length === 1) await previewFetchItem(fetchResults.value[0])

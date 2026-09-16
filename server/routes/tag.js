@@ -9,7 +9,7 @@ import { getMusicPaths, addMusicPath, removeMusicPath, isUnderConfiguredMusicDir
 import { listAudioFiles, listDirEntries, probeDir } from '../utils/audioScan.js'
 import { mapWithConcurrency } from '../utils/asyncPool.js'
 import { notifyLibraryChanged } from '../utils/libraryNotify.js'
-import { scanBatchAndCache, enrichFilesFromCache, readBatchFromCacheOrScan } from '../utils/libraryCache.js'
+import { scanBatchAndCache, enrichFilesFromCache, readBatchFromCacheOrScan, getAllCachedTracks } from '../utils/libraryCache.js'
 
 export const tagRouter = Router()
 
@@ -278,18 +278,22 @@ tagRouter.post('/scan', async (req, res) => {
 
 tagRouter.post('/match', async (req, res) => {
   try {
-    const { fileName, keyword, artist, title, source = 'wy' } = req.body
+    const { fileName, keyword, artist, title, album, source = 'wy' } = req.body
 
-    if (artist !== undefined || title !== undefined) {
-      const matches = await matchByArtistTitle(artist || '', title || '', source)
-      return res.json({ ok: true, data: matches, parsed: { artist: artist || '', title: title || '' } })
+    if (artist !== undefined || title !== undefined || album !== undefined) {
+      const matches = await matchByArtistTitle(artist || '', title || '', source, 8, null, album || '')
+      return res.json({
+        ok: true,
+        data: matches,
+        parsed: { artist: artist || '', title: title || '', album: album || '' },
+      })
     }
 
     const searchName = fileName || keyword
     if (!searchName) return res.status(400).json({ error: '请提供歌手/歌名或文件名' })
 
-    const matches = await matchByFilename(searchName, source)
-    res.json({ ok: true, data: matches, parsed: parseFilename(searchName) })
+    const matches = await matchByFilename(searchName, source, 8, album || '')
+    res.json({ ok: true, data: matches, parsed: { ...parseFilename(searchName), album: album || '' } })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
@@ -314,11 +318,20 @@ tagRouter.post('/match-batch', async (req, res) => {
     if (files.length > 50) return res.status(400).json({ error: '单次最多 50 个文件' })
 
     const sdkSource = normalizeTagSource(source)
+    const cacheMap = new Map(
+      (getAllCachedTracks() || []).map((t) => [path.resolve(String(t.filePath || '')), t]),
+    )
     // 有限并发：加速批量匹配，同时降低被音源限流的概率
     const concurrency = Math.min(3, Math.max(1, files.length))
     const results = await mapWithConcurrency(files, concurrency, async (file) => {
       try {
-        const matches = await matchByFilename(file.fileName, sdkSource, 1)
+        const cached = cacheMap.get(path.resolve(String(file.filePath || ''))) || {}
+        const artist = String(file.artist || cached.artist || '').trim()
+        const title = String(file.title || cached.title || '').trim()
+        const album = String(file.album || cached.album || '').trim()
+        const matches = (title || artist || album)
+          ? await matchByArtistTitle(artist, title, sdkSource, 1, null, album)
+          : await matchByFilename(file.fileName, sdkSource, 1, album)
         if (!matches.length) {
           return { filePath: file.filePath, ok: false, error: '未找到匹配' }
         }

@@ -1,5 +1,5 @@
 #!/bin/bash
-# 升级：保留数据目录与 Node 运行时；更新代码后重装依赖并拉起
+# 升级：保留数据目录；更新代码后按需重装依赖（可写 npm 缓存，避免卡在 55%）
 
 . "$(dirname "$0")/paths.sh"
 . "$(dirname "$0")/runtime.sh"
@@ -19,11 +19,11 @@ if [ -f "${PID_FILE}" ]; then
   kill "$(tr -d ' \n\r' < "${PID_FILE}" 2>/dev/null)" 2>/dev/null || true
   rm -f "${PID_FILE}" 2>/dev/null || true
 fi
+if command -v fuser >/dev/null 2>&1; then
+  fuser -k 7983/tcp >/dev/null 2>&1 || true
+fi
 
 load_paths
-if [ -z "${wizard_music_path:-}" ]; then
-  :
-fi
 
 APP_ROOT="$(app_root)"
 if [ ! -f "${APP_ROOT}/server/index.js" ]; then
@@ -31,14 +31,16 @@ if [ ! -f "${APP_ROOT}/server/index.js" ]; then
 fi
 
 update_install_ui "检查 Node.js v22…"
-ensure_store_node || fail_install "未找到 Node.js v22，请先在应用中心安装该依赖。"
+ensure_store_node || fail_install "未找到 Node.js v22，请先在应用中心安装该依赖后重试升级。"
 
-# 强制重装依赖（代码可能变了）
-rm -rf "${APP_ROOT}/node_modules" 2>/dev/null || true
-update_install_ui "安装依赖…"
-install_node_modules || fail_install "npm 依赖安装失败：${TRIM_PKGVAR}/log/npm-install.log"
+update_install_ui "安装依赖（国内源，请耐心等待）…"
+# force：依赖清单可能变更；缓存写入应用目录，避免 /home 无权限导致卡死
+install_node_modules force || fail_install "npm 依赖安装失败：${TRIM_PKGVAR}/log/npm-install.log"
+
+update_install_ui "检查 better-sqlite3…"
+ensure_better_sqlite3_native || fail_install "better-sqlite3 原生模块不可用：${TRIM_PKGVAR}/log/npm-install.log"
 
 ensure_desktop_entry || true
-update_install_ui "升级完成，请启用应用"
+update_install_ui "【升级完成】请点「启用」。若一直启用中，SSH 查看：tail -n 80 ${TRIM_PKGVAR}/log/app.log"
 log_line "升级完成"
 exit 0
