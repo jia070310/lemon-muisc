@@ -1,13 +1,16 @@
 #!/bin/bash
 # 原生运行时：依赖飞牛应用中心「Node.js v22」(nodejs_v22)
-# 正确调用方式：manifest 声明 install_dep_apps = nodejs_v22
-# → 安装/升级本应用时，由应用中心自动拉取并安装商店内置 Node，脚本侧等待就绪即可。
-# 第三方应用不要自下 Node 安装包；也没有稳定公开的「商店下载 API」可替代声明依赖。
+#
+# 官方文档（打包运行时环境）：
+#   manifest: install_dep_apps=nodejs_v22
+#   脚本中:   export PATH=/var/apps/nodejs_v22/target/bin:$PATH
+# 依赖由应用中心按 install_dep_apps 自动安装；第三方脚本不应再调 appcenter-cli install
+#（已安装时再 install 会卡在 downloading 0%，见 issue #27）。
 
 STORE_NODE_APP="nodejs_v22"
-# 等待应用中心装完依赖的最长时间（秒）；商店下 Node 包可能较慢
-STORE_NODE_WAIT_SEC="${STORE_NODE_WAIT_SEC:-600}"
-STORE_NODE_POLL_SEC="${STORE_NODE_POLL_SEC:-5}"
+# 仅短等：依赖应由系统装好；找不到可执行文件时再提示用户，勿长时间阻塞升级
+STORE_NODE_WAIT_SEC="${STORE_NODE_WAIT_SEC:-90}"
+STORE_NODE_POLL_SEC="${STORE_NODE_POLL_SEC:-3}"
 
 # 应用代码目录（打包进 FPK 的 dist/server）
 app_root() {
@@ -26,39 +29,63 @@ app_root() {
   echo "${TRIM_APPDEST}"
 }
 
-# 飞牛商店 Node.js v22 常见路径（不同卷/版本略有差异）
+# 文档约定 + 各卷实际安装位置（/var/apps/*/target → /volN/@appcenter/*）
+store_node_bin_dirs() {
+  local d resolved
+  # 官方路径优先
+  echo "/var/apps/nodejs_v22/target/bin"
+  echo "/var/apps/nodejs_v22/bin"
+  if [ -e "/var/apps/nodejs_v22/target" ]; then
+    resolved="$(readlink -f /var/apps/nodejs_v22/target 2>/dev/null || true)"
+    if [ -n "${resolved}" ]; then
+      echo "${resolved}/bin"
+    fi
+  fi
+  # 动态扫描各存储卷（不写死 vol1–4）
+  for d in /vol*/@appcenter/nodejs_v22/bin \
+           /vol*/@appcenter/nodejs_v22/target/bin \
+           /usr/local/apps/@appcenter/nodejs_v22/bin \
+           /usr/local/apps/@appcenter/nodejs_v22/target/bin
+  do
+    [ -d "${d}" ] && echo "${d}"
+  done
+}
+
 store_node_candidates() {
-  cat <<EOF
-/var/apps/nodejs_v22/target/bin/node
-/var/apps/nodejs_v22/bin/node
-/usr/local/apps/@appcenter/nodejs_v22/bin/node
-/vol1/@appcenter/nodejs_v22/bin/node
-/vol2/@appcenter/nodejs_v22/bin/node
-/vol3/@appcenter/nodejs_v22/bin/node
-/vol4/@appcenter/nodejs_v22/bin/node
+  local d
+  while IFS= read -r d; do
+    [ -n "${d}" ] && echo "${d}/node"
+  done <<EOF
+$(store_node_bin_dirs)
 EOF
 }
 
-# 把商店 Node 的 bin 目录插入 PATH
+# 商店包目录是否已存在（appcenter 显示「已安装」时通常为真）
+store_nodejs_dir_present() {
+  [ -d "/var/apps/nodejs_v22" ] && return 0
+  [ -d "/var/apps/nodejs_v22/target" ] && return 0
+  local d
+  for d in /vol*/@appcenter/nodejs_v22 /usr/local/apps/@appcenter/nodejs_v22; do
+    [ -d "${d}" ] && return 0
+  done
+  return 1
+}
+
+# 把商店 Node 的 bin 目录插入 PATH（官方写法）
 prepend_store_node_path() {
   local d
-  for d in \
-    "/var/apps/nodejs_v22/target/bin" \
-    "/var/apps/nodejs_v22/bin" \
-    "/usr/local/apps/@appcenter/nodejs_v22/bin" \
-    "/vol1/@appcenter/nodejs_v22/bin" \
-    "/vol2/@appcenter/nodejs_v22/bin" \
-    "/vol3/@appcenter/nodejs_v22/bin" \
-    "/vol4/@appcenter/nodejs_v22/bin"
-  do
-    if [ -x "${d}/node" ]; then
+  while IFS= read -r d; do
+    [ -z "${d}" ] && continue
+    if [ -x "${d}/node" ] || [ -f "${d}/node" ]; then
       case ":${PATH}:" in
         *":${d}:"*) ;;
         *) export PATH="${d}:${PATH}" ;;
       esac
       return 0
     fi
-  done
+  done <<EOF
+$(store_node_bin_dirs)
+EOF
   return 1
 }
 
@@ -67,7 +94,7 @@ resolve_node_bin() {
   prepend_store_node_path || true
   while IFS= read -r p; do
     [ -z "${p}" ] && continue
-    if [ -x "${p}" ] && "${p}" -v >/dev/null 2>&1; then
+    if { [ -x "${p}" ] || [ -f "${p}" ]; } && "${p}" -v >/dev/null 2>&1; then
       echo "${p}"
       return 0
     fi
@@ -84,26 +111,40 @@ EOF
 resolve_npm_bin() {
   local node_bin npm_bin dir
   node_bin="$(resolve_node_bin)" || return 1
-  dir="$(cd "$(dirname "${node_bin}")" && pwd -P 2>/dev/null || dirname "${node_bin}")"
-  npm_bin="${dir}/npm"
-  if [ -x "${npm_bin}" ]; then
-    echo "${npm_bin}"
-    return 0
-  fi
-  if command -v npm >/dev/null 2>&1; then
+  prepend_store_node_path || true
+  dir="$(cd "$(dirname "${node_bin}")" 2>/dev/null && pwd -P 2>/dev/null || dirname "${node_bin}")"
+
+  for npm_bin in "${dir}/npm" "$(dirname "${dir}")/lib/node_modules/npm/bin/npm-cli.js"; do
+    [ -e "${npm_bin}" ] || continue
+    # 可执行文件，或 #!/usr/bin/env node 脚本（需 PATH 已含 node）
+    if "${npm_bin}" -v >/dev/null 2>&1; then
+      echo "${npm_bin}"
+      return 0
+    fi
+    if "${node_bin}" "${npm_bin}" -v >/dev/null 2>&1; then
+      echo "${npm_bin}"
+      return 0
+    fi
+  done
+
+  if command -v npm >/dev/null 2>&1 && npm -v >/dev/null 2>&1; then
     command -v npm
     return 0
   fi
   return 1
 }
 
-# 商店依赖「安装完成」判定：node + npm 均可执行
+# node 可跑即视为运行时可用；npm 单独探测（内置 node_modules 时可不强制 npm）
 is_store_node_ready() {
-  local node_bin npm_bin
+  local node_bin
   node_bin="$(resolve_node_bin)" || return 1
-  npm_bin="$(resolve_npm_bin)" || return 1
   "${node_bin}" -v >/dev/null 2>&1 || return 1
-  "${npm_bin}" -v >/dev/null 2>&1 || return 1
+  return 0
+}
+
+is_store_npm_ready() {
+  local npm_bin
+  npm_bin="$(resolve_npm_bin)" || return 1
   return 0
 }
 
@@ -119,33 +160,49 @@ store_ui() {
 }
 
 #
-# 尽力触发应用中心安装商店包 nodejs_v22。
-# 正式路径仍是 manifest 的 install_dep_apps；此处仅作回调里「未就绪」时的补救。
+# 文档：依赖由 install_dep_apps 安装。禁止对已安装包再执行 appcenter-cli install
+#（用户日志：Application is installed → downloading 0.00% → 超时）。
+# 仅在完全找不到目录时，用短超时尝试 start（不 install）。
 #
-try_trigger_store_nodejs_install() {
+nudge_store_nodejs_if_missing() {
   local log_file="${TRIM_PKGVAR}/log/runtime-install.log"
   local cli=""
   mkdir -p "${TRIM_PKGVAR}/log" 2>/dev/null || true
+
+  if is_store_node_ready; then
+    return 0
+  fi
+  if store_nodejs_dir_present; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ${STORE_NODE_APP} 目录已存在，不调用 appcenter-cli install（避免卡 downloading 0%）" >> "${log_file}"
+    prepend_store_node_path || true
+    return 0
+  fi
 
   for cli in appcenter-cli trim-appcenter-cli; do
     if ! command -v "${cli}" >/dev/null 2>&1; then
       continue
     fi
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 尝试 ${cli} 安装商店依赖 ${STORE_NODE_APP}" >> "${log_file}"
-    "${cli}" install "${STORE_NODE_APP}" >> "${log_file}" 2>&1 \
-      || "${cli}" install --app "${STORE_NODE_APP}" >> "${log_file}" 2>&1 \
-      || "${cli}" start "${STORE_NODE_APP}" >> "${log_file}" 2>&1 \
-      || true
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ${STORE_NODE_APP} 未找到目录，短超时尝试 ${cli} start（不 install）" >> "${log_file}"
+    if command -v timeout >/dev/null 2>&1; then
+      timeout 20 "${cli}" start "${STORE_NODE_APP}" >> "${log_file}" 2>&1 || true
+    else
+      "${cli}" start "${STORE_NODE_APP}" >> "${log_file}" 2>&1 || true
+    fi
     return 0
   done
 
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] 无 appcenter-cli，仅等待 install_dep_apps 装好 ${STORE_NODE_APP}" >> "${log_file}"
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] 无 appcenter-cli；依赖安装交给 manifest install_dep_apps=${STORE_NODE_APP}" >> "${log_file}"
   return 1
 }
 
+# 兼容旧名（禁止再走 install 触发）
+try_trigger_store_nodejs_install() {
+  nudge_store_nodejs_if_missing
+}
+
 #
-# 硬门槛：阻塞直到商店依赖 Node.js v22 安装完成（或超时失败）。
-# 安装/升级回调必须先过此关，才允许继续本应用的 npm / 收尾。
+# 等待商店 Node 可执行。成功条件：resolve_node_bin 成功。
+# 若目录已存在但暂时解析不到，短等后仍失败则返回错误（由调用方决定是否硬失败）。
 #
 wait_for_store_dependencies() {
   local log_file="${TRIM_PKGVAR}/log/runtime-install.log"
@@ -155,38 +212,45 @@ wait_for_store_dependencies() {
   local max="${STORE_NODE_WAIT_SEC}"
   mkdir -p "${TRIM_PKGVAR}/log" 2>/dev/null || true
 
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] wait_for_store_dependencies: 开始（最长 ${max}s）" >> "${log_file}"
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] wait_for_store_dependencies: 开始（最长 ${max}s）；探测 PATH=/var/apps/${STORE_NODE_APP}/target/bin" >> "${log_file}"
+  prepend_store_node_path || true
 
   if is_store_node_ready; then
     node_bin="$(resolve_node_bin)"
-    npm_bin="$(resolve_npm_bin)"
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 商店依赖已就绪: node=${node_bin} ($("${node_bin}" -v 2>/dev/null)) npm=${npm_bin}" >> "${log_file}"
+    npm_bin="$(resolve_npm_bin 2>/dev/null || true)"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 商店依赖已就绪: node=${node_bin} ($("${node_bin}" -v 2>/dev/null)) npm=${npm_bin:-none}" >> "${log_file}"
     store_ui "等待商店安装依赖 Node.js — 已就绪"
     return 0
   fi
 
   store_ui "等待商店安装依赖 Node.js"
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] 商店依赖未就绪，阻塞等待 install_dep_apps=${STORE_NODE_APP}" >> "${log_file}"
-  try_trigger_store_nodejs_install || true
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] node 暂不可用；dir_present=$(store_nodejs_dir_present && echo yes || echo no)" >> "${log_file}"
+  # 只 nudge 一次，绝不循环 install
+  nudge_store_nodejs_if_missing || true
+  prepend_store_node_path || true
 
   while [ "${waited}" -lt "${max}" ]; do
-    sleep "${step}"
-    waited=$((waited + step))
     if is_store_node_ready; then
       node_bin="$(resolve_node_bin)"
-      npm_bin="$(resolve_npm_bin)"
       echo "[$(date '+%Y-%m-%d %H:%M:%S')] 商店依赖就绪（等待 ${waited}s）: node=${node_bin} ($("${node_bin}" -v 2>/dev/null))" >> "${log_file}"
       store_ui "等待商店安装依赖 Node.js — 已完成，继续安装本应用"
       return 0
     fi
-    store_ui "等待商店安装依赖 Node.js"
-    if [ $((waited % 60)) -eq 0 ]; then
-      try_trigger_store_nodejs_install || true
-    fi
+    # 目录已在、只是 bin 偶发未就绪：继续短等；不要再调 install
+    sleep "${step}"
+    waited=$((waited + step))
+    store_ui "等待商店安装依赖 Node.js（${waited}s）"
+    prepend_store_node_path || true
   done
 
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] 等待商店依赖超时（${max}s）" >> "${log_file}"
-  store_ui "等待商店安装依赖 Node.js 超时，请在应用中心手动安装后再试"
+  # 兜底：目录存在且能找到 node 文件（即使 -v 曾失败）再试一次
+  if store_nodejs_dir_present && is_store_node_ready; then
+    return 0
+  fi
+
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] 等待商店依赖超时（${max}s）；candidates:" >> "${log_file}"
+  store_node_candidates >> "${log_file}" 2>/dev/null || true
+  store_ui "等待商店安装依赖 Node.js 超时，请在应用中心确认已安装「Node.js v22」"
   return 1
 }
 
@@ -257,22 +321,40 @@ run_npm_with_timeout() {
 }
 
 # 若缺少 better-sqlite3 原生库，在 NAS 上用商店 Node 重建（走 prebuild 或本地编译）
+# 注意：FPK 内置的 prebuilds 可能含 darwin-*；不可用 find 第一个 .node 当成功
 ensure_better_sqlite3_native() {
-  local root npm_bin log_file binding
+  local root npm_bin log_file binding arch plat
   root="$(app_root)"
   log_file="${TRIM_PKGVAR}/log/npm-install.log"
   mkdir -p "${TRIM_PKGVAR}/log" 2>/dev/null || true
 
-  binding="$(find "${root}/node_modules/better-sqlite3" -name '*.node' 2>/dev/null | head -n 1 || true)"
+  plat="$(uname -s 2>/dev/null | tr '[:upper:]' '[:lower:]')"
+  arch="$(uname -m 2>/dev/null)"
+  case "${arch}" in
+    x86_64|amd64) arch="x64" ;;
+    aarch64|arm64) arch="arm64" ;;
+  esac
+
+  binding=""
+  if [ -d "${root}/node_modules/better-sqlite3" ]; then
+    # 优先当前平台 prebuild
+    binding="$(find "${root}/node_modules/better-sqlite3" -path "*prebuilds/${plat}-${arch}*" -name '*.node' 2>/dev/null | head -n 1 || true)"
+    if [ -z "${binding}" ]; then
+      binding="$(find "${root}/node_modules/better-sqlite3" -name '*.node' 2>/dev/null | grep -v darwin | grep -v win32 | head -n 1 || true)"
+    fi
+  fi
   if [ -n "${binding}" ]; then
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] better-sqlite3 native ok: ${binding}" >> "${log_file}"
     return 0
   fi
 
-  npm_bin="$(resolve_npm_bin)" || return 1
+  npm_bin="$(resolve_npm_bin)" || {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] better-sqlite3: 无可用 npm，跳过重建（启用时再试）" >> "${log_file}"
+    return 1
+  }
   prepend_store_node_path || true
   prepare_npm_env
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] rebuilding better-sqlite3…" >> "${log_file}"
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] rebuilding better-sqlite3 for ${plat}-${arch}…" >> "${log_file}"
   update_npm_ui "正在重建 better-sqlite3 原生模块…"
   (
     cd "${root}" || exit 1
@@ -280,7 +362,10 @@ ensure_better_sqlite3_native() {
       || run_npm_with_timeout "${npm_bin}" "${log_file}" install better-sqlite3 --omit=dev --omit=optional
   ) || true
 
-  binding="$(find "${root}/node_modules/better-sqlite3" -name '*.node' 2>/dev/null | head -n 1 || true)"
+  binding="$(find "${root}/node_modules/better-sqlite3" -path "*prebuilds/${plat}-${arch}*" -name '*.node' 2>/dev/null | head -n 1 || true)"
+  if [ -z "${binding}" ]; then
+    binding="$(find "${root}/node_modules/better-sqlite3/build" -name '*.node' 2>/dev/null | head -n 1 || true)"
+  fi
   if [ -n "${binding}" ]; then
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] better-sqlite3 rebuilt: ${binding}" >> "${log_file}"
     return 0

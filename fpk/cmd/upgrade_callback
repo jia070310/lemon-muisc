@@ -30,10 +30,18 @@ if [ ! -f "${APP_ROOT}/server/index.js" ]; then
   fail_install "升级包缺少 server/index.js"
 fi
 
-# —— 硬门槛：商店依赖未装完前，不进入本应用后续升级 ——
-update_install_ui "等待商店安装依赖 Node.js"
+# —— 商店 Node：按文档用 /var/apps/nodejs_v22/target/bin；不二次 appcenter-cli install ——
+update_install_ui "检查商店依赖 Node.js v22…"
 log_line "gate: wait_for_store_dependencies begin"
-wait_for_store_dependencies || fail_install "等待商店安装依赖 Node.js 失败。请在应用中心安装「Node.js v22」后重试升级。"
+prepend_store_node_path || true
+if ! wait_for_store_dependencies; then
+  # 已装目录或可解析到 node：软通过，避免误杀升级（#27）
+  if is_store_node_ready || store_nodejs_dir_present; then
+    log_line "gate: wait 超时但 node/目录可用，继续升级"
+  else
+    fail_install "未检测到商店依赖 Node.js v22。请在应用中心安装「Node.js v22」后重试升级（本应用已声明 install_dep_apps=nodejs_v22）。"
+  fi
+fi
 log_line "gate: wait_for_store_dependencies ok，继续本应用升级"
 
 update_install_ui "商店依赖已就绪；检查本应用 npm 依赖…"

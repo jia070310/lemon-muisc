@@ -1,4 +1,23 @@
-﻿# 柠檬音乐 v1.2.16.3
+﻿# 柠檬音乐 v1.2.16.4
+
+## 更新内容
+
+### 商店 Node.js 检测（[#27](https://github.com/jia070310/lemon-muisc/issues/27)）
+
+按飞牛文档：依赖由 `install_dep_apps=nodejs_v22` 安装；脚本使用 `/var/apps/nodejs_v22/target/bin`。
+
+- 禁止对已安装包再 `appcenter-cli install`（避免卡 `downloading 0%`）
+- 官方路径 + 动态卷扫描；`node` 可运行即通过
+- `better-sqlite3` 不再误认 darwin 预编译
+
+## 安装 / 更新
+
+- x86：`lemon-music-1.2.16.4-x86.fpk`
+- ARM：`lemon-music-1.2.16.4-arm.fpk`
+
+---
+
+# 柠檬音乐 v1.2.16.3
 
 ## 更新内容
 

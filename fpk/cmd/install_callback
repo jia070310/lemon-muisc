@@ -84,11 +84,16 @@ if [ ! -f "${APP_ROOT}/package.json" ]; then
   fail_install "安装包缺少 package.json。请重新用 scripts/build-fpk.ps1 打包。"
 fi
 
-# —— 硬门槛：商店依赖未装完前，不进入本应用后续安装 ——
-update_install_ui "等待商店安装依赖 Node.js"
+# —— 商店 Node：文档路径 + install_dep_apps；禁止对已装包再 install ——
+update_install_ui "检查商店依赖 Node.js v22…"
 log_line "gate: wait_for_store_dependencies begin"
+prepend_store_node_path || true
 if ! wait_for_store_dependencies; then
-  fail_install "等待商店安装依赖 Node.js 失败。请在应用中心安装「Node.js v22」后重新安装本应用。"
+  if is_store_node_ready || store_nodejs_dir_present; then
+    log_line "gate: wait 超时但 node/目录可用，继续安装"
+  else
+    fail_install "未检测到商店依赖 Node.js v22。请在应用中心安装「Node.js v22」后重新安装本应用（已声明 install_dep_apps=nodejs_v22）。"
+  fi
 fi
 log_line "gate: wait_for_store_dependencies ok，继续本应用安装"
 

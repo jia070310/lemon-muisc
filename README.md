@@ -5,11 +5,16 @@
 
 面向飞牛 NAS 与自托管环境的 **Web 音乐工具**：多平台搜索、歌单发现、在线试听、批量下载、本地标签管理。兼容落雪音乐（LX Music）自定义音源脚本，在浏览器中即可完成「找歌 → 试听 → 下载 → 整理」全流程。
 
-当前版本：**v1.2.16.3** · 开源协议：**[MIT](LICENSE)**  
+当前版本：**v1.2.16.4** · 开源协议：**[MIT](LICENSE)**  
 飞牛应用中心显示名：**柠檬音乐**（浏览器标题仍为「柠檬音乐下载」）  
 仓库：[https://github.com/jia070310/lemon-muisc](https://github.com/jia070310/lemon-muisc)
 
 飞牛 FPK 为**独立原生应用**，不再依赖 Docker。运行时使用应用中心 **Node.js v22**。
+
+### v1.2.16.4
+
+- 按飞牛文档修正商店 Node 探测：用 `/var/apps/nodejs_v22/target/bin`；**不再**对已安装依赖二次 `appcenter-cli install`（修复卡 55%/超时，[#27](https://github.com/jia070310/lemon-muisc/issues/27)）
+- better-sqlite3 忽略错误的 darwin 预编译探测
 
 ### v1.2.16.3
 

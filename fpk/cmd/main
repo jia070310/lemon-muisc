@@ -110,7 +110,11 @@ start_service() {
 
   node_bin="$(resolve_node_bin)" || true
   if [ -z "${node_bin}" ]; then
-    echo "未找到 Node.js v22。请在应用中心安装「Node.js v22」（本应用已声明依赖 install_dep_apps=nodejs_v22），然后重试启用。" > "${TRIM_TEMP_LOGFILE}"
+    prepend_store_node_path || true
+    node_bin="$(resolve_node_bin)" || true
+  fi
+  if [ -z "${node_bin}" ]; then
+    echo "未找到 Node.js v22。请在应用中心安装「Node.js v22」（本应用已声明依赖 install_dep_apps=nodejs_v22），然后重试启用。文档路径：/var/apps/nodejs_v22/target/bin" > "${TRIM_TEMP_LOGFILE}"
     return 1
   fi
 
