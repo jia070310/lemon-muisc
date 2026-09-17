@@ -1,5 +1,5 @@
 #!/bin/bash
-# 升级：保留数据目录；更新代码后按需重装依赖（可写 npm 缓存，避免卡在 55%）
+# 升级：对齐 1.2.14 稳定逻辑 — 快检商店 Node → 按需 npm（有模块则跳过）
 
 . "$(dirname "$0")/paths.sh"
 . "$(dirname "$0")/runtime.sh"
@@ -30,28 +30,17 @@ if [ ! -f "${APP_ROOT}/server/index.js" ]; then
   fail_install "升级包缺少 server/index.js"
 fi
 
-# —— 商店 Node：按文档用 /var/apps/nodejs_v22/target/bin；不二次 appcenter-cli install ——
-update_install_ui "检查商店依赖 Node.js v22…"
-log_line "gate: wait_for_store_dependencies begin"
-prepend_store_node_path || true
-if ! wait_for_store_dependencies; then
-  # 已装目录或可解析到 node：软通过，避免误杀升级（#27）
-  if is_store_node_ready || store_nodejs_dir_present; then
-    log_line "gate: wait 超时但 node/目录可用，继续升级"
-  else
-    fail_install "未检测到商店依赖 Node.js v22。请在应用中心安装「Node.js v22」后重试升级（本应用已声明 install_dep_apps=nodejs_v22）。"
-  fi
-fi
-log_line "gate: wait_for_store_dependencies ok，继续本应用升级"
+# 飞牛文档：install_dep_apps 装 Node；脚本只 PATH + 检查，不 appcenter-cli install
+update_install_ui "检查 Node.js v22…"
+ensure_store_node || fail_install "未找到 Node.js v22，请先在应用中心安装该依赖。"
 
-update_install_ui "商店依赖已就绪；检查本应用 npm 依赖…"
-# 依赖在 @appdata/runtime 持久化；FPK 内置或已有模块则跳过联网重装
-install_node_modules || fail_install "本应用 npm 依赖安装失败：${TRIM_PKGVAR}/log/npm-install.log（商店 Node 已就绪则多为网络/registry 问题）"
+update_install_ui "检查依赖…"
+# 已有 express/better-sqlite3（含 @appdata 持久化）则跳过；否则 npm 安装
+install_node_modules || fail_install "npm 依赖安装失败：${TRIM_PKGVAR}/log/npm-install.log"
 
-update_install_ui "检查 better-sqlite3…"
-ensure_better_sqlite3_native || fail_install "better-sqlite3 原生模块不可用：${TRIM_PKGVAR}/log/npm-install.log"
+ensure_better_sqlite3_native || true
 
 ensure_desktop_entry || true
-update_install_ui "【升级完成】请点「启用」。若一直启用中，SSH 查看：tail -n 80 ${TRIM_PKGVAR}/log/app.log"
+update_install_ui "升级完成，请启用应用"
 log_line "升级完成"
 exit 0

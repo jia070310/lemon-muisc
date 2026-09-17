@@ -1,23 +1,23 @@
-# 柠檬音乐 v1.2.16.4
+# 柠檬音乐 v1.2.16.5
 
 ## 更新
 
-### 商店 Node.js 检测（[#27](https://github.com/jia070310/lemon-muisc/issues/27)）
+### 商店 Node / 升级卡 55%（[#27](https://github.com/jia070310/lemon-muisc/issues/27)）
 
-按[飞牛开发文档 · 打包运行时环境](https://github.com/ckcoding/fnnas-docs/blob/main/ALL_DOCS.md)：依赖由 `install_dep_apps=nodejs_v22` 安装，脚本使用：
+按[飞牛开发文档 · 打包运行时](https://github.com/ckcoding/fnnas-docs/blob/main/ALL_DOCS.md)：
 
-`export PATH=/var/apps/nodejs_v22/target/bin:$PATH`
+```bash
+install_dep_apps=nodejs_v22
+export PATH=/var/apps/nodejs_v22/target/bin:$PATH
+```
 
-**修复**：
+**本版回到 1.2.14 稳定路径（小包 ~1MB）：**
 
-- **禁止**对已安装的 `nodejs_v22` 再执行 `appcenter-cli install`（会卡在 `downloading 0.00%` 直至超时）
-- 按官方路径 + 动态扫描 `/vol*/@appcenter/nodejs_v22` 探测 `node`
-- 判定改为「`node` 可运行」即可；等待超时缩短；目录已存在时软通过
-- `better-sqlite3` 不再误把 `darwin-*.node` 当成 Linux 原生库
-
-请用本版 FPK。若仍失败，附上 `@appdata/lemon-music/log/runtime-install.log` 与 `install.log` 末尾。
+1. **只检查**商店 Node 是否可用，**不再**长时间「等待商店安装」、**不再**对已安装包执行 `appcenter-cli install`（根因：已装仍 install → `downloading 0%` → 超时）
+2. 默认打包**不再**内置 `node_modules`（体积回到约 1MB）
+3. 已有业务依赖（含 `@appdata/runtime` 持久化）则升级跳过 npm
 
 ## 安装包
 
-- x86：`lemon-music-1.2.16.4-x86.fpk`
-- ARM：`lemon-music-1.2.16.4-arm.fpk`
+- x86：`lemon-music-1.2.16.5-x86.fpk`
+- ARM：`lemon-music-1.2.16.5-arm.fpk`

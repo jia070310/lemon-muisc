@@ -1,6 +1,6 @@
 # Feiniu FPK build — native app (store Node.js v22)
-# Default release: -BundleNodeModules packs linux deps (avoids upgrade stuck at ~55% npm).
-# Use npm run fpk:build:slim for small packages without node_modules.
+# Default: small package (dist + server + package.json), ~1MB.
+# Optional -BundleNodeModules for offline/large packs.
 # Telemetry: inject from local file / TELEMETRY_* env (never commit real secrets).
 # Use -AllowNoTelemetry only for test packs without DAU endpoint.
 

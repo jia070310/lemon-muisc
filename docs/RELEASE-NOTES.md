@@ -1,4 +1,23 @@
-﻿# 柠檬音乐 v1.2.16.4
+﻿# 柠檬音乐 v1.2.16.5
+
+## 更新内容
+
+### 商店 Node / 卡 55%（[#27](https://github.com/jia070310/lemon-muisc/issues/27)）
+
+按飞牛文档：`install_dep_apps=nodejs_v22` + `PATH=/var/apps/nodejs_v22/target/bin`。
+
+- 恢复 1.2.14 式快检 Node：不长时间等待、不二次 `appcenter-cli install`
+- 默认小包（不内置 node_modules）
+- 已有依赖则升级跳过 npm
+
+## 安装 / 更新
+
+- x86：`lemon-music-1.2.16.5-x86.fpk`
+- ARM：`lemon-music-1.2.16.5-arm.fpk`
+
+---
+
+# 柠檬音乐 v1.2.16.4
 
 ## 更新内容
 

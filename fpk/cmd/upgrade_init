@@ -1,5 +1,5 @@
 #!/bin/bash
-# 升级前：停进程，并尽量把旧 node_modules 备份到数据目录（升级会替换 APPDEST）
+# 升级前：停止进程；尽量把旧 node_modules 备份到数据目录（飞牛会替换 APPDEST）
 
 . "$(dirname "$0")/runtime.sh" 2>/dev/null || true
 
@@ -9,7 +9,6 @@ if [ -f "${PID_FILE}" ]; then
   rm -f "${PID_FILE}" 2>/dev/null || true
 fi
 
-# 若仍能读到旧 APP 依赖，先塞进 @appdata（防止随后解压清空）
 if type stash_node_modules_before_upgrade >/dev/null 2>&1; then
   stash_node_modules_before_upgrade || true
 fi

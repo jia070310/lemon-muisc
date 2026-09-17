@@ -1,5 +1,5 @@
 #!/bin/bash
-# 原生安装：准备目录 → 等待商店 Node.js v22（install_dep_apps）→ npm 安装业务依赖 → 交由「启用」启动
+# 原生安装：准备目录 → 检查商店 Node（install_dep_apps）→ npm 安装业务依赖 → 启用启动
 
 . "$(dirname "$0")/paths.sh"
 . "$(dirname "$0")/runtime.sh"
@@ -84,36 +84,19 @@ if [ ! -f "${APP_ROOT}/package.json" ]; then
   fail_install "安装包缺少 package.json。请重新用 scripts/build-fpk.ps1 打包。"
 fi
 
-# —— 商店 Node：文档路径 + install_dep_apps；禁止对已装包再 install ——
-update_install_ui "检查商店依赖 Node.js v22…"
-log_line "gate: wait_for_store_dependencies begin"
-prepend_store_node_path || true
-if ! wait_for_store_dependencies; then
-  if is_store_node_ready || store_nodejs_dir_present; then
-    log_line "gate: wait 超时但 node/目录可用，继续安装"
-  else
-    fail_install "未检测到商店依赖 Node.js v22。请在应用中心安装「Node.js v22」后重新安装本应用（已声明 install_dep_apps=nodejs_v22）。"
-  fi
-fi
-log_line "gate: wait_for_store_dependencies ok，继续本应用安装"
+# 飞牛文档：依赖由 install_dep_apps=nodejs_v22 安装；脚本只检查 PATH
+update_install_ui "检查 Node.js v22…"
+log_line "ensure_store_node begin"
+ensure_store_node || fail_install "未找到 Node.js v22，请先在应用中心安装该依赖后重试安装。"
+log_line "ensure_store_node ok"
 
-# 若 FPK 已内置 node_modules，则跳过联网 npm（并迁入数据目录，便于下次升级复用）
-if [ -d "${APP_ROOT}/node_modules/express" ]; then
-  update_install_ui "商店依赖已就绪；检测到内置依赖，跳过 npm…"
-  log_line "bundled node_modules present, skip npm"
-  attach_persist_modules || true
-  echo "$(deps_fingerprint "${APP_ROOT}")" > "${TRIM_PKGVAR}/npm.deps.stamp" 2>/dev/null || true
-else
-  update_install_ui "商店依赖已就绪；正在安装本应用 npm 依赖… 进度可能停在 55% 附近几分钟，请勿取消"
-  if ! install_node_modules; then
-    fail_install "本应用 npm 依赖安装失败（商店 Node 已就绪）。请查看 ${TRIM_PKGVAR}/log/npm-install.log；确认可访问 registry.npmmirror.com"
-  fi
+update_install_ui "安装依赖…"
+if ! install_node_modules; then
+  fail_install "npm 依赖安装失败。请查看 ${TRIM_PKGVAR}/log/npm-install.log；确认可访问 registry.npmmirror.com"
 fi
 
-update_install_ui "检查 better-sqlite3 原生模块…"
-if ! ensure_better_sqlite3_native; then
-  fail_install "better-sqlite3 原生库缺失。请确认商店 Node.js v22 可用，并查看 ${TRIM_PKGVAR}/log/npm-install.log"
-fi
+update_install_ui "检查 better-sqlite3…"
+ensure_better_sqlite3_native || fail_install "better-sqlite3 原生库缺失。请确认商店 Node.js v22 可用，并查看 ${TRIM_PKGVAR}/log/npm-install.log"
 
 ensure_desktop_entry || true
 mark_install_complete
