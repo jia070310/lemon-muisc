@@ -37,7 +37,7 @@ wait_for_store_dependencies || fail_install "等待商店安装依赖 Node.js �
 log_line "gate: wait_for_store_dependencies ok，继续本应用升级"
 
 update_install_ui "商店依赖已就绪；检查本应用 npm 依赖…"
-# 依赖指纹未变则跳过；仅 package-lock 变更或模块缺失时才重装（不再每次升级 force 清空）
+# 依赖在 @appdata/runtime 持久化；FPK 内置或已有模块则跳过联网重装
 install_node_modules || fail_install "本应用 npm 依赖安装失败：${TRIM_PKGVAR}/log/npm-install.log（商店 Node 已就绪则多为网络/registry 问题）"
 
 update_install_ui "检查 better-sqlite3…"

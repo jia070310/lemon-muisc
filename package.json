@@ -1,6 +1,6 @@
 {
   "name": "lx-music-nas",
-  "version": "1.2.16.2",
+  "version": "1.2.16.3",
   "description": "Lemon Music - 柠檬音乐下载",
   "private": true,
   "license": "MIT",
@@ -13,8 +13,9 @@
     "start": "node server/index.js",
     "auth:reset-password": "node scripts/reset-password.js",
     "auth:reset-users": "node scripts/reset-users.js",
-    "fpk:build": "powershell -ExecutionPolicy Bypass -File scripts/build-fpk.ps1",
-    "fpk:build:no-telemetry": "powershell -ExecutionPolicy Bypass -File scripts/build-fpk.ps1 -AllowNoTelemetry"
+    "fpk:build": "powershell -ExecutionPolicy Bypass -File scripts/build-fpk.ps1 -BundleNodeModules",
+    "fpk:build:slim": "powershell -ExecutionPolicy Bypass -File scripts/build-fpk.ps1",
+    "fpk:build:no-telemetry": "powershell -ExecutionPolicy Bypass -File scripts/build-fpk.ps1 -BundleNodeModules -AllowNoTelemetry"
   },
   "engines": {
     "node": ">=20"

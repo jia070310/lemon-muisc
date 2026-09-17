@@ -314,8 +314,12 @@ install_node_runtime() {
 
 deps_fingerprint() {
   local root="$1"
+  # 仅用 deps.rev：发版改 package 版本号不会误触发重装；改 npm 依赖时手动 +1
+  if [ -f "${root}/deps.rev" ]; then
+    tr -d ' \t\r\n' < "${root}/deps.rev"
+    return 0
+  fi
   if [ -f "${root}/package-lock.json" ]; then
-    # 短指纹即可：升级时对比是否需要重装
     cksum "${root}/package-lock.json" 2>/dev/null | awk '{print $1"-"$2}'
     return 0
   fi
@@ -326,15 +330,111 @@ deps_fingerprint() {
   echo "none"
 }
 
-# 安装生产依赖（npm 走国内源；缓存放应用目录；跳过 optional）
-# 无 force：依赖指纹未变且 express/better-sqlite3 齐全则跳过（升级不再无脑重装）
-# 有 force：强制清空后重装（仅用于修复损坏）
-install_node_modules() {
-  local root npm_bin log_file fp stamp force="${1:-}"
+# 依赖落在数据目录：飞牛升级会替换 TRIM_APPDEST，APP 内 node_modules 会被清掉
+persist_modules_dir() {
+  echo "${TRIM_PKGVAR}/runtime/node_modules"
+}
+
+has_core_modules() {
+  local base="$1"
+  [ -d "${base}/express" ] && [ -d "${base}/better-sqlite3" ]
+}
+
+# 把 APP 目录下的 node_modules 接到持久目录（软链优先，失败则复制）
+attach_persist_modules() {
+  local root persist log_file
   root="$(app_root)"
+  persist="$(persist_modules_dir)"
+  log_file="${TRIM_PKGVAR}/log/npm-install.log"
+  mkdir -p "${TRIM_PKGVAR}/runtime" "${TRIM_PKGVAR}/log" 2>/dev/null || true
+
+  # FPK 内置 / 旧版装在 APP 内：迁入持久目录
+  if has_core_modules "${root}/node_modules" && ! has_core_modules "${persist}"; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 迁移 node_modules → ${persist}" >> "${log_file}"
+    rm -rf "${persist}" 2>/dev/null || true
+    if mv "${root}/node_modules" "${persist}" 2>/dev/null; then
+      :
+    else
+      mkdir -p "${persist}" 2>/dev/null || true
+      cp -a "${root}/node_modules/." "${persist}/" 2>/dev/null || true
+      rm -rf "${root}/node_modules" 2>/dev/null || true
+    fi
+  fi
+
+  if ! has_core_modules "${persist}"; then
+    return 1
+  fi
+
+  # APP 侧挂接：软链 → 硬拷（部分卷不支持软链）
+  if [ -L "${root}/node_modules" ]; then
+    local cur
+    cur="$(readlink "${root}/node_modules" 2>/dev/null || true)"
+    if [ "${cur}" = "${persist}" ]; then
+      return 0
+    fi
+    rm -f "${root}/node_modules" 2>/dev/null || true
+  elif [ -d "${root}/node_modules" ]; then
+    # 已是实体目录且齐全：仍迁到持久区再挂接，避免下次升级丢失
+    if has_core_modules "${root}/node_modules" && [ "${root}/node_modules" != "${persist}" ]; then
+      if ! has_core_modules "${persist}"; then
+        rm -rf "${persist}" 2>/dev/null || true
+        mv "${root}/node_modules" "${persist}" 2>/dev/null \
+          || { mkdir -p "${persist}"; cp -a "${root}/node_modules/." "${persist}/"; rm -rf "${root}/node_modules"; }
+      else
+        rm -rf "${root}/node_modules" 2>/dev/null || true
+      fi
+    else
+      rm -rf "${root}/node_modules" 2>/dev/null || true
+    fi
+  fi
+
+  if ln -sfn "${persist}" "${root}/node_modules" 2>/dev/null; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] node_modules → ${persist} (symlink)" >> "${log_file}"
+    return 0
+  fi
+  mkdir -p "${root}/node_modules" 2>/dev/null || true
+  cp -a "${persist}/." "${root}/node_modules/" 2>/dev/null || true
+  if has_core_modules "${root}/node_modules"; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] node_modules 已从持久目录复制到 APP" >> "${log_file}"
+    return 0
+  fi
+  return 1
+}
+
+# 升级前尽量把旧 APP 依赖先塞进数据目录（upgrade_init 调用）
+stash_node_modules_before_upgrade() {
+  local root persist log_file
+  root="$(app_root)"
+  persist="$(persist_modules_dir)"
+  log_file="${TRIM_PKGVAR}/log/npm-install.log"
+  mkdir -p "${TRIM_PKGVAR}/runtime" "${TRIM_PKGVAR}/log" 2>/dev/null || true
+
+  if has_core_modules "${persist}"; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] stash: 持久目录已有依赖，跳过" >> "${log_file}"
+    return 0
+  fi
+  if has_core_modules "${root}/node_modules"; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] stash: 备份 APP node_modules → ${persist}" >> "${log_file}"
+    rm -rf "${persist}" 2>/dev/null || true
+    if mv "${root}/node_modules" "${persist}" 2>/dev/null; then
+      return 0
+    fi
+    mkdir -p "${persist}" 2>/dev/null || true
+    cp -a "${root}/node_modules/." "${persist}/" 2>/dev/null || true
+  fi
+  return 0
+}
+
+# 安装生产依赖（npm 走国内源；缓存放应用目录；跳过 optional）
+# - 依赖装在 TRIM_PKGVAR/runtime，升级替换 APPDEST 后仍可复用
+# - 核心模块齐全：默认跳过；deps.rev 变更则增量装；force 才清空
+install_node_modules() {
+  local root npm_bin log_file fp stamp persist force="${1:-}"
+  root="$(app_root)"
+  persist="$(persist_modules_dir)"
   log_file="${TRIM_PKGVAR}/log/npm-install.log"
   stamp="${TRIM_PKGVAR}/npm.deps.stamp"
-  mkdir -p "${TRIM_PKGVAR}/log" 2>/dev/null || true
+  mkdir -p "${TRIM_PKGVAR}/log" "${TRIM_PKGVAR}/runtime" 2>/dev/null || true
 
   if [ ! -f "${root}/package.json" ]; then
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] 缺少 package.json: ${root}" >> "${log_file}"
@@ -343,50 +443,70 @@ install_node_modules() {
 
   fp="$(deps_fingerprint "${root}")"
 
-  if [ "${force}" = "force" ]; then
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] force reinstall: 清理旧 node_modules" >> "${log_file}"
-    rm -rf "${root}/node_modules" 2>/dev/null || true
-    rm -f "${stamp}" 2>/dev/null || true
-  elif [ -d "${root}/node_modules/express" ] \
-    && [ -d "${root}/node_modules/better-sqlite3" ] \
-    && [ -f "${stamp}" ] \
-    && [ "$(cat "${stamp}" 2>/dev/null)" = "${fp}" ]
-  then
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] node_modules 已是当前依赖（指纹未变），跳过 npm install" >> "${log_file}"
-    update_npm_ui "依赖未变更，跳过 npm 安装"
-    return 0
-  elif [ -d "${root}/node_modules/express" ] \
-    && [ -d "${root}/node_modules/better-sqlite3" ] \
-    && { [ ! -f "${stamp}" ] || [ "$(cat "${stamp}" 2>/dev/null)" != "${fp}" ]; }
-  then
-    # 指纹变了（package-lock 更新）：需要重装；先清再建，与 npm ci 行为一致
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 依赖清单已变更，准备更新 node_modules（旧指纹=$(cat "${stamp}" 2>/dev/null || echo none) 新=${fp}）" >> "${log_file}"
-    update_npm_ui "依赖清单已更新，正在同步 npm 依赖…"
-    rm -rf "${root}/node_modules" 2>/dev/null || true
-    rm -f "${stamp}" 2>/dev/null || true
+  # 先挂接已有持久依赖 / FPK 内置依赖
+  attach_persist_modules || true
+
+  local has_core=0
+  if has_core_modules "${persist}" || has_core_modules "${root}/node_modules"; then
+    has_core=1
   fi
 
-  if [ -d "${root}/node_modules/express" ] \
-    && [ -d "${root}/node_modules/better-sqlite3" ]
-  then
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] node_modules 已存在，跳过 npm install" >> "${log_file}"
-    echo "${fp}" > "${stamp}" 2>/dev/null || true
-    update_npm_ui "依赖已就绪，跳过 npm 安装"
-    return 0
+  if [ "${force}" = "force" ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] force reinstall: 清理持久/APP node_modules" >> "${log_file}"
+    rm -rf "${persist}" "${root}/node_modules" 2>/dev/null || true
+    rm -f "${stamp}" 2>/dev/null || true
+    has_core=0
+  fi
+
+  if [ "${has_core}" = "1" ]; then
+    attach_persist_modules || true
+    if [ ! -f "${stamp}" ] || [ "$(cat "${stamp}" 2>/dev/null)" = "${fp}" ]; then
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] node_modules 已就绪（rev=${fp}），跳过 npm install" >> "${log_file}"
+      echo "${fp}" > "${stamp}" 2>/dev/null || true
+      update_npm_ui "依赖已就绪，跳过 npm 安装"
+      return 0
+    fi
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] deps.rev 变更（$(cat "${stamp}" 2>/dev/null) → ${fp}），增量 npm install…" >> "${log_file}"
+    update_npm_ui "依赖有更新，正在增量安装（不删除已有模块）…"
+    npm_bin="$(resolve_npm_bin)" || return 1
+    prepend_store_node_path || true
+    prepare_npm_env
+    (
+      cd "${root}" || exit 1
+      # 保证安装落到 APP/node_modules（已是持久目录的软链或实体）
+      if [ ! -e "${root}/node_modules" ]; then
+        mkdir -p "${persist}" && ln -sfn "${persist}" "${root}/node_modules" 2>/dev/null \
+          || mkdir -p "${root}/node_modules"
+      fi
+      run_npm_with_timeout "${npm_bin}" "${log_file}" install --omit=dev --omit=optional --ignore-scripts --no-audit --no-fund
+    ) || true
+    attach_persist_modules || true
+    if has_core_modules "${root}/node_modules"; then
+      echo "${fp}" > "${stamp}" 2>/dev/null || true
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] 增量 npm install ok" >> "${log_file}"
+      update_npm_ui "依赖增量更新完成"
+      return 0
+    fi
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 增量安装后核心模块仍异常，尝试全量安装" >> "${log_file}"
   fi
 
   npm_bin="$(resolve_npm_bin)" || return 1
   prepend_store_node_path || true
   prepare_npm_env
 
+  # 全量安装写到持久目录，再挂到 APP
+  mkdir -p "${persist}" 2>/dev/null || true
+  rm -rf "${root}/node_modules" 2>/dev/null || true
+  ln -sfn "${persist}" "${root}/node_modules" 2>/dev/null \
+    || { mkdir -p "${root}/node_modules"; }
+
   local rc=0
   local npm_pid=""
   update_npm_ui "正在安装本应用 npm 依赖（国内源）… 请勿关闭"
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] npm install start root=${root} cache=${npm_config_cache}" >> "${log_file}"
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] npm install start root=${root} persist=${persist} cache=${npm_config_cache} rev=${fp}" >> "${log_file}"
 
   (
     cd "${root}" || exit 1
-    # 不跑 scripts（避免 postinstall 再下二进制卡住）；随后单独确保 better-sqlite3
     if [ -f package-lock.json ]; then
       run_npm_with_timeout "${npm_bin}" "${log_file}" ci --omit=dev --omit=optional --ignore-scripts \
         || run_npm_with_timeout "${npm_bin}" "${log_file}" install --omit=dev --omit=optional --ignore-scripts
@@ -398,12 +518,16 @@ install_node_modules() {
   npm_progress_heartbeat "${npm_pid}" "安装"
   wait "${npm_pid}" || rc=$?
 
-  if [ ! -d "${root}/node_modules/express" ]; then
+  # 若装到了软链目标之外的实体目录，再迁一次
+  attach_persist_modules || true
+
+  if ! has_core_modules "${root}/node_modules" && ! has_core_modules "${persist}"; then
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] npm 结束后仍无 express (rc=${rc})" >> "${log_file}"
     update_npm_ui "依赖安装失败。请查看 ${log_file}；或确认可访问 registry.npmmirror.com，并已安装 Node.js v22。"
     return 1
   fi
 
+  attach_persist_modules || true
   echo "${fp}" > "${stamp}" 2>/dev/null || true
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] npm install ok (rc=${rc})" >> "${log_file}"
   return 0

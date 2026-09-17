@@ -115,6 +115,9 @@ start_service() {
   fi
 
   if [ ! -d "${root}/node_modules/express" ]; then
+    attach_persist_modules || true
+  fi
+  if [ ! -d "${root}/node_modules/express" ]; then
     echo "正在补装依赖（首次启用可能需几分钟）…" > "${TRIM_TEMP_LOGFILE}"
     install_node_modules || true
   fi

@@ -92,10 +92,12 @@ if ! wait_for_store_dependencies; then
 fi
 log_line "gate: wait_for_store_dependencies ok，继续本应用安装"
 
-# 若 FPK 已内置 node_modules，则跳过联网 npm
+# 若 FPK 已内置 node_modules，则跳过联网 npm（并迁入数据目录，便于下次升级复用）
 if [ -d "${APP_ROOT}/node_modules/express" ]; then
   update_install_ui "商店依赖已就绪；检测到内置依赖，跳过 npm…"
   log_line "bundled node_modules present, skip npm"
+  attach_persist_modules || true
+  echo "$(deps_fingerprint "${APP_ROOT}")" > "${TRIM_PKGVAR}/npm.deps.stamp" 2>/dev/null || true
 else
   update_install_ui "商店依赖已就绪；正在安装本应用 npm 依赖… 进度可能停在 55% 附近几分钟，请勿取消"
   if ! install_node_modules; then

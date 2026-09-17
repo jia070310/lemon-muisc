@@ -1,6 +1,6 @@
 # Feiniu FPK build — native app (store Node.js v22)
-# Small package: dist + server + package.json only
-# Set -BundleNodeModules to also pack linux node_modules (much larger)
+# Default release: -BundleNodeModules packs linux deps (avoids upgrade stuck at ~55% npm).
+# Use npm run fpk:build:slim for small packages without node_modules.
 # Telemetry: inject from local file / TELEMETRY_* env (never commit real secrets).
 # Use -AllowNoTelemetry only for test packs without DAU endpoint.
 
@@ -159,6 +159,10 @@ Copy-Item (Join-Path $Root "package.json") (Join-Path $AppBundle "package.json")
 if (Test-Path (Join-Path $Root "package-lock.json")) {
   Copy-Item (Join-Path $Root "package-lock.json") (Join-Path $AppBundle "package-lock.json")
 }
+# deps.rev：升级是否增量装 npm 的开关（发版改版本号不必改它）
+if (Test-Path (Join-Path $Root "deps.rev")) {
+  Copy-Item (Join-Path $Root "deps.rev") (Join-Path $AppBundle "deps.rev")
+}
 
 # Flatten into fpk/app for fnpack
 Copy-Item -Recurse (Join-Path $AppBundle "server") (Join-Path $FpkDir "app\server")
@@ -166,6 +170,9 @@ Copy-Item -Recurse (Join-Path $AppBundle "dist") (Join-Path $FpkDir "app\dist")
 Copy-Item -Force (Join-Path $AppBundle "package.json") (Join-Path $FpkDir "app\package.json")
 if (Test-Path (Join-Path $AppBundle "package-lock.json")) {
   Copy-Item -Force (Join-Path $AppBundle "package-lock.json") (Join-Path $FpkDir "app\package-lock.json")
+}
+if (Test-Path (Join-Path $AppBundle "deps.rev")) {
+  Copy-Item -Force (Join-Path $AppBundle "deps.rev") (Join-Path $FpkDir "app\deps.rev")
 }
 
 Write-Host ">>> normalize cmd scripts to LF" -ForegroundColor Cyan
