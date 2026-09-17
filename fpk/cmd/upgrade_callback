@@ -36,9 +36,9 @@ log_line "gate: wait_for_store_dependencies begin"
 wait_for_store_dependencies || fail_install "等待商店安装依赖 Node.js 失败。请在应用中心安装「Node.js v22」后重试升级。"
 log_line "gate: wait_for_store_dependencies ok，继续本应用升级"
 
-update_install_ui "商店依赖已就绪；正在安装本应用 npm 依赖（国内源）…"
-# force：依赖清单可能变更；缓存写入应用目录，避免 /home 无权限导致卡死
-install_node_modules force || fail_install "本应用 npm 依赖安装失败：${TRIM_PKGVAR}/log/npm-install.log（商店 Node 已就绪则多为网络/registry 问题）"
+update_install_ui "商店依赖已就绪；检查本应用 npm 依赖…"
+# 依赖指纹未变则跳过；仅 package-lock 变更或模块缺失时才重装（不再每次升级 force 清空）
+install_node_modules || fail_install "本应用 npm 依赖安装失败：${TRIM_PKGVAR}/log/npm-install.log（商店 Node 已就绪则多为网络/registry 问题）"
 
 update_install_ui "检查 better-sqlite3…"
 ensure_better_sqlite3_native || fail_install "better-sqlite3 原生模块不可用：${TRIM_PKGVAR}/log/npm-install.log"

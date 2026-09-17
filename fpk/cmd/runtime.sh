@@ -327,6 +327,8 @@ deps_fingerprint() {
 }
 
 # 安装生产依赖（npm 走国内源；缓存放应用目录；跳过 optional）
+# 无 force：依赖指纹未变且 express/better-sqlite3 齐全则跳过（升级不再无脑重装）
+# 有 force：强制清空后重装（仅用于修复损坏）
 install_node_modules() {
   local root npm_bin log_file fp stamp force="${1:-}"
   root="$(app_root)"
@@ -340,28 +342,36 @@ install_node_modules() {
   fi
 
   fp="$(deps_fingerprint "${root}")"
+
   if [ "${force}" = "force" ]; then
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] force reinstall: 清理旧 node_modules" >> "${log_file}"
     rm -rf "${root}/node_modules" 2>/dev/null || true
     rm -f "${stamp}" 2>/dev/null || true
-  fi
-
-  if [ "${force}" != "force" ] \
-    && [ -d "${root}/node_modules/express" ] \
+  elif [ -d "${root}/node_modules/express" ] \
     && [ -d "${root}/node_modules/better-sqlite3" ] \
     && [ -f "${stamp}" ] \
     && [ "$(cat "${stamp}" 2>/dev/null)" = "${fp}" ]
   then
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] node_modules 已是当前依赖，跳过 npm install" >> "${log_file}"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] node_modules 已是当前依赖（指纹未变），跳过 npm install" >> "${log_file}"
+    update_npm_ui "依赖未变更，跳过 npm 安装"
     return 0
+  elif [ -d "${root}/node_modules/express" ] \
+    && [ -d "${root}/node_modules/better-sqlite3" ] \
+    && { [ ! -f "${stamp}" ] || [ "$(cat "${stamp}" 2>/dev/null)" != "${fp}" ]; }
+  then
+    # 指纹变了（package-lock 更新）：需要重装；先清再建，与 npm ci 行为一致
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 依赖清单已变更，准备更新 node_modules（旧指纹=$(cat "${stamp}" 2>/dev/null || echo none) 新=${fp}）" >> "${log_file}"
+    update_npm_ui "依赖清单已更新，正在同步 npm 依赖…"
+    rm -rf "${root}/node_modules" 2>/dev/null || true
+    rm -f "${stamp}" 2>/dev/null || true
   fi
 
-  if [ "${force}" != "force" ] \
-    && [ -d "${root}/node_modules/express" ] \
+  if [ -d "${root}/node_modules/express" ] \
     && [ -d "${root}/node_modules/better-sqlite3" ]
   then
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] node_modules 已存在，跳过 npm install" >> "${log_file}"
     echo "${fp}" > "${stamp}" 2>/dev/null || true
+    update_npm_ui "依赖已就绪，跳过 npm 安装"
     return 0
   fi
 
@@ -371,7 +381,7 @@ install_node_modules() {
 
   local rc=0
   local npm_pid=""
-  update_npm_ui "正在安装依赖（npm，国内源）… 首次可能需几分钟，请勿关闭"
+  update_npm_ui "正在安装本应用 npm 依赖（国内源）… 请勿关闭"
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] npm install start root=${root} cache=${npm_config_cache}" >> "${log_file}"
 
   (

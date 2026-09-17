@@ -1,4 +1,21 @@
-﻿# 柠檬音乐 v1.2.16.1
+﻿# 柠檬音乐 v1.2.16.2
+
+## 更新内容
+
+### 升级体验（[#27](https://github.com/jia070310/lemon-muisc/issues/27)）
+
+- 修复升级回调每次 `force` 清空 `node_modules` 再全量重装，导致进度长时间停在约 55%、应用中心超时回滚
+- 现按依赖指纹判断：清单未变且 express / better-sqlite3 齐全则跳过；仅清单变更或模块缺失时才重装
+- 说明：约 55% 对应本应用 npm 安装阶段，与 ffmpeg 无关（装包不下载 ffmpeg）
+
+## 安装 / 更新
+
+- x86：`lemon-music-1.2.16.2-x86.fpk`
+- ARM：`lemon-music-1.2.16.2-arm.fpk`
+
+---
+
+# 柠檬音乐 v1.2.16.1
 
 ## 更新内容
 
