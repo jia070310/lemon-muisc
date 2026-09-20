@@ -21,6 +21,10 @@ import {
   sleep,
 } from '../utils/downloadQuality.js'
 import {
+  findNextCrossPlatformMatch,
+  isCrossPlatformSupplementEnabled,
+} from '../utils/crossPlatformMatch.js'
+import {
   parseDurationSeconds,
   probeFileDurationSeconds,
   probeRemoteAudioDurationSeconds,
@@ -50,12 +54,14 @@ import { recordSourceHealthOutcome } from '../utils/sourceHealth.js'
 export const downloadRouter = Router()
 
 const activeDownloads = new Map()
-let runningCount = 0
 /** 用户对本批同名文件的默认处理：skip | overwrite */
 const autoExistActionByUser = new Map()
 /** 防抖：队列空闲后汇总同名待处理提醒 */
 const existSummaryTimers = new Map()
 const existSummaryNotifiedKeys = new Set()
+/** 队列泵单飞：避免多次 processQueue 重入导致并发突破上限 */
+let queuePumpRunning = false
+let queuePumpQueued = false
 
 export function getDownloadQueueStats() {
   try {
@@ -63,12 +69,12 @@ export function getDownloadQueueStats() {
       SELECT COUNT(*) AS c FROM download_tasks WHERE status IN ('waiting', 'downloading', 'await_confirm', 'await_source', 'await_exist')
     `).get()
     return {
-      running: runningCount,
+      running: activeDownloads.size,
       active: activeDownloads.size,
       pending: Number(row?.c) || 0,
     }
   } catch {
-    return { running: runningCount, active: activeDownloads.size, pending: 0 }
+    return { running: activeDownloads.size, active: activeDownloads.size, pending: 0 }
   }
 }
 
@@ -506,6 +512,7 @@ function pauseTask(id) {
   if (!row) return false
   getDB().prepare("UPDATE download_tasks SET status = 'paused' WHERE id = ?").run(id)
   dlBroadcast('download:status', { id, status: 'paused' })
+  // 槽位在 downloadTask.finally 里释放；此处不删 activeDownloads，避免泵超额抢跑
   return true
 }
 
@@ -520,7 +527,7 @@ function pauseTasks(ids = null) {
   return count
 }
 
-function requeueTask(id, { allowedStatuses = ['paused', 'error', 'await_confirm', 'await_exist'], cleanupFiles = true } = {}) {
+function requeueTask(id, { allowedStatuses = ['paused', 'error', 'await_confirm', 'await_exist'], cleanupFiles = true, pump = true } = {}) {
   const row = getDB().prepare('SELECT * FROM download_tasks WHERE id = ?').get(id)
   if (!row || !allowedStatuses.includes(row.status)) return false
 
@@ -544,7 +551,7 @@ function requeueTask(id, { allowedStatuses = ['paused', 'error', 'await_confirm'
     downgradeOffer: null,
     existFileOffer: null,
   })
-  processQueue()
+  if (pump) processQueue()
   return true
 }
 
@@ -628,8 +635,10 @@ function resumeTasks(ids = null) {
     : getDB().prepare("SELECT id FROM download_tasks WHERE status = 'paused'").all()
   let count = 0
   for (const row of rows) {
-    if (resumeTask(row.id)) count++
+    // 批量续传：只改状态，最后统一泵一次，避免每条都 processQueue 重入
+    if (requeueTask(row.id, { pump: false })) count++
   }
+  if (count) processQueue()
   return count
 }
 
@@ -692,6 +701,97 @@ function skipFailedSource(meta, taskId, platform = '', { markPreview = true } = 
   return true
 }
 
+/** 记下已试过的平台，避免同档反复搜同一平台 */
+function rememberTriedPlatform(meta, platform) {
+  const plat = String(platform || '').trim()
+  if (!plat) return
+  const set = new Set([...(meta.skipPlatforms || []), plat].filter(Boolean))
+  meta.skipPlatforms = [...set]
+}
+
+/**
+ * 同音质跨平台补源：用搜到的同曲替换任务身份，清空本档音源 skip，继续下载
+ * @returns {boolean} 是否已切换成功
+ */
+function applyCrossPlatformDownloadHit(task, meta, hit, quality) {
+  if (!hit?.source) return false
+  const from = String(meta.source || task.source || '').trim()
+  const to = String(hit.source).trim()
+  if (!to || to === from) return false
+
+  rememberTriedPlatform(meta, from)
+  meta.originalSource = meta.originalSource || from
+  meta.source = to
+  meta.songId = hit.songId || hit.songmid || hit.hash || hit.copyrightId || ''
+  meta.hash = hit.hash || ''
+  meta.songmid = hit.songmid || ''
+  meta.strMediaMid = hit.strMediaMid || ''
+  meta.copyrightId = hit.copyrightId || ''
+  meta.albumAudioId = hit.albumAudioId || ''
+  meta.albumId = hit.albumId || hit.albumMid || hit.albummid || ''
+  meta.albumMid = hit.albumMid || hit.albummid || ''
+  meta.albummid = hit.albummid || hit.albumMid || ''
+  meta.musicId = hit.musicId || ''
+  meta.rid = hit.rid || ''
+  meta.dcTargetId = hit.dcTargetId || ''
+  meta.picUrl = hit.picUrl || hit.img || meta.picUrl || ''
+  meta.img = hit.img || hit.picUrl || meta.img || ''
+  meta.types = Array.isArray(hit.types) ? hit.types : meta.types
+  meta.qualitys = Array.isArray(hit.qualitys) ? hit.qualitys : meta.qualitys
+  meta.duration = hit.duration ?? hit.interval ?? meta.duration
+  delete meta.sourceApiId
+  delete meta.skipSourceIds
+  meta.lastPlatformSwitch = {
+    from,
+    to,
+    quality,
+    at: new Date().toISOString(),
+    name: hit.name || task.name,
+  }
+  rememberTriedPlatform(meta, to)
+
+  getDB().prepare(`
+    UPDATE download_tasks SET source = ?, meta = ?, error = NULL WHERE id = ?
+  `).run(to, JSON.stringify(meta), task.id)
+
+  // 同步内存中的 task，供本轮继续下载
+  task.source = to
+  dlBroadcast('download:platform-switched', {
+    id: task.id,
+    name: task.name,
+    from,
+    to,
+    quality,
+  })
+  dlBroadcast('download:status', {
+    id: task.id,
+    status: 'downloading',
+    quality,
+    source: to,
+    error: '',
+  })
+  return true
+}
+
+async function tryCrossPlatformSameQuality(task, meta, quality, settings) {
+  if (!isCrossPlatformSupplementEnabled(settings)) return false
+  const from = String(meta.source || task.source || '').trim()
+  rememberTriedPlatform(meta, from)
+  const exclude = [...(meta.skipPlatforms || [])]
+  const hit = await findNextCrossPlatformMatch({
+    name: task.name,
+    singer: task.singer,
+    userId: task.user_id,
+    excludePlatforms: exclude,
+  })
+  if (!hit) {
+    meta.crossPlatformExhausted = true
+    saveTaskMeta(task.id, meta)
+    return false
+  }
+  return applyCrossPlatformDownloadHit(task, meta, hit, quality)
+}
+
 function shouldSkipSourceAfterError(error) {
   const message = error?.message || String(error || '')
   const code = error?.code || ''
@@ -703,9 +803,11 @@ function shouldSkipSourceAfterError(error) {
 function applyQualityDowngrade(row, toQuality, { autoCascade = false, reason = '' } = {}) {
   const meta = parseTaskMeta(row)
   delete meta.downgradeOffer
-  // 换音质后重新按激活音源顺序尝试，不锁死在上一档用过的音源
+  // 换音质后重新按激活音源顺序尝试，不锁死在上一档用过的音源 / 平台
   delete meta.sourceApiId
   delete meta.skipSourceIds
+  delete meta.skipPlatforms
+  delete meta.crossPlatformExhausted
   meta.autoCascade = autoCascade || Boolean(meta.autoCascade)
   meta.lastDowngrade = {
     from: row.quality,
@@ -758,24 +860,59 @@ function confirmPendingDowngradesForUser(userId, { exceptId } = {}) {
   }
 }
 
-async function processQueue() {
-  const globalSettings = getSettings()
-  const maxDl = parseInt(globalSettings['download.maxDownloadNum']) || 3
+function getMaxDownloadSlots() {
+  const raw = getSettings()['download.maxDownloadNum']
+  const n = parseInt(raw, 10)
+  if (!Number.isFinite(n) || n < 1) return 3
+  return Math.min(8, n)
+}
 
-  while (runningCount < maxDl) {
-    const task = getDB().prepare("SELECT * FROM download_tasks WHERE status = 'waiting' ORDER BY created_at ASC LIMIT 1").get()
-    if (!task) break
+/** 原子领取一条 waiting 任务，避免并发泵重复领到同一条 */
+function claimNextWaitingTask() {
+  const task = getDB().prepare(`
+    SELECT * FROM download_tasks WHERE status = 'waiting' ORDER BY created_at ASC LIMIT 1
+  `).get()
+  if (!task) return null
+  const result = getDB().prepare(`
+    UPDATE download_tasks SET status = 'downloading' WHERE id = ? AND status = 'waiting'
+  `).run(task.id)
+  if (!result.changes) return null
+  return task
+}
 
-    runningCount++
-    getDB().prepare("UPDATE download_tasks SET status = 'downloading' WHERE id = ?").run(task.id)
-    dlBroadcast('download:status', { id: task.id, status: 'downloading', quality: task.quality })
+function processQueue() {
+  if (queuePumpRunning) {
+    queuePumpQueued = true
+    return
+  }
+  queuePumpRunning = true
+  try {
+    do {
+      queuePumpQueued = false
+      const maxDl = getMaxDownloadSlots()
 
-    downloadTask(task, taskSettings(task)).finally(() => {
-      runningCount--
-      activeDownloads.delete(task.id)
-      if (task.user_id) scheduleExistSummary(task.user_id)
-      processQueue()
-    })
+      while (activeDownloads.size < maxDl) {
+        const task = claimNextWaitingTask()
+        if (!task) break
+
+        // 先占槽并创建 abort，暂停可立刻取消；并发以 Map 大小为准
+        const abort = new AbortController()
+        activeDownloads.set(task.id, { abort })
+        dlBroadcast('download:status', { id: task.id, status: 'downloading', quality: task.quality })
+
+        Promise.resolve(downloadTask(task, taskSettings(task), abort)).finally(() => {
+          activeDownloads.delete(task.id)
+          if (task.user_id) scheduleExistSummary(task.user_id)
+          processQueue()
+        })
+      }
+    } while (queuePumpQueued)
+  } finally {
+    queuePumpRunning = false
+    if (queuePumpQueued) {
+      queuePumpQueued = false
+      queueMicrotask(() => processQueue())
+    }
   }
 }
 
@@ -1319,22 +1456,25 @@ function finalizePartFile(partPath, filePath) {
   fs.renameSync(partPath, filePath)
 }
 
-async function downloadTask(task, settings) {
-  const abort = new AbortController()
+async function downloadTask(task, settings, abortSignal = null) {
+  const abort = abortSignal || new AbortController()
   activeDownloads.set(task.id, { abort })
 
   const meta = parseTaskMeta(task)
-  const source = meta.source || task.source
   const quality = task.quality || '320k'
-  const musicInfo = buildMusicInfoFromTask(task, meta)
   let lastError = null
   let lastAttemptPath = ''
+  const MAX_PLATFORM_HOPS = 5
 
   try {
     // 取链前先按「主文件名」检测本地同名（扩展名不同也算），避免无效请求
     if (await handleExistingSameNameFile(task, meta, settings)) return
 
-    for (let attempt = 1; attempt <= SAME_QUALITY_ATTEMPTS; attempt++) {
+    for (let hop = 0; hop < MAX_PLATFORM_HOPS; hop++) {
+      let source = meta.source || task.source
+      let musicInfo = buildMusicInfoFromTask(task, meta)
+
+      for (let attempt = 1; attempt <= SAME_QUALITY_ATTEMPTS; attempt++) {
       // 任务可能已被暂停
       const latest = getDB().prepare('SELECT status FROM download_tasks WHERE id = ?').get(task.id)
       if (!latest || latest.status === 'paused') return
@@ -1343,15 +1483,16 @@ async function downloadTask(task, settings) {
       let partPath = ''
       let publishedDest = false
       try {
-        if (attempt > 1) {
+        if (attempt > 1 || hop > 0) {
           dlBroadcast('download:status', {
             id: task.id,
             status: 'downloading',
             quality,
+            source,
             retryAttempt: attempt,
             retryTotal: SAME_QUALITY_ATTEMPTS,
           })
-          await sleep(RETRY_DELAY_MS * (attempt - 1))
+          if (attempt > 1) await sleep(RETRY_DELAY_MS * (attempt - 1))
         }
 
         const { url, sourceInfo } = await resolveDownloadUrl(source, quality, musicInfo, settings, meta, task.user_id)
@@ -1466,7 +1607,7 @@ async function downloadTask(task, settings) {
 
         getDB().prepare("UPDATE download_tasks SET status = 'completed', file_path = ?, progress = 1, error = NULL WHERE id = ?")
           .run(filePath, task.id)
-        dlBroadcast('download:status', { id: task.id, status: 'completed', progress: 1, filePath, quality })
+        dlBroadcast('download:status', { id: task.id, status: 'completed', progress: 1, filePath, quality, source })
         scanBatchAndCache([{ filePath }]).catch(() => {})
         notifyLibraryChanged([filePath], { reason: 'download' })
         return
@@ -1486,9 +1627,30 @@ async function downloadTask(task, settings) {
           const alreadySkipped = (meta.skipSourceIds || []).includes(meta.sourceApiId)
           if (!alreadySkipped) skipCurrentDownloadSource(meta, task.id, source)
         }
-        console.warn(`[下载] ${task.name} ${quality} 第 ${attempt}/${SAME_QUALITY_ATTEMPTS} 次失败: ${e.message}`)
+        console.warn(`[下载] ${task.name} ${quality}@${source} 第 ${attempt}/${SAME_QUALITY_ATTEMPTS} 次失败: ${e.message}`)
         if (!retryable || attempt >= SAME_QUALITY_ATTEMPTS) break
       }
+      }
+
+      // 本平台同档失败：先跨平台补源，再考虑降档
+      if (isNoActiveSourceError(lastError)) break
+      try {
+        dlBroadcast('download:status', {
+          id: task.id,
+          status: 'downloading',
+          quality,
+          error: '',
+          tip: '正在跨平台补源…',
+        })
+        const switched = await tryCrossPlatformSameQuality(task, meta, quality, settings)
+        if (switched) {
+          lastError = null
+          continue
+        }
+      } catch (e) {
+        console.warn(`[下载] ${task.name} 跨平台补源失败: ${e.message}`)
+      }
+      break
     }
 
     // 失败收尾：不要按路径名删除音乐库里已有成品（仅清本任务跟踪产物与 .part）
@@ -1500,7 +1662,7 @@ async function downloadTask(task, settings) {
       markError(task.id, reason, meta)
       return
     }
-    // 各音源均为试听片段：不再降档，直接失败提示
+    // 各音源/平台均为试听片段：不再降档，直接失败提示
     if (lastError?.code === 'PREVIEW_CLIP' || /试听时长|仅提供约.*试听片段|仅支持试听约|时长不完整/i.test(reason)) {
       markError(task.id, reason, meta)
       return

@@ -133,6 +133,35 @@
       </section>
     </div>
 
+    <section class="about-card card community-card">
+      <h2 class="section-title">互动群聊</h2>
+      <div class="community-body">
+        <div class="community-info">
+          <p class="community-name">飞牛柠檬🍋muisc</p>
+          <p class="community-desc">加入 QQ 群反馈问题、交流使用心得，或获取安装与更新帮助。</p>
+          <div class="community-id-row">
+            <span class="community-id-label">群号</span>
+            <code class="community-id">{{ QQ_GROUP_ID }}</code>
+            <button type="button" class="btn-ghost btn-sm" @click="copyGroupId">
+              {{ groupIdCopied ? '已复制' : '复制' }}
+            </button>
+          </div>
+          <a
+            class="btn-primary btn-sm community-join"
+            :href="qqGroupJoinUrl"
+            target="_blank"
+            rel="noopener"
+          >
+            打开 QQ 加群
+          </a>
+        </div>
+        <figure class="community-qr">
+          <img :src="QQ_GROUP_QR_URL" alt="飞牛柠檬 QQ 群二维码" class="community-qr-img" />
+          <figcaption>扫码加入</figcaption>
+        </figure>
+      </div>
+    </section>
+
     <section v-if="isAdminUser" class="about-admin">
       <h2 class="section-title about-admin-heading">服务状态</h2>
 
@@ -269,14 +298,21 @@ import { isAdmin as isAdminUser } from '../utils/auth.js'
 import { getPwaInstallState, onPwaInstallState, promptPwaInstall } from '../utils/pwa.js'
 import { APP_ICON_URL } from '../utils/appIcon.js'
 
+const QQ_GROUP_ID = '1126326017'
+const QQ_GROUP_QR_URL = '/qq-group-qr.png'
+/** 已安装 QQ 时尝试唤起加群页；否则请扫码或复制群号 */
+const qqGroupJoinUrl = `mqqapi://card/show_psw?src_type=internal&version=1&uin=${QQ_GROUP_ID}&card_type=group&source=qrcode`
+
 const info = ref(null)
 const loading = ref(false)
 const serverHealth = ref(null)
 const pwa = ref(getPwaInstallState())
 const pwaInstalling = ref(false)
 const mirrorCopied = ref(false)
+const groupIdCopied = ref(false)
 let stopPwaWatch = null
 let mirrorCopyTimer = null
+let groupCopyTimer = null
 
 const fpkAssets = computed(() => {
   const fromHints = info.value?.installHints?.fpkAssets
@@ -292,6 +328,15 @@ async function copyMirrorCmd() {
     mirrorCopied.value = true
     if (mirrorCopyTimer) clearTimeout(mirrorCopyTimer)
     mirrorCopyTimer = setTimeout(() => { mirrorCopied.value = false }, 2000)
+  } catch {}
+}
+
+async function copyGroupId() {
+  try {
+    await navigator.clipboard.writeText(QQ_GROUP_ID)
+    groupIdCopied.value = true
+    if (groupCopyTimer) clearTimeout(groupCopyTimer)
+    groupCopyTimer = setTimeout(() => { groupIdCopied.value = false }, 2000)
   } catch {}
 }
 
@@ -318,6 +363,7 @@ onUnmounted(() => {
   if (typeof stopPwaWatch === 'function') stopPwaWatch()
   stopPwaWatch = null
   if (mirrorCopyTimer) clearTimeout(mirrorCopyTimer)
+  if (groupCopyTimer) clearTimeout(groupCopyTimer)
 })
 
 async function loadServerHealth() {
@@ -710,6 +756,93 @@ function formatDate(iso) {
   color: var(--text-muted, var(--text-secondary));
 }
 
+.community-card {
+  padding: 16px 18px;
+}
+
+.community-body {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.community-info {
+  flex: 1;
+  min-width: 200px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.community-name {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--text);
+}
+
+.community-desc {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+.community-id-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.community-id-label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.community-id {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text);
+  background: var(--bg-input);
+  border: 1px solid var(--border-light);
+  padding: 4px 10px;
+  border-radius: 8px;
+}
+
+.community-join {
+  align-self: flex-start;
+  text-decoration: none;
+}
+
+.community-qr {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.community-qr-img {
+  width: 148px;
+  height: 148px;
+  object-fit: contain;
+  border-radius: 12px;
+  background: #fff;
+  border: 1px solid var(--border-light);
+  padding: 6px;
+  box-sizing: border-box;
+}
+
+.community-qr figcaption {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
 .section-title {
   margin: 0 0 10px;
   font-size: 14px;
@@ -1070,6 +1203,20 @@ function formatDate(iso) {
 @media (max-width: 768px) {
   .about-row {
     grid-template-columns: 1fr;
+  }
+
+  .community-body {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+
+  .community-qr {
+    align-self: center;
+  }
+
+  .community-join {
+    align-self: stretch;
+    text-align: center;
   }
 
   .about-hero {

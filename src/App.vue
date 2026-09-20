@@ -475,6 +475,7 @@ import {
   cancelSourceFallback,
   notifySourceSwitch,
 } from './stores/sourceFallback.js'
+import { platformLabel } from './utils/platforms.js'
 import PlayerBar from './components/PlayerBar.vue'
 import TagEditModal from './components/TagEditModal.vue'
 import FullscreenPlayer from './components/FullscreenPlayer.vue'
@@ -600,6 +601,7 @@ const downloadSourcePrompt = ref(null)
 const downloadSourceBusy = ref('')
 const downloadSourceQueue = []
 let offDownloadSourceWS = null
+let offDownloadPlatformWS = null
 let offLibraryHotReload = null
 
 const existFilePrompt = ref(null)
@@ -1136,6 +1138,15 @@ onMounted(() => {
       })
     }
   })
+  offDownloadPlatformWS = onWS('download:platform-switched', (d) => {
+    if (d?.to) {
+      notifySourceSwitch({
+        switched: true,
+        fromName: platformLabel(d.from),
+        name: platformLabel(d.to),
+      })
+    }
+  })
   api.paths.list().then((res) => {
     const needs = Boolean(res.setup?.needsPathConfig)
     setupBanner.value = needs && !isSetupBannerDismissed()
@@ -1160,6 +1171,7 @@ onUnmounted(() => {
   offSourceFaultWS?.()
   offDowngradeWS?.()
   offDownloadSourceWS?.()
+  offDownloadPlatformWS?.()
   offExistSummaryWS?.()
   offLibraryHotReload?.()
 })

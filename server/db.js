@@ -118,6 +118,7 @@ export function initDB(configPath) {
     'source.fault': '',
     'player.coverStyle': 'disc',
     'player.visualizer': 'true',
+    'player.playQuality': '128k',
     'ui.theme': 'dark',
     'ui.librarySongColumns': '2',
     'file.paths': '[]',

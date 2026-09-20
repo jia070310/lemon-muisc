@@ -803,76 +803,102 @@
         </div>
       </div>
 
-      <!-- 下载设置 -->
+      <!-- 试听 / 下载 -->
       <div v-if="activeTab === 'download'" class="panel-body">
         <div class="setting-item">
           <div class="setting-item-info">
-            <div class="setting-item-label">保存路径</div>
-            <div class="setting-item-desc">
-              下载文件的默认保存目录。可在「文件路径」中单独配置，与音乐库目录无关。
+            <div class="setting-item-label">试听音质</div>
+            <div class="setting-item-desc">在线试听优先使用的音质；当前平台没有时先跨平台同档补源，再降档。本地文件不受影响</div>
+          </div>
+          <div class="setting-item-action">
+            <AppSelect
+              v-model="settings[PLAY_QUALITY_KEY]"
+              :options="playQualityOptions"
+              min-width="160px"
+              @change="savePlayQuality"
+            />
+          </div>
+        </div>
+        <div class="setting-item">
+          <div class="setting-item-info">
+            <div class="setting-item-label">跨平台补源</div>
+            <div class="setting-item-desc">试听 / 下载拿不到所选音质时，先搜其它平台同名曲尝试同档，再考虑降档。批量下载同样生效</div>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" :checked="settings['download.isUseOtherSource'] !== 'false'" @change="toggleCrossPlatformSupplement" />
+            <span class="slider"></span>
+          </label>
+        </div>
+        <template v-if="isAdminUser">
+          <div class="setting-item">
+            <div class="setting-item-info">
+              <div class="setting-item-label">保存路径</div>
+              <div class="setting-item-desc">
+                下载文件的默认保存目录。可在「文件路径」中单独配置，与音乐库目录无关。
+              </div>
+            </div>
+            <div class="setting-item-action path-readonly">
+              <code class="download-path-code">{{ downloadPath || '未设置' }}</code>
+              <button type="button" class="btn-sm btn-ghost" @click="activeTab = 'paths'">去修改</button>
             </div>
           </div>
-          <div class="setting-item-action path-readonly">
-            <code class="download-path-code">{{ downloadPath || '未设置' }}</code>
-            <button type="button" class="btn-sm btn-ghost" @click="activeTab = 'paths'">去修改</button>
+          <div class="setting-item">
+            <div class="setting-item-info">
+              <div class="setting-item-label">文件名格式</div>
+              <div class="setting-item-desc">下载文件的命名规则</div>
+            </div>
+            <div class="setting-item-action">
+              <AppSelect
+                v-model="settings['download.fileName']"
+                :options="fileNameOptions"
+                min-width="200px"
+                @change="saveSetting('download.fileName')"
+              />
+            </div>
           </div>
-        </div>
-        <div class="setting-item">
-          <div class="setting-item-info">
-            <div class="setting-item-label">文件名格式</div>
-            <div class="setting-item-desc">下载文件的命名规则</div>
+          <div class="setting-item">
+            <div class="setting-item-info">
+              <div class="setting-item-label">最大并发</div>
+              <div class="setting-item-desc">同时下载的任务数量</div>
+            </div>
+            <div class="setting-item-action">
+              <AppSelect
+                v-model="settings['download.maxDownloadNum']"
+                :options="maxDownloadOptions"
+                min-width="100px"
+                @change="saveSetting('download.maxDownloadNum')"
+              />
+            </div>
           </div>
-          <div class="setting-item-action">
-            <AppSelect
-              v-model="settings['download.fileName']"
-              :options="fileNameOptions"
-              min-width="200px"
-              @change="saveSetting('download.fileName')"
-            />
+          <div class="setting-item">
+            <div class="setting-item-info">
+              <div class="setting-item-label">同名文件处理</div>
+              <div class="setting-item-desc">按文件名（忽略扩展名）检测本地已有文件；询问时会显示本地音质。「仍下载」会与其它格式并存，不删已有 FLAC/MP3 等</div>
+            </div>
+            <div class="setting-item-action">
+              <AppSelect
+                v-model="settings['download.existFileMode']"
+                :options="existFileModeOptions"
+                min-width="160px"
+                @change="saveExistFileMode"
+              />
+            </div>
           </div>
-        </div>
-        <div class="setting-item">
-          <div class="setting-item-info">
-            <div class="setting-item-label">最大并发</div>
-            <div class="setting-item-desc">同时下载的任务数量</div>
+          <div class="setting-item">
+            <div class="setting-item-info">
+              <div class="setting-item-label">下载分组</div>
+              <div class="setting-item-desc">在下载目录下创建子文件夹；按歌手时多位歌手归档到「群星 (Various Artists)」；歌手/专辑为两级目录。请把「下载目录」设在分组根（如 download），不要选进已生成的专辑/歌手子文件夹，否则容易一层层套娃</div>
+            </div>
+            <div class="setting-item-action">
+              <AppSelect
+                v-model="settings[DOWNLOAD_GROUP_BY_KEY]"
+                :options="downloadGroupOptions"
+                min-width="180px"
+                @change="saveDownloadGroupBy"
+              />
+            </div>
           </div>
-          <div class="setting-item-action">
-            <AppSelect
-              v-model="settings['download.maxDownloadNum']"
-              :options="maxDownloadOptions"
-              min-width="100px"
-              @change="saveSetting('download.maxDownloadNum')"
-            />
-          </div>
-        </div>
-        <div class="setting-item">
-          <div class="setting-item-info">
-            <div class="setting-item-label">同名文件处理</div>
-            <div class="setting-item-desc">按文件名（忽略扩展名）检测本地已有文件；询问时会显示本地音质。「仍下载」会与其它格式并存，不删已有 FLAC/MP3 等</div>
-          </div>
-          <div class="setting-item-action">
-            <AppSelect
-              v-model="settings['download.existFileMode']"
-              :options="existFileModeOptions"
-              min-width="160px"
-              @change="saveExistFileMode"
-            />
-          </div>
-        </div>
-        <div class="setting-item">
-          <div class="setting-item-info">
-            <div class="setting-item-label">下载分组</div>
-            <div class="setting-item-desc">在下载目录下创建子文件夹；按歌手时多位歌手归档到「群星 (Various Artists)」；歌手/专辑为两级目录。请把「下载目录」设在分组根（如 download），不要选进已生成的专辑/歌手子文件夹，否则容易一层层套娃</div>
-          </div>
-          <div class="setting-item-action">
-            <AppSelect
-              v-model="settings[DOWNLOAD_GROUP_BY_KEY]"
-              :options="downloadGroupOptions"
-              min-width="180px"
-              @change="saveDownloadGroupBy"
-            />
-          </div>
-        </div>
+        </template>
       </div>
 
       <!-- 内嵌数据 -->
@@ -1115,7 +1141,7 @@ defineOptions({ name: 'Settings' })
 import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from '../api.js'
-import { loadCoverStyle, loadPlayerSettings, setAutoMatchOnPlay, PLAYER_AUTO_MATCH_ON_PLAY_KEY } from '../stores/player.js'
+import { loadCoverStyle, loadPlayerSettings, setAutoMatchOnPlay, PLAYER_AUTO_MATCH_ON_PLAY_KEY, PLAYER_PLAY_QUALITY_KEY, PLAY_QUALITY_OPTIONS, normalizePlayQuality } from '../stores/player.js'
 import { scanLibrary, libraryScanning, PLAYLIST_REMOTE_SYNC_DAYS_KEY, setPlaylistRemoteSyncDays, getPlaylistRemoteSyncDays, LIBRARY_SONG_COLUMNS_KEY, setLibrarySongColumns, normalizeLibrarySongColumns } from '../stores/library.js'
 import { reloadSearchSources } from '../stores/search.js'
 import { reloadDiscoverSources } from '../stores/discover.js'
@@ -1146,6 +1172,8 @@ const maxDownloadOptions = Array.from({ length: 6 }, (_, i) => ({
   value: String(i + 1),
   label: String(i + 1),
 }))
+const playQualityOptions = PLAY_QUALITY_OPTIONS
+const PLAY_QUALITY_KEY = PLAYER_PLAY_QUALITY_KEY
 const tagMatchConcurrencyOptions = Array.from({ length: 6 }, (_, i) => ({
   value: String(i + 1),
   label: `${i + 1} 路`,
@@ -1510,14 +1538,14 @@ const tabs = computed(() => {
     { id: 'source', label: '音源管理' },
     { id: 'tag', label: '标签管理' },
     { id: 'appearance', label: '风格样式' },
-    { id: 'download', label: '下载设置' },
+    { id: 'download', label: '试听下载' },
     { id: 'embed', label: '内嵌数据' },
     { id: 'lrc', label: '歌词文件' },
     { id: 'users', label: '用户管理' },
     { id: 'mail', label: '邮件服务' },
   ]
   if (isAdminUser.value) return all
-  return all.filter(t => ['account', 'paths', 'source', 'tag', 'appearance'].includes(t.id))
+  return all.filter(t => ['account', 'paths', 'source', 'tag', 'appearance', 'download'].includes(t.id))
 })
 
 const embedItems = [
@@ -1953,6 +1981,8 @@ onMounted(async () => {
     if (settings['tag.matchRejectForeignArtist'] == null) settings['tag.matchRejectForeignArtist'] = 'true'
     if (!settings['player.coverStyle']) settings['player.coverStyle'] = 'disc'
     if (settings['player.visualizer'] == null) settings['player.visualizer'] = 'true'
+    settings[PLAY_QUALITY_KEY] = normalizePlayQuality(settings[PLAY_QUALITY_KEY])
+    if (settings['download.isUseOtherSource'] == null) settings['download.isUseOtherSource'] = 'true'
     if (!settings[THEME_KEY]) settings[THEME_KEY] = currentTheme.value
     if (!settings[COLOR_SCHEME_KEY]) settings[COLOR_SCHEME_KEY] = currentColorScheme.value
     if (!settings[CUSTOM_COLOR_KEY]) settings[CUSTOM_COLOR_KEY] = currentCustomColor.value
@@ -2418,6 +2448,8 @@ async function saveSetting(key) {
     await api.settings.update({ [key]: settings[key] })
     if (key === 'player.coverStyle') loadCoverStyle()
     if (key === 'player.visualizer') loadPlayerSettings()
+    if (key === PLAY_QUALITY_KEY) loadPlayerSettings()
+    if (key === 'download.isUseOtherSource') loadPlayerSettings()
     if (key === THEME_KEY) {
       applyTheme(settings[key], {
         color: settings[COLOR_SCHEME_KEY],
@@ -2428,6 +2460,16 @@ async function saveSetting(key) {
       applyColorScheme(settings[key], settings[THEME_KEY], { customHex: settings[CUSTOM_COLOR_KEY] })
     }
   } catch (e) { showToast(e.message, 'error') }
+}
+
+async function savePlayQuality() {
+  settings[PLAY_QUALITY_KEY] = normalizePlayQuality(settings[PLAY_QUALITY_KEY])
+  await saveSetting(PLAY_QUALITY_KEY)
+}
+
+async function toggleCrossPlatformSupplement(e) {
+  settings['download.isUseOtherSource'] = e.target.checked ? 'true' : 'false'
+  await saveSetting('download.isUseOtherSource')
 }
 
 async function toggleMailEnabled(e) {

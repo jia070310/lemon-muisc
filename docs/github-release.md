@@ -1,23 +1,22 @@
-# 柠檬音乐 v1.2.16.5
+# 柠檬音乐 v1.2.16.6
 
 ## 更新
 
-### 商店 Node / 升级卡 55%（[#27](https://github.com/jia070310/lemon-muisc/issues/27)）
+### 下载并发（[#33](https://github.com/jia070310/lemon-muisc/issues/33)）
 
-按[飞牛开发文档 · 打包运行时](https://github.com/ckcoding/fnnas-docs/blob/main/ALL_DOCS.md)：
+设置「下载线程 = 1」时，批量提交 / 全部继续也不再叠出多路「下载中」。全局并发以实际在下的任务数为准。
 
-```bash
-install_dep_apps=nodejs_v22
-export PATH=/var/apps/nodejs_v22/target/bin:$PATH
-```
+### 试听下载
 
-**本版回到 1.2.14 稳定路径（小包 ~1MB）：**
+- 设置原「下载设置」改名为 **试听下载**
+- 新增 **试听音质**（默认 128k）
+- 新增 **跨平台补源**（默认开）：当前平台没有所选音质时，先搜其它平台同名曲试同档，再降档；试听、单曲与批量下载均适用
 
-1. **只检查**商店 Node 是否可用，**不再**长时间「等待商店安装」、**不再**对已安装包执行 `appcenter-cli install`（根因：已装仍 install → `downloading 0%` → 超时）
-2. 默认打包**不再**内置 `node_modules`（体积回到约 1MB）
-3. 已有业务依赖（含 `@appdata/runtime` 持久化）则升级跳过 npm
+### 关于页
+
+- 增加 QQ 互动群：飞牛柠檬🍋muisc（群号 `1126326017`），可复制群号 / 扫码加入
 
 ## 安装包
 
-- x86：`lemon-music-1.2.16.5-x86.fpk`
-- ARM：`lemon-music-1.2.16.5-arm.fpk`
+- x86：`lemon-music-1.2.16.6-x86.fpk`
+- ARM：`lemon-music-1.2.16.6-arm.fpk`
