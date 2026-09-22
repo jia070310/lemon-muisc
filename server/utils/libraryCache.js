@@ -374,6 +374,42 @@ export function removeCachePaths(paths) {
   return delMany(list)
 }
 
+/** 磁盘改名后同步缓存主键与 fileName / 文件名解析字段 */
+export function renameCachePath(oldPath, newPath) {
+  ensureLibraryCacheTable()
+  const db = getDB()
+  if (!db || !oldPath || !newPath) return false
+  const oldKey = normalizePathKey(oldPath)
+  const newKey = normalizePathKey(newPath)
+  if (!oldKey || !newKey || oldKey === newKey) return false
+
+  const row = db.prepare('SELECT file_path, mtime, size, meta_json FROM library_index WHERE file_path = ?').get(oldKey)
+  if (!row) return false
+
+  let meta = {}
+  try {
+    meta = JSON.parse(row.meta_json || '{}') || {}
+  } catch {
+    meta = {}
+  }
+  const fileName = path.basename(newPath)
+  const parsed = parseFilename(fileName)
+  meta.fileName = fileName
+  meta.parsedTitle = parsed.title
+  meta.parsedArtist = parsed.artist
+  const format = path.extname(fileName).replace(/^\./, '').toLowerCase()
+  if (format) meta.format = format
+
+  const tx = db.transaction(() => {
+    db.prepare('DELETE FROM library_index WHERE file_path = ?').run(oldKey)
+    // 目标路径若已有幽灵记录先清掉
+    db.prepare('DELETE FROM library_index WHERE file_path = ?').run(newKey)
+    upsertCacheEntry(newPath, row.mtime || 0, row.size || 0, meta)
+  })
+  tx()
+  return true
+}
+
 export async function scanBatchAndCache(files) {
   ensureLibraryCacheTable()
   const entries = (files || []).filter(f => f?.filePath)

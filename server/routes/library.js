@@ -14,6 +14,8 @@ import {
   syncLibraryIndex,
   scanBatchAndCache,
   removeCachePaths,
+  renameCachePath,
+  upsertCacheEntry,
   queryCachedTracks,
   queryArtists,
   queryAlbums,
@@ -24,6 +26,8 @@ import {
   queryMoodMapPoints,
   queryMoodTracksInRegion,
 } from '../utils/libraryCache.js'
+import { inspectFakeFlacFile } from '../utils/audioFormat.js'
+import { parseFilename } from '../utils/filenameParse.js'
 import {
   getLibraryScanStatus,
   startLibraryScanJob,
@@ -452,6 +456,188 @@ libraryRouter.post('/delete-files', (req, res) => {
       deleted: deleted.length,
       failed: failed.length,
       data: { deleted, failed },
+    })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+function collectFakeFlacScanRoots() {
+  const roots = []
+  for (const p of getMusicPaths() || []) {
+    if (p) roots.push(path.resolve(p))
+  }
+  try {
+    const dl = getDownloadSavePath()
+    if (dl) roots.push(path.resolve(dl))
+  } catch {}
+  const seen = new Set()
+  const out = []
+  for (const r of roots) {
+    const key = r.replace(/\\/g, '/').toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(r)
+  }
+  return out
+}
+
+/** 扫描音乐库 / 下载目录中扩展名为 .flac、但文件头不符（或过小）的伪无损 */
+libraryRouter.post('/scan-fake-flac', (req, res) => {
+  try {
+    const dirRaw = String(req.body?.dirPath || '').trim()
+    let roots = collectFakeFlacScanRoots()
+    if (dirRaw) {
+      const resolved = path.resolve(dirRaw)
+      if (!fs.existsSync(resolved)) {
+        return res.status(400).json({ error: `目录不存在：${dirRaw}` })
+      }
+      const under = roots.some((root) => {
+        const a = resolved.replace(/\\/g, '/').toLowerCase()
+        const b = root.replace(/\\/g, '/').toLowerCase()
+        return a === b || a.startsWith(`${b}/`)
+      })
+      if (!under) {
+        return res.status(400).json({ error: '目录不在已配置的音乐库/下载路径内' })
+      }
+      roots = [resolved]
+    }
+    if (!roots.length) {
+      return res.status(400).json({ error: '请先在设置中配置音乐库路径' })
+    }
+
+    let scanned = 0
+    const fakes = []
+    for (const root of roots) {
+      if (!fs.existsSync(root)) continue
+      const files = listAudioFiles(root)
+      for (const fp of files) {
+        if (path.extname(fp).toLowerCase() !== '.flac') continue
+        scanned += 1
+        const info = inspectFakeFlacFile(fp)
+        if (!info.fake) continue
+        fakes.push({
+          filePath: fp,
+          fileName: path.basename(fp),
+          kind: info.kind,
+          size: info.size,
+          reason: info.reason,
+          suggestedExt: info.suggestedExt,
+          issue: info.issue,
+        })
+        if (fakes.length >= 500) break
+      }
+      if (fakes.length >= 500) break
+    }
+
+    res.json({
+      ok: true,
+      data: {
+        scanned,
+        fakeCount: fakes.length,
+        truncated: fakes.length >= 500,
+        files: fakes,
+      },
+    })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+const AUDIO_RENAME_EXTS = new Set(['.mp3', '.flac', '.wav', '.ape', '.ogg', '.m4a', '.aac', '.wma'])
+
+function sanitizeAudioFileName(raw, fallbackExt = '.mp3') {
+  let name = String(raw || '').trim()
+  name = path.basename(name.replace(/\\/g, '/'))
+  name = name
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')
+    .replace(/[. ]+$/g, '')
+    .trim()
+  if (!name) return null
+  let ext = path.extname(name).toLowerCase()
+  let base = ext ? name.slice(0, -ext.length) : name
+  base = base.replace(/[. ]+$/g, '').trim()
+  if (!base) return null
+  if (!ext || !AUDIO_RENAME_EXTS.has(ext)) {
+    const fb = String(fallbackExt || '.mp3').toLowerCase()
+    ext = AUDIO_RENAME_EXTS.has(fb) ? fb : '.mp3'
+  }
+  return `${base}${ext}`.slice(0, 200)
+}
+
+/** 重命名音乐库/下载目录内的音频文件（仅改文件名，不移动目录） */
+libraryRouter.post('/rename-file', (req, res) => {
+  try {
+    const filePath = String(req.body?.filePath || '').trim()
+    const newNameRaw = String(req.body?.newName || req.body?.fileName || '').trim()
+    if (!filePath) return res.status(400).json({ error: '请指定文件' })
+    if (!newNameRaw) return res.status(400).json({ error: '请输入新文件名' })
+    if (!isAllowedMediaPath(filePath)) {
+      return res.status(403).json({ error: '路径不在允许的音乐库/下载目录内' })
+    }
+
+    const resolved = path.resolve(filePath)
+    if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
+      return res.status(404).json({ error: '文件不存在' })
+    }
+
+    const oldExt = path.extname(resolved).toLowerCase() || '.mp3'
+    const safeName = sanitizeAudioFileName(newNameRaw, oldExt)
+    if (!safeName) return res.status(400).json({ error: '文件名无效' })
+
+    const dir = path.dirname(resolved)
+    const dest = path.resolve(dir, safeName)
+    if (path.dirname(dest) !== dir) {
+      return res.status(400).json({ error: '不允许改变文件所在目录' })
+    }
+    if (!isAllowedMediaPath(dest, { allowMissing: true })) {
+      return res.status(403).json({ error: '目标路径不在允许的音乐库/下载目录内' })
+    }
+
+    const samePath = dest.replace(/\\/g, '/').toLowerCase() === resolved.replace(/\\/g, '/').toLowerCase()
+    if (samePath) {
+      return res.json({
+        ok: true,
+        data: {
+          from: resolved,
+          to: resolved,
+          fileName: path.basename(resolved),
+          unchanged: true,
+        },
+      })
+    }
+    if (fs.existsSync(dest)) {
+      return res.status(409).json({ error: `目标已存在：${safeName}` })
+    }
+
+    fs.renameSync(resolved, dest)
+    const renamedInCache = renameCachePath(resolved, dest)
+    if (!renamedInCache) {
+      removeCachePaths([resolved])
+      try {
+        const st = fs.statSync(dest)
+        const parsed = parseFilename(path.basename(dest))
+        upsertCacheEntry(dest, st.mtimeMs || 0, st.size || 0, {
+          fileName: path.basename(dest),
+          parsedTitle: parsed.title,
+          parsedArtist: parsed.artist,
+          title: parsed.title,
+          artist: parsed.artist,
+          format: path.extname(dest).replace(/^\./, '').toLowerCase(),
+        })
+      } catch {}
+    }
+    notifyLibraryRemoved([resolved], { reason: 'rename' })
+    notifyLibraryChanged([dest], { reason: 'rename' })
+
+    res.json({
+      ok: true,
+      data: {
+        from: resolved,
+        to: dest,
+        fileName: path.basename(dest),
+        unchanged: false,
+      },
     })
   } catch (e) {
     res.status(500).json({ error: e.message })

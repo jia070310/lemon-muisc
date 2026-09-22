@@ -4,13 +4,12 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import needle from 'needle'
 import { compareVersion } from '../utils/version.js'
+import { getAppLogInfo } from '../utils/appPaths.js'
 
 export const aboutRouter = Router()
 
 const REPO = 'jia070310/lemon-muisc'
 const REPO_URL = `https://github.com/${REPO}`
-/** 国内拉取 GHCR 常用加速前缀（与历史 Release 说明一致） */
-const GHCR_MIRROR_HOST = 'ghcr.1ms.run'
 /** GitHub Release 资源加速（国内直链常不可用） */
 const GITHUB_ASSET_MIRROR_PREFIX = 'https://ghproxy.net/'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -89,10 +88,6 @@ function buildInstallHints(version, fpkAssets = []) {
   return {
     fpkHint: '请下载对应架构的 FPK，下载完成后到飞牛「应用中心」→「手动安装」选择文件安装（覆盖即可）。请勿依赖应用商店卡片上的「更新」。',
     fpkAssets,
-    dockerOfficial: `ghcr.io/${REPO}:${ver}`,
-    dockerMirror: `${GHCR_MIRROR_HOST}/${REPO}:${ver}`,
-    dockerPullMirror: `docker pull ${GHCR_MIRROR_HOST}/${REPO}:${ver}`,
-    mirrorNote: '国内环境建议用加速镜像拉取，再按需 tag 为本地 lemon-music:latest',
   }
 }
 
@@ -127,6 +122,7 @@ aboutRouter.get('/', async (_req, res) => {
   }
 
   const updateAvailable = Boolean(latestVersion && compareVersion(latestVersion, currentVersion) > 0)
+  const logInfo = getAppLogInfo()
 
   res.json({
     name: 'Lemon Music',
@@ -135,7 +131,7 @@ aboutRouter.get('/', async (_req, res) => {
     features: [
       '搜索 / 试听 / 下载与标签管理',
       '多音源同时激活，批量下载自动降档',
-      '飞牛 NAS 原生应用（FPK）与 Docker',
+      '飞牛 NAS 原生应用（FPK）',
     ],
     repoUrl: REPO_URL,
     currentVersion,
@@ -149,5 +145,9 @@ aboutRouter.get('/', async (_req, res) => {
     publishedAt,
     checkError,
     checkedAt: new Date().toISOString(),
+    logDir: logInfo.logDir,
+    appLogPath: logInfo.appLog,
+    logDirExists: logInfo.exists,
+    logFiles: logInfo.files,
   })
 })

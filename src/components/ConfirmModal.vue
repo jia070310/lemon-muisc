@@ -15,6 +15,19 @@
             <h3 :id="titleId">{{ title }}</h3>
             <p v-if="message" class="confirm-text">{{ message }}</p>
             <p v-if="hint" class="confirm-hint">{{ hint }}</p>
+            <label v-if="mode === 'prompt'" class="confirm-input-wrap">
+              <span v-if="inputLabel" class="confirm-input-label">{{ inputLabel }}</span>
+              <input
+                ref="inputEl"
+                class="confirm-input"
+                type="text"
+                :value="inputValue"
+                :placeholder="inputPlaceholder"
+                :disabled="busy"
+                @input="onInput"
+                @keydown.enter.prevent="!busy && onConfirm()"
+              />
+            </label>
           </div>
         </div>
         <div class="confirm-actions">
@@ -43,11 +56,12 @@
 </template>
 
 <script setup>
+import { ref, watch, nextTick } from 'vue'
 import CoverArt from './CoverArt.vue'
 
-defineProps({
+const props = defineProps({
   open: { type: Boolean, default: false },
-  mode: { type: String, default: 'confirm' }, // confirm | alert
+  mode: { type: String, default: 'confirm' }, // confirm | alert | prompt
   title: { type: String, default: '确认' },
   message: { type: String, default: '' },
   hint: { type: String, default: '' },
@@ -57,11 +71,30 @@ defineProps({
   danger: { type: Boolean, default: false },
   busy: { type: Boolean, default: false },
   busyText: { type: String, default: '处理中…' },
+  inputValue: { type: String, default: '' },
+  inputPlaceholder: { type: String, default: '' },
+  inputLabel: { type: String, default: '' },
 })
 
-const emit = defineEmits(['confirm', 'cancel'])
+const emit = defineEmits(['confirm', 'cancel', 'update:inputValue'])
 
 const titleId = 'confirm-modal-title'
+const inputEl = ref(null)
+
+watch(
+  () => [props.open, props.mode],
+  async ([open, mode]) => {
+    if (open && mode === 'prompt') {
+      await nextTick()
+      inputEl.value?.focus?.()
+      inputEl.value?.select?.()
+    }
+  },
+)
+
+function onInput(e) {
+  emit('update:inputValue', e?.target?.value ?? '')
+}
 
 function onConfirm() {
   emit('confirm')
@@ -133,6 +166,30 @@ function onCancel() {
   font-size: 12px;
   line-height: 1.5;
   color: var(--text-muted);
+}
+.confirm-input-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+}
+.confirm-input-label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.confirm-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-input, var(--bg));
+  color: var(--text);
+  font-size: 14px;
+}
+.confirm-input:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 .confirm-actions {
   display: flex;

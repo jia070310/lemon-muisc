@@ -193,6 +193,44 @@ function easeOutCubic(t) {
   return 1 - (1 - t) ** 3
 }
 
+/** 从坐标原点向外扩散的涟漪圆环（画在点之前） */
+function drawRippleRings(ctx, mid, w, h, pad, now, accent) {
+  const maxR = Math.hypot(
+    Math.max(mid.cx - pad, w - pad - mid.cx, 1),
+    Math.max(mid.cy - pad, h - pad - mid.cy, 1),
+  ) * 1.08
+  const ringCount = 7
+  ctx.save()
+  ctx.lineWidth = 1
+  ctx.strokeStyle = accent || '#6c8cff'
+
+  if (preferReducedMotion) {
+    const step = maxR / (ringCount + 0.5)
+    for (let i = 1; i <= ringCount; i += 1) {
+      ctx.beginPath()
+      ctx.arc(mid.cx, mid.cy, step * i, 0, Math.PI * 2)
+      ctx.globalAlpha = 0.18 - i * 0.016
+      ctx.stroke()
+    }
+    ctx.restore()
+    return
+  }
+
+  const period = 9000
+  for (let i = 0; i < ringCount; i += 1) {
+    const phase = ((now / period) + i / ringCount) % 1
+    const r = 6 + phase * (maxR - 6)
+    // 外扩渐隐；靠近原点略亮
+    const alpha = (1 - phase) * (0.1 + 0.14 * (1 - phase))
+    if (alpha < 0.012) continue
+    ctx.beginPath()
+    ctx.arc(mid.cx, mid.cy, r, 0, Math.PI * 2)
+    ctx.globalAlpha = alpha
+    ctx.stroke()
+  }
+  ctx.restore()
+}
+
 function pointKey(p) {
   return `${p.filePath || ''}|${p.x}|${p.y}`
 }
@@ -304,6 +342,8 @@ function drawCoverThumb(ctx, img, cx, cy, r, alpha) {
 
 function needsAnimLoop() {
   if (preferReducedMotion) return false
+  // 背景涟漪持续外扩
+  if (points.value.length) return true
   if (animStartedAt && performance.now() - animStartedAt < 1400) return true
   // 封面刚加载完的淡入
   const now = performance.now()
@@ -557,6 +597,8 @@ function drawFrame() {
     ctx.lineTo(mid.cx, h - pad)
   }
   ctx.stroke()
+
+  drawRippleRings(ctx, mid, w, h, pad, now, accent)
 
   const list = points.value
   const n = list.length || 1

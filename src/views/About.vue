@@ -75,17 +75,6 @@
         <p class="fpk-tip">
           {{ info.installHints.fpkHint }}
         </p>
-
-        <div class="update-mirror">
-          <div class="update-mirror-label">
-            <span>国内加速（Docker）</span>
-            <button type="button" class="btn-ghost btn-xs" @click="copyMirrorCmd">
-              {{ mirrorCopied ? '已复制' : '复制命令' }}
-            </button>
-          </div>
-          <code class="update-mirror-cmd">{{ info.installHints.dockerPullMirror }}</code>
-          <p class="update-mirror-note">{{ info.installHints.mirrorNote }}</p>
-        </div>
       </div>
     </section>
 
@@ -115,21 +104,42 @@
       <section class="about-card card pwa-card">
         <h2 class="section-title">添加到桌面</h2>
         <p class="pwa-desc">
-          支持 PWA：Safari / 系统浏览器可「添加到主屏幕」。推荐 HTTPS 访问；桌面 Chrome 可用地址栏安装。
+          支持 PWA 安装到主屏幕。请用 <strong>HTTPS</strong> 访问；Chrome / Edge 可一键安装，鸿蒙 / Safari 请用浏览器菜单添加。
         </p>
         <div v-if="pwa.standalone" class="pwa-status ok">当前已在桌面应用模式</div>
-        <button
-          v-else-if="pwa.canInstall"
-          class="btn-primary btn-sm"
-          type="button"
-          :disabled="pwaInstalling"
-          @click="installPwa"
-        >
-          {{ pwaInstalling ? '请在系统弹窗中确认…' : '安装到桌面' }}
-        </button>
-        <p v-else-if="!pwa.isSecureContext" class="pwa-hint">
-          当前非 HTTPS，部分浏览器可能无法弹出安装提示。
-        </p>
+        <template v-else>
+          <button
+            v-if="pwa.canInstall"
+            class="btn-primary btn-sm"
+            type="button"
+            :disabled="pwaInstalling"
+            @click="installPwa"
+          >
+            {{ pwaInstalling ? '请在系统弹窗中确认…' : '安装到桌面' }}
+          </button>
+          <ol v-if="pwa.canGuideInstall && !pwa.canInstall" class="pwa-steps">
+            <template v-if="pwa.isHarmonyNext">
+              <li>用手机浏览器打开本站（建议系统自带浏览器或 Chrome）</li>
+              <li>打开右上角「⋮ / 菜单」→「添加到桌面」或「添加到主屏幕」</li>
+              <li>从桌面图标重新打开；若仍显示地址栏，属鸿蒙 NEXT 当前限制</li>
+            </template>
+            <template v-else-if="pwa.isHarmony">
+              <li>打开浏览器菜单「⋮」</li>
+              <li>选择「添加到桌面」或「添加到主屏幕」</li>
+              <li>从桌面图标启动以获得接近独立应用的体验</li>
+            </template>
+            <template v-else-if="pwa.isIosLike">
+              <li>使用 Safari 打开本站</li>
+              <li>点底部分享按钮 →「添加到主屏幕」</li>
+              <li>确认添加后从主屏幕图标打开</li>
+            </template>
+            <template v-else>
+              <li>使用 Chrome / Edge 打开本站</li>
+              <li>点地址栏右侧安装图标，或菜单里的「安装应用」</li>
+            </template>
+          </ol>
+          <p v-if="pwa.installHint" class="pwa-hint">{{ pwa.installHint }}</p>
+        </template>
       </section>
     </div>
 
@@ -284,6 +294,40 @@
       </p>
     </section>
 
+    <section class="about-card card log-path-card">
+      <h2 class="section-title">设备日志路径</h2>
+      <p class="log-path-desc">
+        排查安装 / 启用 / 运行问题时，可到本机查看日志。主日志一般为 <code>app.log</code>，依赖安装看 <code>npm-install.log</code>。
+      </p>
+      <div class="log-path-row">
+        <span class="log-path-label">日志目录</span>
+        <code class="log-path-value" :title="info?.logDir || ''">{{ info?.logDir || (loading ? '检测中…' : '暂不可用') }}</code>
+        <button
+          type="button"
+          class="btn-ghost btn-sm"
+          :disabled="!info?.logDir"
+          @click="copyLogPath('dir')"
+        >
+          {{ logDirCopied ? '已复制' : '复制' }}
+        </button>
+      </div>
+      <div class="log-path-row">
+        <span class="log-path-label">主日志</span>
+        <code class="log-path-value" :title="info?.appLogPath || ''">{{ info?.appLogPath || (loading ? '检测中…' : '暂不可用') }}</code>
+        <button
+          type="button"
+          class="btn-ghost btn-sm"
+          :disabled="!info?.appLogPath"
+          @click="copyLogPath('app')"
+        >
+          {{ appLogCopied ? '已复制' : '复制' }}
+        </button>
+      </div>
+      <p v-if="info && info.logDirExists === false" class="log-path-hint">
+        当前目录尚未创建（本地开发或未写入过日志时常见）。飞牛上启用后一般会出现在 <code>/vol*/@appdata/lemon-music/log</code>。
+      </p>
+    </section>
+
     <p class="about-footer">© {{ new Date().getFullYear() }} {{ APP_NAME }}</p>
   </div>
 </template>
@@ -308,11 +352,13 @@ const loading = ref(false)
 const serverHealth = ref(null)
 const pwa = ref(getPwaInstallState())
 const pwaInstalling = ref(false)
-const mirrorCopied = ref(false)
 const groupIdCopied = ref(false)
+const logDirCopied = ref(false)
+const appLogCopied = ref(false)
 let stopPwaWatch = null
-let mirrorCopyTimer = null
 let groupCopyTimer = null
+let logDirCopyTimer = null
+let appLogCopyTimer = null
 
 const fpkAssets = computed(() => {
   const fromHints = info.value?.installHints?.fpkAssets
@@ -320,15 +366,29 @@ const fpkAssets = computed(() => {
   return Array.isArray(info.value?.fpkAssets) ? info.value.fpkAssets : []
 })
 
-async function copyMirrorCmd() {
-  const cmd = info.value?.installHints?.dockerPullMirror
-  if (!cmd) return
+async function copyText(text, onOk) {
+  const val = String(text || '').trim()
+  if (!val) return
   try {
-    await navigator.clipboard.writeText(cmd)
-    mirrorCopied.value = true
-    if (mirrorCopyTimer) clearTimeout(mirrorCopyTimer)
-    mirrorCopyTimer = setTimeout(() => { mirrorCopied.value = false }, 2000)
+    await navigator.clipboard.writeText(val)
+    onOk?.()
   } catch {}
+}
+
+async function copyLogPath(kind) {
+  if (kind === 'app') {
+    await copyText(info.value?.appLogPath, () => {
+      appLogCopied.value = true
+      if (appLogCopyTimer) clearTimeout(appLogCopyTimer)
+      appLogCopyTimer = setTimeout(() => { appLogCopied.value = false }, 2000)
+    })
+    return
+  }
+  await copyText(info.value?.logDir, () => {
+    logDirCopied.value = true
+    if (logDirCopyTimer) clearTimeout(logDirCopyTimer)
+    logDirCopyTimer = setTimeout(() => { logDirCopied.value = false }, 2000)
+  })
 }
 
 async function copyGroupId() {
@@ -362,8 +422,9 @@ onMounted(() => {
 onUnmounted(() => {
   if (typeof stopPwaWatch === 'function') stopPwaWatch()
   stopPwaWatch = null
-  if (mirrorCopyTimer) clearTimeout(mirrorCopyTimer)
   if (groupCopyTimer) clearTimeout(groupCopyTimer)
+  if (logDirCopyTimer) clearTimeout(logDirCopyTimer)
+  if (appLogCopyTimer) clearTimeout(appLogCopyTimer)
 })
 
 async function loadServerHealth() {
@@ -648,40 +709,6 @@ function formatDate(iso) {
   background: rgba(255, 180, 60, 0.12);
   border: 1px solid rgba(255, 180, 60, 0.28);
 }
-.update-mirror {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 10px 12px;
-  border-radius: 10px;
-  background: rgba(0, 0, 0, 0.16);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-}
-.update-mirror-label {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text);
-}
-.update-mirror-cmd {
-  display: block;
-  font-size: 12px;
-  line-height: 1.45;
-  word-break: break-all;
-  color: var(--accent);
-}
-.update-mirror-note {
-  margin: 0;
-  font-size: 11px;
-  color: var(--text-muted, var(--text-secondary));
-}
-.btn-xs {
-  padding: 2px 8px;
-  font-size: 11px;
-}
 
 .about-meta {
   padding: 12px 16px;
@@ -754,6 +781,59 @@ function formatDate(iso) {
   font-size: 12px;
   line-height: 1.5;
   color: var(--text-muted, var(--text-secondary));
+}
+.pwa-steps {
+  margin: 8px 0 0;
+  padding-left: 1.2rem;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+.pwa-steps li + li {
+  margin-top: 4px;
+}
+
+.log-path-card {
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.log-path-desc {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+.log-path-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.log-path-label {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  min-width: 3.5em;
+}
+.log-path-value {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  word-break: break-all;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--bg-input, rgba(0, 0, 0, 0.2));
+  border: 1px solid var(--border-light);
+  color: var(--text);
+}
+.log-path-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
 }
 
 .community-card {

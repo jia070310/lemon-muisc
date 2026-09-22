@@ -395,6 +395,15 @@
               {{ isPlayingFile(editingFile) && !isPaused ? '暂停' : '试听' }}
             </button>
             <button
+              v-if="!isBatchMode && editingFile"
+              class="btn-ghost btn-sm play-inline"
+              :disabled="renamingFile"
+              @click="renameEditingFile"
+              title="修改磁盘文件名"
+            >
+              {{ renamingFile ? '改名中…' : '改文件名' }}
+            </button>
+            <button
               v-if="showMobileEditSheet"
               type="button"
               class="btn-icon edit-sheet-close"
@@ -706,11 +715,12 @@ import {
   libraryTracks,
   groupArtists,
 } from '../stores/library.js'
-import { appConfirm } from '../stores/appDialog.js'
+import { appConfirm, appPrompt } from '../stores/appDialog.js'
 import {
   loadingPlay, isPaused, isPlayingItem, playItem, addToQueue, isInQueue,
-  refreshPlayingLocalMeta,
+  refreshPlayingLocalMeta, currentPlaying,
 } from '../stores/player.js'
+import { getTrackFilePath, isSameTrackPath } from '../utils/trackPath.js'
 import {
   tagMatchRunning,
   tagMatchPaused,
@@ -764,6 +774,7 @@ const filterText = ref('')
 const missingFilter = ref('all')
 const selectAll = ref(false)
 const saving = ref(false)
+const renamingFile = ref(false)
 const fetchSource = ref('tx')
 const fetchLoading = ref(false)
 const fetchResults = ref([])
@@ -1502,6 +1513,106 @@ async function autoRematchSelectedByFilename() {
   })
   if (!ok) return
   runTagMatch(targets, { forceOverwrite: true })
+}
+
+/** 修改当前编辑文件的磁盘文件名（同目录） */
+async function renameEditingFile() {
+  const f = editingFile.value
+  if (!f?.filePath || renamingFile.value) return
+  if (f._modified) {
+    const ok = await appConfirm({
+      title: '未保存的标签修改',
+      message: '当前文件有未保存的标签修改。改名不会写入标签；建议先保存再改名。',
+      hint: '仍可继续改名，未保存的标签改动会保留在当前会话中。',
+      confirmText: '继续改名',
+    })
+    if (!ok) return
+  }
+  const nextName = await appPrompt({
+    title: '修改文件名',
+    message: f.filePath,
+    inputLabel: '新文件名（可含扩展名）',
+    defaultValue: f.fileName || '',
+    confirmText: '重命名',
+  })
+  if (nextName == null) return
+  const trimmed = String(nextName).trim()
+  if (!trimmed || trimmed === f.fileName) return
+
+  renamingFile.value = true
+  try {
+    const res = await api.library.renameFile(f.filePath, trimmed)
+    const data = res?.data || {}
+    if (data.unchanged) {
+      showToast('文件名未变化', 'info')
+      return
+    }
+    const from = f.filePath
+    const to = data.to
+    const fileName = data.fileName || trimmed
+    const parsed = parseFilename(fileName)
+    applyRenameToLocalFile(from, to, fileName, parsed)
+    showToast(`已改名为 ${fileName}`, 'success')
+    try {
+      refreshPlayingLocalMeta(to)
+    } catch {}
+  } catch (e) {
+    showToast(e.message || '重命名失败', 'error')
+  } finally {
+    renamingFile.value = false
+  }
+}
+
+function applyRenameToLocalFile(from, to, fileName, parsed) {
+  const patch = (row) => {
+    if (!row || row.filePath !== from) return row
+    row.filePath = to
+    row.fileName = fileName
+    if (parsed) {
+      row.parsedTitle = parsed.title
+      row.parsedArtist = parsed.artist
+    }
+    return row
+  }
+  for (const row of files.value) patch(row)
+  if (editingFile.value?.filePath === from || editingFile.value?.filePath === to) {
+    patch(editingFile.value)
+  }
+  try {
+    const next = [...libraryTracks.value]
+    const idx = next.findIndex((t) => t.localPath === from || t.filePath === from)
+    if (idx >= 0) {
+      const existing = next[idx]
+      next[idx] = {
+        ...existing,
+        localPath: to,
+        filePath: to,
+        fileName,
+        parsedTitle: parsed?.title ?? existing.parsedTitle,
+        parsedArtist: parsed?.artist ?? existing.parsedArtist,
+        mtime: Date.now(),
+      }
+      libraryTracks.value = next
+    }
+  } catch {}
+  try {
+    const playing = currentPlaying.value
+    const playPath = playing ? getTrackFilePath(playing) : ''
+    if (playPath && isSameTrackPath(playPath, from)) {
+      currentPlaying.value = {
+        ...playing,
+        localPath: to,
+        filePath: to,
+        fileName,
+      }
+    }
+  } catch {}
+  saveTagEditorSession({
+    mode: browseMode.value,
+    activeDir: activeDir.value,
+    activeArtist: activeArtist.value,
+    files: files.value,
+  })
 }
 
 async function openEdit(f) {

@@ -34,6 +34,8 @@ DOWNLOAD_PATH=${music}
 CONFIG_PATH=${config}
 MUSIC_HOST_PATH=${music}
 DOWNLOADS_HOST_PATH=${downloads}
+LOG_PATH=${TRIM_PKGVAR}/log
+PKGVAR_PATH=${TRIM_PKGVAR}
 EOF
   save_paths "${music}" "${downloads}" "${config}" 2>/dev/null || true
 }

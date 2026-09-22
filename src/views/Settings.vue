@@ -222,14 +222,14 @@
                 <div class="setting-item-label">音乐库路径</div>
                 <div class="setting-item-desc">
                   用于音乐库、标签编辑等扫描本地歌曲，可添加一个或多个目录。请使用 NAS 绝对路径（如 <code>/vol1/1000/Music</code>），同一物理目录只会保留一条。
-                  {{ fnosAvailable ? '点击「选择文件夹」会调用系统文件管理器。' : '' }}
+                  {{ fnosAvailable ? '点击「选择文件夹」会调用系统文件管理器。' : '点击「添加路径」输入目录。' }}
                 </div>
               </div>
               <div class="setting-item-action">
                 <button v-if="fnosAvailable" class="btn-primary btn-sm" @click="browseAddPath" :disabled="pickingFolder">
                   {{ pickingFolder ? '选择中...' : '选择文件夹' }}
                 </button>
-                <button v-else class="btn-primary btn-sm" @click="addPath">添加路径</button>
+                <button v-else class="btn-primary btn-sm" @click="promptAddPath">添加路径</button>
               </div>
             </div>
 
@@ -261,11 +261,47 @@
               <div class="setting-item setting-item-path-row">
                 <div class="setting-item-info">
                   <div class="setting-item-label">
-                    自动扫描范围
-                    <span class="setting-item-label-hint">（进入音乐库 / 后台监测时使用）</span>
+                    音乐库热更新
+                    <span class="setting-item-label-hint">（低性能设备建议关闭）</span>
                   </div>
                   <div class="setting-item-desc">
-                    进入音乐库时会增量检查外部新增文件；也可开启下方后台监测定时同步。
+                    开启后：后台定时比对磁盘，进入音乐库时也会增量检查外部新增/删除并热更新列表。
+                    关闭后仅保留缓存与手动扫描，可明显减轻 NAS / 弱设备持续 IO 压力。
+                  </div>
+                </div>
+                <div class="setting-item-action">
+                  <label class="toggle">
+                    <input v-model="scanWatchEnabled" type="checkbox" @change="saveScanSettings" />
+                    <span class="slider"></span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="setting-item setting-item-path-row">
+                <div class="setting-item-info">
+                  <div class="setting-item-label">热更新间隔</div>
+                  <div class="setting-item-desc">仅后台定时监测生效。间隔越短越及时，大曲库或低性能设备建议 5 分钟及以上。</div>
+                </div>
+                <div class="setting-item-action">
+                  <AppSelect
+                    v-model="scanWatchIntervalSec"
+                    :options="scanWatchIntervalOptions"
+                    size="sm"
+                    min-width="140px"
+                    :disabled="!scanWatchEnabled"
+                    @change="saveScanSettings"
+                  />
+                </div>
+              </div>
+
+              <div class="setting-item setting-item-path-row">
+                <div class="setting-item-info">
+                  <div class="setting-item-label">
+                    自动扫描范围
+                    <span class="setting-item-label-hint">（热更新 / 手动扫描范围）</span>
+                  </div>
+                  <div class="setting-item-desc">
+                    热更新与进入音乐库时的增量检查使用此范围；也可在下方目录树勾选「自动」。
                     <template v-if="scanAutoMode === 'all'">当前为所有已添加目录。</template>
                     <template v-else>当前为目录列表中勾选「自动」的目录。</template>
                   </div>
@@ -281,45 +317,10 @@
                 </div>
               </div>
 
-              <div class="setting-item setting-item-path-row">
-                <div class="setting-item-info">
-                  <div class="setting-item-label">
-                    后台监测外部文件
-                    <span class="setting-item-label-hint">（关闭网页也会继续）</span>
-                  </div>
-                  <div class="setting-item-desc">
-                    定时比对磁盘与音乐库缓存；通过 NAS / 拷贝 / 其它工具放入的新歌会自动入库并热更新。
-                  </div>
-                </div>
-                <div class="setting-item-action">
-                  <label class="toggle">
-                    <input v-model="scanWatchEnabled" type="checkbox" @change="saveScanSettings" />
-                    <span class="slider"></span>
-                  </label>
-                </div>
-              </div>
-
-              <div class="setting-item setting-item-path-row">
-                <div class="setting-item-info">
-                  <div class="setting-item-label">监测间隔</div>
-                  <div class="setting-item-desc">间隔越短越及时，大曲库建议 2 分钟及以上。</div>
-                </div>
-                <div class="setting-item-action">
-                  <AppSelect
-                    v-model="scanWatchIntervalSec"
-                    :options="scanWatchIntervalOptions"
-                    size="sm"
-                    min-width="140px"
-                    :disabled="!scanWatchEnabled"
-                    @change="saveScanSettings"
-                  />
-                </div>
-              </div>
-
               <div class="setting-item setting-item-path-row setting-item-path-row-last">
                 <div class="setting-item-info">
                   <div class="setting-item-label">手动扫描</div>
-                  <div class="setting-item-desc">立即扫描目录列表中勾选「手动」的目录</div>
+                  <div class="setting-item-desc">立即扫描目录列表中勾选「手动」的目录（热更新关闭时仍可用）</div>
                 </div>
                 <div class="setting-item-action path-scan-toolbar">
                   <button
@@ -425,11 +426,6 @@
               </div>
             </div>
             <div v-else class="empty-hint">暂无音乐库目录，请添加或选择路径</div>
-
-            <div v-if="!fnosAvailable" class="path-manual">
-              <input v-model="newPath" placeholder="手动输入音乐库绝对路径，如 /vol1/1000/Music" class="path-input" @keydown.enter="addPath" />
-              <button class="btn-primary btn-sm" @click="addPath">添加</button>
-            </div>
           </section>
 
           <section class="paths-section paths-section-block">
@@ -453,65 +449,68 @@
               </div>
             </div>
 
-            <div class="path-block">
-              <div class="block-label">共用下载目录{{ isAdminUser ? '' : '（只读）' }}</div>
-              <div class="path-row path-row-static path-row-download">
-                <template v-if="isAdminUser && editingDownload">
-                  <input v-model="editDownloadValue" class="path-input" @keydown.enter="saveDownloadPathEdit" />
-                  <button class="btn-sm btn-primary" @click="saveDownloadPathEdit">保存</button>
-                  <button class="btn-sm btn-ghost" @click="cancelDownloadEdit">取消</button>
-                </template>
-                <template v-else>
-                  <span class="path-text path-col-path" :title="sharedDownloadPath">{{ sharedDownloadPath || '未设置' }}</span>
-                  <div class="path-actions">
-                    <button v-if="isAdminUser && !fnosAvailable" class="btn-sm btn-ghost" @click="startDownloadEdit">修改</button>
-                    <button
-                      v-if="isAdminUser && fnosAvailable"
-                      class="btn-sm btn-primary"
-                      @click="browseDownloadPath"
-                      :disabled="pickingFolder"
-                    >{{ pickingFolder ? '选择中...' : '选择' }}</button>
-                  </div>
-                </template>
+            <div class="setting-item setting-item-flat">
+              <div class="setting-item-info">
+                <div class="setting-item-label">共用下载目录{{ isAdminUser ? '' : '（只读）' }}</div>
+                <div class="setting-item-desc path-desc-mono" :title="sharedDownloadPath">
+                  {{ sharedDownloadPath || '未设置' }}
+                </div>
+              </div>
+              <div v-if="isAdminUser" class="setting-item-action">
+                <button
+                  v-if="fnosAvailable"
+                  type="button"
+                  class="btn-primary btn-sm"
+                  :disabled="pickingFolder"
+                  @click="browseDownloadPath"
+                >
+                  {{ pickingFolder ? '选择中…' : '选择文件夹' }}
+                </button>
+                <button
+                  v-else
+                  type="button"
+                  class="btn-primary btn-sm"
+                  @click="promptEditSharedDownload"
+                >
+                  修改
+                </button>
               </div>
             </div>
 
-            <div v-if="isAdminUser && !fnosAvailable" class="path-manual path-manual-download">
-              <input v-model="newDownloadPath" placeholder="手动输入共用下载目录绝对路径" class="path-input" @keydown.enter="setDownloadPathManual" />
-              <button class="btn-primary btn-sm" @click="setDownloadPathManual">应用共用路径</button>
-            </div>
-
-            <div v-if="downloadPathMode === 'personal'" class="path-block" style="margin-top: 12px">
-              <div class="block-label">我的专属下载目录</div>
-              <div class="path-row path-row-static path-row-download">
-                <template v-if="editingPersonalDownload">
-                  <input v-model="editPersonalDownloadValue" class="path-input" @keydown.enter="savePersonalDownloadEdit" />
-                  <button class="btn-sm btn-primary" @click="savePersonalDownloadEdit">保存</button>
-                  <button class="btn-sm btn-ghost" @click="cancelPersonalDownloadEdit">取消</button>
-                </template>
-                <template v-else>
-                  <span class="path-text path-col-path" :title="personalDownloadPath">{{ personalDownloadPath || '未设置' }}</span>
-                  <div class="path-actions">
-                    <button v-if="!fnosAvailable" class="btn-sm btn-ghost" @click="startPersonalDownloadEdit">修改</button>
-                    <button
-                      v-if="fnosAvailable"
-                      class="btn-sm btn-primary"
-                      @click="browsePersonalDownloadPath"
-                      :disabled="pickingFolder"
-                    >{{ pickingFolder ? '选择中...' : '选择' }}</button>
-                  </div>
-                </template>
+            <div v-if="downloadPathMode === 'personal'" class="setting-item setting-item-flat">
+              <div class="setting-item-info">
+                <div class="setting-item-label">我的专属下载目录</div>
+                <div class="setting-item-desc path-desc-mono" :title="personalDownloadPath">
+                  {{ personalDownloadPath || '未设置（将使用共用目录下的用户名子文件夹）' }}
+                </div>
               </div>
-              <div v-if="!fnosAvailable" class="path-manual path-manual-download" style="margin-top: 8px">
-                <input v-model="newPersonalDownloadPath" placeholder="手动输入个人下载目录，如 /vol1/1000/Music/用户名" class="path-input" @keydown.enter="setPersonalDownloadManual" />
-                <button class="btn-primary btn-sm" @click="setPersonalDownloadManual">应用个人路径</button>
+              <div class="setting-item-action">
+                <button
+                  v-if="fnosAvailable"
+                  type="button"
+                  class="btn-primary btn-sm"
+                  :disabled="pickingFolder"
+                  @click="browsePersonalDownloadPath"
+                >
+                  {{ pickingFolder ? '选择中…' : '选择文件夹' }}
+                </button>
+                <button
+                  v-else
+                  type="button"
+                  class="btn-primary btn-sm"
+                  @click="promptEditPersonalDownload"
+                >
+                  修改
+                </button>
               </div>
             </div>
 
-            <div class="path-block" style="margin-top: 12px">
-              <div class="block-label">当前生效目录</div>
-              <div class="path-row path-row-static">
-                <span class="path-text path-col-path" :title="downloadPath">{{ downloadPath || '未设置' }}</span>
+            <div class="setting-item setting-item-flat">
+              <div class="setting-item-info">
+                <div class="setting-item-label">当前生效目录</div>
+                <div class="setting-item-desc path-desc-mono" :title="downloadPath">
+                  {{ downloadPath || '未设置' }}
+                </div>
               </div>
             </div>
           </section>
@@ -1142,12 +1141,13 @@ import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from '../api.js'
 import { loadCoverStyle, loadPlayerSettings, setAutoMatchOnPlay, PLAYER_AUTO_MATCH_ON_PLAY_KEY, PLAYER_PLAY_QUALITY_KEY, PLAY_QUALITY_OPTIONS, normalizePlayQuality } from '../stores/player.js'
-import { scanLibrary, libraryScanning, PLAYLIST_REMOTE_SYNC_DAYS_KEY, setPlaylistRemoteSyncDays, getPlaylistRemoteSyncDays, LIBRARY_SONG_COLUMNS_KEY, setLibrarySongColumns, normalizeLibrarySongColumns } from '../stores/library.js'
+import { scanLibrary, libraryScanning, PLAYLIST_REMOTE_SYNC_DAYS_KEY, setPlaylistRemoteSyncDays, getPlaylistRemoteSyncDays, LIBRARY_SONG_COLUMNS_KEY, setLibrarySongColumns, normalizeLibrarySongColumns, setLibraryHotUpdateEnabled } from '../stores/library.js'
 import { reloadSearchSources } from '../stores/search.js'
 import { reloadDiscoverSources } from '../stores/discover.js'
 import { applySourceFallbackMode, SOURCE_FALLBACK_MODE_KEY } from '../stores/sourceFallback.js'
 import { isAdmin as isAdminUser, currentUser as currentAuthUser, patchLocalUser } from '../utils/auth.js'
 import { canPickFolder, pickFolder } from '../utils/fnos.js'
+import { appPrompt } from '../stores/appDialog.js'
 import { applyTheme, theme as currentTheme, THEME_KEY, COLOR_SCHEME_KEY, CUSTOM_COLOR_KEY, COLOR_SCHEME_OPTIONS, applyColorScheme, setCustomColor, normalizeHex, colorScheme as currentColorScheme, customColor as currentCustomColor } from '../utils/theme.js'
 import AppSelect from '../components/AppSelect.vue'
 import MailConfigGuide from '../components/MailConfigGuide.vue'
@@ -1258,21 +1258,15 @@ const sharedDownloadPath = ref('')
 const personalDownloadPath = ref('')
 const downloadPathMode = ref('shared')
 const newPath = ref('')
-const newDownloadPath = ref('')
-const newPersonalDownloadPath = ref('')
 const editingPath = ref('')
 const editPathValue = ref('')
-const editingDownload = ref(false)
-const editDownloadValue = ref('')
-const editingPersonalDownload = ref(false)
-const editPersonalDownloadValue = ref('')
+const editFromPicker = ref(false)
 const downloadPathModeOptions = [
   { value: 'shared', label: '共用目录' },
   { value: 'personal', label: '我的专属目录' },
 ]
 const fnosAvailable = ref(false)
 const pickingFolder = ref(false)
-const editFromPicker = ref(false)
 const activeTab = ref('paths')
 const needsPathSetup = ref(false)
 const mountInfo = ref(null)
@@ -1326,6 +1320,8 @@ const scanWatchIntervalOptions = [
   { value: 120, label: '2 分钟' },
   { value: 300, label: '5 分钟' },
   { value: 600, label: '10 分钟' },
+  { value: 900, label: '15 分钟' },
+  { value: 1800, label: '30 分钟' },
 ]
 const manualScanDirs = ref([])
 const scanTreeCache = ref({})
@@ -1882,6 +1878,7 @@ async function loadScanSettings() {
     scanAutoMode.value = res.data?.autoMode || 'all'
     autoScanDirs.value = res.data?.autoDirs || []
     scanWatchEnabled.value = res.data?.watchEnabled !== false
+    setLibraryHotUpdateEnabled(scanWatchEnabled.value)
     const interval = Number(res.data?.watchIntervalSec)
     scanWatchIntervalSec.value = Number.isFinite(interval) ? interval : 120
   } catch {}
@@ -1897,6 +1894,7 @@ async function saveScanSettings() {
     })
     autoScanDirs.value = res.data?.autoDirs || []
     scanWatchEnabled.value = res.data?.watchEnabled !== false
+    setLibraryHotUpdateEnabled(scanWatchEnabled.value)
     const interval = Number(res.data?.watchIntervalSec)
     if (Number.isFinite(interval)) scanWatchIntervalSec.value = interval
     showToast('扫描设置已保存', 'success')
@@ -2147,18 +2145,45 @@ async function loadPaths() {
 }
 
 async function addPath(fromPicker = false) {
+  // 模板里若写成 @click="addPath" 会把 MouseEvent 当成 fromPicker；统一成布尔
+  const viaPicker = fromPicker === true
   const val = newPath.value.trim()
-  if (!val) return
+  if (!val) {
+    showToast('请先输入音乐库绝对路径', 'info')
+    return
+  }
   try {
-    const res = await api.paths.add(val, fromPicker)
+    const res = await api.paths.add(val, viaPicker)
     musicPaths.value = res.musicPaths || res.data || []
     applyDownloadPathInfo(res)
     newPath.value = ''
-    showToast(fromPicker ? '音乐库路径已添加' : '音乐库路径已添加', 'success')
+    showToast('音乐库路径已添加', 'success')
     await loadLibraryStats()
+    await loadScanSettings()
+    initScanTreeExpansion()
   } catch (e) {
     showToast(e.message, 'error')
   }
+}
+
+/** 无飞牛选目录能力时：弹窗输入路径 */
+async function promptAddPath() {
+  const val = await appPrompt({
+    title: '添加音乐库路径',
+    message: '请输入 NAS 上的绝对路径（同一物理目录只会保留一条）',
+    inputLabel: '目录路径',
+    placeholder: '/vol1/1000/Music',
+    defaultValue: newPath.value || '',
+    confirmText: '添加',
+  })
+  if (val == null) return
+  const trimmed = String(val).trim()
+  if (!trimmed) {
+    showToast('请输入路径', 'info')
+    return
+  }
+  newPath.value = trimmed
+  await addPath(false)
 }
 
 async function browseAddPath() {
@@ -2248,16 +2273,6 @@ async function removePath(dirPath) {
   }
 }
 
-function startDownloadEdit() {
-  editingDownload.value = true
-  editDownloadValue.value = sharedDownloadPath.value || downloadPath.value
-}
-
-function cancelDownloadEdit() {
-  editingDownload.value = false
-  editDownloadValue.value = ''
-}
-
 function applyDownloadPathInfo(res = {}) {
   downloadPath.value = res.downloadPath || ''
   sharedDownloadPath.value = res.sharedDownloadPath || res.downloadPath || ''
@@ -2276,81 +2291,32 @@ async function onDownloadPathModeChange() {
   }
 }
 
-function startPersonalDownloadEdit() {
-  editingPersonalDownload.value = true
-  editPersonalDownloadValue.value = personalDownloadPath.value
-}
-
-function cancelPersonalDownloadEdit() {
-  editingPersonalDownload.value = false
-  editPersonalDownloadValue.value = ''
-}
-
-async function savePersonalDownloadEdit() {
-  const val = editPersonalDownloadValue.value.trim()
-  if (!val) return
-  try {
-    const res = await api.paths.setPersonalDownload(val, false, true)
-    applyDownloadPathInfo(res)
-    cancelPersonalDownloadEdit()
-    showToast('个人下载路径已更新', 'success')
-  } catch (e) {
-    showToast(e.message, 'error')
+async function applySharedDownloadPath(path, fromPicker = false) {
+  const val = String(path || '').trim()
+  if (!val) {
+    showToast('请输入共用下载目录路径', 'info')
+    return
   }
-}
-
-async function setPersonalDownloadManual() {
-  const val = newPersonalDownloadPath.value.trim()
-  if (!val) return
   try {
-    const res = await api.paths.setPersonalDownload(val, false, true)
+    const res = await api.paths.setDownload(val, fromPicker === true)
     applyDownloadPathInfo(res)
-    newPersonalDownloadPath.value = ''
-    showToast('个人下载路径已更新', 'success')
-  } catch (e) {
-    showToast(e.message, 'error')
-  }
-}
-
-async function browsePersonalDownloadPath() {
-  pickingFolder.value = true
-  try {
-    const path = await pickFolder({ title: '选择我的专属下载目录' })
-    if (!path) return
-    const res = await api.paths.setPersonalDownload(path, true, true)
-    applyDownloadPathInfo(res)
-    showToast('个人下载路径已更新', 'success')
-  } catch (e) {
-    if (e.message && !e.message.includes('未选择')) showToast(e.message, 'error')
-  } finally {
-    pickingFolder.value = false
-  }
-}
-
-async function saveDownloadPathEdit() {
-  const val = editDownloadValue.value.trim()
-  if (!val) return
-  try {
-    const res = await api.paths.setDownload(val, false)
-    applyDownloadPathInfo(res)
-    cancelDownloadEdit()
     showToast('共用下载路径已更新', 'success')
   } catch (e) {
     showToast(e.message, 'error')
   }
 }
 
-async function setDownloadPathManual() {
-  const val = newDownloadPath.value.trim()
-  if (!val) return
-  try {
-    const res = await api.paths.setDownload(val, false)
-    applyDownloadPathInfo(res)
-    newDownloadPath.value = ''
-    showToast('共用下载路径已更新', 'success')
-  } catch (e) {
-    showToast(e.message, 'error')
-  }
+async function promptEditSharedDownload() {
+  const val = await appPrompt({
+    title: '修改共用下载目录',
+    message: '请输入 NAS 绝对路径',
+    inputLabel: '目录路径',
+    placeholder: '/vol1/1000/Music/Download',
+    defaultValue: sharedDownloadPath.value || '',
+    confirmText: '保存',
+  })
+  if (val == null) return
+  await applySharedDownloadPath(val, false)
 }
 
 async function browseDownloadPath() {
@@ -2358,9 +2324,48 @@ async function browseDownloadPath() {
   try {
     const path = await pickFolder({ title: '选择共用下载保存目录' })
     if (!path) return
-    const res = await api.paths.setDownload(path, true)
+    await applySharedDownloadPath(path, true)
+  } catch (e) {
+    if (e.message && !e.message.includes('未选择')) showToast(e.message, 'error')
+  } finally {
+    pickingFolder.value = false
+  }
+}
+
+async function applyPersonalDownloadPath(path, fromPicker = false) {
+  const val = String(path || '').trim()
+  if (!val) {
+    showToast('请输入个人下载目录路径', 'info')
+    return
+  }
+  try {
+    const res = await api.paths.setPersonalDownload(val, fromPicker === true, true)
     applyDownloadPathInfo(res)
-    showToast('共用下载路径已更新', 'success')
+    showToast('个人下载路径已更新', 'success')
+  } catch (e) {
+    showToast(e.message, 'error')
+  }
+}
+
+async function promptEditPersonalDownload() {
+  const val = await appPrompt({
+    title: '修改专属下载目录',
+    message: '请输入当前账号的专属下载目录（绝对路径）',
+    inputLabel: '目录路径',
+    placeholder: '/vol1/1000/Music/用户名',
+    defaultValue: personalDownloadPath.value || '',
+    confirmText: '保存',
+  })
+  if (val == null) return
+  await applyPersonalDownloadPath(val, false)
+}
+
+async function browsePersonalDownloadPath() {
+  pickingFolder.value = true
+  try {
+    const path = await pickFolder({ title: '选择我的专属下载目录' })
+    if (!path) return
+    await applyPersonalDownloadPath(path, true)
   } catch (e) {
     if (e.message && !e.message.includes('未选择')) showToast(e.message, 'error')
   } finally {
@@ -2857,6 +2862,25 @@ function showToast(text, type = 'info') {
   border: 1px solid var(--border-light);
   border-bottom: 1px solid var(--border-light);
 }
+/* 覆盖 .setting-item 的 padding:16px 0，避免底色与右侧控件错位 */
+.setting-item.setting-item-flat {
+  padding: 12px 14px;
+  border-bottom: none;
+  align-items: center;
+}
+.setting-item.setting-item-flat .setting-item-action {
+  display: flex;
+  align-items: center;
+  align-self: center;
+}
+.setting-item.setting-item-flat .setting-item-action .app-select,
+.setting-item.setting-item-flat .setting-item-action .btn-sm {
+  margin: 0;
+}
+.path-desc-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  word-break: break-all;
+}
 
 .setup-alert {
   margin-bottom: 16px;
@@ -3193,7 +3217,16 @@ function showToast(text, type = 'info') {
 .path-text { min-width: 0; font-size: 13px; font-family: monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .path-actions { display: flex; gap: 6px; flex-shrink: 0; }
 .path-manual { display: flex; gap: 8px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border-light); }
-.path-input { flex: 1; min-width: 0; font-size: 13px; }
+.path-input {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-input, var(--bg));
+  color: var(--text);
+}
 .empty-hint { font-size: 13px; color: var(--text-muted); padding: 12px 0; }
 
 .source-tip {

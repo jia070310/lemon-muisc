@@ -37,6 +37,10 @@ export const libraryScanCurrent = ref(0)
 export const libraryScanTotal = ref(0)
 /** 音乐库歌曲网格列数：2 | 3 | 4 */
 export const librarySongColumns = ref(2)
+/** 音乐库热更新（后台监测 + 进入时增量比对）；低性能 NAS 建议关闭 */
+export const libraryHotUpdateEnabled = ref(true)
+let hotUpdateSettingLoaded = false
+let hotUpdateSettingPromise = null
 
 export const LIBRARY_SONG_COLUMNS_KEY = 'ui.librarySongColumns'
 
@@ -59,6 +63,30 @@ export async function loadLibrarySongColumns(apiClient) {
     setLibrarySongColumns(2)
   }
   return librarySongColumns.value
+}
+
+export function setLibraryHotUpdateEnabled(value) {
+  libraryHotUpdateEnabled.value = value !== false
+  hotUpdateSettingLoaded = true
+  return libraryHotUpdateEnabled.value
+}
+
+/** 与服务端 library.scan.watchEnabled 同步（后台监测 + 进入库增量比对） */
+export async function loadLibraryHotUpdateSetting(apiClient) {
+  if (hotUpdateSettingLoaded) return libraryHotUpdateEnabled.value
+  if (hotUpdateSettingPromise) return hotUpdateSettingPromise
+  hotUpdateSettingPromise = (async () => {
+    try {
+      const res = await apiClient?.library?.scanSettings?.get?.()
+      setLibraryHotUpdateEnabled(res?.data?.watchEnabled !== false)
+    } catch {
+      setLibraryHotUpdateEnabled(true)
+    } finally {
+      hotUpdateSettingPromise = null
+    }
+    return libraryHotUpdateEnabled.value
+  })()
+  return hotUpdateSettingPromise
 }
 
 export const libraryScanning = computed(() => libraryLoading.value || libraryMetaLoading.value)
@@ -562,6 +590,8 @@ export function resetLibraryUserData() {
     userDataPersistTimer = null
   }
   activeUserId = ''
+  hotUpdateSettingLoaded = false
+  hotUpdateSettingPromise = null
   clearInMemoryUserData()
 }
 
@@ -1613,6 +1643,31 @@ export async function scanLibrary(api, { force = false, resync = false, dirs: re
     if (libraryScanned.value && !force && !resync) return null
 
     const softResync = resync && !force && libraryScanned.value && libraryTracks.value.length > 0
+
+    // 热更新关闭：进入音乐库只读缓存，不触发磁盘增量比对（手动「刷新」force 仍可用）
+    if (resync && !force) {
+      await loadLibraryHotUpdateSetting(api)
+      if (!libraryHotUpdateEnabled.value) {
+        if (!libraryTracks.value.length && libraryTrackTotal.value <= 0) {
+          try {
+            libraryLoading.value = true
+            await reloadTracksFromCache(api)
+          } catch {}
+        }
+        libraryScanned.value = true
+        libraryLoading.value = false
+        libraryMetaLoading.value = false
+        const result = {
+          totalTracks: libraryTracks.value.length || libraryTrackTotal.value || 0,
+          scannedTags: 0,
+          hadPending: false,
+          skippedHotUpdate: true,
+        }
+        onComplete?.(result, { force, resync })
+        return result
+      }
+    }
+
     if (!softResync) {
       libraryLoading.value = true
       libraryMetaLoading.value = false

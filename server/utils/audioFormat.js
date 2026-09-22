@@ -126,3 +126,73 @@ export function assertLosslessContentType(contentType, quality) {
     throw createFakeLosslessError(`Content-Type=${ct}（像是错误页而非音频）`)
   }
 }
+
+/** 容器类型 → 建议扩展名（含点） */
+export function extForAudioContainer(kind) {
+  const map = {
+    flac: '.flac',
+    mp3: '.mp3',
+    ogg: '.ogg',
+    wav: '.wav',
+    m4a: '.m4a',
+    ape: '.ape',
+  }
+  return map[String(kind || '').toLowerCase()] || ''
+}
+
+/**
+ * 检查扩展名为 .flac 的文件是否为伪无损（文件头不符或过小）。
+ * @returns {{ fake: boolean, kind: string, size: number, reason: string, suggestedExt: string, issue: string }}
+ */
+export function inspectFakeFlacFile(filePath) {
+  const kind = detectAudioContainer(filePath)
+  let size = 0
+  try {
+    size = fs.statSync(filePath).size || 0
+  } catch {
+    return {
+      fake: true,
+      kind: 'unknown',
+      size: 0,
+      reason: '无法读取文件',
+      suggestedExt: '',
+      issue: 'unreadable',
+    }
+  }
+
+  const suggestedExt = extForAudioContainer(kind)
+
+  if (kind === 'flac') {
+    if (size > 0 && size < 256 * 1024) {
+      return {
+        fake: true,
+        kind,
+        size,
+        reason: `文件过小 ${Math.round(size / 1024)}KB，不像完整 FLAC`,
+        suggestedExt: '.flac',
+        issue: 'tiny',
+      }
+    }
+    return { fake: false, kind, size, reason: '', suggestedExt: '.flac', issue: '' }
+  }
+
+  if (kind === 'mp3' || kind === 'm4a' || kind === 'ogg' || kind === 'wav' || kind === 'ape') {
+    return {
+      fake: true,
+      kind,
+      size,
+      reason: `文件头为 ${kind.toUpperCase()}，不是 FLAC`,
+      suggestedExt,
+      issue: 'mismatch',
+    }
+  }
+
+  return {
+    fake: true,
+    kind: 'unknown',
+    size,
+    reason: '无法识别为有效 FLAC',
+    suggestedExt: '',
+    issue: 'unknown',
+  }
+}

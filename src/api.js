@@ -446,6 +446,16 @@ export const api = {
       body: { filePaths: Array.isArray(filePaths) ? filePaths : [filePaths] },
       timeout: 60000,
     }),
+    scanFakeFlac: (dirPath = '') => request('/library/scan-fake-flac', {
+      method: 'POST',
+      body: dirPath ? { dirPath } : {},
+      timeout: 300000,
+    }),
+    renameFile: (filePath, newName) => request('/library/rename-file', {
+      method: 'POST',
+      body: { filePath, newName },
+      timeout: 30000,
+    }),
   },
   backup: {
     export: () => request('/backup/export', { timeout: 60000 }),

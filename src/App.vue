@@ -438,8 +438,12 @@
       :danger="appDialogState.danger"
       :busy="appDialogState.busy"
       :busy-text="appDialogState.busyText"
+      :input-value="appDialogState.inputValue"
+      :input-placeholder="appDialogState.inputPlaceholder"
+      :input-label="appDialogState.inputLabel"
       @confirm="confirmAppDialog"
       @cancel="cancelAppDialog"
+      @update:input-value="setAppDialogInput"
     />
   </div>
 </template>
@@ -461,7 +465,7 @@ import { formatUserError } from './utils/userError.js'
 import {
   playlistPickTarget, stopPlaylistPick,
   initLibraryHotReload, initLibraryUserData, resetLibraryUserData, libraryHotNotice, clearLibraryHotNotice,
-  loadLibrarySongColumns,
+  loadLibrarySongColumns, loadLibraryHotUpdateSetting,
 } from './stores/library.js'
 import {
   tagMatchRunning, tagMatchProgress, tagMatchResult, clearTagMatchResult,
@@ -486,6 +490,7 @@ import {
   appAlert,
   confirmAppDialog,
   cancelAppDialog,
+  setAppDialogInput,
 } from './stores/appDialog.js'
 import {
   noActiveSourcePrompt,
@@ -1075,6 +1080,7 @@ watch(
     if (valid && userId) {
       initLibraryUserData(api, currentUser.value).catch(() => {})
       loadLibrarySongColumns(api).catch(() => {})
+      loadLibraryHotUpdateSetting(api).catch(() => {})
     } else {
       resetLibraryUserData()
     }

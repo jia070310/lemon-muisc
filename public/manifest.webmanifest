@@ -3,16 +3,17 @@
   "name": "柠檬音乐下载",
   "short_name": "柠檬音乐",
   "description": "飞牛 NAS 柠檬音乐：搜索、下载与本地音乐库",
-  "start_url": "/?source=pwa",
+  "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "display_override": ["standalone", "minimal-ui"],
+  "display_override": ["standalone", "minimal-ui", "browser"],
   "orientation": "any",
   "background_color": "#FFF4E8",
   "theme_color": "#f07018",
   "lang": "zh-CN",
   "dir": "ltr",
   "categories": ["music", "entertainment"],
+  "prefer_related_applications": false,
   "icons": [
     {
       "src": "/pwa/icon-192.png",
@@ -31,6 +32,12 @@
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"
+    },
+    {
+      "src": "/pwa/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
     }
   ]
 }

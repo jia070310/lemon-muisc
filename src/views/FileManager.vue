@@ -2,7 +2,7 @@
   <div class="file-manager-page" :class="{ 'fm-embed-tag': activeTab === 'tag' }">
     <div class="fm-head">
       <h2>文件管理</h2>
-      <p class="fm-desc">管理本地音乐文件：编辑标签、查找重复曲目，或按歌手整理迁移音乐库</p>
+      <p class="fm-desc">管理本地音乐文件：编辑标签、查找重复曲目、检测伪 FLAC，或按歌手整理迁移音乐库</p>
     </div>
 
     <div class="fm-tabs">
@@ -21,6 +21,14 @@
         @click="setTab('dedup')"
       >
         去重
+      </button>
+      <button
+        type="button"
+        class="fm-tab"
+        :class="{ active: activeTab === 'fake-flac' }"
+        @click="setTab('fake-flac')"
+      >
+        伪 FLAC
       </button>
       <button
         type="button"
@@ -127,6 +135,106 @@
           </ul>
         </div>
       </div>
+    </section>
+
+    <!-- ============ 伪 FLAC ============ -->
+    <section v-if="activeTab === 'fake-flac'" class="fm-panel">
+      <div class="fm-panel-toolbar">
+        <button
+          type="button"
+          class="btn-primary btn-sm"
+          :disabled="fakeScanning"
+          @click="scanFakeFlac"
+        >
+          {{ fakeScanning ? '扫描中…' : '扫描伪 FLAC' }}
+        </button>
+        <template v-if="fakeResult.files.length">
+          <span class="fm-summary">
+            扫描 {{ fakeResult.scanned }} 个 .flac，可疑 {{ fakeResult.fakeCount }} 个
+            <span v-if="fakeResult.truncated">（已截断至 500）</span>
+          </span>
+          <div class="fm-batch-actions">
+            <button
+              type="button"
+              class="btn-ghost btn-sm"
+              :disabled="!fakeSelected.size || fakeBusy"
+              @click="fixFakeExtSelected"
+            >
+              按检测结果改扩展名（{{ fakeSelected.size }}）
+            </button>
+            <button
+              type="button"
+              class="btn-ghost btn-sm"
+              :disabled="!fakeSelected.size || fakeBusy"
+              @click="deleteFakeSelected"
+            >
+              删除选中（{{ fakeSelected.size }}）
+            </button>
+            <button
+              type="button"
+              class="btn-ghost btn-sm"
+              :disabled="!fakeSelected.size"
+              @click="fakeSelected = new Set()"
+            >
+              取消选择
+            </button>
+          </div>
+        </template>
+      </div>
+
+      <p class="fm-hint">
+        读取文件头判断真实容器。扩展名是 .flac 但实际为 MP3/M4A 等，或文件过小的，会列在下方。
+        「改扩展名」只改后缀，不重新编码。
+      </p>
+
+      <div v-if="!fakeResult.files.length" class="fm-empty">
+        <p>{{ fakeScanned ? '未发现伪 FLAC' : '点击「扫描伪 FLAC」检查音乐库与下载目录' }}</p>
+      </div>
+
+      <ul v-else class="fake-list">
+        <li v-for="f in fakeResult.files" :key="f.filePath" class="fake-row">
+          <label class="dup-check">
+            <input
+              type="checkbox"
+              :checked="fakeSelected.has(f.filePath)"
+              @change="toggleFakeSelect(f.filePath)"
+            />
+          </label>
+          <div class="fake-meta">
+            <code class="dup-path" :title="f.filePath">{{ f.fileName || f.filePath }}</code>
+            <span class="fake-reason">{{ f.reason }}</span>
+          </div>
+          <span v-if="f.kind" class="dup-meta">实测 {{ String(f.kind).toUpperCase() }}</span>
+          <span v-if="f.size" class="dup-meta">{{ formatFakeSize(f.size) }}</span>
+          <span class="dup-file-actions">
+            <button
+              type="button"
+              class="btn-ghost btn-sm"
+              :disabled="fakeBusy || !f.suggestedExt || f.suggestedExt === '.flac'"
+              :title="f.suggestedExt ? `重命名为 *${f.suggestedExt}` : '无建议扩展名'"
+              @click="fixFakeExt(f)"
+            >
+              改扩展名
+            </button>
+            <button
+              type="button"
+              class="btn-ghost btn-sm"
+              :disabled="fakeBusy"
+              @click="renameFakeFile(f)"
+            >
+              改文件名
+            </button>
+            <button
+              type="button"
+              class="btn-ghost btn-sm"
+              :disabled="fakeBusy"
+              @click="deleteFakeFile(f)"
+            >
+              删除
+            </button>
+          </span>
+        </li>
+      </ul>
     </section>
 
     <!-- ============ 整理 ============ -->
@@ -331,7 +439,7 @@
 import { ref, computed, watch, onMounted, onErrorCaptured } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from '../api.js'
-import { appConfirm } from '../stores/appDialog.js'
+import { appConfirm, appPrompt } from '../stores/appDialog.js'
 import { reloadLibraryTracksFromServer } from '../stores/library.js'
 import TagEditor from './TagEditor.vue'
 
@@ -340,7 +448,7 @@ defineOptions({ name: 'FileManager' })
 const route = useRoute()
 const router = useRouter()
 
-const TAB_IDS = ['tag', 'dedup', 'organize']
+const TAB_IDS = ['tag', 'dedup', 'fake-flac', 'organize']
 
 function normalizeTab(raw) {
   const t = String(raw || '').trim()
@@ -558,6 +666,209 @@ async function runBatchDelete(list) {
     alert(e.message || '批量删除失败')
   } finally {
     batchDeleting.value = false
+  }
+}
+
+/* ---------- 伪 FLAC ---------- */
+const fakeScanning = ref(false)
+const fakeScanned = ref(false)
+const fakeResult = ref({ scanned: 0, fakeCount: 0, truncated: false, files: [] })
+const fakeSelected = ref(new Set())
+const fakeBusy = ref(false)
+
+function formatFakeSize(size) {
+  const n = Number(size) || 0
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function toggleFakeSelect(filePath) {
+  const next = new Set(fakeSelected.value)
+  if (next.has(filePath)) next.delete(filePath)
+  else next.add(filePath)
+  fakeSelected.value = next
+}
+
+function pruneFakeResult(removedPaths) {
+  const gone = new Set(removedPaths || [])
+  if (!gone.size) return
+  const files = (fakeResult.value.files || []).filter((f) => !gone.has(f.filePath))
+  fakeResult.value = {
+    ...fakeResult.value,
+    files,
+    fakeCount: files.length,
+  }
+  const next = new Set([...fakeSelected.value].filter((p) => !gone.has(p)))
+  fakeSelected.value = next
+}
+
+function applyFakeRenameLocal(from, to, fileName) {
+  const files = (fakeResult.value.files || []).map((f) => {
+    if (f.filePath !== from) return f
+    return { ...f, filePath: to, fileName: fileName || f.fileName }
+  })
+  fakeResult.value = { ...fakeResult.value, files, fakeCount: files.length }
+  if (fakeSelected.value.has(from)) {
+    const next = new Set(fakeSelected.value)
+    next.delete(from)
+    next.add(to)
+    fakeSelected.value = next
+  }
+}
+
+async function scanFakeFlac() {
+  if (fakeScanning.value) return
+  fakeScanning.value = true
+  try {
+    const res = await api.library.scanFakeFlac()
+    fakeResult.value = res?.data || { scanned: 0, fakeCount: 0, truncated: false, files: [] }
+    fakeScanned.value = true
+    fakeSelected.value = new Set()
+  } catch (e) {
+    alert(e.message || '扫描失败')
+  } finally {
+    fakeScanning.value = false
+  }
+}
+
+async function renameFakeFile(file) {
+  if (!file?.filePath || fakeBusy.value) return
+  const nextName = await appPrompt({
+    title: '修改文件名',
+    message: file.filePath,
+    inputLabel: '新文件名（可含扩展名）',
+    defaultValue: file.fileName || '',
+    confirmText: '重命名',
+  })
+  if (nextName == null) return
+  const trimmed = String(nextName).trim()
+  if (!trimmed || trimmed === file.fileName) return
+  fakeBusy.value = true
+  try {
+    const res = await api.library.renameFile(file.filePath, trimmed)
+    const data = res?.data || {}
+    if (data.unchanged) return
+    applyFakeRenameLocal(file.filePath, data.to, data.fileName)
+  } catch (e) {
+    alert(e.message || '重命名失败')
+  } finally {
+    fakeBusy.value = false
+  }
+}
+
+async function fixFakeExt(file) {
+  if (!file?.filePath || !file.suggestedExt || file.suggestedExt === '.flac' || fakeBusy.value) return
+  const base = String(file.fileName || '').replace(/\.[^.]+$/, '')
+  const newName = `${base}${file.suggestedExt}`
+  const ok = await appConfirm({
+    title: '修正扩展名',
+    message: `将\n${file.fileName}\n重命名为\n${newName}`,
+    hint: '只改后缀，不重新编码。若同目录已有同名目标文件会失败。',
+    confirmText: '改扩展名',
+  })
+  if (!ok) return
+  fakeBusy.value = true
+  try {
+    const res = await api.library.renameFile(file.filePath, newName)
+    const data = res?.data || {}
+    if (data.unchanged) return
+    // 扩展名已正确则不再视为伪 flac，从列表移除
+    pruneFakeResult([file.filePath])
+  } catch (e) {
+    alert(e.message || '改扩展名失败')
+  } finally {
+    fakeBusy.value = false
+  }
+}
+
+async function fixFakeExtSelected() {
+  const list = (fakeResult.value.files || []).filter(
+    (f) => fakeSelected.value.has(f.filePath) && f.suggestedExt && f.suggestedExt !== '.flac',
+  )
+  if (!list.length) {
+    alert('选中项没有可改的扩展名（需识别出真实容器）')
+    return
+  }
+  const ok = await appConfirm({
+    title: '批量改扩展名',
+    message: `将按检测结果修正 ${list.length} 个文件的扩展名（如 .flac → .mp3）。`,
+    confirmText: '开始',
+  })
+  if (!ok) return
+  fakeBusy.value = true
+  const done = []
+  const failed = []
+  try {
+    for (const f of list) {
+      const base = String(f.fileName || '').replace(/\.[^.]+$/, '')
+      const newName = `${base}${f.suggestedExt}`
+      try {
+        await api.library.renameFile(f.filePath, newName)
+        done.push(f.filePath)
+      } catch (e) {
+        failed.push({ filePath: f.filePath, error: e.message || '失败' })
+      }
+    }
+    pruneFakeResult(done)
+    if (failed.length) {
+      alert(`已修正 ${done.length} 个，${failed.length} 个失败：${failed[0]?.error || ''}`)
+    }
+  } finally {
+    fakeBusy.value = false
+  }
+}
+
+async function deleteFakeFile(file) {
+  if (!file?.filePath || fakeBusy.value) return
+  const ok = await appConfirm({
+    title: '永久删除文件',
+    message: `确定从磁盘永久删除？\n\n${file.fileName || file.filePath}`,
+    hint: '此操作不可恢复。',
+    confirmText: '删除',
+    danger: true,
+  })
+  if (!ok) return
+  fakeBusy.value = true
+  try {
+    const res = await api.library.deleteFiles([file.filePath])
+    const failed = res?.data?.failed || []
+    if (failed.length) {
+      alert(failed[0]?.error || '删除失败')
+      return
+    }
+    pruneFakeResult([file.filePath])
+  } catch (e) {
+    alert(e.message || '删除失败')
+  } finally {
+    fakeBusy.value = false
+  }
+}
+
+async function deleteFakeSelected() {
+  const list = [...fakeSelected.value]
+  if (!list.length || fakeBusy.value) return
+  const ok = await appConfirm({
+    title: '批量删除伪 FLAC',
+    message: `确定从磁盘永久删除选中的 ${list.length} 个文件？此操作不可恢复。`,
+    confirmText: '删除',
+    danger: true,
+  })
+  if (!ok) return
+  fakeBusy.value = true
+  try {
+    const res = await api.library.deleteFiles(list)
+    const data = res?.data || {}
+    const deleted = data.deleted || []
+    const failed = data.failed || []
+    pruneFakeResult(deleted)
+    if (failed.length) {
+      alert(`${deleted.length ? `已删除 ${deleted.length} 个，` : ''}${failed.length} 个失败：${failed[0]?.error || ''}`)
+    }
+  } catch (e) {
+    alert(e.message || '批量删除失败')
+  } finally {
+    fakeBusy.value = false
   }
 }
 
@@ -1004,6 +1315,46 @@ async function startOrganize() {
   display: flex;
   gap: 6px;
   white-space: nowrap;
+}
+.fm-hint {
+  margin: 0 0 14px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+.fake-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--bg-card);
+}
+.fake-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+}
+.fake-row:first-child {
+  border-top: none;
+}
+.fake-row:hover {
+  background: var(--bg-hover);
+}
+.fake-meta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.fake-reason {
+  font-size: 12px;
+  color: var(--text-muted);
 }
 
 /* 整理 */

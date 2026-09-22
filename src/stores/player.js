@@ -27,6 +27,7 @@ import {
 } from '../utils/audioDuration.js'
 import { platformLabel, PLATFORM_LABELS } from '../utils/platforms.js'
 import { QUALITY_LABELS, QUALITY_ORDER, getQualityLabel } from '../utils/quality.js'
+import { isPwaStandalone } from '../utils/pwa.js'
 
 export const currentPlaying = ref(null)
 export const loadingPlay = ref(null)
@@ -332,10 +333,7 @@ function clearPlaybackKickWatch() {
 
 function isStandalonePwa() {
   try {
-    return Boolean(
-      window.matchMedia('(display-mode: standalone)').matches
-      || window.navigator.standalone === true,
-    )
+    return isPwaStandalone()
   } catch {
     return false
   }
