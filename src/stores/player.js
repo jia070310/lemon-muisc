@@ -446,6 +446,16 @@ function trimMediaAudioCache() {
   }
 }
 
+function silenceCachedAudioElements({ exceptKey = '' } = {}) {
+  for (const [key, entry] of mediaAudioCache.entries()) {
+    if (exceptKey && key === exceptKey) continue
+    try {
+      entry.element.pause()
+      entry.element.muted = true
+    } catch {}
+  }
+}
+
 function stashMediaAudio(trackKey) {
   if (!audio || !hasMediaSrc || !trackKey) return
   if (audio.error || audio.readyState < 2) return
@@ -469,6 +479,8 @@ function stashMediaAudio(trackKey) {
 
   mediaAudioCache.set(trackKey, entry)
   trimMediaAudioCache()
+  // 缓存里其它元素一律静音暂停，避免切歌后残留双声
+  silenceCachedAudioElements({ exceptKey: trackKey })
 
   audio = null
   hasMediaSrc = false
@@ -509,6 +521,7 @@ async function activateCachedAudio(entry, { resumeTime = 0 } = {}) {
   hasMediaSrc = true
   analyserBoundSrc = ''
   audioGraphReady = false
+  try { audio.muted = false } catch {}
 
   if (entry.mediaSource) {
     mainMediaSource = entry.mediaSource
@@ -1900,17 +1913,26 @@ export function initPlayer() {
   window.addEventListener('pageshow', () => { resumeAudioPlayback() })
 }
 
+let endedHandling = false
+
 async function onTrackEnded() {
-  if (playMode.value === 'single' && audio) {
-    audio.currentTime = 0
-    applyAudioOutput()
-    beginPlaybackBuffer()
-    await audio.play()
-    if (visualizerEnabled.value) scheduleAudioAnalyserRefresh()
-    isPaused.value = false
-    return
+  // 单飞：ended 重入会叠出「当前又播 + 下一首也播」
+  if (endedHandling) return
+  endedHandling = true
+  try {
+    if (playMode.value === 'single' && audio) {
+      audio.currentTime = 0
+      applyAudioOutput()
+      beginPlaybackBuffer()
+      await audio.play()
+      if (visualizerEnabled.value) scheduleAudioAnalyserRefresh()
+      isPaused.value = false
+      return
+    }
+    await playNextAuto()
+  } finally {
+    endedHandling = false
   }
-  await playNextAuto()
 }
 
 async function playNextAuto() {
@@ -2410,6 +2432,9 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 }
   if (prevIndex >= 0 && prevIndex !== index) {
     const prevEntry = playQueue.value[prevIndex]
     if (prevEntry?.key) stashMediaAudio(prevEntry.key)
+  } else {
+    // 同曲重进或无上一曲：仍清掉缓存里其它在播元素，防止双声叠加
+    silenceCachedAudioElements()
   }
 
   currentQueueIndex.value = index

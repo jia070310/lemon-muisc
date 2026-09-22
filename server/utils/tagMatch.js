@@ -137,10 +137,15 @@ function scoreMatchForTag(item, parsed) {
   return score
 }
 
-async function fetchCrossSourceTagFallback(match, primarySource) {
-  // 优先「歌名 专辑名」，减少同名多专辑误匹配
-  const keyword = [match?.name, match?.album || match?.albumName].filter(Boolean).join(' ')
-    || [match?.name, match?.singer].filter(Boolean).join(' ')
+async function fetchCrossSourceTagFallback(match, primarySource, { needCover = false } = {}) {
+  // 歌名与专辑同名时，用「歌名 歌手」更稳（QQ 等对「歌名 歌名」常搜不出封面）
+  const title = String(match?.name || '').trim()
+  const album = String(match?.album || match?.albumName || '').trim()
+  const artist = String(match?.singer || '').trim()
+  const sameNameAlbum = title && album && title.toLowerCase() === album.toLowerCase()
+  const keyword = sameNameAlbum
+    ? [title, artist].filter(Boolean).join(' ')
+    : ([title, album].filter(Boolean).join(' ') || [title, artist].filter(Boolean).join(' '))
   if (!keyword) return {}
 
   const trySources = ['tx', 'wy', 'kg', 'kw', 'mg'].filter(src => src !== primarySource)
@@ -161,7 +166,9 @@ async function fetchCrossSourceTagFallback(match, primarySource) {
         .sort((a, b) => b.score - a.score)[0]?.item
       if (!hit) continue
       const extras = await fetchAlbumTagExtras(hit, src)
-      if (extras.year || extras.genre || extras.comment) return extras
+      const cover = extras.picUrl || resolveCoverUrl({ ...hit, source: src })
+      if (cover) extras.picUrl = cover
+      if (extras.year || extras.genre || extras.comment || (needCover && extras.picUrl)) return extras
     } catch {}
   }
   return {}
@@ -298,7 +305,10 @@ export async function matchByArtistTitle(artist = '', title = '', source = 'wy',
   const keywords = []
   // 默认优先「歌名 专辑名」，同名多专辑时更准（issue #23）
   if (parsed.title && parsed.album) {
-    keywords.push(`${parsed.title} ${parsed.album}`)
+    // 歌名=专辑名时，「歌名 专辑」会退化成重复词，QQ 等接口常搜不出有效封面
+    if (String(parsed.title).trim().toLowerCase() !== String(parsed.album).trim().toLowerCase()) {
+      keywords.push(`${parsed.title} ${parsed.album}`)
+    }
   }
   if (parsed.title) keywords.push(parsed.title)
   if (parsed.title && parsed.artist) {
@@ -404,12 +414,35 @@ export async function fetchMatchMeta(match, source, fields = null) {
 
   if (!meta.picUrl) meta.picUrl = resolveCoverUrl({ ...match, source: sdkSource })
 
+  // 主平台无封面（歌名专辑同名等）：跨平台补封面
+  if (wantCover && !meta.picUrl) {
+    try {
+      const coverFallback = await fetchCrossSourceTagFallback(match, sdkSource, { needCover: true })
+      if (coverFallback.picUrl) meta.picUrl = coverFallback.picUrl
+    } catch {}
+  }
+
   if (wantCover && meta.picUrl) {
     try {
       const buf = await fetchPicBuffer(meta.picUrl)
       if (buf) {
         const mime = detectImageMime(buf)
         meta.pic = `data:${mime};base64,${buf.toString('base64')}`
+      }
+    } catch {}
+  }
+
+  // URL 有但拉图失败：再试跨平台
+  if (wantCover && !meta.pic) {
+    try {
+      const coverFallback = await fetchCrossSourceTagFallback(match, sdkSource, { needCover: true })
+      if (coverFallback.picUrl && coverFallback.picUrl !== meta.picUrl) {
+        meta.picUrl = coverFallback.picUrl
+        const buf = await fetchPicBuffer(meta.picUrl)
+        if (buf) {
+          const mime = detectImageMime(buf)
+          meta.pic = `data:${mime};base64,${buf.toString('base64')}`
+        }
       }
     } catch {}
   }

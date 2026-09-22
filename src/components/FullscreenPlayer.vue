@@ -586,15 +586,21 @@ function toggleDownloadMenu(event) {
 async function downloadCurrent(quality) {
   const item = currentPlaying.value
   if (!item || currentLocalPath.value) return
-  closeDownloadMenu()
-  closeMoreMenu()
-  if (!(await assertActiveSourceForDownload())) return
-  const source = item.source || 'kw'
+  const root = document.querySelector('.fullscreen-player')
+  if (root) root.classList.add('block-pointer')
   try {
+    if (!(await assertActiveSourceForDownload())) return
+    const source = item.source || 'kw'
     await api.download.add([buildDownloadTask(item, source, quality)])
     showPlayerNotice(`已添加下载: ${item.name || ''} (${getQualityLabel(quality, item.types)})`, 2500)
   } catch (e) {
     showPlayerNotice(e?.message || '下载失败', 3000)
+  } finally {
+    window.setTimeout(() => {
+      closeDownloadMenu()
+      closeMoreMenu()
+      root?.classList.remove('block-pointer')
+    }, 320)
   }
 }
 
@@ -1773,5 +1779,9 @@ watch(currentPlaying, () => closeDownloadMenu())
     height: min(22vh, 140px);
     bottom: 64px;
   }
+}
+
+.fullscreen-player.block-pointer {
+  pointer-events: none;
 }
 </style>

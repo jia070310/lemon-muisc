@@ -580,16 +580,23 @@ function toggleDownloadMenu(event) {
 async function downloadCurrent(quality) {
   const item = currentPlaying.value
   if (!item || currentLocalPath.value) return
-  closeDownloadMenu()
-  showMoreDlQuality.value = false
-  showMorePanel.value = false
-  if (!(await assertActiveSourceForDownload())) return
-  const source = item.source || 'kw'
+  // 先关菜单会让触摸「穿透」到底栏「下一曲」；延后关闭并暂时屏蔽底栏点击
+  const bar = document.querySelector('.player-bar')
+  if (bar) bar.classList.add('block-pointer')
   try {
+    if (!(await assertActiveSourceForDownload())) return
+    const source = item.source || 'kw'
     await api.download.add([buildDownloadTask(item, source, quality)])
     showPlayerNotice(`已添加下载: ${item.name || ''} (${getQualityLabel(quality, item.types)})`, 2500)
   } catch (e) {
     showPlayerNotice(e?.message || '下载失败', 3000)
+  } finally {
+    window.setTimeout(() => {
+      closeDownloadMenu()
+      showMoreDlQuality.value = false
+      showMorePanel.value = false
+      bar?.classList.remove('block-pointer')
+    }, 320)
   }
 }
 
@@ -1837,6 +1844,10 @@ async function onQueuePlayClick(index) {
   padding: 8px 10px;
   font-size: 12px;
   color: var(--text-muted);
+}
+
+.player-bar.block-pointer {
+  pointer-events: none;
 }
 
 .player-bar.compact .ctrl-queue {
