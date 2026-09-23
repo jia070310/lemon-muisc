@@ -18,6 +18,7 @@ import { extractMusicUrl } from '../utils/sourceResult.js'
 import { appendStreamToken } from '../utils/streamAuth.js'
 import { ensureApePlayWav } from '../utils/apePlay.js'
 import { buildMusicCdnHeaders } from '../utils/musicCdnHeaders.js'
+import { ensureSmoothPlayAac, needsSmoothPlayTranscode } from '../utils/smoothPlay.js'
 
 export const playRouter = Router()
 
@@ -102,11 +103,22 @@ playRouter.post('/url', async (req, res) => {
       }
       const resolvedLocal = path.resolve(localFilePath)
       const localExt = path.extname(resolvedLocal).toLowerCase()
+      const wantSmooth = Boolean(req.body?.smooth)
+        && needsSmoothPlayTranscode(resolvedLocal)
+        && localExt !== '.ape'
       const playPath = localExt === '.ape'
         ? `/api/play/local-ape?path=${encodeURIComponent(resolvedLocal)}`
-        : `/api/play/local?path=${encodeURIComponent(resolvedLocal)}`
+        : wantSmooth
+          ? `/api/play/local-smooth?path=${encodeURIComponent(resolvedLocal)}`
+          : `/api/play/local?path=${encodeURIComponent(resolvedLocal)}`
       const url = signPlayStreamUrl(playPath, req)
-      return res.json({ ok: true, url, local: true, format: localExt.slice(1) || undefined })
+      return res.json({
+        ok: true,
+        url,
+        local: true,
+        smooth: wantSmooth || localExt === '.ape',
+        format: localExt.slice(1) || undefined,
+      })
     }
 
     if (source === 'local') {
@@ -312,6 +324,66 @@ playRouter.get('/local-ape', async (req, res) => {
     if (!res.headersSent) {
       const status = /ffmpeg|无法直接播放 APE/i.test(String(e?.message || '')) ? 415 : 500
       res.status(status).json({ error: formatUserError(e, 'APE 播放失败') })
+    }
+  }
+})
+
+/**
+ * 车机 / 弱网：本地高码率 → AAC 缓存后流式输出（支持 Range）。
+ * 无线 CarPlay 与 NAS 同 WiFi 时，直出 FLAC 易欠载卡顿。
+ */
+playRouter.get('/local-smooth', async (req, res) => {
+  try {
+    let filePath = req.query.path
+    if (!filePath || typeof filePath !== 'string') {
+      return res.status(400).json({ error: '缺少文件路径' })
+    }
+    try {
+      filePath = decodeURIComponent(String(filePath).replace(/\+/g, '%20'))
+    } catch {
+      filePath = String(filePath).replace(/\+/g, ' ')
+    }
+    if (!isAllowedMediaPath(filePath)) {
+      return res.status(403).json({ error: '无权访问该文件' })
+    }
+
+    const resolved = path.resolve(filePath)
+    if (!needsSmoothPlayTranscode(resolved)) {
+      return res.status(400).json({ error: '该格式无需流畅转码，请使用 /api/play/local' })
+    }
+
+    const aacPath = await ensureSmoothPlayAac(resolved)
+    const stat = fs.statSync(aacPath)
+    const total = stat.size
+    const range = req.headers.range
+
+    setLocalStreamHeaders(res, req)
+    res.setHeader('Accept-Ranges', 'bytes')
+    res.setHeader('Content-Type', 'audio/mp4')
+    res.setHeader('Cache-Control', 'private, max-age=3600')
+
+    if (range) {
+      const m = /^bytes=(\d*)-(\d*)$/.exec(range)
+      if (!m) return res.status(416).end()
+      const start = m[1] ? parseInt(m[1], 10) : 0
+      const end = m[2] ? parseInt(m[2], 10) : total - 1
+      if (start >= total || end >= total || start > end) {
+        res.setHeader('Content-Range', `bytes */${total}`)
+        return res.status(416).end()
+      }
+      res.status(206)
+      res.setHeader('Content-Range', `bytes ${start}-${end}/${total}`)
+      res.setHeader('Content-Length', end - start + 1)
+      pipeLocalFile(res, aacPath, { start, end })
+      return
+    }
+
+    res.setHeader('Content-Length', total)
+    pipeLocalFile(res, aacPath)
+  } catch (e) {
+    if (!res.headersSent) {
+      const status = /ffmpeg|转码/i.test(String(e?.message || '')) ? 415 : 500
+      res.status(status).json({ error: formatUserError(e, '流畅播放转码失败') })
     }
   }
 })

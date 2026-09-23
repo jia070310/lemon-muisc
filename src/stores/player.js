@@ -98,6 +98,16 @@ export const coverStyle = ref('disc')
 export const visualizerEnabled = ref(true)
 /** 关闭频谱时自动启用后台播放（与 visualizerEnabled 互斥） */
 export const backgroundPlayEnabled = computed(() => !visualizerEnabled.value)
+/**
+ * 车机 / 弱网流畅播放：本地 FLAC 等先转 AAC 再播。
+ * 无线 CarPlay 与 NAS 抢 WiFi 时直出无损易一卡一卡；关可视化也无效。
+ */
+export const smoothStreamEnabled = ref(false)
+export const PLAYER_SMOOTH_STREAM_KEY = 'player.smoothStream'
+
+const LOCAL_SMOOTH_EXTS = new Set([
+  'flac', 'wav', 'aiff', 'aif', 'ape', 'dsf', 'dff', 'wv', 'tak',
+])
 export const showFullscreenPlayer = ref(false)
 export const playerError = ref('')
 /** 非致命提示（如试听片段时长警告） */
@@ -2007,8 +2017,36 @@ export async function loadPlayQualitySetting() {
   }
 }
 
+export async function loadSmoothStreamSetting() {
+  try {
+    const settings = await api.settings.get()
+    if (settings[PLAYER_SMOOTH_STREAM_KEY] == null) {
+      // iPhone / iPad 默认开：无线 CarPlay 场景最常见
+      const { isIosLikeDevice } = await import('../utils/device.js')
+      const def = isIosLikeDevice()
+      smoothStreamEnabled.value = def
+      try {
+        await api.settings.update({ [PLAYER_SMOOTH_STREAM_KEY]: def ? 'true' : 'false' })
+      } catch {}
+    } else {
+      smoothStreamEnabled.value = settings[PLAYER_SMOOTH_STREAM_KEY] !== 'false'
+    }
+  } catch {
+    try {
+      const { isIosLikeDevice } = await import('../utils/device.js')
+      smoothStreamEnabled.value = isIosLikeDevice()
+    } catch {
+      smoothStreamEnabled.value = false
+    }
+  }
+}
+
 export async function loadPlayerSettings() {
-  await Promise.all([loadVisualizerSetting(), loadPlayQualitySetting()])
+  await Promise.all([
+    loadVisualizerSetting(),
+    loadPlayQualitySetting(),
+    loadSmoothStreamSetting(),
+  ])
 }
 
 export function openFullscreenPlayer() {
@@ -2093,7 +2131,7 @@ function cancelPlayUrlFetch() {
 async function resolvePlayUrl(item, source, quality = getPlayQuality(), options = {}) {
   if (isLocalTrack(item, source)) {
     // 普通本地文件直接拼同源流地址，省掉 /api/play/url 往返（情绪地图连播尤其明显）
-    // APE 需服务端转码，仍走接口
+    // APE 需服务端转码；流畅模式：高码率无损走 AAC 缓存流（车机/弱网）
     const filePath = getTrackFilePath(item)
     if (filePath) {
       const ext = (() => {
@@ -2101,13 +2139,21 @@ async function resolvePlayUrl(item, source, quality = getPlayQuality(), options 
         const i = base.lastIndexOf('.')
         return i >= 0 ? base.slice(i + 1).toLowerCase() : ''
       })()
+      if (ext && LOCAL_SMOOTH_EXTS.has(ext) && smoothStreamEnabled.value && !options.forceDirectLocal) {
+        const url = `/api/play/local-smooth?path=${encodeURIComponent(filePath)}`
+        if (!options.refresh) setCachedPlayUrl(item, 'local', `${quality}:smooth`, url)
+        return url
+      }
       if (ext && ext !== 'ape') {
         const url = `/api/play/local?path=${encodeURIComponent(filePath)}`
         if (!options.refresh) setCachedPlayUrl(item, 'local', quality, url)
         return url
       }
     }
-    const res = await api.play.getUrl(buildPlayPayload(item, 'local', quality), { signal: options.signal })
+    const res = await api.play.getUrl({
+      ...buildPlayPayload(item, 'local', quality),
+      ...((smoothStreamEnabled.value && !options.forceDirectLocal) ? { smooth: true } : {}),
+    }, { signal: options.signal })
     return res.url || ''
   }
 
@@ -2163,6 +2209,7 @@ function canReuseLoadedAudio(url, item, source) {
 /** 播放失败后重建管道：坏链缓存 + 卡死的 Audio 元素（刷新页面才好的主因） */
 function recoverPlaybackPipeline(trackKey, item, source, quality = getPlayQuality()) {
   clearCachedPlayUrl(item, source, quality)
+  clearCachedPlayUrl(item, source, `${quality}:smooth`)
   if (trackKey) destroyMediaAudioCacheEntry(trackKey)
   hasMediaSrc = false
   recreateMainAudioElement()
@@ -2194,7 +2241,11 @@ async function startPlaybackFromUrl(url, { resumeTime = 0, item, source, isLocal
   audio.src = authedUrl
   hasMediaSrc = true
   // 本地：至少等 HAVE_CURRENT_DATA / canplay，避免 metadata 假播放卡死 00:00
-  await waitForAudioReady(authedUrl, { isLocal })
+  // 流畅模式：多等一会缓冲，减少车机 WiFi 欠载
+  await waitForAudioReady(authedUrl, {
+    isLocal,
+    preferCanPlay: Boolean(isLocal && smoothStreamEnabled.value),
+  })
 
   applyAudioOutput()
   if (resumeTime > 0) {
@@ -2478,13 +2529,16 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 }
   const maxAttempts = isLocal ? 3 : 2
   const audioBrokenAtStart = Boolean(audio?.error)
 
-  async function tryPlayAtQuality(playItem, playSource, quality, { forceRefresh = false } = {}) {
+  async function tryPlayAtQuality(playItem, playSource, quality, { forceRefresh = false, forceDirectLocal = false } = {}) {
     const playKey = getTrackKey(playItem, playSource)
-    const cachedUrl = forceRefresh ? '' : getCachedPlayUrl(playItem, playSource, quality)
+    const cacheQuality = (smoothStreamEnabled.value && !forceDirectLocal && isLocalTrack(playItem, playSource))
+      ? `${quality}:smooth`
+      : quality
+    const cachedUrl = forceRefresh ? '' : getCachedPlayUrl(playItem, playSource, cacheQuality)
     const cachedMedia = cachedUrl ? takeMediaAudioCache(playKey, cachedUrl) : null
     if (cachedMedia) {
       await activateCachedAudio(cachedMedia, { resumeTime })
-      rememberLoadedPlayUrl(playItem, playSource, cachedUrl, quality)
+      rememberLoadedPlayUrl(playItem, playSource, cachedUrl, cacheQuality)
     } else if (!forceRefresh && canReuseLoadedAudio(cachedUrl, playItem, playSource)) {
       await startPlaybackFromUrl(cachedUrl, {
         resumeTime,
@@ -2498,6 +2552,7 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 }
         signal: playUrlController.signal,
         intent,
         refresh: forceRefresh,
+        forceDirectLocal,
       })
       if (!url) throw new Error('获取播放链接失败')
       await startPlaybackFromUrl(url, {
@@ -2542,6 +2597,7 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 }
     // —— 本地：沿用原重试 ——
     if (isLocal) {
       const quality = preferredQuality
+      let usedSmoothFallback = false
       for (let attempt = 0; attempt < maxAttempts; attempt++) {
         if (intent !== playIntentToken) return
         if (attempt > 0 || audioBrokenAtStart) {
@@ -2549,8 +2605,10 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 }
           if (attempt > 0) await new Promise((r) => setTimeout(r, 250 * attempt))
         }
         try {
+          const forceDirectLocal = usedSmoothFallback || (attempt > 0 && smoothStreamEnabled.value)
           await tryPlayAtQuality(enrichedItem, source, quality, {
             forceRefresh: attempt > 0 || audioBrokenAtStart,
+            forceDirectLocal,
           })
           if (intent !== playIntentToken) {
             try { audio?.pause() } catch {}
@@ -2570,11 +2628,19 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 }
           updateActiveLyric(audio?.currentTime || 0)
           saveQueueState()
           updateMediaSession()
+          if (forceDirectLocal && smoothStreamEnabled.value && attempt > 0) {
+            showPlayerNotice('流畅转码不可用，已改直出原文件', 3500)
+          }
           return
         } catch (e) {
           if (e.aborted || intent !== playIntentToken) throw e
           lastError = e
           recoverPlaybackPipeline(trackKey, item, source, quality)
+          const msg = String(e?.message || '')
+          if (smoothStreamEnabled.value && !usedSmoothFallback && /ffmpeg|转码|流畅/i.test(msg)) {
+            usedSmoothFallback = true
+            continue
+          }
           if (attempt + 1 >= maxAttempts || !isRetryablePlayError(e)) throw e
         }
       }
@@ -2683,7 +2749,7 @@ function getAudioElementError(el = audio) {
 function isRetryablePlayError(error) {
   const text = String(error?.message || error || '')
   if (error?.aborted || isBenignPlayInterrupt(error)) return false
-  return /播放链接失效|无法播放该音频|无法解码|音频加载超时|本地音频加载超时|网络异常|音频加载被中止|音频解码失败|音频加载失败|获取播放链接失败|获取.*音质.*失败|未获取到URL|获取URL失败/i.test(text)
+  return /播放链接失效|无法播放该音频|无法解码|音频加载超时|本地音频加载超时|网络异常|音频加载被中止|音频解码失败|音频加载失败|获取播放链接失败|获取.*音质.*失败|未获取到URL|获取URL失败|流畅|转码|ffmpeg/i.test(text)
     || /NotSupportedError|no supported sources|MEDIA_ERR_SRC_NOT_SUPPORTED|MEDIA_ERR_NETWORK|MEDIA_ERR_ABORTED/i.test(text)
 }
 

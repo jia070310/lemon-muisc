@@ -117,6 +117,7 @@ import { useRoute } from 'vue-router'
 import { api } from '../api.js'
 import { formatTrackTags, formatAlbumTags } from '../utils/format.js'
 import { getTrackFilePath } from '../utils/trackPath.js'
+import { parseAlbumId } from '../utils/albumId.js'
 import PickPlaylistModal from '../components/PickPlaylistModal.vue'
 import CoverArt from '../components/CoverArt.vue'
 import MobileRowActions from '../components/MobileRowActions.vue'
@@ -132,13 +133,15 @@ import {
 } from '../stores/library.js'
 
 const route = useRoute()
-const albumId = ref('')
+const initialAlbumId = route.query.id ? String(route.query.id) : ''
+const albumId = ref(initialAlbumId)
 const album = ref(null)
-const loading = ref(false)
+const loading = ref(!!initialAlbumId)
 const page = ref(1)
 const pageSize = 30
 const hoverKey = ref('')
 const actionsOpenKey = ref('')
+let loadSeq = 0
 
 function toggleRowActions(key) {
   actionsOpenKey.value = actionsOpenKey.value === key ? '' : key
@@ -154,11 +157,18 @@ function updateNarrow() {
   isNarrow.value = narrowMq?.matches ?? window.innerWidth <= 768
 }
 
-function parseAlbumId(id) {
-  const raw = String(id || '')
-  const idx = raw.indexOf('::')
-  if (idx < 0) return { artist: '', name: raw }
-  return { artist: raw.slice(0, idx), name: raw.slice(idx + 2) }
+function albumShell(artist, name, extras = {}) {
+  return {
+    id: albumId.value,
+    name,
+    artist: artist || '未知艺术家',
+    cover: '',
+    year: '',
+    genre: '',
+    trackCount: 0,
+    tracks: [],
+    ...extras,
+  }
 }
 
 const albumTags = computed(() => (album.value ? formatAlbumTags(album.value) : ''))
@@ -167,24 +177,36 @@ const listStart = computed(() => (page.value - 1) * pageSize)
 const pagedTracks = computed(() => album.value?.tracks || [])
 
 async function loadAlbum() {
+  const seq = ++loadSeq
   const { artist, name } = parseAlbumId(albumId.value)
   if (!name) {
-    album.value = null
+    if (seq === loadSeq) {
+      album.value = null
+      loading.value = false
+    }
     return
   }
   loading.value = true
   try {
-    const tracksRes = await fetchLibraryTracksPage(api, {
-      page: page.value,
-      limit: pageSize,
-      album: name,
-      albumArtist: artist && artist !== '未知艺术家' ? artist : '',
-      sort: 'album',
-      replace: false,
-    })
-    let items = tracksRes.items
-    let total = tracksRes.total
-    if (!items.length && artist) {
+    let items = []
+    let total = 0
+    const albumArtist = artist && artist !== '未知艺术家' ? artist : ''
+    try {
+      const tracksRes = await fetchLibraryTracksPage(api, {
+        page: page.value,
+        limit: pageSize,
+        album: name,
+        albumArtist,
+        sort: 'album',
+        replace: false,
+      })
+      items = tracksRes.items
+      total = tracksRes.total
+    } catch {
+      items = []
+      total = 0
+    }
+    if (!items.length) {
       const fallback = await fetchLibraryTracksPage(api, {
         page: page.value,
         limit: pageSize,
@@ -195,22 +217,22 @@ async function loadAlbum() {
       items = fallback.items
       total = fallback.total
     }
+    if (seq !== loadSeq) return
     const cover = items.find((t) => t.picUrl)?.picUrl
       || (items[0]?.filePath ? localCoverUrl(items[0].filePath) : '')
-    album.value = {
-      id: albumId.value,
-      name,
+    album.value = albumShell(artist, name, {
       artist: artist || items[0]?.singer || '未知艺术家',
       cover,
       year: items[0]?.year || '',
       genre: items[0]?.genre || '',
       trackCount: total,
       tracks: items,
-    }
+    })
   } catch {
-    album.value = null
+    if (seq !== loadSeq) return
+    album.value = albumShell(artist, name)
   } finally {
-    loading.value = false
+    if (seq === loadSeq) loading.value = false
   }
 }
 
@@ -227,11 +249,12 @@ onMounted(async () => {
   narrowMq = window.matchMedia('(max-width: 768px)')
   updateNarrow()
   narrowMq.addEventListener('change', updateNarrow)
-  if (route.query.id) albumId.value = String(route.query.id)
   if (!libraryScanned.value) {
     try { await scanLibrary(api, { resync: true }) } catch {}
+    if (albumId.value) await loadAlbum()
+  } else if (albumId.value && !album.value) {
+    await loadAlbum()
   }
-  if (albumId.value) await loadAlbum()
 })
 
 onUnmounted(() => {

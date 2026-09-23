@@ -47,6 +47,7 @@ export const USER_SETTING_KEYS = new Set([
   'player.coverStyle',
   'player.visualizer',
   'player.playQuality',
+  'player.smoothStream',
   'playlist.remoteSyncDays',
   'download.usePersonalSavePath',
   'download.savePathPersonal',

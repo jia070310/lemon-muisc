@@ -1,4 +1,3 @@
-import nodemailer from 'nodemailer'
 import { getGlobalSettings } from './userSettings.js'
 
 export function isMailConfigured() {
@@ -52,9 +51,22 @@ export function mailConfigToSettings(cfg = {}) {
   }
 }
 
-function createTransportFromConfig(cfg) {
+/** 按需加载，避免升级跳过 npm 时缺 nodemailer 导致整个服务起不来（issue #34） */
+async function loadNodemailer() {
+  try {
+    const mod = await import('nodemailer')
+    return mod.default || mod
+  } catch {
+    throw new Error(
+      '邮件组件 nodemailer 未安装。请停用应用后重新启用（会补装依赖），或查看 npm-install.log。',
+    )
+  }
+}
+
+async function createTransportFromConfig(cfg) {
   if (!cfg.host) throw new Error('请填写 SMTP 服务器')
   if (!cfg.from) throw new Error('请填写发件人地址')
+  const nodemailer = await loadNodemailer()
   return nodemailer.createTransport({
     host: cfg.host,
     port: cfg.port,
@@ -68,7 +80,7 @@ export async function sendMail({ to, subject, text, html }, cfg = null) {
   if (!mailCfg.enabled && !cfg) {
     throw new Error('邮件服务未配置，请管理员在设置中配置 SMTP')
   }
-  const transport = createTransportFromConfig(mailCfg)
+  const transport = await createTransportFromConfig(mailCfg)
   await transport.sendMail({
     from: mailCfg.from,
     to,

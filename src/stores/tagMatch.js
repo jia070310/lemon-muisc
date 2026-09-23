@@ -76,10 +76,16 @@ export function applyMatchMetaToFile(file, meta) {
   if (meta.comment) file.comment = meta.comment
   if (meta.lyric) file.lyric = meta.lyric
   if (meta.pic) file.pictureBase64 = meta.pic
+  if (meta.pictureBase64) file.pictureBase64 = meta.pictureBase64
   if (meta.picUrl) file.picUrl = meta.picUrl
-  file.hasPicture = Boolean(file.pictureBase64 || file.picUrl)
-  file.hasLyrics = Boolean(file.lyric)
+
+  // 以 patch 显式标记为准；勿因清掉大图 base64 后误判为无封面/歌词
+  const picFromMeta = Boolean(meta.hasPicture || meta.pic || meta.pictureBase64 || meta.picUrl)
+  const lyricFromMeta = Boolean(meta.hasLyrics || meta.lyric)
+  file.hasPicture = Boolean(picFromMeta || file.pictureBase64 || file.picUrl || file.hasPicture)
+  file.hasLyrics = Boolean(lyricFromMeta || file.lyric || file.hasLyrics)
   file._modified = meta._savedToDisk ? false : true
+  if (meta._metaLoaded) file._metaLoaded = true
 }
 
 export function syncFilesFromMatchPatches(files) {
@@ -221,7 +227,16 @@ export async function startTagMatchBatch(targets, source, options = {}) {
           } catch {
             savedToDisk = false
           }
-          rememberPatch(filePath, { ...meta, _savedToDisk: savedToDisk })
+          rememberPatch(filePath, {
+            ...meta,
+            // 列表同步只需标记，不必长期占用内存存大图
+            pic: undefined,
+            pictureBase64: undefined,
+            hasPicture: Boolean(meta.pic || meta.picUrl || meta.pictureBase64 || meta.hasPicture),
+            hasLyrics: Boolean(meta.lyric || meta.hasLyrics),
+            _savedToDisk: savedToDisk,
+            _metaLoaded: true,
+          })
           if (savedToDisk) {
             saved++
             savedLibraryFiles.push({

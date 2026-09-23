@@ -120,16 +120,21 @@ start_service() {
     return 1
   fi
 
-  if [ ! -d "${root}/node_modules/express" ]; then
+  if [ ! -d "${root}/node_modules/express" ] || [ ! -d "${root}/node_modules/nodemailer" ]; then
     attach_persist_modules || true
   fi
-  if [ ! -d "${root}/node_modules/express" ]; then
-    echo "正在补装依赖（首次启用可能需几分钟）…" > "${TRIM_TEMP_LOGFILE}"
+  if [ ! -d "${root}/node_modules/express" ] || [ ! -d "${root}/node_modules/nodemailer" ]; then
+    echo "正在补装依赖（首次启用或依赖有更新，可能需几分钟）…" > "${TRIM_TEMP_LOGFILE}"
     install_node_modules || true
   fi
   if [ ! -d "${root}/node_modules/express" ]; then
     echo "依赖未安装成功。请查看 ${TRIM_PKGVAR}/log/npm-install.log ；确认已安装 Node.js v22，且 NAS 可访问 registry.npmmirror.com。" > "${TRIM_TEMP_LOGFILE}"
     return 1
+  fi
+  # nodemailer 缺失时仍允许启动（邮件功能按需加载）；下次升级会因 deps.rev 补齐
+  if [ ! -d "${root}/node_modules/nodemailer" ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] warn: nodemailer 缺失，邮件功能暂不可用，尝试补装…" >> "${APP_LOG}" 2>/dev/null || true
+    install_node_modules || true
   fi
 
   if ! ensure_better_sqlite3_native; then

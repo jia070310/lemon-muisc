@@ -5,6 +5,7 @@ import { detectImageMime } from './utils/fetchPic.js'
 import { normalizeLyricText, pickBestLyricText } from './utils/lyric.js'
 import { writeWavMeta } from './utils/wavTag.js'
 import { writeApeMeta } from './utils/apeTag.js'
+import { writeM4aMeta, canWriteM4aExt } from './utils/m4aTag.js'
 import { joinArtists, normalizeArtistForWrite } from './utils/artistTag.js'
 
 export async function writeMeta(filePath, ext, meta) {
@@ -15,6 +16,9 @@ export async function writeMeta(filePath, ext, meta) {
   }
   if (ext === '.ape') {
     return writeApeMeta(filePath, meta, { decodePicInput, atomicReplaceFile })
+  }
+  if (canWriteM4aExt(ext)) {
+    return writeM4aMeta(filePath, meta, { decodePicInput })
   }
   throw new Error(`暂不支持 ${ext} 格式写入标签`)
 }
@@ -498,7 +502,8 @@ function mp3HasPictureFrame(filePath) {
 function flacHasPictureBlock(filePath) {
   try {
     const stat = fs.statSync(filePath)
-    const readLen = Math.min(stat.size, 512 * 1024)
+    // 封面块可能在靠后的 metadata 中，探测窗口过小会漏检 → 标签列表误报「缺失」
+    const readLen = Math.min(stat.size, 4 * 1024 * 1024)
     const data = Buffer.alloc(readLen)
     const fd = fs.openSync(filePath, 'r')
     try {

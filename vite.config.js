@@ -57,6 +57,7 @@ export default defineConfig({
       // 更具体的规则须写在通用 /api 之前（各自独立实例，避免共享状态）
       '/api/play/local': createStreamProxy(),
       '/api/play/local-ape': createStreamProxy(),
+      '/api/play/local-smooth': createStreamProxy(),
       '/api/play/proxy': createStreamProxy(),
       '/api/tag/cover': createStreamProxy(),
       '/api': { target: API_TARGET, changeOrigin: true, timeout: 0, proxyTimeout: 0 },

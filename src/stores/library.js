@@ -3,6 +3,7 @@ import { findLocalMatchForTrack, isLocalPlaylistTrack } from '../utils/trackMatc
 import { withStreamAuth } from '../utils/streamAuth.js'
 import { currentUser } from '../utils/auth.js'
 import { splitArtists } from '../utils/text.js'
+import { encodeAlbumId } from '../utils/albumId.js'
 
 const FAVORITES_KEY_BASE = 'lemon-library-favorites'
 const RECENT_KEY_BASE = 'lemon-library-recent'
@@ -1091,7 +1092,7 @@ export function groupAlbums(tracks) {
     for (const track of source) {
       const album = track.album || '未知专辑'
       const artist = track.singer || '未知艺术家'
-      const id = `${artist}::${album}`
+      const id = encodeAlbumId(artist, album)
       if (!map.has(id)) {
         map.set(id, {
           id,

@@ -333,7 +333,8 @@ persist_modules_dir() {
 
 has_core_modules() {
   local base="$1"
-  [ -d "${base}/express" ] && [ -d "${base}/better-sqlite3" ]
+  # express / better-sqlite3 为核心；nodemailer 在加邮件后也视为必备（缺则增量装）
+  [ -d "${base}/express" ] && [ -d "${base}/better-sqlite3" ] && [ -d "${base}/nodemailer" ]
 }
 
 # 把 APP 目录下的 node_modules 接到持久目录（软链优先，失败则复制）

@@ -274,6 +274,7 @@
                   'row-missing': isFileMissing(f, 'any'),
                 }"
                 @click="openEdit(f)"
+                @contextmenu.prevent="renameFileFromList(f)"
               >
                 <td @click.stop><input type="checkbox" v-model="f._selected" /></td>
                 <td class="cell-file" :title="f.filePath">
@@ -327,6 +328,7 @@
               'row-missing': isFileMissing(f, 'any'),
             }"
             @click="openEdit(f)"
+            @contextmenu.prevent="renameFileFromList(f)"
           >
             <label class="mobile-file-check" @click.stop>
               <input type="checkbox" v-model="f._selected" />
@@ -1378,9 +1380,16 @@ function applyMetaRow(file, item) {
     if (item.year) file.year = item.year
     if (item.genre) file.genre = item.genre
     if (item.comment) file.comment = item.comment
+    // 已有文本字段时，用磁盘/缓存补全空值（匹配后列表即时正确）
+    if (!hasTagText(file.album) && item.album) file.album = item.album
+    if (!hasTagText(file.title) && item.title) file.title = item.title
+    if (!hasTagText(file.artist) && item.artist) file.artist = item.artist
   }
-  file.hasPicture = hasPicture
-  file.hasLyrics = hasLyrics
+  // 只升不降：避免轻量缓存误报 false 盖掉匹配结果 / 已确认有封面歌词
+  if (hasPicture) file.hasPicture = true
+  else if (file.hasPicture == null) file.hasPicture = false
+  if (hasLyrics) file.hasLyrics = true
+  else if (file.hasLyrics == null) file.hasLyrics = false
   return true
 }
 
@@ -1414,6 +1423,7 @@ async function loadMetaInBatches(token) {
     }
 
     metaProgress.value.done = Math.min(i + batchSize, files.value.length)
+    syncFilesFromMatchPatches(files.value)
   }
 
   const failed = files.value.filter(f => !f._metaLoaded)
@@ -1515,9 +1525,9 @@ async function autoRematchSelectedByFilename() {
   runTagMatch(targets, { forceOverwrite: true })
 }
 
-/** 修改当前编辑文件的磁盘文件名（同目录） */
-async function renameEditingFile() {
-  const f = editingFile.value
+/** 修改磁盘文件名（同目录）；可从编辑区或列表右键触发 */
+async function renameEditingFile(targetFile = null) {
+  const f = targetFile || editingFile.value
   if (!f?.filePath || renamingFile.value) return
   if (f._modified) {
     const ok = await appConfirm({
@@ -1561,6 +1571,12 @@ async function renameEditingFile() {
   } finally {
     renamingFile.value = false
   }
+}
+
+/** 列表右键：直接弹出改文件名 */
+function renameFileFromList(f) {
+  if (!f?.filePath || matching.value || renamingFile.value) return
+  renameEditingFile(f)
 }
 
 function applyRenameToLocalFile(from, to, fileName, parsed) {
@@ -1669,10 +1685,11 @@ async function openEdit(f) {
         comment: meta.comment || f.comment,
         lyric: typeof meta.lyric === 'string' ? meta.lyric : (f.lyric || ''),
         pictureBase64: meta.pictureBase64 || f.pictureBase64 || '',
-        hasPicture: meta.hasPicture ?? Boolean(meta.pictureBase64 || f.pictureBase64),
-        hasLyrics: meta.hasLyrics ?? Boolean(meta.lyric || f.lyric),
+        hasPicture: Boolean(meta.hasPicture || meta.pictureBase64 || f.pictureBase64 || f.hasPicture),
+        hasLyrics: Boolean(meta.hasLyrics || meta.lyric || f.lyric || f.hasLyrics),
       })
       f._detailLoaded = true
+      f._metaLoaded = true
       editForm.value = reactive({
         title: f.title || f.parsedTitle || '',
         artist: f.artist || f.parsedArtist || '',

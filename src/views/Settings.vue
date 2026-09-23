@@ -800,6 +800,19 @@
             <span class="slider"></span>
           </label>
         </div>
+        <div class="setting-item">
+          <div class="setting-item-info">
+            <div class="setting-item-label">车机 / 弱网流畅播放</div>
+            <div class="setting-item-desc">
+              本地 FLAC 等无损先在 NAS 转成约 192kbps AAC 再播，减轻无线 CarPlay 与拉歌抢同一路 WiFi 时的断续。
+              有线 CarPlay 一般不需要。首次播放某首可能稍慢（转码缓存），之后可秒开。需要可用的 ffmpeg。iPhone/iPad 默认开启。
+            </div>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" :checked="settings['player.smoothStream'] !== 'false'" @change="toggleSmoothStreamSetting" />
+            <span class="slider"></span>
+          </label>
+        </div>
       </div>
 
       <!-- 试听 / 下载 -->
@@ -1140,7 +1153,7 @@ defineOptions({ name: 'Settings' })
 import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from '../api.js'
-import { loadCoverStyle, loadPlayerSettings, setAutoMatchOnPlay, PLAYER_AUTO_MATCH_ON_PLAY_KEY, PLAYER_PLAY_QUALITY_KEY, PLAY_QUALITY_OPTIONS, normalizePlayQuality } from '../stores/player.js'
+import { loadCoverStyle, loadPlayerSettings, setAutoMatchOnPlay, PLAYER_AUTO_MATCH_ON_PLAY_KEY, PLAYER_PLAY_QUALITY_KEY, PLAYER_SMOOTH_STREAM_KEY, PLAY_QUALITY_OPTIONS, normalizePlayQuality } from '../stores/player.js'
 import { scanLibrary, libraryScanning, PLAYLIST_REMOTE_SYNC_DAYS_KEY, setPlaylistRemoteSyncDays, getPlaylistRemoteSyncDays, LIBRARY_SONG_COLUMNS_KEY, setLibrarySongColumns, normalizeLibrarySongColumns, setLibraryHotUpdateEnabled } from '../stores/library.js'
 import { reloadSearchSources } from '../stores/search.js'
 import { reloadDiscoverSources } from '../stores/discover.js'
@@ -1979,6 +1992,18 @@ onMounted(async () => {
     if (settings['tag.matchRejectForeignArtist'] == null) settings['tag.matchRejectForeignArtist'] = 'true'
     if (!settings['player.coverStyle']) settings['player.coverStyle'] = 'disc'
     if (settings['player.visualizer'] == null) settings['player.visualizer'] = 'true'
+    if (settings[PLAYER_SMOOTH_STREAM_KEY] == null) {
+      // 与播放器一致：iOS 默认开，并写入设置避免开关状态漂移
+      try {
+        const { isIosLikeDevice } = await import('../utils/device.js')
+        settings[PLAYER_SMOOTH_STREAM_KEY] = isIosLikeDevice() ? 'true' : 'false'
+      } catch {
+        settings[PLAYER_SMOOTH_STREAM_KEY] = 'false'
+      }
+      try {
+        await api.settings.update({ [PLAYER_SMOOTH_STREAM_KEY]: settings[PLAYER_SMOOTH_STREAM_KEY] })
+      } catch {}
+    }
     settings[PLAY_QUALITY_KEY] = normalizePlayQuality(settings[PLAY_QUALITY_KEY])
     if (settings['download.isUseOtherSource'] == null) settings['download.isUseOtherSource'] = 'true'
     if (!settings[THEME_KEY]) settings[THEME_KEY] = currentTheme.value
@@ -2453,6 +2478,7 @@ async function saveSetting(key) {
     await api.settings.update({ [key]: settings[key] })
     if (key === 'player.coverStyle') loadCoverStyle()
     if (key === 'player.visualizer') loadPlayerSettings()
+    if (key === PLAYER_SMOOTH_STREAM_KEY) loadPlayerSettings()
     if (key === PLAY_QUALITY_KEY) loadPlayerSettings()
     if (key === 'download.isUseOtherSource') loadPlayerSettings()
     if (key === THEME_KEY) {
@@ -2610,6 +2636,23 @@ async function toggleVisualizerSetting() {
   try {
     await api.settings.update({ 'player.visualizer': settings['player.visualizer'] })
     await loadPlayerSettings()
+  } catch (e) {
+    showToast(e.message, 'error')
+  }
+}
+
+async function toggleSmoothStreamSetting() {
+  const currentlyOn = settings[PLAYER_SMOOTH_STREAM_KEY] !== 'false'
+  settings[PLAYER_SMOOTH_STREAM_KEY] = currentlyOn ? 'false' : 'true'
+  try {
+    await api.settings.update({ [PLAYER_SMOOTH_STREAM_KEY]: settings[PLAYER_SMOOTH_STREAM_KEY] })
+    await loadPlayerSettings()
+    showToast(
+      settings[PLAYER_SMOOTH_STREAM_KEY] !== 'false'
+        ? '已开启流畅播放：本地无损将转 AAC 再播（建议同时关闭音频可视化）'
+        : '已关闭流畅播放：本地文件直出',
+      'success',
+    )
   } catch (e) {
     showToast(e.message, 'error')
   }

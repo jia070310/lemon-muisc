@@ -489,9 +489,16 @@ export function getCacheEntry(filePath) {
   const db = getDB()
   if (!db || !filePath) return null
   const key = normalizePathKey(filePath)
-  const row = db.prepare('SELECT file_path, mtime, size, meta_json FROM library_index WHERE file_path = ?').get(key)
+  const row = db.prepare(`
+    SELECT file_path, mtime, size, meta_json, has_picture, has_lyrics
+    FROM library_index WHERE file_path = ?
+  `).get(key)
   if (!row) return null
-  return rowToFile(row)
+  const file = rowToFile(row)
+  // 列字段与 meta_json 取并集，避免 json 缺标记时列表误判「缺失」
+  file.hasPicture = Boolean(file.hasPicture || row.has_picture)
+  file.hasLyrics = Boolean(file.hasLyrics || row.has_lyrics)
+  return file
 }
 
 /** 用 SQLite 缓存补全文件列表（标签编辑 / 快速扫描） */
@@ -636,13 +643,26 @@ export function queryCachedTracks(opts = {}) {
 
   const album = String(opts.album || '').trim()
   if (album) {
-    clauses.push('album = ? COLLATE NOCASE')
-    params.push(album)
+    // 与 queryAlbums 的 album_name 对齐：空标签在列表里显示为「未知专辑」
+    if (album === '未知专辑') {
+      clauses.push("(NULLIF(TRIM(album), '') IS NULL OR album = ? COLLATE NOCASE)")
+      params.push(album)
+    } else {
+      clauses.push('album = ? COLLATE NOCASE')
+      params.push(album)
+    }
   }
   const albumArtist = String(opts.albumArtist || '').trim()
   if (albumArtist) {
-    clauses.push('(NULLIF(album_artist, "") = ? COLLATE NOCASE OR (album_artist = "" AND artist = ? COLLATE NOCASE))')
-    params.push(albumArtist, albumArtist)
+    // 与 queryAlbums 的 artist_name 表达式对齐（勿用 ""，SQLite 会当成标识符）
+    clauses.push(`(
+      CASE
+        WHEN NULLIF(album_artist, '') IS NOT NULL THEN album_artist
+        WHEN NULLIF(artist, '') IS NOT NULL THEN artist
+        ELSE '未知艺术家'
+      END
+    ) = ? COLLATE NOCASE`)
+    params.push(albumArtist)
   }
   const genre = String(opts.genre || '').trim()
   if (genre) {
@@ -895,7 +915,7 @@ export function queryAlbums(opts = {}) {
     const albumName = r.album_name || '未知专辑'
     const artistName = r.artist_name || '未知艺术家'
     return {
-      id: `${artistName}::${albumName}`,
+      id: `${encodeURIComponent(artistName)}::${encodeURIComponent(albumName)}`,
       name: albumName,
       artist: artistName,
       trackCount: r.track_count || 0,
