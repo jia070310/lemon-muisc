@@ -88,17 +88,34 @@ export function joinDownloadGroupSegments(savePath, segments = []) {
   return path.join(root, ...segs)
 }
 
-/** 根据设置解析下载保存目录（可在根目录下按歌手/专辑分子文件夹） */
+/** 从任务或 meta 取出歌单文件夹名（循序/批量下载可选） */
+function pickListName(task = {}) {
+  if (task.listName) return task.listName
+  let meta = task.meta
+  if (typeof meta === 'string') {
+    try { meta = JSON.parse(meta || '{}') } catch { meta = {} }
+  }
+  if (meta && typeof meta === 'object' && meta.listName) return meta.listName
+  return ''
+}
+
+/** 根据设置解析下载保存目录（可在根目录下按歌手/专辑分子文件夹；可选歌单文件夹前缀） */
 export function resolveDownloadGroupDir(savePath, settings, task) {
+  const listName = sanitizePathSegment(pickListName(task))
+  let base = savePath
+  if (listName) {
+    base = joinDownloadGroupSegments(savePath, [listName])
+  }
+
   const mode = resolveGroupMode(settings)
 
   if (mode === 'artist-album') {
     const artist = sanitizePathSegment(pickArtistSegment(task)) || '未知歌手'
     const album = sanitizePathSegment(task.album || '') || '未知专辑'
-    return joinDownloadGroupSegments(savePath, [artist, album])
+    return joinDownloadGroupSegments(base, [artist, album])
   }
 
   const segment = sanitizePathSegment(pickGroupSegment(mode, task))
-  if (!segment) return savePath
-  return joinDownloadGroupSegments(savePath, [segment])
+  if (!segment) return base
+  return joinDownloadGroupSegments(base, [segment])
 }

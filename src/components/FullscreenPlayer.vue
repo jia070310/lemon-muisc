@@ -97,7 +97,7 @@
               class="fs-lyric-col"
               ref="lyricPanelRef"
               @wheel.passive="onLyricUserInteract"
-              @touchstart.passive="onLyricUserInteract"
+              @touchmove.passive="onLyricUserInteract"
               @pointerdown="onLyricPanelPointerDown"
             >
               <div v-if="!displayLyricLines.length" class="fs-lyric-empty">暂无歌词</div>
@@ -137,14 +137,17 @@
 
         <div class="fs-controls fs-chrome">
           <div class="fs-progress">
-            <span class="fs-time">{{ fmtTime(currentTime) }}</span>
+            <span class="fs-time">{{ fmtTime(progressDisplayTime) }}</span>
             <input
               type="range"
               class="fs-slider"
               min="0"
               :max="displayDuration || 1"
-              :value="currentTime"
-              @input="onSeek"
+              :value="progressDisplayTime"
+              @input="onSeekInput"
+              @change="onSeekCommit"
+              @pointerup="onSeekCommit"
+              @touchend.passive="onSeekCommit"
             />
             <span class="fs-time">{{ fmtTime(displayDuration) }}</span>
           </div>
@@ -384,7 +387,7 @@ import {
   playQueue, currentQueueIndex, playMode, playModeLabel,
   showFullscreenPlayer, visualizerEnabled, volume, isMuted, playerError,
   currentPlayPlatformLabel,
-  togglePause, seekTo, setVolume, toggleMute, fmtTime, playNext, playPrev, togglePlayMode,
+  togglePause, seekTo, previewSeek, commitSeek, setVolume, toggleMute, fmtTime, playNext, playPrev, togglePlayMode,
   closeFullscreenPlayer, showQueuePanel, playTrackAt, removeFromQueue, clearQueue,
   resumeOrTogglePause, unlockAudioFromGesture, currentLocalTrackPath, tryFillCoverFromNetwork,
   showPlayerNotice,
@@ -625,8 +628,31 @@ function setLyricLineRef(el, i) {
   if (el) lyricLineEls.value[i] = el
 }
 
-function onSeek(e) {
-  seekTo(Number(e.target.value))
+const scrubbing = ref(false)
+const scrubTime = ref(0)
+let seekCommitLock = false
+
+const progressDisplayTime = computed(() => (
+  scrubbing.value ? scrubTime.value : currentTime.value
+))
+
+function onSeekInput(e) {
+  const t = Number(e.target.value)
+  scrubbing.value = true
+  scrubTime.value = t
+  previewSeek(t)
+}
+
+function onSeekCommit(e) {
+  if (seekCommitLock) return
+  const t = Number(e?.target?.value ?? scrubTime.value)
+  if (!scrubbing.value && !Number.isFinite(t)) return
+  scrubbing.value = false
+  scrubTime.value = t
+  seekCommitLock = true
+  Promise.resolve(commitSeek(t)).finally(() => {
+    seekCommitLock = false
+  })
 }
 
 function onVolumePercent(e) {
@@ -706,9 +732,10 @@ function onAddedToPlaylist({ playlist, duplicate }) {
 }
 
 /** 手动浏览歌词后，多久自动回到当前播放行 */
-const LYRIC_AUTO_RESUME_MS = 3500
+const LYRIC_AUTO_RESUME_MS = 2200
 const lyricUserBrowsing = ref(false)
 let lyricBrowseTimer = null
+let lyricScrollRaf = 0
 
 function clearLyricBrowseTimer() {
   if (lyricBrowseTimer != null) {
@@ -734,24 +761,37 @@ function onLyricUserInteract() {
 }
 
 function onLyricPanelPointerDown(e) {
-  // 工具栏切换不打断自动跟随
+  // 工具栏切换不打断自动跟随；点击不立刻暂停跟随（避免误触卡死）
   if (e.target?.closest?.('.fs-lyric-toolbar')) return
-  onLyricUserInteract()
+  if (e.pointerType === 'mouse' && e.button === 0) {
+    // 鼠标按下后若发生拖动，由后续 wheel/move 处理；纯点击不暂停
+    return
+  }
 }
 
 function scrollActiveLyric(force = false) {
   if (!force && lyricUserBrowsing.value) return
-  const idx = activeLyricIdx.value
-  if (idx < 0) return
-  const el = lyricLineEls.value[idx]
-  const panel = lyricPanelRef.value
-  if (!el || !panel) return
-  const panelRect = panel.getBoundingClientRect()
-  const elRect = el.getBoundingClientRect()
-  const delta = (elRect.top + elRect.height / 2) - (panelRect.top + panelRect.height / 2)
-  if (Math.abs(delta) < 2) return
-  const nextTop = panel.scrollTop + delta
-  panel.scrollTo({ top: Math.max(0, nextTop), behavior: 'smooth' })
+  if (lyricScrollRaf) cancelAnimationFrame(lyricScrollRaf)
+  lyricScrollRaf = requestAnimationFrame(() => {
+    lyricScrollRaf = 0
+    const idx = activeLyricIdx.value
+    if (idx < 0) return
+    const el = lyricLineEls.value[idx]
+    const panel = lyricPanelRef.value
+    if (!el || !panel) return
+    const panelRect = panel.getBoundingClientRect()
+    const elRect = el.getBoundingClientRect()
+    const delta = (elRect.top + elRect.height / 2) - (panelRect.top + panelRect.height / 2)
+    if (Math.abs(delta) < 3) return
+    const nextTop = panel.scrollTop + delta
+    // 移动端 / 大跨度：即时定位，避免 smooth 叠动画卡死
+    const far = Math.abs(delta) > panelRect.height * 0.9
+    const useSmooth = !isMobileViewport.value && !far
+    panel.scrollTo({
+      top: Math.max(0, nextTop),
+      behavior: useSmooth ? 'smooth' : 'auto',
+    })
+  })
 }
 
 function syncNativeFullscreenState() {
@@ -898,6 +938,8 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  if (lyricScrollRaf) cancelAnimationFrame(lyricScrollRaf)
+  lyricScrollRaf = 0
   clearChromeIdleTimer()
   resetLyricBrowseState()
   mobileViewportMq?.removeEventListener('change', updateMobileViewport)
@@ -1623,31 +1665,51 @@ watch(currentPlaying, () => closeDownloadMenu())
   opacity: 0;
 }
 
+/* 平板：左右分栏收紧，封面略小、歌词区更大 */
+@media (min-width: 861px) and (max-width: 1100px) {
+  .fs-body {
+    grid-template-columns: minmax(200px, 300px) minmax(0, 1fr);
+    gap: 20px;
+    padding: calc(56px + env(safe-area-inset-top, 0px)) 24px 14px;
+  }
+  .fs-cover {
+    width: min(260px, 34vw);
+  }
+  .fs-title { font-size: 20px; }
+  .fs-lyric-line { font-size: 17px; padding: 8px 6px; }
+  .fs-lyric-line.active { font-size: 20px; }
+  .fs-spectrum {
+    height: min(32vh, 260px);
+    opacity: 0.75;
+  }
+}
+
 @media (max-width: 860px) {
   .fs-body {
     display: flex;
     flex-direction: column;
     grid-template-columns: unset;
-    gap: 8px;
-    padding: calc(52px + env(safe-area-inset-top, 0px)) 14px 4px;
+    gap: 6px;
+    padding: calc(48px + env(safe-area-inset-top, 0px)) 12px 2px;
     align-items: stretch;
     overflow: hidden;
     min-height: 0;
   }
   .fs-cover-col {
     flex: 0 0 auto;
-    gap: 10px;
+    gap: 8px;
   }
   .fs-cover {
-    width: min(140px, 34vw);
+    width: min(108px, 26vw);
   }
   .fs-meta { max-width: 100%; }
-  .fs-title { font-size: 17px; margin-bottom: 4px; }
-  .fs-artist { font-size: 13px; }
+  .fs-title { font-size: 16px; margin-bottom: 2px; }
+  .fs-artist { font-size: 12px; }
+  .fs-error { font-size: 12px; margin-top: 4px; }
   .fs-lyric-wrap {
     flex: 1 1 0;
     min-height: 0;
-    gap: 8px;
+    gap: 6px;
   }
   .fs-lyric-toolbar {
     top: auto;
@@ -1660,26 +1722,32 @@ watch(currentPlaying, () => closeDownloadMenu())
     overflow-x: hidden;
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
-    mask-image: linear-gradient(to bottom, transparent, #000 10%, #000 82%, transparent);
-    -webkit-mask-image: linear-gradient(to bottom, transparent, #000 10%, #000 82%, transparent);
+    overscroll-behavior: contain;
+    touch-action: pan-y;
+    mask-image: linear-gradient(to bottom, transparent, #000 8%, #000 86%, transparent);
+    -webkit-mask-image: linear-gradient(to bottom, transparent, #000 8%, #000 86%, transparent);
   }
   .fs-lyric-list {
-    padding: 12vh 6px 14vh;
+    padding: 10vh 4px 12vh;
   }
-  .fs-lyric-line { font-size: 15px; padding: 7px 4px; }
-  .fs-lyric-line.active { font-size: 17px; }
+  .fs-lyric-line { font-size: 15px; padding: 6px 4px; }
+  .fs-lyric-line.active { font-size: 16px; }
   .fs-spectrum {
-    height: min(28vh, 180px);
-    opacity: 0.55;
-    bottom: 72px;
+    height: min(16vh, 110px);
+    opacity: 0.4;
+    bottom: 68px;
   }
   .fs-controls {
     flex: 0 0 auto;
     z-index: 10;
-    padding: 4px 12px calc(10px + env(safe-area-inset-bottom, 0px));
-    background: linear-gradient(to top, rgba(0, 0, 0, 0.72) 55%, transparent);
+    padding: 2px 10px calc(8px + env(safe-area-inset-bottom, 0px));
+    background: linear-gradient(to top, rgba(0, 0, 0, 0.78) 50%, transparent);
   }
-  .fs-progress { margin-bottom: 6px; }
+  .fs-progress { margin-bottom: 4px; }
+  .fs-slider {
+    height: 28px;
+    touch-action: none;
+  }
   .fs-close {
     width: 44px;
     height: 44px;
@@ -1764,19 +1832,58 @@ watch(currentPlaying, () => closeDownloadMenu())
   }
 }
 
+/* 手机横屏：左右分栏，封面缩小、歌词占主区 */
+@media (max-width: 860px) and (orientation: landscape) {
+  .fs-body {
+    flex-direction: row;
+    align-items: stretch;
+    gap: 10px;
+    padding: calc(40px + env(safe-area-inset-top, 0px)) 12px 4px;
+  }
+  .fs-cover-col {
+    flex: 0 0 min(28vw, 160px);
+    justify-content: center;
+    max-width: 180px;
+  }
+  .fs-cover {
+    width: min(120px, 22vw);
+  }
+  .fs-meta { max-width: 100%; }
+  .fs-title { font-size: 14px; }
+  .fs-artist { font-size: 11px; }
+  .fs-lyric-wrap {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+  .fs-lyric-list {
+    padding: 8vh 4px 10vh;
+  }
+  .fs-spectrum {
+    height: min(22vh, 100px);
+    bottom: 56px;
+  }
+  .fs-controls {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+  }
+}
+
 /* 矮屏竖屏：压缩封面，优先留给歌词 */
 @media (max-width: 860px) and (max-height: 700px) {
   .fs-cover {
-    width: min(110px, 28vw);
+    width: min(88px, 22vw);
   }
   .fs-cover-col { gap: 6px; }
   .fs-body {
     padding-top: calc(44px + env(safe-area-inset-top, 0px));
     gap: 6px;
   }
-  .fs-lyric-list { padding: 22vh 6px 18vh; }
+  .fs-lyric-list { padding: 16vh 4px 14vh; }
   .fs-spectrum {
-    height: min(22vh, 140px);
+    height: min(12vh, 80px);
+    opacity: 0.32;
     bottom: 64px;
   }
 }

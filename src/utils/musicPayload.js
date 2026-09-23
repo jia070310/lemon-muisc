@@ -169,6 +169,7 @@ export function buildDownloadTask(item, source, quality, extra = {}) {
     autoCascade: extra.autoCascade != null ? Boolean(extra.autoCascade) : policy === 'cascade',
     deferExistAsk: Boolean(extra.deferExistAsk),
     batchId: extra.batchId || '',
+    listName: extra.listName || '',
   }
 }
 

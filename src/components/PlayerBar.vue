@@ -59,7 +59,7 @@
         <span class="player-lyric" :class="{ empty: currentPlaying && !currentLyricText && !playerError && !playerNotice, error: !!playerError, notice: !playerError && !!playerNotice }">
           {{ playerError || playerNotice || (currentPlaying ? (currentLyricText || '暂无歌词') : '未知艺术家') }}
         </span>
-        <span v-if="currentPlaying" class="player-time-mobile">{{ fmtTime(currentTime) }} / {{ fmtTime(displayDuration) }}</span>
+        <span v-if="currentPlaying" class="player-time-mobile">{{ fmtTime(progressDisplayTime) }} / {{ fmtTime(displayDuration) }}</span>
       </div>
     </div>
 
@@ -102,8 +102,18 @@
 
     <div class="bar-right">
       <div class="player-progress" v-if="currentPlaying">
-        <input type="range" min="0" :max="displayDuration || 1" :value="currentTime" @input="onSeek" class="progress-slider" />
-        <span class="time-display">{{ fmtTime(currentTime) }} / {{ fmtTime(displayDuration) }}</span>
+        <input
+          type="range"
+          min="0"
+          :max="displayDuration || 1"
+          :value="progressDisplayTime"
+          class="progress-slider"
+          @input="onSeekInput"
+          @change="onSeekCommit"
+          @pointerup="onSeekCommit"
+          @touchend.passive="onSeekCommit"
+        />
+        <span class="time-display">{{ fmtTime(progressDisplayTime) }} / {{ fmtTime(displayDuration) }}</span>
       </div>
       <button
         v-if="currentPlaying"
@@ -478,7 +488,7 @@ import {
   queueSource, queuePanelTitle,
   sleepTimerMinutes, sleepTimerLeftLabel, setSleepTimer, clearSleepTimer,
   currentPlayPlatformLabel,
-  togglePause, stopPlay, seekTo, setVolume, toggleMute, fmtTime, initPlayer,
+  togglePause, stopPlay, seekTo, previewSeek, commitSeek, setVolume, toggleMute, fmtTime, initPlayer,
   playNext, playPrev, togglePlayMode, resumeOrTogglePause, unlockAudioFromGesture,
   removeFromQueue,   clearQueue, playTrackAt, openFullscreenPlayer,
   currentLocalTrackPath, tryFillCoverFromNetwork, showPlayerNotice,
@@ -517,6 +527,12 @@ const showMorePanel = ref(false)
 const showMoreDlQuality = ref(false)
 const downloadMenuOpen = ref(false)
 const pickPlaylistTrack = ref(null)
+const scrubbing = ref(false)
+const scrubTime = ref(0)
+let seekCommitLock = false
+const progressDisplayTime = computed(() => (
+  scrubbing.value ? scrubTime.value : currentTime.value
+))
 const {
   menuStyle: downloadMenuStyle,
   positionMenu: positionDownloadMenu,
@@ -717,7 +733,7 @@ const CARD_PROGRESS_PATH = 'M 22,2 L 34,2 A 8,8 0 0 1 42,10 L 42,34 A 8,8 0 0 1 
 const progressRatio = computed(() => {
   const dur = displayDuration.value
   if (!dur || dur <= 0) return 0
-  return Math.min(1, Math.max(0, currentTime.value / dur))
+  return Math.min(1, Math.max(0, progressDisplayTime.value / dur))
 })
 
 const discRingDashoffset = computed(() => DISC_RING_CIRC * (1 - progressRatio.value))
@@ -800,7 +816,23 @@ function onMoreOpenTagEdit() {
   onOpenTagEdit()
 }
 
-function onSeek(e) { seekTo(Number(e.target.value)) }
+function onSeekInput(e) {
+  const t = Number(e.target.value)
+  scrubbing.value = true
+  scrubTime.value = t
+  previewSeek(t)
+}
+
+function onSeekCommit(e) {
+  if (seekCommitLock) return
+  const t = Number(e?.target?.value ?? scrubTime.value)
+  scrubbing.value = false
+  scrubTime.value = t
+  seekCommitLock = true
+  Promise.resolve(commitSeek(t)).finally(() => {
+    seekCommitLock = false
+  })
+}
 
 function onCoverClick() {
   if (!currentPlaying.value) return

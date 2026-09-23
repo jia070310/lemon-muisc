@@ -50,6 +50,14 @@ import {
   isSameAudioBaseName,
 } from '../utils/downloadExist.js'
 import { recordSourceHealthOutcome } from '../utils/sourceHealth.js'
+import {
+  startPlaylistDownloadScheduler,
+  createPlaylistDownloadJob,
+  listPlaylistDownloadJobs,
+  getPlaylistDownloadJob,
+  cancelPlaylistDownloadJob,
+  findActiveJobForPlaylist,
+} from '../utils/playlistDownloadJob.js'
 
 export const downloadRouter = Router()
 
@@ -135,6 +143,86 @@ function getNoActiveSourcePayload() {
   return { error, code: 'NO_ACTIVE_SOURCE', imported }
 }
 
+/**
+ * 将下载任务写入队列（供 /add 与歌单循序任务复用）
+ * @returns {{ added: string[], skipped: number }}
+ */
+export function enqueueDownloadTasks(userId, tasks, { broadcastAdded = true } = {}) {
+  if (!userId || !Array.isArray(tasks) || !tasks.length) return { added: [], skipped: 0 }
+
+  const insert = getDB().prepare(`
+    INSERT INTO download_tasks (id, name, singer, source, album, interval, quality, meta, status, user_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'waiting', ?)
+  `)
+
+  const activeKeys = loadActiveDownloadIdentityKeys(userId)
+  const added = []
+  let skipped = 0
+  const tx = getDB().transaction(() => {
+    for (const t of tasks) {
+      const quality = t.quality || '320k'
+      const key = buildDownloadIdentityKey(t, quality)
+      if (key && activeKeys.has(key)) {
+        skipped += 1
+        continue
+      }
+      if (key) activeKeys.add(key)
+
+      const id = `dl_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+      const meta = JSON.stringify({
+        songId: t.songId || t.id,
+        hash: t.hash || '',
+        songmid: t.songmid || '',
+        copyrightId: t.copyrightId || '',
+        albumAudioId: t.albumAudioId || '',
+        duration: t.duration || '',
+        musicId: t.musicId || '',
+        rid: t.rid || '',
+        dcTargetId: t.dcTargetId || '',
+        albummid: t.albummid || t.albumMid || t.albumId || '',
+        albumId: t.albumId || t.albumMid || t.albummid || '',
+        albumMid: t.albumMid || t.albummid || t.albumId || '',
+        strMediaMid: t.strMediaMid || '',
+        img: t.img || t.picUrl || '',
+        picUrl: t.picUrl || t.img || '',
+        source: t.source,
+        types: t.types || [],
+        qualitys: t.qualitys || [],
+        requestedQuality: t.preferredQuality || t.quality || '320k',
+        preferredQuality: t.preferredQuality || t.quality || '320k',
+        qualityPolicy: t.qualityPolicy || '',
+        qualityFloor: t.qualityFloor || '',
+        autoCascade: Boolean(t.autoCascade) || t.qualityPolicy === 'cascade',
+        deferExistAsk: Boolean(t.deferExistAsk),
+        batchId: t.batchId || '',
+        listName: t.listName || '',
+      })
+      insert.run(id, t.name, t.singer || '', t.source || '', t.album || '', t.interval || '', quality, meta, userId)
+      added.push(id)
+    }
+  })
+  tx()
+
+  if (broadcastAdded && added.length) {
+    const placeholders = added.map(() => '?').join(',')
+    const rows = getDB().prepare(
+      `SELECT * FROM download_tasks WHERE id IN (${placeholders}) ORDER BY created_at DESC`,
+    ).all(...added)
+    broadcast('download:added', {
+      tasks: rows.map((r) => ({
+        ...r,
+        meta: (() => {
+          try { return JSON.parse(r.meta || '{}') } catch { return {} }
+        })(),
+      })),
+      skipped,
+    }, userId)
+  }
+
+  if (added.length) processQueue()
+  return { added, skipped }
+}
+
 downloadRouter.post('/add', async (req, res) => {
   try {
     if (!hasActiveSource(getStoredActiveSourceIds(req.user?.id))) {
@@ -144,76 +232,65 @@ downloadRouter.post('/add', async (req, res) => {
     if (!Array.isArray(tasks) || !tasks.length) return res.status(400).json({ error: '没有下载任务' })
     if (tasks.length > 50) return res.status(400).json({ error: '单次最多添加 50 个下载任务' })
 
-    const insert = getDB().prepare(`
-      INSERT INTO download_tasks (id, name, singer, source, album, interval, quality, meta, status, user_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'waiting', ?)
-    `)
-
-    const activeKeys = loadActiveDownloadIdentityKeys(req.user.id)
-    const added = []
-    let skipped = 0
-    const tx = getDB().transaction(() => {
-      for (const t of tasks) {
-        const quality = t.quality || '320k'
-        const key = buildDownloadIdentityKey(t, quality)
-        if (key && activeKeys.has(key)) {
-          skipped += 1
-          continue
-        }
-        if (key) activeKeys.add(key)
-
-        const id = `dl_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-        const meta = JSON.stringify({
-          songId: t.songId || t.id,
-          hash: t.hash || '',
-          songmid: t.songmid || '',
-          copyrightId: t.copyrightId || '',
-          albumAudioId: t.albumAudioId || '',
-          duration: t.duration || '',
-          musicId: t.musicId || '',
-          rid: t.rid || '',
-          dcTargetId: t.dcTargetId || '',
-          albummid: t.albummid || t.albumMid || t.albumId || '',
-          albumId: t.albumId || t.albumMid || t.albummid || '',
-          albumMid: t.albumMid || t.albummid || t.albumId || '',
-          strMediaMid: t.strMediaMid || '',
-          img: t.img || t.picUrl || '',
-          picUrl: t.picUrl || t.img || '',
-          source: t.source,
-          types: t.types || [],
-          qualitys: t.qualitys || [],
-          requestedQuality: t.preferredQuality || t.quality || '320k',
-          preferredQuality: t.preferredQuality || t.quality || '320k',
-          qualityPolicy: t.qualityPolicy || '',
-          qualityFloor: t.qualityFloor || '',
-          autoCascade: Boolean(t.autoCascade) || t.qualityPolicy === 'cascade',
-          deferExistAsk: Boolean(t.deferExistAsk),
-          batchId: t.batchId || '',
-        })
-        insert.run(id, t.name, t.singer || '', t.source || '', t.album || '', t.interval || '', quality, meta, req.user.id)
-        added.push(id)
-      }
-    })
-    tx()
-
-    if (added.length) {
-      const placeholders = added.map(() => '?').join(',')
-      const rows = getDB().prepare(
-        `SELECT * FROM download_tasks WHERE id IN (${placeholders}) ORDER BY created_at DESC`,
-      ).all(...added)
-      broadcast('download:added', {
-        tasks: rows.map((r) => ({
-          ...r,
-          meta: (() => {
-            try { return JSON.parse(r.meta || '{}') } catch { return {} }
-          })(),
-        })),
-        skipped,
-      }, req.user.id)
-    }
-
-    processQueue()
+    const { added, skipped } = enqueueDownloadTasks(req.user.id, tasks)
     res.json({ ok: true, ids: added, skipped })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+downloadRouter.get('/playlist-jobs', (req, res) => {
+  try {
+    const status = String(req.query.status || '').trim() || undefined
+    const jobs = listPlaylistDownloadJobs(req.user.id, { status })
+    res.json({ jobs })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+downloadRouter.get('/playlist-jobs/active', (req, res) => {
+  try {
+    const playlistId = String(req.query.playlistId || '').trim()
+    const job = playlistId
+      ? findActiveJobForPlaylist(req.user.id, playlistId)
+      : null
+    res.json({ job })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+downloadRouter.post('/playlist-job', (req, res) => {
+  try {
+    if (!hasActiveSource(getStoredActiveSourceIds(req.user?.id))) {
+      return res.status(400).json(getNoActiveSourcePayload())
+    }
+    const job = createPlaylistDownloadJob(req.user.id, req.body || {})
+    res.json({ ok: true, job })
+  } catch (e) {
+    if (e?.code === 'JOB_EXISTS') {
+      return res.status(409).json({ error: e.message, code: e.code, job: e.job })
+    }
+    res.status(400).json({ error: e.message || '创建失败' })
+  }
+})
+
+downloadRouter.post('/playlist-job/:id/cancel', (req, res) => {
+  try {
+    const job = cancelPlaylistDownloadJob(req.user.id, req.params.id)
+    if (!job) return res.status(404).json({ error: '任务不存在' })
+    res.json({ ok: true, job })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+downloadRouter.get('/playlist-job/:id', (req, res) => {
+  try {
+    const job = getPlaylistDownloadJob(req.user.id, req.params.id)
+    if (!job) return res.status(404).json({ error: '任务不存在' })
+    res.json({ job })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
@@ -645,6 +722,7 @@ function resumeTasks(ids = null) {
 export function initDownloadQueue() {
   reconcileStaleDownloads()
   processQueue()
+  startPlaylistDownloadScheduler({ enqueueDownloadTasks })
 }
 
 function getSettings(userId = null) {

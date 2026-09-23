@@ -114,6 +114,8 @@ export function initDB(configPath) {
     'download.isUseOtherSource': 'true',
     'download.isSavePathGroupByListName': 'false',
     'download.savePathGroupBy': 'none',
+    'download.playlistBatchSize': '50',
+    'download.playlistIntervalHours': '24',
     'source.active': '[]',
     'source.fault': '',
     'player.coverStyle': 'disc',
@@ -178,4 +180,28 @@ function migrateSchema(db) {
   if (!sessionCols.some((c) => c.name === 'remember')) {
     db.exec('ALTER TABLE sessions ADD COLUMN remember INTEGER DEFAULT 1')
   }
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS playlist_download_jobs (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      playlist_id TEXT DEFAULT '',
+      playlist_name TEXT DEFAULT '',
+      batch_size INTEGER NOT NULL DEFAULT 10,
+      interval_hours REAL NOT NULL DEFAULT 24,
+      cursor INTEGER NOT NULL DEFAULT 0,
+      total INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'active',
+      next_run_at INTEGER NOT NULL DEFAULT 0,
+      save_list_folder INTEGER NOT NULL DEFAULT 0,
+      preferred_quality TEXT DEFAULT '',
+      strategy TEXT DEFAULT 'cascade',
+      floor_quality TEXT DEFAULT '',
+      tasks_json TEXT NOT NULL DEFAULT '[]',
+      created_at INTEGER DEFAULT (unixepoch()),
+      updated_at INTEGER DEFAULT (unixepoch())
+    );
+    CREATE INDEX IF NOT EXISTS idx_playlist_dl_jobs_user ON playlist_download_jobs(user_id, status);
+    CREATE INDEX IF NOT EXISTS idx_playlist_dl_jobs_next ON playlist_download_jobs(status, next_run_at);
+  `)
 }

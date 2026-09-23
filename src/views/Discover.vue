@@ -127,13 +127,18 @@
           <template v-if="selectedCount"> · 已选 {{ selectedCount }}</template>
         </span>
         <label class="mobile-select-all">
-          <input type="checkbox" :checked="allSelected" :indeterminate.prop="someSelected && !allSelected" @change="toggleSelectAll" />
-          全选
+          <input
+            type="checkbox"
+            :checked="allLoadedSelected"
+            :indeterminate.prop="someSelected && !allLoadedSelected"
+            @change="toggleSelectAllLoaded"
+          />
+          全选歌单
         </label>
         <div class="results-actions">
           <div class="dl-wrap batch-dl-wrap">
             <button
-              class="btn-primary btn-sm"
+              class="btn-ghost btn-sm"
               :disabled="!selectedCount || batchDownloading"
               @click.stop="toggleBatchQualityMenu($event)"
             >
@@ -146,7 +151,7 @@
                 :style="batchMenuStyle"
                 @click.stop
               >
-                <div class="quality-menu-title">批量音质：仅列出所选歌曲实际支持的音质</div>
+                <div class="quality-menu-title">批量音质：仅下载已勾选的歌曲</div>
                 <template v-if="batchQualities.length">
                   <button
                     v-for="q in batchQualities"
@@ -156,6 +161,35 @@
                   >{{ getQualityLabel(q) }}</button>
                 </template>
                 <div v-else class="quality-empty">所选歌曲暂无可用音质信息</div>
+              </div>
+            </Teleport>
+          </div>
+          <div class="dl-wrap batch-dl-wrap">
+            <button
+              class="btn-primary btn-sm"
+              :disabled="!discoverState.results.length || pacedBusy || discoverState.loadingMore"
+              @click.stop="togglePacedQualityMenu($event)"
+              title="整单循序下载，无需勾选；可设每批数量与间隔"
+            >
+              {{ pacedBusy ? '创建中…' : `下载歌单 (${discoverState.results.length})` }}
+            </button>
+            <Teleport to="body">
+              <div
+                class="quality-menu discover-batch-quality-menu"
+                v-if="showPacedQualityMenu"
+                :style="pacedMenuStyle"
+                @click.stop
+              >
+                <div class="quality-menu-title">整单循序下载：选择目标音质</div>
+                <template v-if="pacedQualities.length">
+                  <button
+                    v-for="q in pacedQualities"
+                    :key="q"
+                    class="quality-option"
+                    @click="openPacedDialog(q)"
+                  >{{ getQualityLabel(q) }}</button>
+                </template>
+                <div v-else class="quality-empty">暂无可用音质信息</div>
               </div>
             </Teleport>
           </div>
@@ -172,9 +206,22 @@
       </div>
       <div class="result-header song-list-header">
         <label class="header-select-all">
-          <input type="checkbox" :checked="allSelected" :indeterminate.prop="someSelected && !allSelected" @change="toggleSelectAll" />
+          <input
+            type="checkbox"
+            :checked="pageAllSelected"
+            :indeterminate.prop="pageSomeSelected && !pageAllSelected"
+            @change="toggleSelectPage"
+          />
           全选本页
         </label>
+        <button
+          type="button"
+          class="btn-ghost btn-sm header-select-all-loaded"
+          :disabled="!discoverState.results.length"
+          @click="toggleSelectAllLoaded"
+        >
+          {{ allLoadedSelected ? '取消全选歌单' : `全选歌单 (${discoverState.results.length})` }}
+        </button>
       </div>
       <div
         ref="trackListContainerRef"
@@ -241,6 +288,19 @@
       @cancel="closeBatchDialog"
       @confirm="handleBatchConfirm"
     />
+
+    <PlaylistPacedDownloadDialog
+      :open="Boolean(pacedDialog)"
+      :total-count="discoverState.results.length"
+      :preferred="pacedDialog?.preferred || '320k'"
+      :preferred-label="pacedPreferredLabel"
+      :playlist-name="cleanText(discoverState.playlistInfo?.name) || '歌单'"
+      :default-batch-size="pacedDefaults.batchSize"
+      :default-interval-hours="pacedDefaults.intervalHours"
+      :busy="pacedBusy"
+      @cancel="pacedDialog = null"
+      @confirm="handlePacedConfirm"
+    />
   </div>
 </template>
 
@@ -249,6 +309,7 @@ defineOptions({ name: 'Discover' })
 import { ref, computed, onMounted, onActivated, onUnmounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import BatchQualityDialog from '../components/BatchQualityDialog.vue'
+import PlaylistPacedDownloadDialog from '../components/PlaylistPacedDownloadDialog.vue'
 import ConfirmModal from '../components/ConfirmModal.vue'
 import CoverArt from '../components/CoverArt.vue'
 import DiscoverSongItem from '../components/discover/DiscoverSongItem.vue'
@@ -258,6 +319,7 @@ import DiscoverNewSongsSection from '../components/discover/DiscoverNewSongsSect
 import DiscoverNewAlbumsSection from '../components/discover/DiscoverNewAlbumsSection.vue'
 import DiscoverRanksSection from '../components/discover/DiscoverRanksSection.vue'
 import { useBatchDownload, formatBatchDownloadToast } from '../composables/useBatchDownload.js'
+import { buildBatchDownloadTasks, trackSelectKey } from '../utils/musicPayload.js'
 import { useTrackListView } from '../composables/useTrackListView.js'
 import { useProgressiveTrackCovers } from '../composables/useProgressiveTrackCovers.js'
 import { api } from '../api.js'
@@ -275,11 +337,9 @@ import { loadingPlay, isPaused, isPlayingItem, playItem, addToQueue, isInQueue }
 import { getQualityLabel } from '../utils/quality.js'
 import { platformLabel } from '../utils/platforms.js'
 import { cleanText, cleanTrackItem } from '../utils/text.js'
-import {
-  trackSelectKey,
-} from '../utils/musicPayload.js'
 import { useQualityMenuPosition } from '../utils/qualityMenu.js'
 import { playlistPickTarget, importPlaylistFromLoaded } from '../stores/library.js'
+import { assertActiveSourceForDownload } from '../stores/downloadGuard.js'
 
 const router = useRouter()
 const route = useRoute()
@@ -287,8 +347,13 @@ const toast = ref(null)
 const importingPlaylist = ref(false)
 const importConfirm = ref(null)
 const showBatchQualityMenu = ref(false)
+const showPacedQualityMenu = ref(false)
 const selectedKeys = ref(new Set())
+const pacedDialog = ref(null)
+const pacedBusy = ref(false)
+const pacedDefaults = ref({ batchSize: 50, intervalHours: 24 })
 const { menuStyle: batchMenuStyle, positionMenu: positionBatchMenu, clearMenuPosition: clearBatchMenuPosition } = useQualityMenuPosition()
+const { menuStyle: pacedMenuStyle, positionMenu: positionPacedMenu, clearMenuPosition: clearPacedMenuPosition } = useQualityMenuPosition()
 
 const {
   batchDialog,
@@ -337,7 +402,7 @@ const playlistLoadLabel = computed(() => {
 })
 
 const selectedCount = computed(() => selectedKeys.value.size)
-const allSelected = computed(() =>
+const allLoadedSelected = computed(() =>
   discoverState.results.length > 0
   && discoverState.results.every((item, i) => selectedKeys.value.has(trackSelectKey(item, i)))
 )
@@ -349,6 +414,17 @@ const batchQualities = computed(() => getBatchQualities(selectedItems.value))
 const batchPreferredLabel = computed(() => {
   const q = batchDialog.value?.preferred
   return q ? getQualityLabel(q) : ''
+})
+const pacedQualities = computed(() => getBatchQualities(discoverState.results))
+const pacedPreferredLabel = computed(() => {
+  const q = pacedDialog.value?.preferred
+  return q ? getQualityLabel(q) : ''
+})
+const discoverPlaylistJobId = computed(() => {
+  const info = discoverState.playlistInfo || {}
+  const src = activeSource.value || ''
+  const id = info.id || info.listId || info.sourceListId || info.url || info.name || ''
+  return `discover:${src}:${id}`
 })
 
 const MAX_PLAYLIST_QUEUE = 100
@@ -365,6 +441,17 @@ const {
   enableVirtual: false,
   pageSize: 50,
 })
+
+const pageTrackKeys = computed(() =>
+  displayRows.value.map(({ item, i }) => trackSelectKey(item, i))
+)
+const pageAllSelected = computed(() =>
+  pageTrackKeys.value.length > 0
+  && pageTrackKeys.value.every((k) => selectedKeys.value.has(k))
+)
+const pageSomeSelected = computed(() =>
+  pageTrackKeys.value.some((k) => selectedKeys.value.has(k))
+)
 
 useProgressiveTrackCovers(() => displayRows.value, {
   getSource: () => activeSource.value,
@@ -418,6 +505,7 @@ onMounted(() => {
       loadHomeFeed()
     }
   })()
+  loadPacedDefaults()
   document.addEventListener('click', closeMenus)
 })
 
@@ -842,8 +930,20 @@ function toggleSelect(item, i) {
   selectedKeys.value = next
 }
 
-function toggleSelectAll() {
-  if (allSelected.value) {
+function toggleSelectPage() {
+  const keys = pageTrackKeys.value
+  if (!keys.length) return
+  const next = new Set(selectedKeys.value)
+  if (pageAllSelected.value) {
+    for (const k of keys) next.delete(k)
+  } else {
+    for (const k of keys) next.add(k)
+  }
+  selectedKeys.value = next
+}
+
+function toggleSelectAllLoaded() {
+  if (allLoadedSelected.value) {
     selectedKeys.value = new Set()
     return
   }
@@ -856,6 +956,8 @@ function clearSelection() {
 
 function toggleBatchQualityMenu(event) {
   if (!selectedCount.value) return
+  showPacedQualityMenu.value = false
+  clearPacedMenuPosition()
   showBatchQualityMenu.value = !showBatchQualityMenu.value
   if (showBatchQualityMenu.value) {
     positionBatchMenu(event?.currentTarget, { align: 'left', zIndex: 120 })
@@ -864,9 +966,95 @@ function toggleBatchQualityMenu(event) {
   }
 }
 
-function closeMenus() {
+function togglePacedQualityMenu(event) {
+  if (!discoverState.results.length) return
   showBatchQualityMenu.value = false
   clearBatchMenuPosition()
+  showPacedQualityMenu.value = !showPacedQualityMenu.value
+  if (showPacedQualityMenu.value) {
+    positionPacedMenu(event?.currentTarget, { align: 'left', zIndex: 120 })
+  } else {
+    clearPacedMenuPosition()
+  }
+}
+
+function closeMenus() {
+  showBatchQualityMenu.value = false
+  showPacedQualityMenu.value = false
+  clearBatchMenuPosition()
+  clearPacedMenuPosition()
+}
+
+async function loadPacedDefaults() {
+  try {
+    const s = await api.settings.get()
+    const batchSize = Number(s?.['download.playlistBatchSize']) || 50
+    const intervalHours = Number(s?.['download.playlistIntervalHours']) || 24
+    pacedDefaults.value = {
+      batchSize: [50, 100, 200, 300, 500, 1000].includes(batchSize) ? batchSize : 50,
+      intervalHours: [1, 3, 6, 12, 24, 48].includes(intervalHours) ? intervalHours : 24,
+    }
+  } catch {}
+}
+
+function openPacedDialog(quality) {
+  closeMenus()
+  pacedDialog.value = { preferred: quality }
+}
+
+async function handlePacedConfirm(payload) {
+  const preferred = pacedDialog.value?.preferred || '320k'
+  const entries = discoverState.results.map((item, i) => ({
+    item,
+    key: trackSelectKey(item, i),
+  }))
+  if (!entries.length) return
+  if (!(await assertActiveSourceForDownload())) return
+
+  pacedBusy.value = true
+  try {
+    const { tasks, skippedCount } = buildBatchDownloadTasks(entries, activeSource.value, {
+      preferredQuality: preferred,
+      strategy: payload.strategy,
+      floorQuality: payload.floorQuality,
+    })
+    if (!tasks.length) {
+      showToast(skippedCount ? '所选歌曲均无要求音质，未创建任务' : '没有可下载的歌曲', 'error')
+      return
+    }
+    await api.download.createPlaylistJob({
+      playlistId: discoverPlaylistJobId.value,
+      playlistName: cleanText(discoverState.playlistInfo?.name) || '歌单',
+      batchSize: payload.batchSize,
+      intervalHours: payload.intervalHours,
+      saveListFolder: payload.saveListFolder,
+      preferredQuality: preferred,
+      strategy: payload.strategy,
+      floorQuality: payload.floorQuality,
+      tasks,
+    })
+    pacedDialog.value = null
+    const first = Math.min(payload.batchSize, tasks.length)
+    const skippedHint = skippedCount ? `（策略跳过 ${skippedCount} 首）` : ''
+    showToast(
+      `已开始循序下载：首批 ${first} 首已入队，共 ${tasks.length} 首，每 ${payload.intervalHours} 小时一批${skippedHint}`,
+      'success',
+    )
+    try {
+      await api.settings.update({
+        'download.playlistBatchSize': String(payload.batchSize),
+        'download.playlistIntervalHours': String(payload.intervalHours),
+      })
+      pacedDefaults.value = {
+        batchSize: payload.batchSize,
+        intervalHours: payload.intervalHours,
+      }
+    } catch {}
+  } catch (e) {
+    showToast(e.message || '创建失败', 'error')
+  } finally {
+    pacedBusy.value = false
+  }
 }
 
 async function togglePlay(item) {
@@ -1385,11 +1573,16 @@ function showToast(text, type = 'info') {
 .result-header.song-list-header {
   display: flex;
   align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
   padding: 10px 16px;
   color: var(--text-muted);
   font-size: 12px;
   border-bottom: 1px solid var(--border-light);
   background: var(--bg-elevated);
+}
+.header-select-all-loaded {
+  margin-left: auto;
 }
 .header-select-all {
   display: inline-flex;

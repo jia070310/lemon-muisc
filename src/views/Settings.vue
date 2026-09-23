@@ -910,6 +910,34 @@
               />
             </div>
           </div>
+          <div class="setting-item">
+            <div class="setting-item-info">
+              <div class="setting-item-label">歌单循序下载：每批数量</div>
+              <div class="setting-item-desc">下载整个歌单时默认一次入队多少首；可在歌单页临时修改。一次过多可能触发音源风控</div>
+            </div>
+            <div class="setting-item-action">
+              <AppSelect
+                v-model="settings['download.playlistBatchSize']"
+                :options="playlistBatchSizeOptions"
+                min-width="120px"
+                @change="saveSetting('download.playlistBatchSize')"
+              />
+            </div>
+          </div>
+          <div class="setting-item">
+            <div class="setting-item-info">
+              <div class="setting-item-label">歌单循序下载：间隔</div>
+              <div class="setting-item-desc">下一批自动入队的等待时间；建议至少数小时，降低封号风险</div>
+            </div>
+            <div class="setting-item-action">
+              <AppSelect
+                v-model="settings['download.playlistIntervalHours']"
+                :options="playlistIntervalOptions"
+                min-width="120px"
+                @change="saveSetting('download.playlistIntervalHours')"
+              />
+            </div>
+          </div>
         </template>
       </div>
 
@@ -1185,6 +1213,18 @@ const maxDownloadOptions = Array.from({ length: 6 }, (_, i) => ({
   value: String(i + 1),
   label: String(i + 1),
 }))
+const playlistBatchSizeOptions = [50, 100, 200, 300, 500, 1000].map((n) => ({
+  value: String(n),
+  label: `${n} 首`,
+}))
+const playlistIntervalOptions = [
+  { value: '1', label: '1 小时' },
+  { value: '3', label: '3 小时' },
+  { value: '6', label: '6 小时' },
+  { value: '12', label: '12 小时' },
+  { value: '24', label: '1 天' },
+  { value: '48', label: '2 天' },
+]
 const playQualityOptions = PLAY_QUALITY_OPTIONS
 const PLAY_QUALITY_KEY = PLAYER_PLAY_QUALITY_KEY
 const tagMatchConcurrencyOptions = Array.from({ length: 6 }, (_, i) => ({
@@ -2015,6 +2055,10 @@ onMounted(async () => {
     if (!settings[DOWNLOAD_GROUP_BY_KEY]) {
       settings[DOWNLOAD_GROUP_BY_KEY] = settings['download.isSavePathGroupByListName'] === 'true' ? 'album' : 'none'
     }
+    if (!settings['download.playlistBatchSize'] || !['50', '100', '200', '300', '500', '1000'].includes(String(settings['download.playlistBatchSize']))) {
+      settings['download.playlistBatchSize'] = '50'
+    }
+    if (!settings['download.playlistIntervalHours']) settings['download.playlistIntervalHours'] = '24'
     if (!['ask', 'skip', 'overwrite'].includes(settings['download.existFileMode'])) {
       settings['download.existFileMode'] = settings['download.skipExistFile'] === 'false' ? 'overwrite' : 'ask'
     }

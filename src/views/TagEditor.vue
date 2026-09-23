@@ -208,6 +208,14 @@
             <button class="btn-ghost btn-sm" :disabled="!displayedFiles.length" @click="playAllVisible">
               试听全部
             </button>
+            <button
+              class="btn-ghost btn-sm"
+              :disabled="!selectedFiles.length"
+              title="将勾选的文件加入自定义歌单"
+              @click="openBatchAddToPlaylist"
+            >
+              加入歌单{{ selectedFiles.length ? ` (${selectedFiles.length})` : '' }}
+            </button>
             <button class="btn-ghost btn-sm" :disabled="!missingFilesCount || matching || tagChecking" @click="selectMissingFiles">
               选中缺失
             </button>
@@ -607,6 +615,14 @@
 
     <div v-if="toast" class="toast" :class="toast.type">{{ toast.text }}</div>
 
+    <PickPlaylistModal
+      v-if="pickPlaylistTracks?.length"
+      :tracks="pickPlaylistTracks"
+      source="local"
+      @close="pickPlaylistTracks = null"
+      @added="onAddedToPlaylist"
+    />
+
     <!-- 网络获取信息弹窗 -->
     <div class="modal-overlay" v-if="showFetchModal" @click.self="closeFetchModal">
       <div class="fetch-modal">
@@ -742,6 +758,7 @@ import {
 import AppSelect from '../components/AppSelect.vue'
 import ClearableInput from '../components/ClearableInput.vue'
 import CoverArt from '../components/CoverArt.vue'
+import PickPlaylistModal from '../components/PickPlaylistModal.vue'
 import { collectDefaultExpandedPaths } from '../utils/dirTreeExpand.js'
 import { resolveSearchArtistTitle, parseFilename } from '../utils/filenameParse.js'
 import { withStreamAuth } from '../utils/streamAuth.js'
@@ -790,6 +807,7 @@ const fetchIntent = ref('cover')
 const editingFile = ref(null)
 const editForm = ref(null)
 const toast = ref(null)
+const pickPlaylistTracks = ref(null)
 const scanning = ref(false)
 const loadingMeta = ref(false)
 const loadingDetail = ref(false)
@@ -2401,6 +2419,7 @@ function fileToTrack(f) {
   const singer = f.artist || f.parsedArtist || '未知歌手'
   return {
     id: `local_${f.filePath}`,
+    key: `local:${f.filePath}`,
     name,
     singer,
     source: 'local',
@@ -2408,6 +2427,7 @@ function fileToTrack(f) {
     picUrl: pic,
     img: pic,
     localPath: f.filePath,
+    filePath: f.filePath,
     lyric: f.lyric || '',
     hasPicture: Boolean(f.hasPicture || pic),
     hasLyrics: Boolean(f.lyric),
@@ -2457,6 +2477,28 @@ function addFileToQueue(f) {
   }
   addToQueue(track, 'local')
   showToast(`已加入列表: ${track.name}`, 'success')
+}
+
+function openBatchAddToPlaylist() {
+  const targets = selectedFiles.value
+  if (!targets.length) {
+    showToast('请先勾选要加入歌单的文件', 'info')
+    return
+  }
+  pickPlaylistTracks.value = targets.map(fileToTrack)
+}
+
+function onAddedToPlaylist({ playlist, duplicate, added }) {
+  pickPlaylistTracks.value = null
+  if (!added) {
+    showToast(duplicate ? '所选歌曲已在歌单中' : '未能加入歌单', 'info')
+    return
+  }
+  const name = playlist?.name || ''
+  showToast(
+    added === 1 ? `已加入歌单：${name}` : `已加入歌单「${name}」${added} 首`,
+    'success',
+  )
 }
 
 async function playAllVisible() {

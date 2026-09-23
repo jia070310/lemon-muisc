@@ -276,6 +276,15 @@ export const api = {
   download: {
     list: () => request('/download/list'),
     add: (tasks) => request('/download/add', { method: 'POST', body: { tasks } }),
+    createPlaylistJob: (payload) => request('/download/playlist-job', { method: 'POST', body: payload }),
+    listPlaylistJobs: (status) => {
+      const qs = status ? `?status=${encodeURIComponent(status)}` : ''
+      return request(`/download/playlist-jobs${qs}`)
+    },
+    activePlaylistJob: (playlistId) =>
+      request(`/download/playlist-jobs/active?playlistId=${encodeURIComponent(playlistId || '')}`),
+    getPlaylistJob: (id) => request(`/download/playlist-job/${encodeURIComponent(id)}`),
+    cancelPlaylistJob: (id) => request(`/download/playlist-job/${encodeURIComponent(id)}/cancel`, { method: 'POST' }),
     pause: (id) => request(`/download/pause/${id}`, { method: 'POST' }),
     resume: (id) => request(`/download/resume/${id}`, { method: 'POST' }),
     pauseAll: (ids) => request('/download/pause-all', { method: 'POST', body: ids?.length ? { ids } : {} }),

@@ -7,7 +7,7 @@
           <button type="button" class="btn-ghost btn-sm" @click="$emit('close')">关闭</button>
         </div>
 
-        <p v-if="trackName" class="track-hint">「{{ trackName }}」</p>
+        <p v-if="trackHint" class="track-hint">「{{ trackHint }}」</p>
 
         <div v-if="!playlists.length" class="empty">
           <p>暂无自定义歌单</p>
@@ -58,7 +58,10 @@ import { customPlaylists, addTracksToPlaylist } from '../stores/library.js'
 import { api } from '../api.js'
 
 const props = defineProps({
-  track: { type: Object, required: true },
+  /** 单曲（兼容旧用法） */
+  track: { type: Object, default: null },
+  /** 批量加入；优先于 track */
+  tracks: { type: Array, default: null },
   source: { type: String, default: 'local' },
   excludePlaylistId: { type: String, default: '' },
 })
@@ -67,14 +70,27 @@ const emit = defineEmits(['close', 'added'])
 
 const showCreate = ref(false)
 
-const trackName = computed(() => props.track?.name || '')
+const trackList = computed(() => {
+  if (Array.isArray(props.tracks) && props.tracks.length) return props.tracks.filter(Boolean)
+  if (props.track) return [props.track]
+  return []
+})
+
+const trackHint = computed(() => {
+  const list = trackList.value
+  if (!list.length) return ''
+  if (list.length === 1) return list[0]?.name || ''
+  return `${list.length} 首歌曲`
+})
 
 const playlists = computed(() =>
   customPlaylists.value.filter(pl => pl.id !== props.excludePlaylistId)
 )
 
 function pick(pl) {
-  const res = addTracksToPlaylist(pl.id, [props.track], props.source)
+  const list = trackList.value
+  if (!list.length) return
+  const res = addTracksToPlaylist(pl.id, list, props.source)
   emit('added', {
     playlist: res.playlist,
     duplicate: res.added === 0,

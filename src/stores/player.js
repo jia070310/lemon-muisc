@@ -309,6 +309,12 @@ let audio = null
 let inited = false
 /** 是否已加载可播放的媒体地址（避免 audio.src='' 被解析成页面 URL 误判） */
 let hasMediaSrc = false
+/** 进度跳转进行中：error 时勿立刻弹「链接失效」，交给 commitSeek 恢复 */
+let seekInProgress = false
+/** 用户正在拖进度条：timeupdate 勿覆盖预览进度/歌词 */
+let uiScrubbing = false
+let seekRecoverToken = 0
+let lastSeekSaveAt = 0
 /** @type {AudioContext | null} */
 let audioCtx = null
 /** @type {AnalyserNode | null} */
@@ -995,6 +1001,7 @@ function bindAudioElementEvents(el) {
   })
   el.addEventListener('timeupdate', () => {
     if (audio !== el) return
+    if (uiScrubbing) return
     currentTime.value = audio.currentTime
     updateActiveLyric(audio.currentTime)
     syncDurationFromAudio()
@@ -1053,6 +1060,8 @@ function bindAudioElementEvents(el) {
   el.addEventListener('error', () => {
     if (audio !== el) return
     endPlaybackBuffer()
+    // 跳进度中的失败交给 seek 恢复逻辑，避免立刻弹「链接失效」并卡死
+    if (seekInProgress) return
     isPaused.value = true
     playerError.value = getAudioElementError(el) || '音频加载失败，请尝试其他歌曲'
     loadingPlay.value = null
@@ -3004,9 +3013,120 @@ export function stopPlay() {
 }
 
 export function seekTo(time) {
-  if (audio) audio.currentTime = time
-  currentTime.value = time
-  saveQueueState()
+  void commitSeek(time)
+}
+
+function clampSeekTime(time) {
+  const t = Number(time)
+  if (!Number.isFinite(t) || t < 0) return 0
+  const max = Number(duration.value) || Number(audio?.duration) || 0
+  if (max > 0.25) return Math.min(Math.max(0, t), Math.max(0, max - 0.05))
+  return Math.max(0, t)
+}
+
+/** 拖动预览：只更新进度/歌词 UI，不改 audio（避免手机拖条狂发 Range 导致解码失败） */
+export function previewSeek(time) {
+  uiScrubbing = true
+  const t = clampSeekTime(time)
+  currentTime.value = t
+  updateActiveLyric(t)
+}
+
+function waitForSeekSettle(el, target, timeoutMs = 1400) {
+  return new Promise((resolve) => {
+    if (!el) {
+      resolve('missing')
+      return
+    }
+    let done = false
+    const finish = (reason) => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      el.removeEventListener('seeked', onSeeked)
+      el.removeEventListener('error', onError)
+      resolve(reason)
+    }
+    const onSeeked = () => finish('seeked')
+    const onError = () => finish('error')
+    const timer = setTimeout(() => finish('timeout'), timeoutMs)
+    el.addEventListener('seeked', onSeeked, { once: true })
+    el.addEventListener('error', onError, { once: true })
+    // 已贴近目标且无错误：可能即时完成
+    if (!el.error && Math.abs((el.currentTime || 0) - target) < 0.35 && el.readyState >= 2) {
+      finish('ready')
+    }
+  })
+}
+
+async function recoverSeekPlayback(resumeTime, token) {
+  if (token !== seekRecoverToken) return
+  const playing = currentPlaying.value
+  if (!playing) return
+  const idx = resolveQueueIndexForCurrent()
+  if (idx < 0) return
+
+  clearPlaybackError()
+  playerError.value = ''
+  beginPlaybackBuffer()
+
+  const source = playing.source || 'local'
+  const quality = getPlayQuality()
+  const trackKey = getTrackKey(playing, source)
+  recoverPlaybackPipeline(trackKey, playing, source, quality)
+
+  try {
+    await playTrackAt(idx, { resumeTime, fromHistory: true })
+    if (token === seekRecoverToken) {
+      clearPlaybackError()
+      playerError.value = ''
+    }
+  } catch (e) {
+    if (token !== seekRecoverToken) return
+    if (e?.aborted) return
+    playerError.value = formatPlayClientError(e) || '跳转进度失败，请再点一次播放'
+    isPaused.value = true
+  }
+}
+
+/** 松手提交跳转：只触发一次真正的 seek；失败则按目标进度重建播放 */
+export async function commitSeek(time) {
+  uiScrubbing = false
+  const t = clampSeekTime(time)
+  currentTime.value = t
+  updateActiveLyric(t)
+  if (!audio || !hasMediaSrc) return
+
+  const token = ++seekRecoverToken
+  seekInProgress = true
+  const wasPlaying = !audio.paused && !isPaused.value
+
+  try {
+    audio.currentTime = t
+  } catch {
+    seekInProgress = false
+    await recoverSeekPlayback(t, token)
+    return
+  }
+
+  const settle = await waitForSeekSettle(audio, t)
+  if (token !== seekRecoverToken) return
+  seekInProgress = false
+
+  if (settle === 'error' || audio?.error) {
+    await recoverSeekPlayback(t, token)
+    return
+  }
+
+  if (wasPlaying && audio && audio.paused && !isPaused.value && !audio.error) {
+    try { await audio.play() } catch {}
+  }
+
+  const now = Date.now()
+  if (now - lastSeekSaveAt > 600) {
+    lastSeekSaveAt = now
+    saveQueueState()
+  }
 }
 
 export function setVolume(val) {

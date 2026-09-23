@@ -55,6 +55,12 @@
               · 本地 {{ trackOrigins.local }} / 网络 {{ trackOrigins.online }}
               <template v-if="lastRemoteSyncLabel"> · {{ lastRemoteSyncLabel }}</template>
             </template>
+            <template v-else-if="onlineTrackCount">
+              · 可下载 {{ onlineTrackCount }} 首
+            </template>
+          </p>
+          <p v-if="selectedCard.tracks.length && !onlineTrackCount" class="detail-dl-hint">
+            当前歌单歌曲均已在本地，无需下载；含「网络」标记的歌曲才会显示「下载歌单」。
           </p>
           <div class="detail-actions">
             <button class="btn-primary btn-sm" :disabled="!selectedCard.tracks.length" @click="playAll">播放全部</button>
@@ -75,18 +81,18 @@
               {{ syncingLocal ? '同步中…' : '同步本地' }}
             </button>
             <div
-              v-if="isImportedSelected && onlineTrackCount"
+              v-if="onlineTrackCount"
               class="dl-wrap batch-dl-wrap"
             >
               <button
                 class="btn-ghost btn-sm"
-                :disabled="!batchDownloadCount || batchDownloading"
+                :disabled="!selectedDownloadCount || batchDownloading"
                 @click.stop="toggleBatchQualityMenu($event)"
               >
-                {{ batchDownloading ? '添加中…' : `批量下载${batchDownloadCount ? ` (${batchDownloadCount})` : ''}` }}
+                {{ batchDownloading ? '添加中…' : `批量下载${selectedDownloadCount ? ` (${selectedDownloadCount})` : ''}` }}
               </button>
               <div class="quality-menu" v-if="showBatchQualityMenu" :style="batchMenuStyle" @click.stop>
-                <div class="quality-menu-title">批量音质：仅列出所选歌曲实际支持的音质</div>
+                <div class="quality-menu-title">批量音质：仅下载已勾选的歌曲</div>
                 <template v-if="batchQualities.length">
                   <button
                     v-for="q in batchQualities"
@@ -96,6 +102,30 @@
                   >{{ getQualityLabel(q) }}</button>
                 </template>
                 <div v-else class="quality-empty">所选歌曲暂无可用音质信息</div>
+              </div>
+            </div>
+            <div
+              v-if="onlineTrackCount"
+              class="dl-wrap batch-dl-wrap"
+            >
+              <button
+                class="btn-primary btn-sm"
+                :disabled="!onlineTrackCount || pacedBusy"
+                @click.stop="togglePacedQualityMenu($event)"
+              >
+                {{ pacedBusy ? '创建中…' : `下载歌单 (${onlineTrackCount})` }}
+              </button>
+              <div class="quality-menu" v-if="showPacedQualityMenu" :style="pacedMenuStyle" @click.stop>
+                <div class="quality-menu-title">整单循序下载：选择目标音质</div>
+                <template v-if="pacedQualities.length">
+                  <button
+                    v-for="q in pacedQualities"
+                    :key="q"
+                    class="quality-option"
+                    @click="openPacedDialog(q)"
+                  >{{ getQualityLabel(q) }}</button>
+                </template>
+                <div v-else class="quality-empty">暂无可用音质信息</div>
               </div>
             </div>
             <button v-if="canEditSelected" class="btn-ghost btn-sm" @click="openEdit">编辑歌单</button>
@@ -110,16 +140,33 @@
         <button v-if="canEditSelected" class="btn-primary btn-sm" @click="showAddModal = true">添加歌曲</button>
       </div>
       <template v-else>
-        <div v-if="isImportedSelected && onlineTrackCount" class="track-list-toolbar">
+        <div v-if="activePlaylistJob && activePlaylistJob.status === 'active'" class="paced-job-bar">
+          <div class="paced-job-text">
+            循序下载进行中：已入队 {{ activePlaylistJob.cursor }}/{{ activePlaylistJob.total }} 首
+            <span v-if="activePlaylistJob.nextRunAt"> · 下一批约 {{ formatJobTime(activePlaylistJob.nextRunAt) }}</span>
+          </div>
+          <button type="button" class="btn-ghost btn-sm" :disabled="cancellingJob" @click="cancelActiveJob">
+            {{ cancellingJob ? '取消中…' : '取消任务' }}
+          </button>
+        </div>
+        <div v-if="onlineTrackCount" class="track-list-toolbar">
           <label class="batch-select-all">
             <input
               type="checkbox"
-              :checked="allOnlineSelected"
-              :indeterminate.prop="someOnlineSelected && !allOnlineSelected"
-              @change="toggleSelectAllOnline"
+              :checked="pageOnlineAllSelected"
+              :indeterminate.prop="pageOnlineSomeSelected && !pageOnlineAllSelected"
+              @change="toggleSelectPageOnline"
             />
-            全选网络歌曲
+            全选本页
           </label>
+          <button
+            type="button"
+            class="btn-ghost btn-sm"
+            :disabled="!onlineTrackCount"
+            @click="toggleSelectAllOnline"
+          >
+            {{ allOnlineSelected ? '取消全选网络曲' : `全选网络曲 (${onlineTrackCount})` }}
+          </button>
           <span v-if="selectedDownloadCount" class="batch-count">已选 {{ selectedDownloadCount }}</span>
         </div>
         <div class="track-list">
@@ -133,7 +180,7 @@
             @dblclick="playOne(song)"
           >
             <label
-              v-if="isImportedSelected && !song.isLocal"
+              v-if="onlineTrackCount && !song.isLocal"
               class="track-check"
               @click.stop
             >
@@ -143,7 +190,7 @@
                 @change="toggleSelectOnline(song)"
               />
             </label>
-            <span v-else-if="isImportedSelected && song.isLocal" class="track-check-placeholder" />
+            <span v-else-if="onlineTrackCount && song.isLocal" class="track-check-placeholder" />
             <span class="track-index">{{ listStart + i + 1 }}</span>
             <button
               type="button"
@@ -293,6 +340,19 @@
       @cancel="closeBatchDialog"
       @confirm="handleBatchConfirm"
     />
+
+    <PlaylistPacedDownloadDialog
+      :open="Boolean(pacedDialog)"
+      :total-count="onlineTrackCount"
+      :preferred="pacedDialog?.preferred || '320k'"
+      :preferred-label="pacedPreferredLabel"
+      :playlist-name="selectedCard?.name || ''"
+      :default-batch-size="pacedDefaults.batchSize"
+      :default-interval-hours="pacedDefaults.intervalHours"
+      :busy="pacedBusy"
+      @cancel="pacedDialog = null"
+      @confirm="handlePacedConfirm"
+    />
   </div>
 </template>
 
@@ -307,7 +367,10 @@ import CreatePlaylistModal from '../components/CreatePlaylistModal.vue'
 import AddToPlaylistModal from '../components/AddToPlaylistModal.vue'
 import PickPlaylistModal from '../components/PickPlaylistModal.vue'
 import BatchQualityDialog from '../components/BatchQualityDialog.vue'
+import PlaylistPacedDownloadDialog from '../components/PlaylistPacedDownloadDialog.vue'
 import { useBatchDownload, formatBatchDownloadToast } from '../composables/useBatchDownload.js'
+import { buildBatchDownloadTasks } from '../utils/musicPayload.js'
+import { onWS } from '../ws.js'
 import { platformLabel } from '../utils/platforms.js'
 import { getQualityLabel, getQualityDisplay } from '../utils/quality.js'
 import { buildDownloadTask, getItemQualities } from '../utils/musicPayload.js'
@@ -369,11 +432,19 @@ const syncingLocal = ref(false)
 const syncingRemote = ref(false)
 const qualityMenuKey = ref('')
 const showBatchQualityMenu = ref(false)
+const showPacedQualityMenu = ref(false)
 const selectedDownloadKeys = ref(new Set())
+const pacedDialog = ref(null)
+const pacedBusy = ref(false)
+const pacedDefaults = ref({ batchSize: 50, intervalHours: 24 })
+const activePlaylistJob = ref(null)
+const cancellingJob = ref(false)
 const { menuStyle, positionMenu, clearMenuPosition } = useQualityMenuPosition()
 const { menuStyle: batchMenuStyle, positionMenu: positionBatchMenu, clearMenuPosition: clearBatchMenuPosition } = useQualityMenuPosition()
+const { menuStyle: pacedMenuStyle, positionMenu: positionPacedMenu, clearMenuPosition: clearPacedMenuPosition } = useQualityMenuPosition()
 let narrowMq = null
 let playlistGridRo = null
+const wsUnsubs = []
 
 function updatePlaylistCols() {
   const w = playlistGridEl.value?.clientWidth || 0
@@ -455,17 +526,16 @@ const selectedDownloadCount = computed(() => selectedDownloadKeys.value.size)
 const selectedOnlineTracks = computed(() =>
   allOnlineTracks.value.filter(s => selectedDownloadKeys.value.has(s.key))
 )
-const batchDownloadCount = computed(() =>
-  selectedDownloadCount.value || onlineTrackCount.value
-)
-const batchDownloadItems = computed(() =>
-  selectedOnlineTracks.value.length
-    ? selectedOnlineTracks.value.map(trackPayload)
-    : allOnlineTracks.value.map(trackPayload)
-)
+const batchDownloadCount = computed(() => selectedDownloadCount.value)
+const batchDownloadItems = computed(() => selectedOnlineTracks.value.map(trackPayload))
 const batchQualities = computed(() => getBatchQualities(batchDownloadItems.value))
 const batchPreferredLabel = computed(() => {
   const q = batchDialog.value?.preferred
+  return q ? getQualityLabel(q) : ''
+})
+const pacedQualities = computed(() => getBatchQualities(allOnlineTracks.value.map(trackPayload)))
+const pacedPreferredLabel = computed(() => {
+  const q = pacedDialog.value?.preferred
   return q ? getQualityLabel(q) : ''
 })
 const allOnlineSelected = computed(() =>
@@ -473,11 +543,20 @@ const allOnlineSelected = computed(() =>
   && allOnlineTracks.value.every(s => selectedDownloadKeys.value.has(s.key))
 )
 const someOnlineSelected = computed(() => selectedDownloadCount.value > 0)
+const pageOnlineTracks = computed(() => pagedTracks.value.filter(s => !s.isLocal))
+const pageOnlineAllSelected = computed(() =>
+  pageOnlineTracks.value.length > 0
+  && pageOnlineTracks.value.every(s => selectedDownloadKeys.value.has(s.key))
+)
+const pageOnlineSomeSelected = computed(() =>
+  pageOnlineTracks.value.some(s => selectedDownloadKeys.value.has(s.key))
+)
 
 watch(selectedId, () => {
   trackPage.value = 1
   selectedDownloadKeys.value = new Set()
   closeMenus()
+  refreshActiveJob()
 })
 
 watch(() => route.query.id, (id) => {
@@ -502,6 +581,19 @@ onMounted(async () => {
   updatePlaylistCols()
   const q = route.query.id
   if (q) selectedId.value = String(q)
+  loadPacedDefaults()
+  wsUnsubs.push(onWS('playlist-download:progress', (job) => {
+    if (job?.playlistId && job.playlistId === selectedId.value) activePlaylistJob.value = job
+  }))
+  wsUnsubs.push(onWS('playlist-download:done', (job) => {
+    if (job?.playlistId && job.playlistId === selectedId.value) {
+      activePlaylistJob.value = job
+      showToast(`歌单「${job.playlistName || ''}」循序下载已全部入队`, 'success')
+    }
+  }))
+  wsUnsubs.push(onWS('playlist-download:cancelled', (job) => {
+    if (job?.playlistId && job.playlistId === selectedId.value) activePlaylistJob.value = null
+  }))
   if (!libraryScanned.value) {
     try { await scanLibrary(api, { resync: true }) } catch {}
   }
@@ -513,6 +605,7 @@ onMounted(async () => {
   } finally {
     cardsLoading.value = false
   }
+  refreshActiveJob()
 })
 
 onUnmounted(() => {
@@ -520,6 +613,9 @@ onUnmounted(() => {
   document.removeEventListener('click', closeMenus)
   playlistGridRo?.disconnect()
   playlistGridRo = null
+  while (wsUnsubs.length) {
+    try { wsUnsubs.pop()?.() } catch {}
+  }
 })
 
 function selectCard(card) {
@@ -542,6 +638,18 @@ function toggleSelectOnline(song) {
   selectedDownloadKeys.value = next
 }
 
+function toggleSelectPageOnline() {
+  const page = pageOnlineTracks.value
+  if (!page.length) return
+  const next = new Set(selectedDownloadKeys.value)
+  if (pageOnlineAllSelected.value) {
+    for (const s of page) next.delete(s.key)
+  } else {
+    for (const s of page) next.add(s.key)
+  }
+  selectedDownloadKeys.value = next
+}
+
 function toggleSelectAllOnline() {
   if (allOnlineSelected.value) {
     selectedDownloadKeys.value = new Set()
@@ -552,7 +660,9 @@ function toggleSelectAllOnline() {
 
 function toggleQualityMenu(song, event) {
   showBatchQualityMenu.value = false
+  showPacedQualityMenu.value = false
   clearBatchMenuPosition()
+  clearPacedMenuPosition()
   if (qualityMenuKey.value === song.key) {
     qualityMenuKey.value = ''
     clearMenuPosition()
@@ -563,9 +673,11 @@ function toggleQualityMenu(song, event) {
 }
 
 function toggleBatchQualityMenu(event) {
-  if (!batchDownloadCount.value) return
+  if (!selectedDownloadCount.value) return
   qualityMenuKey.value = ''
+  showPacedQualityMenu.value = false
   clearMenuPosition()
+  clearPacedMenuPosition()
   showBatchQualityMenu.value = !showBatchQualityMenu.value
   if (showBatchQualityMenu.value) {
     positionBatchMenu(event?.currentTarget, { align: 'left' })
@@ -574,16 +686,142 @@ function toggleBatchQualityMenu(event) {
   }
 }
 
-function closeMenus() {
+function togglePacedQualityMenu(event) {
+  if (!onlineTrackCount.value) return
   qualityMenuKey.value = ''
   showBatchQualityMenu.value = false
   clearMenuPosition()
   clearBatchMenuPosition()
+  showPacedQualityMenu.value = !showPacedQualityMenu.value
+  if (showPacedQualityMenu.value) {
+    positionPacedMenu(event?.currentTarget, { align: 'left' })
+  } else {
+    clearPacedMenuPosition()
+  }
+}
+
+function closeMenus() {
+  qualityMenuKey.value = ''
+  showBatchQualityMenu.value = false
+  showPacedQualityMenu.value = false
+  clearMenuPosition()
+  clearBatchMenuPosition()
+  clearPacedMenuPosition()
 }
 
 function getBatchEntries() {
-  const list = selectedOnlineTracks.value.length ? selectedOnlineTracks.value : allOnlineTracks.value
-  return list.map(song => ({ item: trackPayload(song), key: song.key }))
+  return selectedOnlineTracks.value.map(song => ({ item: trackPayload(song), key: song.key }))
+}
+
+function formatJobTime(ts) {
+  const n = Number(ts) || 0
+  if (!n) return ''
+  const d = new Date(n * 1000)
+  if (Number.isNaN(d.getTime())) return ''
+  return d.toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+}
+
+async function loadPacedDefaults() {
+  try {
+    const s = await api.settings.get()
+    const batchSize = Number(s?.['download.playlistBatchSize']) || 50
+    const intervalHours = Number(s?.['download.playlistIntervalHours']) || 24
+    pacedDefaults.value = {
+      batchSize: [50, 100, 200, 300, 500, 1000].includes(batchSize) ? batchSize : 50,
+      intervalHours: [1, 3, 6, 12, 24, 48].includes(intervalHours) ? intervalHours : 24,
+    }
+  } catch {}
+}
+
+async function refreshActiveJob() {
+  if (!selectedId.value) {
+    activePlaylistJob.value = null
+    return
+  }
+  try {
+    const res = await api.download.activePlaylistJob(selectedId.value)
+    activePlaylistJob.value = res?.job || null
+  } catch {
+    activePlaylistJob.value = null
+  }
+}
+
+function openPacedDialog(quality) {
+  closeMenus()
+  pacedDialog.value = { preferred: quality }
+}
+
+async function handlePacedConfirm(payload) {
+  const preferred = pacedDialog.value?.preferred || '320k'
+  const entries = allOnlineTracks.value.map(song => ({ item: trackPayload(song), key: song.key }))
+  if (!entries.length) return
+  if (!(await assertActiveSourceForDownload())) return
+
+  pacedBusy.value = true
+  try {
+    const { tasks, skippedCount } = buildBatchDownloadTasks(entries, playlistSource.value, {
+      preferredQuality: preferred,
+      strategy: payload.strategy,
+      floorQuality: payload.floorQuality,
+    })
+    if (!tasks.length) {
+      showToast(skippedCount ? '所选歌曲均无要求音质，未创建任务' : '没有可下载的歌曲', 'error')
+      return
+    }
+    const res = await api.download.createPlaylistJob({
+      playlistId: selectedId.value,
+      playlistName: selectedCard.value?.name || '歌单',
+      batchSize: payload.batchSize,
+      intervalHours: payload.intervalHours,
+      saveListFolder: payload.saveListFolder,
+      preferredQuality: preferred,
+      strategy: payload.strategy,
+      floorQuality: payload.floorQuality,
+      tasks,
+    })
+    pacedDialog.value = null
+    activePlaylistJob.value = res?.job || null
+    const first = Math.min(payload.batchSize, tasks.length)
+    const skippedHint = skippedCount ? `（策略跳过 ${skippedCount} 首）` : ''
+    showToast(
+      `已开始循序下载：首批 ${first} 首已入队，共 ${tasks.length} 首，每 ${payload.intervalHours} 小时一批${skippedHint}`,
+      'success',
+    )
+    try {
+      await api.settings.update({
+        'download.playlistBatchSize': String(payload.batchSize),
+        'download.playlistIntervalHours': String(payload.intervalHours),
+      })
+      pacedDefaults.value = {
+        batchSize: payload.batchSize,
+        intervalHours: payload.intervalHours,
+      }
+    } catch {}
+  } catch (e) {
+    if (e?.code === 'JOB_EXISTS' || /已有进行中/.test(e?.message || '')) {
+      showToast(e.message || '该歌单已有进行中的任务', 'error')
+      refreshActiveJob()
+    } else {
+      showToast(e.message || '创建失败', 'error')
+    }
+  } finally {
+    pacedBusy.value = false
+  }
+}
+
+async function cancelActiveJob() {
+  const id = activePlaylistJob.value?.id
+  if (!id) return
+  cancellingJob.value = true
+  try {
+    await api.download.cancelPlaylistJob(id)
+    activePlaylistJob.value = null
+    showToast('已取消循序下载任务', 'success')
+  } catch (e) {
+    showToast(e.message || '取消失败', 'error')
+  } finally {
+    cancellingJob.value = false
+  }
 }
 
 async function downloadOne(song, quality) {
@@ -842,7 +1080,13 @@ function showToast(text, type = 'info') {
 }
 .detail-info { flex: 1; min-width: 220px; }
 .detail-info h2 { margin: 0 0 10px; font-size: 24px; }
-.detail-meta { margin: 0 0 16px; color: var(--text-muted); font-size: 15px; }
+.detail-meta { margin: 0 0 12px; color: var(--text-muted); font-size: 13px; }
+.detail-dl-hint {
+  margin: -4px 0 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
 .detail-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .detail-empty {
   color: var(--text-muted);
@@ -1044,6 +1288,21 @@ function showToast(text, type = 'info') {
 .quality-option:hover { background: var(--bg-hover); color: var(--accent); }
 .quality-empty { padding: 10px 12px; font-size: 13px; color: var(--text-muted); }
 .batch-dl-wrap { display: inline-block; }
+.paced-job-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border-light));
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.paced-job-text { min-width: 0; flex: 1; line-height: 1.5; }
 .pager {
   display: flex;
   align-items: center;
