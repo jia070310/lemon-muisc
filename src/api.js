@@ -92,11 +92,13 @@ async function requestOnce(url, options = {}) {
     try {
       data = await res.json()
     } catch {
-      // Vite 代理在后端重启时常见：空 body / HTML 502
+      // Vite 代理在后端重启时常见：空 body / HTML 502；旧后端无路由时常见纯文本 404
       const err = new Error(
-        res.status >= 500 || res.status === 0
-          ? '服务器暂时无响应，请稍后重试'
-          : '服务器响应异常',
+        res.status === 404
+          ? '接口不存在，请确认后端已重启到最新代码'
+          : res.status >= 500 || res.status === 0
+            ? '服务器暂时无响应，请稍后重试'
+            : '服务器响应异常',
       )
       err.transient = true
       throw err
@@ -524,6 +526,18 @@ export const api = {
   },
   about: {
     get: () => request('/about'),
+    downloadFpk: (payload = {}) => request('/about/download-fpk', {
+      method: 'POST',
+      body: payload,
+      timeout: 60000,
+    }),
+    downloadFpkStatus: (params = {}) => {
+      const qs = new URLSearchParams()
+      if (params.name) qs.set('name', params.name)
+      if (params.arch) qs.set('arch', params.arch)
+      const q = qs.toString()
+      return request(`/about/download-fpk/status${q ? `?${q}` : ''}`)
+    },
   },
   auth: {
     status: () => fetch('/api/auth/status').then(r => r.json()),

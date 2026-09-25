@@ -44,36 +44,67 @@
 
       <div v-if="info.installHints" class="update-install">
         <div class="update-install-title">FPK 安装包</div>
-        <div v-if="fpkAssets.length" class="fpk-actions">
-          <template v-for="asset in fpkAssets" :key="asset.name">
-            <a
-              class="btn-primary btn-sm fpk-btn"
-              :href="asset.url"
-              target="_blank"
-              rel="noopener"
-              :download="asset.name"
-            >
-              下载 {{ asset.label }}
-              <span v-if="asset.sizeLabel" class="fpk-size">{{ asset.sizeLabel }}</span>
-            </a>
-            <a
-              class="btn-ghost btn-sm fpk-btn"
-              :href="asset.mirrorUrl"
-              target="_blank"
-              rel="noopener"
-              title="国内加速下载"
-            >
-              {{ asset.label }} 加速
-            </a>
-          </template>
-        </div>
+        <template v-if="isAdminUser">
+          <div v-if="fpkAssets.length" class="fpk-actions">
+            <template v-for="asset in fpkAssets" :key="asset.name">
+              <button
+                type="button"
+                class="btn-primary btn-sm fpk-btn fpk-btn-strong"
+                :disabled="!!fpkDownloading[asset.name]"
+                title="网络无法打开 GitHub 时使用：经国内加速源保存到 NAS"
+                @click="downloadFpkToNas(asset, true)"
+              >
+                {{ fpkDownloading[asset.name] === 'mirror' ? '加速保存中…' : `${asset.label} 加速保存` }}
+                <span v-if="asset.sizeLabel && !fpkDownloading[asset.name]" class="fpk-size">{{ asset.sizeLabel }}</span>
+              </button>
+              <button
+                type="button"
+                class="btn-primary btn-sm fpk-btn fpk-btn-strong"
+                :disabled="!!fpkDownloading[asset.name]"
+                title="直连 GitHub 保存到 NAS（需能访问 GitHub）"
+                @click="downloadFpkToNas(asset, false)"
+              >
+                {{ fpkDownloading[asset.name] === 'direct' ? '保存中…' : `直连 ${asset.label}` }}
+                <span v-if="asset.sizeLabel && !fpkDownloading[asset.name]" class="fpk-size">{{ asset.sizeLabel }}</span>
+              </button>
+            </template>
+          </div>
+          <p v-if="fpkAssets.length" class="fpk-mirror-hint">
+            推荐优先点「加速保存」：当前网络打不开 GitHub 时，走国内镜像拉到 NAS。
+          </p>
+          <p v-else class="update-install-line">
+            暂未解析到 FPK 附件，请
+            <a :href="info.releaseUrl || REPO_URL" target="_blank" rel="noopener">打开 Release</a>
+            手动下载后放到 NAS。
+          </p>
+          <p v-if="fpkUpdateDir" class="fpk-save-path" :title="fpkUpdateDir">
+            保存目录：<code>{{ fpkUpdateDir }}</code>
+            <button type="button" class="btn-ghost btn-xs" @click="copyFpkDir">{{ fpkDirCopied ? '已复制' : '复制' }}</button>
+          </p>
+          <div v-if="fpkJob && fpkJob.status === 'downloading'" class="fpk-progress-card">
+            <div class="fpk-progress-head">
+              <span>{{ fpkJob.label || '' }}{{ fpkJob.mirror ? ' 加速' : ' 直连' }}保存中</span>
+              <span>{{ fpkProgressPct }}%</span>
+            </div>
+            <div class="fpk-progress-track" role="progressbar" :aria-valuenow="fpkProgressPct" aria-valuemin="0" aria-valuemax="100">
+              <div class="fpk-progress-bar" :style="{ width: `${fpkProgressPct}%` }" />
+            </div>
+            <div class="fpk-progress-meta">
+              <span>{{ fpkJob.downloadedLabel || '0 KB' }}<template v-if="fpkJob.totalLabel"> / {{ fpkJob.totalLabel }}</template></span>
+              <span v-if="fpkJob.fileName" class="fpk-progress-name" :title="fpkJob.fileName">{{ fpkJob.fileName }}</span>
+            </div>
+          </div>
+          <p v-if="fpkLastSaved" class="fpk-saved-ok">
+            已保存：<code :title="fpkLastSaved.path">{{ fpkLastSaved.fileName }}</code>
+            <span v-if="fpkLastSaved.sizeLabel">（{{ fpkLastSaved.sizeLabel }}）</span>
+          </p>
+          <p v-if="fpkError" class="fpk-error">{{ fpkError }}</p>
+          <p class="fpk-tip">{{ info.installHints.fpkHint }}</p>
+        </template>
         <p v-else class="update-install-line">
-          暂未解析到 FPK 附件，请
+          请联系管理员在「关于」页将 FPK 保存到 NAS，或
           <a :href="info.releaseUrl || REPO_URL" target="_blank" rel="noopener">打开 Release</a>
-          手动下载。
-        </p>
-        <p class="fpk-tip">
-          {{ info.installHints.fpkHint }}
+          自行下载。
         </p>
       </div>
     </section>
@@ -330,6 +361,8 @@
 
     <p class="about-footer">© {{ new Date().getFullYear() }} {{ APP_NAME }}</p>
   </div>
+
+  <div v-if="toast" class="toast" :class="toast.type">{{ toast.text }}</div>
 </template>
 
 <script setup>
@@ -341,6 +374,7 @@ import { APP_NAME, APP_DISPLAY_NAME, APP_DESCRIPTION, APP_FEATURES, REPO_URL } f
 import { isAdmin as isAdminUser } from '../utils/auth.js'
 import { getPwaInstallState, onPwaInstallState, promptPwaInstall } from '../utils/pwa.js'
 import { APP_ICON_URL } from '../utils/appIcon.js'
+import { onWS } from '../ws.js'
 
 const QQ_GROUP_ID = '1126326017'
 const QQ_GROUP_QR_URL = '/qq-group-qr.png'
@@ -365,6 +399,159 @@ const fpkAssets = computed(() => {
   if (Array.isArray(fromHints) && fromHints.length) return fromHints
   return Array.isArray(info.value?.fpkAssets) ? info.value.fpkAssets : []
 })
+
+const fpkUpdateDir = computed(() => String(info.value?.fpkUpdateDir || '').trim())
+const fpkDownloading = ref({})
+const fpkJob = ref(null)
+const fpkLastSaved = ref(null)
+const fpkError = ref('')
+const fpkDirCopied = ref(false)
+const toast = ref(null)
+let fpkDirCopyTimer = null
+let toastTimer = null
+let fpkPollTimer = null
+let lastFpkToastKey = ''
+const fpkWsUnsubs = []
+
+const fpkProgressPct = computed(() => {
+  const p = Number(fpkJob.value?.progress)
+  if (!Number.isFinite(p) || p < 0) return 0
+  return Math.min(100, Math.round(p * 100))
+})
+
+function showToast(text, type = 'info') {
+  toast.value = { text, type }
+  if (toastTimer) clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => { toast.value = null }, 3200)
+}
+
+function stopFpkPoll() {
+  if (fpkPollTimer) {
+    clearInterval(fpkPollTimer)
+    fpkPollTimer = null
+  }
+}
+
+function applyFpkJob(job, { toastOnTerminal = true } = {}) {
+  if (!job) return
+  fpkJob.value = job
+  const key = job.name || job.fileName
+  if (job.status === 'downloading' && key) {
+    fpkDownloading.value = {
+      ...fpkDownloading.value,
+      [key]: job.mirror ? 'mirror' : 'direct',
+    }
+  }
+  if (job.status === 'done') {
+    fpkLastSaved.value = {
+      fileName: job.fileName || key,
+      path: job.path || '',
+      sizeLabel: job.sizeLabel || '',
+    }
+    fpkError.value = ''
+    if (job.dir && info.value) {
+      info.value = { ...info.value, fpkUpdateDir: job.dir }
+    }
+    if (key) {
+      const next = { ...fpkDownloading.value }
+      delete next[key]
+      fpkDownloading.value = next
+    }
+    stopFpkPoll()
+    if (toastOnTerminal) {
+      const toastKey = `done:${job.jobKey || key}:${job.finishedAt || job.fileName}`
+      if (toastKey !== lastFpkToastKey) {
+        lastFpkToastKey = toastKey
+        showToast(`已保存到 NAS：${job.fileName || key}`, 'success')
+      }
+    }
+  }
+  if (job.status === 'error') {
+    fpkError.value = job.error || '保存到 NAS 失败'
+    if (key) {
+      const next = { ...fpkDownloading.value }
+      delete next[key]
+      fpkDownloading.value = next
+    }
+    stopFpkPoll()
+    if (toastOnTerminal) {
+      const toastKey = `err:${job.jobKey || key}:${job.finishedAt || fpkError.value}`
+      if (toastKey !== lastFpkToastKey) {
+        lastFpkToastKey = toastKey
+        showToast(fpkError.value, 'error')
+      }
+    }
+  }
+}
+
+function startFpkPoll(asset) {
+  stopFpkPoll()
+  fpkPollTimer = setInterval(async () => {
+    try {
+      const res = await api.about.downloadFpkStatus({
+        name: asset?.name,
+        arch: asset?.arch,
+      })
+      const job = res.data || res
+      if (job) applyFpkJob(job)
+      if (job?.status === 'done' || job?.status === 'error') stopFpkPoll()
+    } catch {}
+  }, 800)
+}
+
+async function copyFpkDir() {
+  const dir = fpkUpdateDir.value
+  if (!dir) return
+  try {
+    await navigator.clipboard.writeText(dir)
+    fpkDirCopied.value = true
+    if (fpkDirCopyTimer) clearTimeout(fpkDirCopyTimer)
+    fpkDirCopyTimer = setTimeout(() => { fpkDirCopied.value = false }, 2000)
+  } catch {}
+}
+
+async function downloadFpkToNas(asset, useMirror = true) {
+  if (!asset?.name || !isAdminUser.value) {
+    fpkError.value = '仅管理员可将安装包保存到 NAS'
+    showToast(fpkError.value, 'error')
+    return
+  }
+  if (fpkDownloading.value[asset.name]) return
+
+  fpkError.value = ''
+  fpkLastSaved.value = null
+  fpkJob.value = {
+    name: asset.name,
+    fileName: asset.name,
+    label: asset.label,
+    mirror: useMirror,
+    status: 'downloading',
+    progress: 0,
+    downloadedLabel: '0 KB',
+    totalLabel: asset.sizeLabel || '',
+  }
+  fpkDownloading.value = { ...fpkDownloading.value, [asset.name]: useMirror ? 'mirror' : 'direct' }
+  showToast(`${asset.label}${useMirror ? ' 加速' : ' 直连'}开始保存到 NAS…`, 'info')
+
+  try {
+    const res = await api.about.downloadFpk({
+      name: asset.name,
+      arch: asset.arch,
+      mirror: useMirror,
+    })
+    const data = res.data || res
+    applyFpkJob(data, { toastOnTerminal: false })
+    if (data?.status === 'downloading') startFpkPoll(asset)
+  } catch (e) {
+    fpkError.value = e.message || '保存到 NAS 失败'
+    const next = { ...fpkDownloading.value }
+    delete next[asset.name]
+    fpkDownloading.value = next
+    fpkJob.value = fpkJob.value ? { ...fpkJob.value, status: 'error', error: fpkError.value } : null
+    stopFpkPoll()
+    showToast(fpkError.value, 'error')
+  }
+}
 
 async function copyText(text, onOk) {
   const val = String(text || '').trim()
@@ -417,6 +604,9 @@ onMounted(() => {
   stopPwaWatch = onPwaInstallState((state) => {
     pwa.value = state
   })
+  fpkWsUnsubs.push(onWS('about:fpk-progress', (job) => applyFpkJob(job, { toastOnTerminal: false })))
+  fpkWsUnsubs.push(onWS('about:fpk-done', (job) => applyFpkJob(job)))
+  fpkWsUnsubs.push(onWS('about:fpk-error', (job) => applyFpkJob(job)))
 })
 
 onUnmounted(() => {
@@ -425,6 +615,12 @@ onUnmounted(() => {
   if (groupCopyTimer) clearTimeout(groupCopyTimer)
   if (logDirCopyTimer) clearTimeout(logDirCopyTimer)
   if (appLogCopyTimer) clearTimeout(appLogCopyTimer)
+  if (fpkDirCopyTimer) clearTimeout(fpkDirCopyTimer)
+  if (toastTimer) clearTimeout(toastTimer)
+  stopFpkPoll()
+  while (fpkWsUnsubs.length) {
+    try { fpkWsUnsubs.pop()?.() } catch {}
+  }
 })
 
 async function loadServerHealth() {
@@ -694,10 +890,119 @@ function formatDate(iso) {
   gap: 6px;
   text-decoration: none;
 }
+.fpk-btn-strong {
+  font-weight: 700;
+  box-shadow: 0 0 0 1px rgba(255, 140, 0, 0.45), 0 4px 14px rgba(255, 140, 0, 0.28);
+}
+.fpk-btn:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
 .fpk-size {
   font-size: 11px;
   opacity: 0.75;
   font-weight: 500;
+}
+.fpk-mirror-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--accent, #f59e0b);
+}
+.fpk-progress-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent, #3b82f6) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent, #3b82f6) 28%, transparent);
+}
+.fpk-progress-head,
+.fpk-progress-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.fpk-progress-head {
+  font-weight: 600;
+  color: var(--text);
+}
+.fpk-progress-track {
+  height: 8px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.08);
+}
+.fpk-progress-bar {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent, #3b82f6), color-mix(in srgb, var(--accent, #3b82f6) 70%, #fff));
+  transition: width 0.2s ease;
+}
+.fpk-progress-name {
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.toast {
+  position: fixed;
+  bottom: 80px;
+  right: 24px;
+  padding: 10px 20px;
+  border-radius: var(--radius, 8px);
+  font-size: 14px;
+  z-index: 1000;
+  box-shadow: var(--shadow, 0 8px 24px rgba(0, 0, 0, 0.25));
+  max-width: min(420px, calc(100vw - 24px));
+}
+.toast.success { background: var(--success, #16a34a); color: #fff; }
+.toast.error { background: var(--error, #dc2626); color: #fff; }
+.toast.info { background: var(--bg-card, #1f2937); border: 1px solid var(--border, #374151); color: var(--text, #fff); }
+@media (max-width: 768px) {
+  .toast {
+    left: 12px;
+    right: 12px;
+    bottom: calc(var(--player-height, 72px) + var(--mobile-nav-height, 56px) + 16px);
+  }
+}
+.fpk-save-path,
+.fpk-saved-ok,
+.fpk-error {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.fpk-save-path {
+  color: var(--text-secondary);
+}
+.fpk-save-path code,
+.fpk-saved-ok code {
+  font-size: 11px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fpk-saved-ok {
+  color: var(--success, #16a34a);
+}
+.fpk-error {
+  color: var(--danger, #dc2626);
+}
+.about-page .btn-xs {
+  padding: 2px 8px;
+  font-size: 11px;
+  line-height: 1.4;
+  flex-shrink: 0;
 }
 .fpk-tip {
   margin: 0;
