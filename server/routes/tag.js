@@ -5,7 +5,7 @@ import { readMeta, readMetaLite, batchWriteMeta, writeMeta, readEmbeddedCover } 
 import { matchByFilename, matchByArtistTitle, fetchMatchMeta, normalizeTagSource } from '../utils/tagMatch.js'
 import { parseFilename } from '../utils/filenameParse.js'
 import { fetchPicBuffer } from '../utils/fetchPic.js'
-import { getMusicPaths, addMusicPath, removeMusicPath, isUnderConfiguredMusicDir, isAllowedMediaPath } from '../utils/filePaths.js'
+import { getMusicPaths, getMusicPathsForUser, addMusicPath, removeMusicPath, isUnderConfiguredMusicDir, isAllowedMediaPath } from '../utils/filePaths.js'
 import { listAudioFiles, listDirEntries, probeDir } from '../utils/audioScan.js'
 import { mapWithConcurrency } from '../utils/asyncPool.js'
 import { notifyLibraryChanged } from '../utils/libraryNotify.js'
@@ -44,11 +44,11 @@ function buildFileStub(fp) {
   }
 }
 
-function assertMusicDirAccess(dirPath) {
+function assertMusicDirAccess(dirPath, userId = null) {
   if (!dirPath || !fs.existsSync(dirPath)) {
     return { ok: false, status: 400, error: `目录不存在：${dirPath || ''}` }
   }
-  if (!isUnderConfiguredMusicDir(dirPath)) {
+  if (!isUnderConfiguredMusicDir(dirPath, userId)) {
     return { ok: false, status: 400, error: '该目录未在音乐库路径中配置，请先在设置中添加' }
   }
   const probe = probeDir(dirPath)
@@ -67,7 +67,7 @@ function assertMusicDirAccess(dirPath) {
 tagRouter.get('/cover', async (req, res) => {
   try {
     const filePath = String(req.query.path || '').trim()
-    if (!filePath || !isAllowedMediaPath(filePath)) {
+    if (!filePath || !isAllowedMediaPath(filePath, { userId: req.user?.id })) {
       return res.status(403).json({ error: '无权访问该文件' })
     }
     const cover = await readEmbeddedCover(filePath)
@@ -81,8 +81,8 @@ tagRouter.get('/cover', async (req, res) => {
 })
 
 /** @deprecated 使用 /api/paths */
-tagRouter.get('/dirs', (_req, res) => {
-  res.json({ ok: true, data: getMusicPaths() })
+tagRouter.get('/dirs', (req, res) => {
+  res.json({ ok: true, data: getMusicPathsForUser(req.user?.id) })
 })
 
 tagRouter.post('/dirs', (req, res) => {
@@ -205,7 +205,7 @@ tagRouter.post('/write-batch', async (req, res) => {
 tagRouter.post('/list-dir', async (req, res) => {
   try {
     const { dirPath } = req.body
-    const access = assertMusicDirAccess(dirPath)
+    const access = assertMusicDirAccess(dirPath, req.user?.id)
     if (!access.ok) {
       return res.status(access.status).json({ error: access.error, probe: access.probe })
     }
@@ -235,7 +235,7 @@ tagRouter.post('/list-dir', async (req, res) => {
 tagRouter.post('/scan', async (req, res) => {
   try {
     const { dirPath, recursive = true } = req.body
-    const access = assertMusicDirAccess(dirPath)
+    const access = assertMusicDirAccess(dirPath, req.user?.id)
     if (!access.ok) {
       return res.status(access.status).json({ error: access.error, probe: access.probe })
     }
@@ -339,7 +339,7 @@ tagRouter.post('/match-batch', async (req, res) => {
 
     const sdkSource = normalizeTagSource(source)
     const cacheMap = new Map(
-      (getAllCachedTracks() || []).map((t) => [path.resolve(String(t.filePath || '')), t]),
+      (getAllCachedTracks(getMusicPathsForUser(req.user?.id)) || []).map((t) => [path.resolve(String(t.filePath || '')), t]),
     )
     // 有限并发：加速批量匹配，同时降低被音源限流的概率
     const concurrency = Math.min(3, Math.max(1, files.length))

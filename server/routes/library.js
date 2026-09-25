@@ -3,10 +3,15 @@ import fs from 'node:fs'
 import path from 'node:path'
 import {
   getMusicPaths,
+  getMusicPathsForUser,
+  getAllMusicScanRoots,
   isAllowedMediaPath,
+  isPathUnderMusicDirs,
   addMusicPath,
+  addPersonalMusicPath,
   resolveReal,
   getDownloadSavePath,
+  getEffectivePathsMode,
 } from '../utils/filePaths.js'
 import { listAudioFiles } from '../utils/audioScan.js'
 import {
@@ -63,9 +68,10 @@ export const libraryRouter = Router()
 /** 读取音乐库曲目：默认分页；?all=1 仍返回全量（兼容整理等内部用途，前端勿用） */
 libraryRouter.get('/tracks', (req, res) => {
   try {
+    const userDirs = getMusicPathsForUser(req.user?.id)
     const wantAll = String(req.query.all || '') === '1'
     if (wantAll) {
-      const data = getAllCachedTracks()
+      const data = getAllCachedTracks(userDirs)
       return res.json({ ok: true, data, total: data.length })
     }
     const result = queryCachedTracks({
@@ -77,6 +83,7 @@ libraryRouter.get('/tracks', (req, res) => {
       album: req.query.album,
       albumArtist: req.query.albumArtist,
       genre: req.query.genre,
+      dirs: userDirs,
     })
     res.json({
       ok: true,
@@ -91,9 +98,10 @@ libraryRouter.get('/tracks', (req, res) => {
 })
 
 /** 曲库总数 */
-libraryRouter.get('/tracks/count', (_req, res) => {
+libraryRouter.get('/tracks/count', (req, res) => {
   try {
-    res.json({ ok: true, total: countCachedTracks() })
+    const userDirs = getMusicPathsForUser(req.user?.id)
+    res.json({ ok: true, total: countCachedTracks(userDirs) })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
@@ -106,7 +114,9 @@ libraryRouter.post('/tracks/by-paths', (req, res) => {
     if (paths.length > 2000) {
       return res.status(400).json({ error: '单次最多 2000 条路径' })
     }
+    const userDirs = getMusicPathsForUser(req.user?.id)
     const data = queryTracksByPaths(paths, { limit: paths.length || 500 })
+      .filter((t) => isPathUnderMusicDirs(t.filePath || t.localPath, userDirs))
     res.json({ ok: true, data })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -116,11 +126,13 @@ libraryRouter.post('/tracks/by-paths', (req, res) => {
 /** 歌手聚合分页 */
 libraryRouter.get('/artists', (req, res) => {
   try {
+    const userDirs = getMusicPathsForUser(req.user?.id)
     const result = queryArtists({
       page: req.query.page,
       limit: req.query.limit,
       q: req.query.q,
       sort: req.query.sort,
+      dirs: userDirs,
     })
     res.json({
       ok: true,
@@ -137,12 +149,14 @@ libraryRouter.get('/artists', (req, res) => {
 /** 专辑聚合分页 */
 libraryRouter.get('/albums', (req, res) => {
   try {
+    const userDirs = getMusicPathsForUser(req.user?.id)
     const result = queryAlbums({
       page: req.query.page,
       limit: req.query.limit,
       q: req.query.q,
       sort: req.query.sort,
       artist: req.query.artist,
+      dirs: userDirs,
     })
     res.json({
       ok: true,
@@ -159,11 +173,13 @@ libraryRouter.get('/albums', (req, res) => {
 /** 风格聚合分页 */
 libraryRouter.get('/genres', (req, res) => {
   try {
+    const userDirs = getMusicPathsForUser(req.user?.id)
     const result = queryGenres({
       page: req.query.page,
       limit: req.query.limit,
       q: req.query.q,
       sort: req.query.sort,
+      dirs: userDirs,
     })
     res.json({
       ok: true,
@@ -180,8 +196,9 @@ libraryRouter.get('/genres', (req, res) => {
 /** 比对磁盘与缓存，返回已缓存、待扫描、已删除列表 */
 libraryRouter.post('/sync', (req, res) => {
   try {
-    const dirs = resolveScanDirs(req.body?.dirs)
-    const partial = isPartialScan(dirs)
+    const userId = req.user?.id
+    const dirs = resolveScanDirs(req.body?.dirs, userId)
+    const partial = isPartialScan(dirs, userId)
     const result = syncLibraryIndex(dirs, { partial })
     if (result.removed.length) {
       notifyLibraryRemoved(result.removed)
@@ -229,8 +246,13 @@ libraryRouter.post('/scan-start', (req, res) => {
   try {
     const force = Boolean(req.body?.force)
     const scanAll = Boolean(req.body?.scanAll)
-    const dirs = scanAll ? getMusicPaths().filter(Boolean) : resolveScanDirs(req.body?.dirs)
-    const partial = isPartialScan(dirs)
+    const userId = req.user?.id
+    const userDirs = getMusicPathsForUser(userId)
+    // 全库扫描仅管理员扫全部租户根；普通/专属用户只扫自己的生效路径
+    const dirs = scanAll
+      ? (req.user?.role === 'admin' ? getAllMusicScanRoots().filter(Boolean) : userDirs)
+      : resolveScanDirs(req.body?.dirs, userId)
+    const partial = isPartialScan(dirs, userId)
     const syncResult = syncLibraryIndex(dirs, { partial })
     if (syncResult.removed.length) {
       notifyLibraryRemoved(syncResult.removed)
@@ -302,8 +324,9 @@ libraryRouter.get('/mood/analyze-status', (_req, res) => {
 libraryRouter.get('/mood-map', (req, res) => {
   try {
     const limit = Number.parseInt(req.query.limit, 10) || 5000
-    const data = queryMoodMapPoints({ limit })
-    const stats = getMoodAnalyzeStats({ algoVersion: MOOD_ALGO_VERSION })
+    const userDirs = getMusicPathsForUser(req.user?.id)
+    const data = queryMoodMapPoints({ limit, dirs: userDirs })
+    const stats = getMoodAnalyzeStats({ algoVersion: MOOD_ALGO_VERSION, dirs: userDirs })
     res.json({
       ok: true,
       data: {
@@ -324,10 +347,12 @@ libraryRouter.post('/mood-map/tracks', (req, res) => {
     if (!bbox && !(Array.isArray(polygon) && polygon.length >= 3)) {
       return res.status(400).json({ error: '请提供 bbox 或 polygon' })
     }
+    const userDirs = getMusicPathsForUser(req.user?.id)
     const data = queryMoodTracksInRegion({
       bbox: bbox || null,
       polygon: Array.isArray(polygon) ? polygon : null,
       limit: Number.parseInt(limit, 10) || 500,
+      dirs: userDirs,
     })
     res.json({ ok: true, data })
   } catch (e) {
@@ -377,9 +402,10 @@ function resolveDupIdentity(track) {
 }
 
 /** 检测重复曲目（同标题+歌手；优先文件名解析，忽略大小写与空白） */
-libraryRouter.get('/duplicates', (_req, res) => {
+libraryRouter.get('/duplicates', (req, res) => {
   try {
-    const tracks = getAllCachedTracks() || []
+    const userDirs = getMusicPathsForUser(req.user?.id)
+    const tracks = getAllCachedTracks(userDirs) || []
     const groups = new Map()
     for (const t of tracks) {
       const id = resolveDupIdentity(t)
@@ -432,7 +458,7 @@ libraryRouter.post('/delete-files', (req, res) => {
       try {
         // allowMissing：文件可能已被移走（整理/外部删除）但缓存仍残留。
         // 这种"幽灵记录"只要路径仍归属音乐库/下载目录，就按已删除处理并清理缓存。
-        if (!isAllowedMediaPath(filePath, { allowMissing: true })) {
+        if (!isAllowedMediaPath(filePath, { allowMissing: true, userId: req.user?.id })) {
           failed.push({ filePath, error: '路径不在允许的音乐库/下载目录内' })
           continue
         }
@@ -462,13 +488,13 @@ libraryRouter.post('/delete-files', (req, res) => {
   }
 })
 
-function collectFakeFlacScanRoots() {
+function collectFakeFlacScanRoots(userId = null) {
   const roots = []
-  for (const p of getMusicPaths() || []) {
+  for (const p of (userId ? getMusicPathsForUser(userId) : getMusicPaths()) || []) {
     if (p) roots.push(path.resolve(p))
   }
   try {
-    const dl = getDownloadSavePath()
+    const dl = getDownloadSavePath(userId)
     if (dl) roots.push(path.resolve(dl))
   } catch {}
   const seen = new Set()
@@ -486,7 +512,7 @@ function collectFakeFlacScanRoots() {
 libraryRouter.post('/scan-fake-flac', (req, res) => {
   try {
     const dirRaw = String(req.body?.dirPath || '').trim()
-    let roots = collectFakeFlacScanRoots()
+    let roots = collectFakeFlacScanRoots(req.user?.id)
     if (dirRaw) {
       const resolved = path.resolve(dirRaw)
       if (!fs.existsSync(resolved)) {
@@ -572,7 +598,7 @@ libraryRouter.post('/rename-file', (req, res) => {
     const newNameRaw = String(req.body?.newName || req.body?.fileName || '').trim()
     if (!filePath) return res.status(400).json({ error: '请指定文件' })
     if (!newNameRaw) return res.status(400).json({ error: '请输入新文件名' })
-    if (!isAllowedMediaPath(filePath)) {
+    if (!isAllowedMediaPath(filePath, { userId: req.user?.id })) {
       return res.status(403).json({ error: '路径不在允许的音乐库/下载目录内' })
     }
 
@@ -590,7 +616,7 @@ libraryRouter.post('/rename-file', (req, res) => {
     if (path.dirname(dest) !== dir) {
       return res.status(400).json({ error: '不允许改变文件所在目录' })
     }
-    if (!isAllowedMediaPath(dest, { allowMissing: true })) {
+    if (!isAllowedMediaPath(dest, { allowMissing: true, userId: req.user?.id })) {
       return res.status(403).json({ error: '目标路径不在允许的音乐库/下载目录内' })
     }
 
@@ -761,7 +787,7 @@ function safeBaseName(fileName) {
 }
 
 /** 目录目标：允许音乐库根的子目录或外部目录；禁止根目录/音乐库根/音乐库根的上层目录 */
-function assertOrganizeTargetAllowed(targetDir) {
+function assertOrganizeTargetAllowed(targetDir, userId = null) {
   if (!targetDir || typeof targetDir !== 'string') {
     throw new Error('请填写整理的目标目录')
   }
@@ -770,7 +796,7 @@ function assertOrganizeTargetAllowed(targetDir) {
   if (resolved === fsRoot) {
     throw new Error('目标目录不能是文件系统根目录')
   }
-  const musicDirs = getMusicPaths().filter(Boolean)
+  const musicDirs = (userId ? getMusicPathsForUser(userId) : getMusicPaths()).filter(Boolean)
   for (const dir of musicDirs) {
     const base = path.resolve(dir)
     // 目标是音乐库根的上层目录 → 会把全部文件视为"已在目录内"，且可能越权扫全盘
@@ -798,13 +824,13 @@ function moveFile(src, dest) {
 }
 
 /** 整理后清理空源目录：向上删除空文件夹，但不碰音乐库根 / 下载根 / 目标目录 */
-function pruneEmptyDirsAfterOrganize(movedFromPaths, targetDir) {
+function pruneEmptyDirsAfterOrganize(movedFromPaths, targetDir, userId = null) {
   const stopRoots = new Set()
-  for (const p of getMusicPaths()) {
+  for (const p of (userId ? getMusicPathsForUser(userId) : getMusicPaths())) {
     try { if (p) stopRoots.add(resolveReal(p)) } catch {}
   }
   try {
-    const dl = getDownloadSavePath()
+    const dl = getDownloadSavePath(userId)
     if (dl) stopRoots.add(resolveReal(dl))
   } catch {}
   try {
@@ -826,7 +852,7 @@ function pruneEmptyDirsAfterOrganize(movedFromPaths, targetDir) {
       let real = ''
       try { real = resolveReal(dir) } catch { break }
       if (!real || stopRoots.has(real)) break
-      if (!isAllowedMediaPath(dir)) break
+      if (!isAllowedMediaPath(dir, { userId, allowMissing: true })) break
       try {
         if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) break
         const entries = fs.readdirSync(dir)
@@ -845,9 +871,10 @@ function pruneEmptyDirsAfterOrganize(movedFromPaths, targetDir) {
 }
 
 /** 解析整理范围，返回待整理的文件路径数组 */
-function resolveOrganizeFiles(body = {}) {
+function resolveOrganizeFiles(body = {}, userId = null) {
   const mode = body.scope || 'all' // all | files | dir
   const input = body.filePaths || body.files
+  const userDirs = userId ? getMusicPathsForUser(userId) : getMusicPaths()
 
   if (mode === 'files') {
     const list = Array.isArray(input) ? input : []
@@ -859,9 +886,10 @@ function resolveOrganizeFiles(body = {}) {
       const full = path.resolve(String(p))
       if (seen.has(full)) continue
       seen.add(full)
+      if (!isAllowedMediaPath(full, { userId })) continue
       if (fs.existsSync(full) && fs.statSync(full).isFile()) out.push(full)
     }
-    if (!out.length) throw new Error('所选文件均不存在')
+    if (!out.length) throw new Error('所选文件均不存在或不在你的音乐库路径内')
     return out
   }
 
@@ -871,11 +899,14 @@ function resolveOrganizeFiles(body = {}) {
     if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) {
       throw new Error(`文件夹不存在：${dir}`)
     }
+    if (!isPathUnderMusicDirs(dir, userDirs) && !isAllowedMediaPath(dir, { userId, allowMissing: true })) {
+      throw new Error('该文件夹不在你的音乐库路径内')
+    }
     return listAudioFiles(dir) // 递归列出该目录下全部音频
   }
 
-  // all / 默认：整个音乐库
-  const tracks = getAllCachedTracks() || []
+  // all / 默认：当前用户生效音乐库
+  const tracks = getAllCachedTracks(userDirs) || []
   const out = []
   const seen = new Set()
   for (const t of tracks) {
@@ -890,12 +921,13 @@ function resolveOrganizeFiles(body = {}) {
 /** 整理音乐库：迁移到 目标目录/专辑艺术家(或歌手)/专辑/文件 */
 libraryRouter.post('/organize', async (req, res) => {
   try {
+    const userId = req.user?.id
     const rawDir = req.body?.targetDir
-    const targetDir = assertOrganizeTargetAllowed(rawDir)
+    const targetDir = assertOrganizeTargetAllowed(rawDir, userId)
 
     const artistMode = String(req.body?.artistMode || '').trim() === 'various' ? 'various' : 'primary'
 
-    const srcPaths = resolveOrganizeFiles(req.body || {})
+    const srcPaths = resolveOrganizeFiles(req.body || {}, userId)
     if (!srcPaths.length) {
       return res.status(400).json({ error: '音乐库为空，无可整理的歌曲' })
     }
@@ -908,8 +940,9 @@ libraryRouter.post('/organize', async (req, res) => {
     const targetReal = resolveReal(targetDir).replace(/[\\/]+$/, '')
 
     // 路径 → 缓存曲目（含 albumArtist/artist/album）；未命中则按文件名兜底
+    const userDirs = getMusicPathsForUser(userId)
     const tracksByPath = new Map(
-      (getAllCachedTracks() || []).map((t) => [path.resolve(t.filePath || ''), t]),
+      (getAllCachedTracks(userDirs) || []).map((t) => [path.resolve(t.filePath || ''), t]),
     )
 
     const moved = []
@@ -926,7 +959,7 @@ libraryRouter.post('/organize', async (req, res) => {
         skipped.push({ filePath: src, reason: '已在目标目录内' })
         continue
       }
-      if (!isAllowedMediaPath(src)) {
+      if (!isAllowedMediaPath(src, { userId })) {
         failed.push({ filePath: src, error: '路径不在允许的音乐库/下载目录内' })
         continue
       }
@@ -971,14 +1004,19 @@ libraryRouter.post('/organize', async (req, res) => {
           await scanBatchAndCache(pending)
         } catch {}
       }
-      // 目标目录不在已配置音乐库内时，自动加入扫描列表
+      // 目标目录不在已配置音乐库内时，自动加入当前用户的扫描列表
       try {
-        if (!getMusicPaths().some((p) => resolveReal(p) === resolveReal(targetDir))) {
-          addMusicPath(targetDir)
+        const roots = getMusicPathsForUser(userId)
+        if (!roots.some((p) => resolveReal(p) === resolveReal(targetDir))) {
+          if (getEffectivePathsMode(userId) === 'personal') {
+            addPersonalMusicPath(userId, targetDir)
+          } else if (req.user?.role === 'admin') {
+            addMusicPath(targetDir)
+          }
         }
       } catch {}
       try {
-        cleanedDirs = pruneEmptyDirsAfterOrganize(moved.map((m) => m.from), targetDir)
+        cleanedDirs = pruneEmptyDirsAfterOrganize(moved.map((m) => m.from), targetDir, userId)
       } catch {}
       notifyLibraryRemoved(moved.map((m) => m.from), { reason: 'organize' })
       notifyLibraryChanged(moved.map((m) => m.to), { reason: 'organize' })

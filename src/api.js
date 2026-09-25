@@ -323,13 +323,28 @@ export const api = {
         method: 'POST',
         body: typeof payload === 'object' && payload !== null ? payload : {},
       }),
+    smoothWarmup: (filePath) =>
+      request('/play/smooth-warmup', {
+        method: 'POST',
+        body: { path: filePath },
+        timeout: 180000,
+      }),
   },
   paths: {
     list: () => request('/paths'),
     stats: () => request('/paths/stats', { timeout: 120000 }),
-    add: (dirPath, fromPicker) => request('/paths', { method: 'POST', body: { dirPath, fromPicker } }),
-    update: (oldPath, newPath, fromPicker) => request('/paths', { method: 'PUT', body: { oldPath, newPath, fromPicker } }),
-    remove: (dirPath) => request('/paths', { method: 'DELETE', body: { dirPath } }),
+    add: (dirPath, fromPicker, scope) => request('/paths', {
+      method: 'POST',
+      body: { dirPath, fromPicker, ...(scope ? { scope } : {}) },
+    }),
+    update: (oldPath, newPath, fromPicker, scope) => request('/paths', {
+      method: 'PUT',
+      body: { oldPath, newPath, fromPicker, ...(scope ? { scope } : {}) },
+    }),
+    remove: (dirPath, scope) => request('/paths', {
+      method: 'DELETE',
+      body: { dirPath, ...(scope ? { scope } : {}) },
+    }),
     setDownload: (dirPath, fromPicker) => request('/paths/download', { method: 'PUT', body: { dirPath, fromPicker } }),
     setDownloadMode: (mode) => request('/paths/download/mode', { method: 'PUT', body: { mode } }),
     setPersonalDownload: (dirPath, fromPicker, enable = true) => request('/paths/download/personal', {

@@ -1219,7 +1219,7 @@ onBeforeUnmount(() => {
 async function loadDirs() {
   try {
     const res = await api.paths.list()
-    dirs.value = res.data || []
+    dirs.value = res.musicPaths || res.data || []
   } catch {}
 }
 

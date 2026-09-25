@@ -215,13 +215,42 @@
         </div>
 
         <div class="paths-layout">
+          <section class="paths-section paths-section-block">
+            <h4 class="paths-section-title">路径权限</h4>
+            <p class="source-tip download-path-tip">{{ downloadPathPolicyTip }}</p>
+
+            <div v-if="canChooseDownloadPath" class="setting-item setting-item-flat">
+              <div class="setting-item-info">
+                <div class="setting-item-label">使用哪套路径</div>
+                <div class="setting-item-desc">管理员路径：与管理员共用音乐库与下载目录；专属路径：仅本账号的音乐库与下载目录</div>
+              </div>
+              <div class="setting-item-action">
+                <AppSelect
+                  v-model="downloadPathMode"
+                  :options="downloadPathModeOptions"
+                  min-width="180px"
+                  @change="onDownloadPathModeChange"
+                />
+              </div>
+            </div>
+            <div v-else class="setting-item setting-item-flat">
+              <div class="setting-item-info">
+                <div class="setting-item-label">当前路径策略</div>
+                <div class="setting-item-desc">{{ downloadPathPolicyLockedDesc }}</div>
+              </div>
+              <div class="setting-item-action path-policy-locked">
+                {{ downloadPathMode === 'personal' ? '专属路径' : '管理员路径' }}
+              </div>
+            </div>
+          </section>
+
           <section v-if="isAdminUser" class="paths-section paths-section-block">
-            <h4 class="paths-section-title">音乐库</h4>
+            <h4 class="paths-section-title">音乐库（管理员共用）</h4>
             <div class="setting-item setting-item-flat">
               <div class="setting-item-info">
-                <div class="setting-item-label">音乐库路径</div>
+                <div class="setting-item-label">共用音乐库路径</div>
                 <div class="setting-item-desc">
-                  用于音乐库、标签编辑等扫描本地歌曲，可添加一个或多个目录。请使用 NAS 绝对路径（如 <code>/vol1/1000/Music</code>），同一物理目录只会保留一条。
+                  供选择「管理员路径」的用户使用。请使用 NAS 绝对路径（如 <code>/vol1/1000/Music</code>）。
                   {{ fnosAvailable ? '点击「选择文件夹」会调用系统文件管理器。' : '点击「添加路径」输入目录。' }}
                 </div>
               </div>
@@ -245,7 +274,7 @@
                       <span v-if="libraryStats.musicDirs > 1">（多目录重复文件已去重）</span>。
                       可在下方目录树中勾选要扫描的文件夹（含子目录），不必扫描整个根目录。
                     </p>
-                    <p v-if="downloadPath && musicPaths.includes(downloadPath)" class="library-stats-warn">
+                    <p v-if="sharedDownloadPath && sharedMusicPaths.includes(sharedDownloadPath)" class="library-stats-warn">
                       提示：下载目录与音乐库目录相同，每次下载的新歌也会出现在音乐库中。
                     </p>
                   </template>
@@ -425,33 +454,61 @@
                 </template>
               </div>
             </div>
-            <div v-else class="empty-hint">暂无音乐库目录，请添加或选择路径</div>
+            <div v-else class="empty-hint">暂无共用音乐库目录，请添加或选择路径</div>
+          </section>
+
+          <section
+            v-if="showPersonalMusicSection"
+            class="paths-section paths-section-block"
+          >
+            <h4 class="paths-section-title">{{ isAdminUser ? '我的专属音乐库' : '音乐库（专属）' }}</h4>
+            <p class="source-tip">当前账号使用专属路径：在此配置仅自己可见的音乐库目录。</p>
+            <div class="setting-item setting-item-flat">
+              <div class="setting-item-info">
+                <div class="setting-item-label">专属音乐库路径</div>
+                <div class="setting-item-desc">
+                  可添加一个或多个目录。{{ fnosAvailable ? '点击「选择文件夹」选择。' : '点击「添加路径」输入。' }}
+                </div>
+              </div>
+              <div class="setting-item-action">
+                <button v-if="fnosAvailable" class="btn-primary btn-sm" @click="browseAddPersonalPath" :disabled="pickingFolder">
+                  {{ pickingFolder ? '选择中...' : '选择文件夹' }}
+                </button>
+                <button v-else class="btn-primary btn-sm" @click="promptAddPersonalPath">添加路径</button>
+              </div>
+            </div>
+            <div v-if="personalMusicPaths.length" class="path-list card-inner">
+              <div v-for="p in personalMusicPaths" :key="p" class="path-row">
+                <code class="path-code" :title="p">{{ p }}</code>
+                <div class="path-col-actions">
+                  <button v-if="fnosAvailable" class="btn-sm btn-ghost" @click="browseReplacePersonalPath(p)" :disabled="pickingFolder">浏览</button>
+                  <button class="btn-sm btn-danger" @click="removePersonalPath(p)">移除</button>
+                </div>
+              </div>
+            </div>
+            <div v-else class="empty-hint">尚未添加专属音乐库目录</div>
+          </section>
+
+          <section
+            v-if="!isAdminUser && downloadPathMode === 'shared'"
+            class="paths-section paths-section-block"
+          >
+            <h4 class="paths-section-title">音乐库（管理员）</h4>
+            <p class="source-tip">当前使用管理员配置的共用音乐库（只读）。</p>
+            <div v-if="sharedMusicPaths.length" class="path-list card-inner">
+              <div v-for="p in sharedMusicPaths" :key="p" class="path-row">
+                <code class="path-code" :title="p">{{ p }}</code>
+              </div>
+            </div>
+            <div v-else class="empty-hint">管理员尚未配置共用音乐库</div>
           </section>
 
           <section class="paths-section paths-section-block">
             <h4 class="paths-section-title">下载保存</h4>
-            <p class="source-tip download-path-tip">
-              可使用管理员配置的共用目录，也可为当前账号设置专属目录（默认在共用目录下按用户名建子文件夹）。
-            </p>
 
             <div class="setting-item setting-item-flat">
               <div class="setting-item-info">
-                <div class="setting-item-label">下载目录模式</div>
-                <div class="setting-item-desc">共用：所有用户同一目录；个人：仅当前账号，按用户名独立存储</div>
-              </div>
-              <div class="setting-item-action">
-                <AppSelect
-                  v-model="downloadPathMode"
-                  :options="downloadPathModeOptions"
-                  min-width="160px"
-                  @change="onDownloadPathModeChange"
-                />
-              </div>
-            </div>
-
-            <div class="setting-item setting-item-flat">
-              <div class="setting-item-info">
-                <div class="setting-item-label">共用下载目录{{ isAdminUser ? '' : '（只读）' }}</div>
+                <div class="setting-item-label">管理员下载目录{{ isAdminUser ? '' : '（只读）' }}</div>
                 <div class="setting-item-desc path-desc-mono" :title="sharedDownloadPath">
                   {{ sharedDownloadPath || '未设置' }}
                 </div>
@@ -481,7 +538,7 @@
               <div class="setting-item-info">
                 <div class="setting-item-label">我的专属下载目录</div>
                 <div class="setting-item-desc path-desc-mono" :title="personalDownloadPath">
-                  {{ personalDownloadPath || '未设置（将使用共用目录下的用户名子文件夹）' }}
+                  {{ personalDownloadPath || '未设置（将使用管理员下载目录下的用户名子文件夹）' }}
                 </div>
               </div>
               <div class="setting-item-action">
@@ -507,7 +564,7 @@
 
             <div class="setting-item setting-item-flat">
               <div class="setting-item-info">
-                <div class="setting-item-label">当前生效目录</div>
+                <div class="setting-item-label">当前生效下载目录</div>
                 <div class="setting-item-desc path-desc-mono" :title="downloadPath">
                   {{ downloadPath || '未设置' }}
                 </div>
@@ -804,7 +861,8 @@
           <div class="setting-item-info">
             <div class="setting-item-label">车机 / 弱网流畅播放</div>
             <div class="setting-item-desc">
-              本地 FLAC 等无损先在 NAS 转成约 192kbps AAC 再播，减轻无线 CarPlay 与拉歌抢同一路 WiFi 时的断续。
+              本地 FLAC 等无损先在 NAS 转成约 128kbps AAC 再播，并预热下一首；在线试听也会压到 128k。
+              减轻无线 CarPlay 与拉歌抢同一路 WiFi 时的断续。开启后会自动关闭音频可视化，并降低锁屏/车机 Now Playing 进度推送频率（避免跨进程刷新过频卡顿）。
               有线 CarPlay 一般不需要。首次播放某首可能稍慢（转码缓存），之后可秒开。需要可用的 ffmpeg。iPhone/iPad 默认开启。
             </div>
           </div>
@@ -979,7 +1037,7 @@
 
       <!-- 用户管理 -->
       <div v-if="activeTab === 'users'" class="panel-body users-panel-body">
-        <p class="source-tip">仅管理员可创建与管理账号。普通用户无法自助注册。</p>
+        <p class="source-tip">仅管理员可创建与管理账号。可为每个用户指定路径权限：使用管理员路径（共用音乐库与下载）、使用专属路径，或允许用户自行选择。</p>
         <form class="user-create-form" @submit.prevent="createManagedUser">
           <label class="field-inline">
             <span>用户名</span>
@@ -1001,16 +1059,21 @@
             <span>角色</span>
             <AppSelect v-model="newUser.role" :options="userRoleOptions" min-width="120px" />
           </label>
+          <label class="field-inline">
+            <span>路径权限</span>
+            <AppSelect v-model="newUser.downloadPathPolicy" :options="downloadPathPolicyOptions" min-width="200px" />
+          </label>
           <button class="btn-primary btn-sm" type="submit" :disabled="creatingUser">
             {{ creatingUser ? '创建中…' : '创建用户' }}
           </button>
         </form>
 
-        <div v-if="managedUsers.length" class="user-table">
+        <div v-if="managedUsers.length" class="user-table user-table-with-path">
           <div class="user-table-head">
             <span>用户</span>
             <span>邮箱</span>
             <span>角色</span>
+            <span>路径权限</span>
             <span>操作</span>
           </div>
           <div v-for="u in managedUsers" :key="u.id" class="user-table-row">
@@ -1027,6 +1090,10 @@
                 <label class="field-inline">
                   <span>角色</span>
                   <AppSelect v-model="editUserForm.role" :options="userRoleOptions" min-width="120px" />
+                </label>
+                <label class="field-inline">
+                  <span>下载目录</span>
+                  <AppSelect v-model="editUserForm.downloadPathPolicy" :options="downloadPathPolicyOptions" min-width="180px" />
                 </label>
               </div>
               <div class="user-row-actions">
@@ -1047,6 +1114,7 @@
                 </span>
               </div>
               <div class="user-cell-role">{{ u.role === 'admin' ? '管理员' : '普通用户' }}</div>
+              <div class="user-cell-path-policy">{{ downloadPathPolicyLabel(u.downloadPathPolicy) }}</div>
               <div class="user-row-actions">
                 <button class="btn-sm btn-ghost" type="button" @click="startManagedUserEdit(u)">编辑</button>
                 <button class="btn-sm btn-ghost" type="button" @click="openResetPasswordModal(u)">重置密码</button>
@@ -1265,7 +1333,7 @@ const managedUsers = ref([])
 const creatingUser = ref(false)
 const editingUserId = ref(null)
 const userUpdating = ref(false)
-const editUserForm = reactive({ displayName: '', email: '', role: 'user' })
+const editUserForm = reactive({ displayName: '', email: '', role: 'user', downloadPathPolicy: 'choose' })
 const resetPasswordUser = ref(null)
 const resetPasswordForm = reactive({ password: '', confirm: '' })
 const resetPasswordSaving = ref(false)
@@ -1292,6 +1360,7 @@ const newUser = reactive({
   email: '',
   password: '',
   role: 'user',
+  downloadPathPolicy: 'choose',
 })
 const mailPasswordInput = ref('')
 const mailTestTo = ref('')
@@ -1306,18 +1375,28 @@ const importMode = ref('file')
 const importUrl = ref('')
 const importingUrl = ref(false)
 const musicPaths = ref([])
+const sharedMusicPaths = ref([])
+const personalMusicPaths = ref([])
 const downloadPath = ref('')
 const sharedDownloadPath = ref('')
 const personalDownloadPath = ref('')
 const downloadPathMode = ref('shared')
+const downloadPathPolicy = ref('choose')
+const canChooseDownloadPath = ref(true)
 const newPath = ref('')
 const editingPath = ref('')
 const editPathValue = ref('')
 const editFromPicker = ref(false)
 const downloadPathModeOptions = [
-  { value: 'shared', label: '共用目录' },
-  { value: 'personal', label: '我的专属目录' },
+  { value: 'shared', label: '管理员路径' },
+  { value: 'personal', label: '专属路径' },
 ]
+const downloadPathPolicyOptions = [
+  { value: 'shared', label: '使用管理员路径' },
+  { value: 'personal', label: '使用专属路径' },
+  { value: 'choose', label: '允许用户自行选择' },
+]
+const showPersonalMusicSection = computed(() => downloadPathMode.value === 'personal')
 const fnosAvailable = ref(false)
 const pickingFolder = ref(false)
 const activeTab = ref('paths')
@@ -1817,12 +1896,14 @@ async function createManagedUser() {
       displayName: newUser.displayName || newUser.username,
       email: newUser.email,
       role: newUser.role,
+      downloadPathPolicy: newUser.downloadPathPolicy || 'choose',
     })
     newUser.username = ''
     newUser.displayName = ''
     newUser.email = ''
     newUser.password = ''
     newUser.role = 'user'
+    newUser.downloadPathPolicy = 'choose'
     await loadManagedUsers()
     showToast('用户已创建', 'success')
   } catch (e) {
@@ -1873,6 +1954,9 @@ function startManagedUserEdit(user) {
   editUserForm.displayName = user.displayName || user.username
   editUserForm.email = user.email || ''
   editUserForm.role = user.role || 'user'
+  editUserForm.downloadPathPolicy = ['shared', 'personal', 'choose'].includes(user.downloadPathPolicy)
+    ? user.downloadPathPolicy
+    : 'choose'
 }
 
 function cancelManagedUserEdit() {
@@ -1887,11 +1971,13 @@ async function saveManagedUserEdit() {
       displayName: editUserForm.displayName.trim(),
       email: editUserForm.email.trim(),
       role: editUserForm.role,
+      downloadPathPolicy: editUserForm.downloadPathPolicy,
     })
     const idx = managedUsers.value.findIndex(u => u.id === editingUserId.value)
     if (idx >= 0 && res.user) managedUsers.value[idx] = res.user
     if (editingUserId.value === currentAuthUser.value?.id && res.user) {
       patchLocalUser(res.user)
+      await loadPaths()
     }
     editingUserId.value = null
     showToast('已保存', 'success')
@@ -2192,8 +2278,7 @@ async function disableFfmpeg() {
 async function loadPaths() {
   try {
     const res = await api.paths.list()
-    musicPaths.value = res.musicPaths || res.data || []
-    applyDownloadPathInfo(res)
+    applyPathsInfo(res)
     needsPathSetup.value = Boolean(res.setup?.needsPathConfig)
     mountInfo.value = res.setup?.mountInfo || null
     const mp = res.setup?.musicProbe
@@ -2223,8 +2308,7 @@ async function addPath(fromPicker = false) {
   }
   try {
     const res = await api.paths.add(val, viaPicker)
-    musicPaths.value = res.musicPaths || res.data || []
-    applyDownloadPathInfo(res)
+    applyPathsInfo(res)
     newPath.value = ''
     showToast('音乐库路径已添加', 'success')
     await loadLibraryStats()
@@ -2275,8 +2359,7 @@ async function browseReplacePath(oldPath) {
     const path = await pickFolder({ title: '选择新文件夹' })
     if (!path) return
     const res = await api.paths.update(oldPath, path, true)
-    musicPaths.value = res.musicPaths || res.data || []
-    applyDownloadPathInfo(res)
+    applyPathsInfo(res)
     showToast('路径已更新', 'success')
     await loadLibraryStats()
   } catch (e) {
@@ -2320,8 +2403,7 @@ async function saveEditPath(oldPath) {
   }
   try {
     const res = await api.paths.update(oldPath, val, editFromPicker.value)
-    musicPaths.value = res.musicPaths || res.data || []
-    applyDownloadPathInfo(res)
+    applyPathsInfo(res)
     cancelEditPath()
     showToast('路径已更新', 'success')
     await loadLibraryStats()
@@ -2333,8 +2415,7 @@ async function saveEditPath(oldPath) {
 async function removePath(dirPath) {
   try {
     const res = await api.paths.remove(dirPath)
-    musicPaths.value = res.musicPaths || res.data || []
-    applyDownloadPathInfo(res)
+    applyPathsInfo(res)
     showToast('音乐库路径已删除', 'success')
     await loadLibraryStats()
   } catch (e) {
@@ -2342,34 +2423,149 @@ async function removePath(dirPath) {
   }
 }
 
+function applyPathsInfo(res = {}) {
+  sharedMusicPaths.value = Array.isArray(res.sharedMusicPaths) ? res.sharedMusicPaths : []
+  personalMusicPaths.value = Array.isArray(res.personalMusicPaths) ? res.personalMusicPaths : []
+  // 管理员扫描面板始终操作共用库；普通用户 musicPaths 为当前生效路径
+  if (isAdminUser.value) {
+    musicPaths.value = sharedMusicPaths.value
+  } else {
+    musicPaths.value = res.musicPaths || res.data || []
+  }
+  applyDownloadPathInfo(res)
+}
+
 function applyDownloadPathInfo(res = {}) {
   downloadPath.value = res.downloadPath || ''
   sharedDownloadPath.value = res.sharedDownloadPath || res.downloadPath || ''
   personalDownloadPath.value = res.personalDownloadPath || ''
   downloadPathMode.value = res.downloadPathMode === 'personal' ? 'personal' : 'shared'
+  downloadPathPolicy.value = ['shared', 'personal', 'choose'].includes(res.downloadPathPolicy)
+    ? res.downloadPathPolicy
+    : 'choose'
+  canChooseDownloadPath.value = res.canChooseDownloadPath !== false && downloadPathPolicy.value === 'choose'
 }
+
+function downloadPathPolicyLabel(policy) {
+  const hit = downloadPathPolicyOptions.find((o) => o.value === policy)
+  return hit?.label || '允许用户自行选择'
+}
+
+const downloadPathPolicyTip = computed(() => {
+  if (downloadPathPolicy.value === 'shared') {
+    return '管理员已指定本账号使用管理员路径：音乐库与下载目录均与管理员共用，无法自行切换。'
+  }
+  if (downloadPathPolicy.value === 'personal') {
+    return '管理员已指定本账号使用专属路径：请自行配置音乐库与下载目录（下载默认在管理员下载目录下按用户名建子文件夹）。'
+  }
+  return '可选择「管理员路径」（共用音乐库与下载目录）或「专属路径」（仅本账号）。管理员可在「用户管理」中锁定策略。'
+})
+
+const downloadPathPolicyLockedDesc = computed(() => {
+  if (downloadPathPolicy.value === 'personal') {
+    return '策略由管理员锁定为「专属路径」，如需改回管理员路径或开放自选请联系管理员。'
+  }
+  return '策略由管理员锁定为「管理员路径」，如需专属路径或开放自选请联系管理员。'
+})
 
 async function onDownloadPathModeChange() {
   try {
     const res = await api.paths.setDownloadMode(downloadPathMode.value)
-    applyDownloadPathInfo(res)
-    showToast(downloadPathMode.value === 'personal' ? '已切换为专属下载目录' : '已切换为共用下载目录', 'success')
+    applyPathsInfo(res)
+    showToast(downloadPathMode.value === 'personal' ? '已切换为专属路径' : '已切换为管理员路径', 'success')
+    await loadLibraryStats()
+    initScanTreeExpansion()
   } catch (e) {
     showToast(e.message || '切换失败', 'error')
     await loadPaths()
   }
 }
 
+async function addPersonalPath(fromPicker = false) {
+  const viaPicker = fromPicker === true
+  const val = newPath.value.trim()
+  if (!val) {
+    showToast('请先输入专属音乐库绝对路径', 'info')
+    return
+  }
+  try {
+    const res = await api.paths.add(val, viaPicker, 'personal')
+    applyPathsInfo(res)
+    newPath.value = ''
+    showToast('专属音乐库路径已添加', 'success')
+  } catch (e) {
+    showToast(e.message, 'error')
+  }
+}
+
+async function promptAddPersonalPath() {
+  const val = await appPrompt({
+    title: '添加专属音乐库路径',
+    message: '请输入仅本账号可见的音乐库绝对路径',
+    inputLabel: '目录路径',
+    placeholder: '/vol1/1000/Music/我的',
+    defaultValue: '',
+    confirmText: '添加',
+  })
+  if (val == null) return
+  const trimmed = String(val).trim()
+  if (!trimmed) {
+    showToast('请输入路径', 'info')
+    return
+  }
+  newPath.value = trimmed
+  await addPersonalPath(false)
+}
+
+async function browseAddPersonalPath() {
+  pickingFolder.value = true
+  try {
+    const path = await pickFolder({ title: '选择专属音乐文件夹' })
+    if (!path) return
+    newPath.value = path
+    await addPersonalPath(true)
+  } catch (e) {
+    if (e.message && !e.message.includes('未选择')) showToast(e.message, 'error')
+  } finally {
+    pickingFolder.value = false
+  }
+}
+
+async function browseReplacePersonalPath(oldPath) {
+  pickingFolder.value = true
+  try {
+    const path = await pickFolder({ title: '选择新的专属文件夹' })
+    if (!path) return
+    const res = await api.paths.update(oldPath, path, true, 'personal')
+    applyPathsInfo(res)
+    showToast('专属路径已更新', 'success')
+  } catch (e) {
+    if (e.message && !e.message.includes('未选择')) showToast(e.message, 'error')
+  } finally {
+    pickingFolder.value = false
+  }
+}
+
+async function removePersonalPath(dirPath) {
+  try {
+    const res = await api.paths.remove(dirPath, 'personal')
+    applyPathsInfo(res)
+    showToast('专属音乐库路径已删除', 'success')
+  } catch (e) {
+    showToast(e.message, 'error')
+  }
+}
+
 async function applySharedDownloadPath(path, fromPicker = false) {
   const val = String(path || '').trim()
   if (!val) {
-    showToast('请输入共用下载目录路径', 'info')
+    showToast('请输入管理员下载目录路径', 'info')
     return
   }
   try {
     const res = await api.paths.setDownload(val, fromPicker === true)
-    applyDownloadPathInfo(res)
-    showToast('共用下载路径已更新', 'success')
+    applyPathsInfo(res)
+    showToast('管理员下载路径已更新', 'success')
   } catch (e) {
     showToast(e.message, 'error')
   }
@@ -2377,7 +2573,7 @@ async function applySharedDownloadPath(path, fromPicker = false) {
 
 async function promptEditSharedDownload() {
   const val = await appPrompt({
-    title: '修改共用下载目录',
+    title: '修改管理员下载目录',
     message: '请输入 NAS 绝对路径',
     inputLabel: '目录路径',
     placeholder: '/vol1/1000/Music/Download',
@@ -2391,7 +2587,7 @@ async function promptEditSharedDownload() {
 async function browseDownloadPath() {
   pickingFolder.value = true
   try {
-    const path = await pickFolder({ title: '选择共用下载保存目录' })
+    const path = await pickFolder({ title: '选择管理员下载保存目录' })
     if (!path) return
     await applySharedDownloadPath(path, true)
   } catch (e) {
@@ -2409,7 +2605,7 @@ async function applyPersonalDownloadPath(path, fromPicker = false) {
   }
   try {
     const res = await api.paths.setPersonalDownload(val, fromPicker === true, true)
-    applyDownloadPathInfo(res)
+    applyPathsInfo(res)
     showToast('个人下载路径已更新', 'success')
   } catch (e) {
     showToast(e.message, 'error')
@@ -2687,13 +2883,19 @@ async function toggleVisualizerSetting() {
 
 async function toggleSmoothStreamSetting() {
   const currentlyOn = settings[PLAYER_SMOOTH_STREAM_KEY] !== 'false'
-  settings[PLAYER_SMOOTH_STREAM_KEY] = currentlyOn ? 'false' : 'true'
+  const turningOn = currentlyOn === false
+  settings[PLAYER_SMOOTH_STREAM_KEY] = turningOn ? 'true' : 'false'
   try {
-    await api.settings.update({ [PLAYER_SMOOTH_STREAM_KEY]: settings[PLAYER_SMOOTH_STREAM_KEY] })
+    const patch = { [PLAYER_SMOOTH_STREAM_KEY]: settings[PLAYER_SMOOTH_STREAM_KEY] }
+    if (turningOn) {
+      settings['player.visualizer'] = 'false'
+      patch['player.visualizer'] = 'false'
+    }
+    await api.settings.update(patch)
     await loadPlayerSettings()
     showToast(
-      settings[PLAYER_SMOOTH_STREAM_KEY] !== 'false'
-        ? '已开启流畅播放：本地无损将转 AAC 再播（建议同时关闭音频可视化）'
+      turningOn
+        ? '已开启流畅播放：本地无损转 128k AAC，并已关闭音频可视化'
         : '已关闭流畅播放：本地文件直出',
       'success',
     )
@@ -3728,7 +3930,7 @@ function showToast(text, type = 'info') {
 .user-table-head,
 .user-table-row {
   display: grid;
-  grid-template-columns: minmax(140px, 1.2fr) minmax(160px, 1.4fr) 100px auto;
+  grid-template-columns: minmax(120px, 1.1fr) minmax(140px, 1.2fr) 88px minmax(140px, 1.2fr) auto;
   gap: 12px;
   align-items: center;
   padding: 12px 14px;
@@ -3751,7 +3953,16 @@ function showToast(text, type = 'info') {
   font-size: 13px;
   word-break: break-all;
 }
-.user-cell-role { font-size: 13px; color: var(--text-secondary); }
+.user-cell-role,
+.user-cell-path-policy { font-size: 13px; color: var(--text-secondary); }
+.path-policy-locked {
+  font-size: 13px;
+  color: var(--text-secondary);
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-light);
+}
 .user-edit-fields {
   grid-column: 1 / -2;
   display: flex;

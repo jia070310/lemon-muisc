@@ -18,7 +18,7 @@ import { extractMusicUrl } from '../utils/sourceResult.js'
 import { appendStreamToken } from '../utils/streamAuth.js'
 import { ensureApePlayWav } from '../utils/apePlay.js'
 import { buildMusicCdnHeaders } from '../utils/musicCdnHeaders.js'
-import { ensureSmoothPlayAac, needsSmoothPlayTranscode } from '../utils/smoothPlay.js'
+import { ensureSmoothPlayAac, needsSmoothPlayTranscode, warmSmoothPlayAac } from '../utils/smoothPlay.js'
 
 export const playRouter = Router()
 
@@ -98,7 +98,7 @@ playRouter.post('/url', async (req, res) => {
 
     // 本地文件：返回可流式播放的同源 URL（APE 走转码缓存端点）
     if (localFilePath) {
-      if (!isAllowedMediaPath(localFilePath)) {
+      if (!isAllowedMediaPath(localFilePath, { userId: req.user?.id })) {
         return res.status(400).json({ error: '本地文件不可用或不在允许目录内，请在设置中检查音乐库/下载路径' })
       }
       const resolvedLocal = path.resolve(localFilePath)
@@ -343,7 +343,7 @@ playRouter.get('/local-smooth', async (req, res) => {
     } catch {
       filePath = String(filePath).replace(/\+/g, ' ')
     }
-    if (!isAllowedMediaPath(filePath)) {
+    if (!isAllowedMediaPath(filePath, { userId: req.user?.id })) {
       return res.status(403).json({ error: '无权访问该文件' })
     }
 
@@ -385,6 +385,21 @@ playRouter.get('/local-smooth', async (req, res) => {
       const status = /ffmpeg|转码/i.test(String(e?.message || '')) ? 415 : 500
       res.status(status).json({ error: formatUserError(e, '流畅播放转码失败') })
     }
+  }
+})
+
+/** 预热下一首 AAC 缓存，减轻连播首卡 */
+playRouter.post('/smooth-warmup', async (req, res) => {
+  try {
+    const filePath = String(req.body?.path || req.body?.filePath || req.body?.localPath || '').trim()
+    if (!filePath) return res.status(400).json({ error: '缺少文件路径' })
+    if (!isAllowedMediaPath(filePath, { userId: req.user?.id })) {
+      return res.status(403).json({ error: '无权访问该文件' })
+    }
+    const result = await warmSmoothPlayAac(filePath)
+    res.json({ ok: true, ...result })
+  } catch (e) {
+    res.status(500).json({ error: formatUserError(e, '流畅播放预热失败') })
   }
 })
 

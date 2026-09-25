@@ -1,4 +1,4 @@
-import { getMusicPaths } from './filePaths.js'
+import { getMusicPaths, getAllMusicScanRoots } from './filePaths.js'
 import {
   getLibraryAutoScanDirs,
   isPartialScan,

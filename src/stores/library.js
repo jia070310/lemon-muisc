@@ -11,7 +11,7 @@ const PLAYLISTS_KEY_BASE = 'lemon-library-playlists'
 const USER_DATA_REV_KEY_BASE = 'lemon-library-user-data-rev'
 const LEGACY_MIGRATED_KEY = 'lemon-library-legacy-migrated-user'
 const RECENT_LIMIT = 200
-const SESSION_TRACKS_KEY = 'lemon-library-tracks-v1'
+const SESSION_TRACKS_KEY_BASE = 'lemon-library-tracks-v1'
 const SESSION_TRACKS_LIMIT = 8000
 const coverVersions = new Map()
 
@@ -25,8 +25,11 @@ function favoritesKey() { return storageKey(FAVORITES_KEY_BASE) }
 function recentKey() { return storageKey(RECENT_KEY_BASE) }
 function playlistsKey() { return storageKey(PLAYLISTS_KEY_BASE) }
 function userDataRevKey() { return storageKey(USER_DATA_REV_KEY_BASE) }
+function sessionTracksKey() { return storageKey(SESSION_TRACKS_KEY_BASE) }
 
 export const libraryTracks = ref([])
+/** 当前用户生效的音乐库根目录（用于热更新过滤） */
+export const libraryMusicRoots = ref([])
 /** 服务端曲库总数（不再依赖前端持有全量） */
 export const libraryTrackTotal = ref(0)
 export const libraryLoading = ref(false)
@@ -306,7 +309,7 @@ async function finishBackgroundScan(api) {
 
 function loadSessionTracks() {
   try {
-    const raw = sessionStorage.getItem(SESSION_TRACKS_KEY)
+    const raw = sessionStorage.getItem(sessionTracksKey())
     if (!raw) return null
     const data = JSON.parse(raw)
     if (!Array.isArray(data) || !data.length) return null
@@ -342,7 +345,7 @@ function saveSessionTracks(tracks) {
         duration: t.duration || 0,
         track: t.trackNo || '',
       }))
-      sessionStorage.setItem(SESSION_TRACKS_KEY, JSON.stringify(slim))
+      sessionStorage.setItem(sessionTracksKey(), JSON.stringify(slim))
     } catch {}
   }, 400)
 }
@@ -548,6 +551,10 @@ function clearInMemoryUserData() {
   favorites.value = []
   recentPlays.value = []
   playlistPickTarget.value = null
+  libraryTracks.value = []
+  libraryTrackTotal.value = 0
+  libraryScanned.value = false
+  libraryMusicRoots.value = []
 }
 
 function migrateLegacyLocalUserData(userId) {
@@ -1686,9 +1693,12 @@ export async function scanLibrary(api, { force = false, resync = false, dirs: re
     try {
       const res = await api.paths.list()
       const musicRoots = res.musicPaths || res.data || []
+      libraryMusicRoots.value = musicRoots
       if (!musicRoots.length) {
         libraryTracks.value = []
+        libraryTrackTotal.value = 0
         libraryScanned.value = true
+        saveSessionTracks([])
         const result = { totalTracks: 0, scannedTags: 0, hadPending: false }
         onComplete?.(result, { force, resync })
         return result
@@ -2123,9 +2133,21 @@ function buildTrackFromReadRow(row, existing) {
   })
 }
 
+function pathUnderLibraryRoots(filePath) {
+  const roots = libraryMusicRoots.value || []
+  if (!roots.length || !filePath) return false
+  const normalized = String(filePath).replace(/\\/g, '/')
+  return roots.some((root) => {
+    const base = String(root || '').replace(/\\/g, '/').replace(/\/+$/, '')
+    if (!base) return false
+    return normalized === base || normalized.startsWith(`${base}/`)
+  })
+}
+
 /** 增量合并：新增或更新音乐库中的本地曲目（热更新用） */
 export async function ingestLibraryTracks(api, filePaths) {
   const paths = [...new Set((filePaths || []).filter(Boolean))]
+    .filter((p) => !libraryMusicRoots.value.length || pathUnderLibraryRoots(p))
   if (!paths.length) return { added: 0, updated: 0 }
 
   paths.forEach(bumpLibraryCoverVersion)

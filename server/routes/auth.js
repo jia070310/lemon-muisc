@@ -20,6 +20,11 @@ import {
   findUserById,
   deleteUserSessions,
 } from '../utils/auth.js'
+import {
+  getDownloadPathPolicy,
+  setPathsAccessPolicy,
+  normalizePathsAccessPolicy,
+} from '../utils/filePaths.js'
 import { requireAdmin, requireAuth } from '../middleware/auth.js'
 import { createAuthToken, consumeAuthToken } from '../utils/authTokens.js'
 import { setAuthCookie, clearAuthCookie } from '../utils/authCookie.js'
@@ -271,13 +276,31 @@ authRouter.post('/change-password', requireAuth, (req, res) => {
   }
 })
 
+function withDownloadPathPolicy(user) {
+  if (!user) return user
+  const publicUser = toPublicUser(user)
+  const policy = getDownloadPathPolicy(publicUser.id)
+  return {
+    ...publicUser,
+    downloadPathPolicy: policy,
+    pathsAccessPolicy: policy,
+  }
+}
+
 authRouter.get('/users', requireAuth, requireAdmin, (_req, res) => {
-  res.json({ users: listUsers() })
+  res.json({ users: listUsers().map((u) => {
+    const policy = getDownloadPathPolicy(u.id)
+    return {
+      ...u,
+      downloadPathPolicy: policy,
+      pathsAccessPolicy: policy,
+    }
+  }) })
 })
 
 authRouter.post('/users', requireAuth, requireAdmin, async (req, res) => {
   try {
-    const { username, password, displayName, role, email } = req.body || {}
+    const { username, password, displayName, role, email, downloadPathPolicy, pathsAccessPolicy } = req.body || {}
     const user = createUser({
       username,
       password,
@@ -285,6 +308,8 @@ authRouter.post('/users', requireAuth, requireAdmin, async (req, res) => {
       email,
       role: role === 'admin' ? 'admin' : 'user',
     })
+    const policy = normalizePathsAccessPolicy(pathsAccessPolicy || downloadPathPolicy)
+    setPathsAccessPolicy(user.id, policy)
     let verificationSent = false
     if (email) {
       try {
@@ -293,7 +318,7 @@ authRouter.post('/users', requireAuth, requireAdmin, async (req, res) => {
         console.warn('[邮件] 用户验证邮件发送失败:', e.message)
       }
     }
-    res.json({ ok: true, user: toPublicUser(user), verificationSent })
+    res.json({ ok: true, user: withDownloadPathPolicy(user), verificationSent })
   } catch (e) {
     res.status(400).json({ error: e.message })
   }
@@ -329,7 +354,10 @@ authRouter.patch('/users/:id', requireAuth, requireAdmin, (req, res) => {
       email: req.body?.email,
       role: req.body?.role,
     })
-    res.json({ ok: true, user: toPublicUser(user) })
+    if (req.body?.downloadPathPolicy != null || req.body?.pathsAccessPolicy != null) {
+      setPathsAccessPolicy(user.id, req.body.pathsAccessPolicy || req.body.downloadPathPolicy)
+    }
+    res.json({ ok: true, user: withDownloadPathPolicy(user) })
   } catch (e) {
     res.status(400).json({ error: e.message })
   }

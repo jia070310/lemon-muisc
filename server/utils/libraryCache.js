@@ -1,7 +1,7 @@
 import fs from 'fs'
 import path from 'path'
 import { getDB } from '../db.js'
-import { getMusicPaths, isUnderConfiguredMusicDir, isPathUnderMusicDirs } from './filePaths.js'
+import { getMusicPaths, getAllMusicScanRoots, isUnderConfiguredMusicDir, isPathUnderMusicDirs } from './filePaths.js'
 import { listAudioFiles } from './audioScan.js'
 import { parseFilename } from './filenameParse.js'
 import { readMetaLite } from '../meta.js'
@@ -220,11 +220,11 @@ function buildDirSqlFilter(dirs) {
   }
 }
 
-export function getAllCachedTracks() {
+export function getAllCachedTracks(dirsOverride = null) {
   ensureLibraryCacheTable()
   const db = getDB()
   if (!db) return []
-  const dirs = getMusicPaths().filter(Boolean)
+  const dirs = (Array.isArray(dirsOverride) ? dirsOverride : getMusicPaths()).filter(Boolean)
   if (!dirs.length) return []
 
   const filter = buildDirSqlFilter(dirs)
@@ -618,7 +618,7 @@ export function queryCachedTracks(opts = {}) {
   const limit = clampInt(opts.limit, 50, 1, 200)
   const offset = (page - 1) * limit
 
-  const dirs = getMusicPaths().filter(Boolean)
+  const dirs = (Array.isArray(opts.dirs) ? opts.dirs : getMusicPaths()).filter(Boolean)
   const clauses = []
   const params = []
   const filter = buildDirSqlFilter(dirs)
@@ -801,7 +801,7 @@ export function queryArtists(opts = {}) {
   const limit = clampInt(opts.limit, 48, 1, 200)
   if (!db) return { items: [], total: 0, page, limit }
 
-  const dirs = getMusicPaths().filter(Boolean)
+  const dirs = (Array.isArray(opts.dirs) ? opts.dirs : getAllMusicScanRoots()).filter(Boolean)
   const filter = buildDirSqlFilter(dirs)
   if (!filter) return { items: [], total: 0, page, limit }
 
@@ -870,7 +870,7 @@ export function queryAlbums(opts = {}) {
   const limit = clampInt(opts.limit, 48, 1, 200)
   if (!db) return { items: [], total: 0, page, limit }
 
-  const dirs = getMusicPaths().filter(Boolean)
+  const dirs = (Array.isArray(opts.dirs) ? opts.dirs : getAllMusicScanRoots()).filter(Boolean)
   const filter = buildDirSqlFilter(dirs)
   if (!filter) return { items: [], total: 0, page, limit }
 
@@ -940,12 +940,12 @@ export function queryAlbums(opts = {}) {
   return { items, total, page, limit }
 }
 
-/** 曲库总数（轻量） */
-export function countCachedTracks() {
+/** 曲库总数（轻量）；可传入 dirs 限定当前用户可见范围（含空数组=无可见） */
+export function countCachedTracks(dirsOverride = null) {
   ensureLibraryCacheTable()
   const db = getDB()
   if (!db) return 0
-  const dirs = getMusicPaths().filter(Boolean)
+  const dirs = (Array.isArray(dirsOverride) ? dirsOverride : getAllMusicScanRoots()).filter(Boolean)
   const filter = buildDirSqlFilter(dirs)
   if (!filter) return 0
   return db.prepare(`SELECT COUNT(*) AS n FROM library_index WHERE ${filter.where}`).get(...filter.params)?.n || 0
@@ -972,7 +972,7 @@ export function queryGenres(opts = {}) {
   const limit = clampInt(opts.limit, 48, 1, 200)
   if (!db) return { items: [], total: 0, page, limit }
 
-  const dirs = getMusicPaths().filter(Boolean)
+  const dirs = (Array.isArray(opts.dirs) ? opts.dirs : getAllMusicScanRoots()).filter(Boolean)
   const filter = buildDirSqlFilter(dirs)
   if (!filter) return { items: [], total: 0, page, limit }
 
@@ -1061,24 +1061,27 @@ export function listMoodAnalyzePending({ algoVersion = 1, limit = 0 } = {}) {
   }))
 }
 
-export function getMoodAnalyzeStats({ algoVersion = 1 } = {}) {
+export function getMoodAnalyzeStats({ algoVersion = 1, dirs = null } = {}) {
   ensureLibraryCacheTable()
   const db = getDB()
   if (!db) {
     return { total: 0, analyzed: 0, pending: 0, skipped: 0, error: 0 }
   }
   const ver = Number(algoVersion) || 1
-  const total = db.prepare('SELECT COUNT(*) AS c FROM library_index').get()?.c || 0
+  const filter = buildDirSqlFilter(dirs)
+  const whereExtra = filter ? ` AND (${filter.where})` : ''
+  const params = filter ? filter.params : []
+  const total = db.prepare(`SELECT COUNT(*) AS c FROM library_index WHERE 1=1${whereExtra}`).get(...params)?.c || 0
   const analyzed = db.prepare(`
     SELECT COUNT(*) AS c FROM library_index
-    WHERE mood_status = 'ok' AND mood_version = ? AND ABS(mood_file_mtime - mtime) <= 0.5
-  `).get(ver)?.c || 0
+    WHERE mood_status = 'ok' AND mood_version = ? AND ABS(mood_file_mtime - mtime) <= 0.5${whereExtra}
+  `).get(ver, ...params)?.c || 0
   const skipped = db.prepare(`
-    SELECT COUNT(*) AS c FROM library_index WHERE mood_status = 'skipped' AND mood_version = ?
-  `).get(ver)?.c || 0
+    SELECT COUNT(*) AS c FROM library_index WHERE mood_status = 'skipped' AND mood_version = ?${whereExtra}
+  `).get(ver, ...params)?.c || 0
   const error = db.prepare(`
-    SELECT COUNT(*) AS c FROM library_index WHERE mood_status = 'error'
-  `).get()?.c || 0
+    SELECT COUNT(*) AS c FROM library_index WHERE mood_status = 'error'${whereExtra}
+  `).get(...params)?.c || 0
   const pending = Math.max(0, total - analyzed - skipped)
   return { total, analyzed, pending, skipped, error }
 }
@@ -1120,26 +1123,30 @@ export function updateMoodResult(filePath, result = {}) {
  * 已分析的情绪地图点
  * @returns {{ points: object[], total: number }}
  */
-export function queryMoodMapPoints({ limit = 5000 } = {}) {
+export function queryMoodMapPoints({ limit = 5000, dirs = null } = {}) {
   ensureLibraryCacheTable()
   const db = getDB()
   if (!db) return { points: [], total: 0 }
   const max = Math.min(20000, Math.max(1, Number(limit) || 5000))
+  const filter = buildDirSqlFilter(dirs)
+  if (dirs && !filter) return { points: [], total: 0 }
+  const whereExtra = filter ? ` AND (${filter.where})` : ''
+  const params = filter ? filter.params : []
   const total = db.prepare(`
     SELECT COUNT(*) AS c FROM library_index
     WHERE mood_status = 'ok'
       AND mood_valence IS NOT NULL
-      AND mood_arousal IS NOT NULL
-  `).get()?.c || 0
+      AND mood_arousal IS NOT NULL${whereExtra}
+  `).get(...params)?.c || 0
   const rows = db.prepare(`
     SELECT file_path, title, artist, album, duration, mood_valence, mood_arousal, mood_bpm, has_picture
     FROM library_index
     WHERE mood_status = 'ok'
       AND mood_valence IS NOT NULL
-      AND mood_arousal IS NOT NULL
+      AND mood_arousal IS NOT NULL${whereExtra}
     ORDER BY mtime DESC
     LIMIT ?
-  `).all(max)
+  `).all(...params, max)
   return {
     total,
     points: rows.map((r) => ({
@@ -1185,11 +1192,13 @@ function pointInBBox(x, y, bbox) {
 /**
  * 按圈选区域返回曲目（坐标为 valence/arousal，范围约 [-1,1]）
  */
-export function queryMoodTracksInRegion({ bbox = null, polygon = null, limit = 500 } = {}) {
+export function queryMoodTracksInRegion({ bbox = null, polygon = null, limit = 500, dirs = null } = {}) {
   ensureLibraryCacheTable()
   const db = getDB()
   if (!db) return { items: [], total: 0 }
   const max = Math.min(2000, Math.max(1, Number(limit) || 500))
+  const filter = buildDirSqlFilter(dirs)
+  if (dirs && !filter) return { items: [], total: 0 }
 
   let minX = -1
   let maxX = 1
@@ -1211,6 +1220,8 @@ export function queryMoodTracksInRegion({ bbox = null, polygon = null, limit = 5
     }
   }
 
+  const whereExtra = filter ? ` AND (${filter.where})` : ''
+  const dirParams = filter ? filter.params : []
   const rows = db.prepare(`
     SELECT file_path, title, artist, album, album_artist, year, genre, duration, format,
            mood_valence, mood_arousal, mood_bpm, has_picture, has_lyrics, mtime, size
@@ -1219,10 +1230,10 @@ export function queryMoodTracksInRegion({ bbox = null, polygon = null, limit = 5
       AND mood_valence IS NOT NULL
       AND mood_arousal IS NOT NULL
       AND mood_valence BETWEEN ? AND ?
-      AND mood_arousal BETWEEN ? AND ?
+      AND mood_arousal BETWEEN ? AND ?${whereExtra}
     ORDER BY title COLLATE NOCASE ASC
     LIMIT ?
-  `).all(minX, maxX, minY, maxY, Math.min(5000, max * 4))
+  `).all(minX, maxX, minY, maxY, ...dirParams, Math.min(5000, max * 4))
 
   const filtered = []
   for (const r of rows) {

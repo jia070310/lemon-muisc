@@ -334,7 +334,10 @@ let lastSessionSave = 0
 let mediaSessionInited = false
 /** 切后台时临时改走原生输出（频谱开启时 Web Audio 在 PWA/手机上无法续播） */
 let backgroundNativeOverride = false
-let lastMediaSessionPosAt = 0
+/** 上次写入 MediaSession 的曲目 key，避免重复刷 metadata/artwork */
+let lastMediaSessionTrackKey = ''
+/** 歌词行刷新节流（CarPlay/流畅模式加大间隔，减轻主线程） */
+let lastLyricTickAt = 0
 /** @type {ReturnType<typeof setTimeout> | null} */
 let playbackKickTimer = null
 let playbackKickToken = 0
@@ -862,12 +865,22 @@ export function tryFillCoverFromNetwork() {
 }
 
 function beginPlaybackBuffer() {
+  const was = isBuffering.value
   isBuffering.value = true
   isPaused.value = false
+  if (!was) {
+    syncMediaSessionPlaybackState()
+    syncMediaSessionPosition()
+  }
 }
 
 function endPlaybackBuffer() {
+  const was = isBuffering.value
   isBuffering.value = false
+  if (was) {
+    syncMediaSessionPlaybackState()
+    syncMediaSessionPosition()
+  }
 }
 
 function clearPlaybackError() {
@@ -947,7 +960,14 @@ export function normalizePlayQuality(raw) {
 }
 
 export function getPlayQuality() {
-  return normalizePlayQuality(playQuality.value)
+  const q = normalizePlayQuality(playQuality.value)
+  // 流畅模式：在线试听也压到 128k，避免无线 CarPlay 再拉高码率流
+  if (smoothStreamEnabled.value) {
+    const idx = QUALITY_ORDER.indexOf(q)
+    const capIdx = QUALITY_ORDER.indexOf('128k')
+    if (idx >= 0 && capIdx >= 0 && idx < capIdx) return '128k'
+  }
+  return q
 }
 
 /** 按偏好在曲目可用音质中选一档：优先精确，其次更低，再次更高 */
@@ -1003,12 +1023,22 @@ function bindAudioElementEvents(el) {
     if (audio !== el) return
     if (uiScrubbing) return
     currentTime.value = audio.currentTime
-    updateActiveLyric(audio.currentTime)
+    // CarPlay / 弱网：勿在 timeupdate 里高频推 Media Session（IPC 过载会卡音）
+    // 进度由 setPositionState 的 playbackRate 让系统自行推算，仅在 play/pause/seek/切歌时同步
+    if (smoothStreamEnabled.value) {
+      const now = Date.now()
+      if (now - lastLyricTickAt >= 220) {
+        lastLyricTickAt = now
+        updateActiveLyric(audio.currentTime)
+      }
+    } else {
+      updateActiveLyric(audio.currentTime)
+    }
     syncDurationFromAudio()
     if ((audio.currentTime || 0) > 0.05 && !audio.paused) {
       clearPlaybackKickWatch()
       endPlaybackBuffer()
-      if (visualizerEnabled.value && !backgroundNativeOverride && !audioGraphReady) {
+      if (visualizerEnabled.value && !backgroundNativeOverride && !audioGraphReady && !smoothStreamEnabled.value) {
         scheduleAudioAnalyserRefresh()
       }
     }
@@ -1016,10 +1046,6 @@ function bindAudioElementEvents(el) {
     if (now - lastSessionSave > 5000) {
       lastSessionSave = now
       saveQueueState()
-    }
-    if (now - lastMediaSessionPosAt > 1500) {
-      lastMediaSessionPosAt = now
-      syncMediaSessionPosition()
     }
   })
   el.addEventListener('loadedmetadata', () => {
@@ -1303,11 +1329,8 @@ function initMediaSession() {
 function buildMediaSessionArtwork() {
   if (!coverUrl.value) return []
   const url = coverUrl.value
-  return [
-    { src: url, sizes: '96x96', type: 'image/png' },
-    { src: url, sizes: '256x256', type: 'image/png' },
-    { src: url, sizes: '512x512', type: 'image/png' },
-  ]
+  // CarPlay / 锁屏：只给一张小图，勿宣称多尺寸却指向同一大图（解码大图易卡主线程）
+  return [{ src: url, sizes: '96x96', type: 'image/jpeg' }]
 }
 
 function updateMediaSession() {
@@ -1315,6 +1338,13 @@ function updateMediaSession() {
   if (!('mediaSession' in navigator)) return
   initMediaSession()
   const item = currentPlaying.value
+  const trackKey = getTrackKey(item, item.source)
+  // 同一首歌勿反复 new MediaMetadata + 下发 artwork（CarPlay IPC / 解码压力）
+  if (trackKey && trackKey === lastMediaSessionTrackKey) {
+    syncMediaSessionPlaybackState()
+    return
+  }
+  lastMediaSessionTrackKey = trackKey || ''
   try {
     navigator.mediaSession.metadata = new MediaMetadata({
       title: item.name || '未知歌曲',
@@ -1333,15 +1363,22 @@ function syncMediaSessionPlaybackState() {
   } catch {}
 }
 
+/**
+ * 同步 Now Playing 进度：仅在播放状态变化 / 跳转 / 切歌时调用。
+ * 写入 playbackRate 后系统会自行推算流逝时间，切勿在 timeupdate 里高频刷新。
+ */
 function syncMediaSessionPosition() {
   if (!isBackgroundPlayActive() || !('mediaSession' in navigator) || !audio) return
   try {
     const dur = Number(duration.value) || Number(audio.duration) || 0
     const pos = Number(audio.currentTime) || 0
     if (!(dur > 0) || !Number.isFinite(pos)) return
+    const rate = (isPaused.value || isBuffering.value || audio.paused)
+      ? 0
+      : (audio.playbackRate || 1)
     navigator.mediaSession.setPositionState({
       duration: dur,
-      playbackRate: audio.playbackRate || 1,
+      playbackRate: rate,
       position: Math.max(0, Math.min(pos, dur)),
     })
   } catch {}
@@ -1349,6 +1386,7 @@ function syncMediaSessionPosition() {
 
 function clearMediaSession() {
   if (!('mediaSession' in navigator)) return
+  lastMediaSessionTrackKey = ''
   try {
     navigator.mediaSession.metadata = null
     navigator.mediaSession.playbackState = 'none'
@@ -2048,6 +2086,16 @@ export async function loadSmoothStreamSetting() {
       smoothStreamEnabled.value = false
     }
   }
+  // 流畅模式与频谱抢 CPU/WebAudio，CarPlay 上务必关可视化
+  if (smoothStreamEnabled.value && visualizerEnabled.value) {
+    visualizerEnabled.value = false
+    try {
+      await api.settings.update({ 'player.visualizer': 'false' })
+    } catch {}
+    try {
+      await applyBackgroundPlayMode()
+    } catch {}
+  }
 }
 
 export async function loadPlayerSettings() {
@@ -2131,10 +2179,41 @@ export function isInQueue(item, source) {
 let playUrlAbort = null
 /** 当前播放解析到的音源脚本 id（用于健康统计） */
 let currentPlaySourceApiId = ''
+let smoothWarmupTimer = 0
+let smoothWarmupPath = ''
 
 function cancelPlayUrlFetch() {
   playUrlAbort?.abort()
   playUrlAbort = null
+}
+
+/** 后台预热队列下一首本地无损 → AAC，减轻切歌卡顿 */
+function scheduleSmoothWarmupNext() {
+  if (!smoothStreamEnabled.value) return
+  if (smoothWarmupTimer) {
+    clearTimeout(smoothWarmupTimer)
+    smoothWarmupTimer = 0
+  }
+  smoothWarmupTimer = setTimeout(() => {
+    smoothWarmupTimer = 0
+    try {
+      const idx = currentQueueIndex.value
+      const next = playQueue.value[idx + 1]
+      if (!next?.item) return
+      if (!isLocalTrack(next.item, next.source)) return
+      const filePath = getTrackFilePath(next.item)
+      if (!filePath) return
+      const ext = (() => {
+        const base = String(filePath).replace(/\\/g, '/').split('/').pop() || ''
+        const i = base.lastIndexOf('.')
+        return i >= 0 ? base.slice(i + 1).toLowerCase() : ''
+      })()
+      if (!ext || !LOCAL_SMOOTH_EXTS.has(ext)) return
+      if (filePath === smoothWarmupPath) return
+      smoothWarmupPath = filePath
+      api.play.smoothWarmup?.(filePath).catch(() => {})
+    } catch {}
+  }, 1200)
 }
 
 async function resolvePlayUrl(item, source, quality = getPlayQuality(), options = {}) {
@@ -2250,10 +2329,11 @@ async function startPlaybackFromUrl(url, { resumeTime = 0, item, source, isLocal
   audio.src = authedUrl
   hasMediaSrc = true
   // 本地：至少等 HAVE_CURRENT_DATA / canplay，避免 metadata 假播放卡死 00:00
-  // 流畅模式：多等一会缓冲，减少车机 WiFi 欠载
+  // 流畅模式：等 canplaythrough，多缓冲再开播，减轻车机 WiFi 抖动欠载
   await waitForAudioReady(authedUrl, {
     isLocal,
     preferCanPlay: Boolean(isLocal && smoothStreamEnabled.value),
+    preferCanPlayThrough: Boolean(isLocal && smoothStreamEnabled.value),
   })
 
   applyAudioOutput()
@@ -2285,7 +2365,8 @@ async function startPlaybackFromUrl(url, { resumeTime = 0, item, source, isLocal
   // 真正出声前进度前进前保持「缓冲中」；本地先走原生输出，出声后再挂频谱，避免 MediaElementSource 卡死
   if ((audio.currentTime || 0) > 0.05) {
     endPlaybackBuffer()
-    if (visualizerEnabled.value && !backgroundNativeOverride) {
+    // 流畅模式强制不挂频谱（Web Audio 在 iOS/CarPlay 上易导致卡顿）
+    if (visualizerEnabled.value && !backgroundNativeOverride && !smoothStreamEnabled.value) {
       await ensurePlaybackGraph()
       scheduleAudioAnalyserRefresh()
     }
@@ -2298,6 +2379,11 @@ async function startPlaybackFromUrl(url, { resumeTime = 0, item, source, isLocal
       item,
       source,
     })
+  }
+
+  // 预热队列下一首 AAC，减轻切歌首卡
+  if (isLocal && smoothStreamEnabled.value) {
+    scheduleSmoothWarmupNext()
   }
 }
 
@@ -2319,7 +2405,7 @@ function watchPlaybackKickstart({ intent, isLocal, url, item, source }) {
     const t = audio.currentTime || 0
     if (t > 0.05 && !audio.paused) {
       endPlaybackBuffer()
-      if (visualizerEnabled.value && !backgroundNativeOverride) {
+      if (visualizerEnabled.value && !backgroundNativeOverride && !smoothStreamEnabled.value) {
         scheduleAudioAnalyserRefresh()
       }
       return
@@ -2768,12 +2854,16 @@ function isBenignPlayInterrupt(error) {
     || /play\(\) request was interrupted/i.test(text)
 }
 
-function waitForAudioReady(expectedUrl = '', { isLocal = false, preferCanPlay = false } = {}) {
-  const timeoutMs = isLocal ? 20000 : 8000
-  // 本地：默认等 HAVE_CURRENT_DATA(2)；卡住重试时升到 canplay(3)
+function waitForAudioReady(expectedUrl = '', { isLocal = false, preferCanPlay = false, preferCanPlayThrough = false } = {}) {
+  const timeoutMs = isLocal
+    ? (preferCanPlayThrough || (preferCanPlay && smoothStreamEnabled.value) ? 45000 : 20000)
+    : 8000
+  // 本地：默认等 HAVE_CURRENT_DATA(2)；卡住重试时升到 canplay(3)；流畅模式等 canplaythrough(4)
   // 在线：metadata(1) 即可
-  const minReady = isLocal ? (preferCanPlay ? 3 : 2) : 1
-  const softCanPlayMs = isLocal && !preferCanPlay ? 2800 : 0
+  const minReady = isLocal
+    ? (preferCanPlayThrough ? 4 : preferCanPlay ? 3 : 2)
+    : 1
+  const softCanPlayMs = isLocal && !preferCanPlay && !preferCanPlayThrough ? 2800 : 0
   return new Promise((resolve, reject) => {
     if (!audio) { resolve(); return }
     const matchesExpected = () => !expectedUrl || urlsMatch(audio.src, expectedUrl)
@@ -2982,6 +3072,7 @@ export async function togglePause() {
     endPlaybackBuffer()
     isPaused.value = true
     syncMediaSessionPlaybackState()
+    syncMediaSessionPosition()
     saveQueueState()
   }
   syncMediaSessionPlaybackState()
@@ -3121,6 +3212,9 @@ export async function commitSeek(time) {
   if (wasPlaying && audio && audio.paused && !isPaused.value && !audio.error) {
     try { await audio.play() } catch {}
   }
+
+  syncMediaSessionPlaybackState()
+  syncMediaSessionPosition()
 
   const now = Date.now()
   if (now - lastSeekSaveAt > 600) {

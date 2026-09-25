@@ -964,7 +964,7 @@ async function loadOrgDirs() {
   orgLoadingDirs.value = true
   try {
     const res = await api.paths.list()
-    orgRootDirs.value = res.data || []
+    orgRootDirs.value = res.musicPaths || res.data || []
     orgExpanded.value = new Set()
     orgTreeCache.value = {}
     if (orgRootDirs.value.length) {

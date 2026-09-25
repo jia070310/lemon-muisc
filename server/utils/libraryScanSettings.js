@@ -1,6 +1,6 @@
 import { getDB } from '../db.js'
 import path from 'path'
-import { getMusicPaths, mapToContainerPath, isUnderConfiguredMusicDir, isPathUnderMusicDirs } from './filePaths.js'
+import { getMusicPaths, getMusicPathsForUser, getEffectivePathsMode, mapToContainerPath, isUnderConfiguredMusicDir, isPathUnderMusicDirs } from './filePaths.js'
 
 const AUTO_SCAN_MODE_KEY = 'library.scan.autoMode'
 const AUTO_SCAN_DIRS_KEY = 'library.scan.autoDirs'
@@ -135,23 +135,34 @@ function remapPathUnderRoot(dirPath, oldRoot, newRoot) {
 }
 
 /** 解析本次要扫描的目录：未指定时用自动扫描配置；支持音乐库根目录下的子文件夹 */
-export function resolveScanDirs(requestedDirs) {
-  const allRoots = getMusicPaths().filter(Boolean)
-  if (!requestedDirs) return getLibraryAutoScanDirs()
+export function resolveScanDirs(requestedDirs, userId = null) {
+  const allRoots = (userId ? getMusicPathsForUser(userId) : getMusicPaths()).filter(Boolean)
+  if (!requestedDirs) {
+    if (userId && getEffectivePathsMode(userId) === 'personal') {
+      return allRoots
+    }
+    return getLibraryAutoScanDirs()
+  }
   if (!Array.isArray(requestedDirs) || !requestedDirs.length) {
+    if (userId) return allRoots.length ? allRoots : getLibraryAutoScanDirs()
     return getLibraryAutoScanDirs()
   }
   const picked = []
   for (const req of requestedDirs) {
     const r = mapToContainerPath(String(req || '').trim())
-    if (!r || !isUnderConfiguredMusicDir(r)) continue
+    if (!r) continue
+    if (userId) {
+      if (!isPathUnderMusicDirs(r, allRoots) && !isUnderConfiguredMusicDir(r, userId)) continue
+    } else if (!isUnderConfiguredMusicDir(r)) {
+      continue
+    }
     picked.push(r)
   }
   return [...new Set(picked)]
 }
 
-export function isPartialScan(dirs) {
-  const allRoots = getMusicPaths().filter(Boolean)
+export function isPartialScan(dirs, userId = null) {
+  const allRoots = (userId ? getMusicPathsForUser(userId) : getMusicPaths()).filter(Boolean)
   const scan = (dirs || []).filter(Boolean)
   if (!allRoots.length || !scan.length) return false
   if (scan.length !== allRoots.length) return true

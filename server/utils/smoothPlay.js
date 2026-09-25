@@ -1,6 +1,9 @@
 /**
  * 车机 / 弱网流畅播放：将本地高码率无损转成 AAC 缓存后流式输出。
  * 无线 CarPlay 与 NAS 抢同一路 WiFi 时，直出 FLAC 容易缓冲欠载一卡一卡。
+ *
+ * 码率取 128k（原 192k）：无线 CarPlay 本身已占大量 WiFi，再叠 NAS 拉无损易欠载；
+ * 128k AAC 约 16KB/s，对同网争用更友好。
  */
 import crypto from 'crypto'
 import fs from 'fs'
@@ -13,6 +16,9 @@ import { assertFfmpegFeatureReady } from './apePlay.js'
 export const SMOOTH_PLAY_EXTS = new Set([
   '.flac', '.wav', '.aiff', '.aif', '.ape', '.dsf', '.dff', '.wv', '.tak',
 ])
+
+/** AAC 目标码率（kbps）；改动需同步 cacheKey 后缀 */
+export const SMOOTH_AAC_BITRATE = 128
 
 export function needsSmoothPlayTranscode(filePath) {
   const ext = path.extname(String(filePath || '')).toLowerCase()
@@ -28,7 +34,7 @@ function cacheDir() {
 function cacheKey(filePath, stat) {
   return crypto
     .createHash('sha1')
-    .update(`${filePath}|${stat.size}|${stat.mtimeMs}|aac192`)
+    .update(`${filePath}|${stat.size}|${stat.mtimeMs}|aac${SMOOTH_AAC_BITRATE}`)
     .digest('hex')
 }
 
@@ -49,7 +55,7 @@ function runFfmpeg(bin, args) {
 }
 
 /**
- * 将本地高码率文件转成 AAC/M4A（约 192kbps），缓存到临时目录。
+ * 将本地高码率文件转成 AAC/M4A，缓存到临时目录。
  * @returns {Promise<string>} m4a path
  */
 export async function ensureSmoothPlayAac(filePath) {
@@ -69,12 +75,15 @@ export async function ensureSmoothPlayAac(filePath) {
     if (fs.existsSync(tmp)) fs.unlinkSync(tmp)
   } catch {}
 
+  // 优先速度：NAS CPU 弱时尽快出缓存，便于连播预热
   await runFfmpeg(ffmpeg, [
     '-y',
+    '-hide_banner',
+    '-loglevel', 'error',
     '-i', resolved,
     '-vn',
     '-c:a', 'aac',
-    '-b:a', '192k',
+    '-b:a', `${SMOOTH_AAC_BITRATE}k`,
     '-ac', '2',
     '-ar', '44100',
     '-movflags', '+faststart',
@@ -83,4 +92,13 @@ export async function ensureSmoothPlayAac(filePath) {
   ])
   fs.renameSync(tmp, out)
   return out
+}
+
+/** 仅预热缓存（不返回文件内容），供连播下一首 */
+export async function warmSmoothPlayAac(filePath) {
+  if (!needsSmoothPlayTranscode(filePath)) return { warmed: false, reason: 'skip' }
+  const resolved = path.resolve(filePath)
+  if (!fs.existsSync(resolved)) return { warmed: false, reason: 'missing' }
+  const out = await ensureSmoothPlayAac(resolved)
+  return { warmed: true, path: out }
 }

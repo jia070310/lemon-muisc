@@ -9,6 +9,25 @@ const MUSIC_PATHS_KEY = 'music.paths'
 const DOWNLOAD_PATH_KEY = 'download.savePath'
 const DOWNLOAD_PERSONAL_PATH_KEY = 'download.savePathPersonal'
 const DOWNLOAD_USE_PERSONAL_KEY = 'download.usePersonalSavePath'
+/** @deprecated 兼容旧键；新逻辑用 paths.accessPolicy */
+const DOWNLOAD_PATH_POLICY_KEY = 'download.pathPolicy'
+/** 管理员为用户设定：shared=管理员路径 / personal=专属路径 / choose=用户自选 */
+const PATHS_ACCESS_POLICY_KEY = 'paths.accessPolicy'
+/** 用户自选时的模式：shared | personal（与 download.usePersonalSavePath 同步） */
+const PATHS_MODE_KEY = 'paths.mode'
+/** 用户专属音乐库路径 JSON 数组 */
+const MUSIC_PATHS_PERSONAL_KEY = 'music.pathsPersonal'
+
+export const PATHS_ACCESS_POLICIES = ['shared', 'personal', 'choose']
+export const DOWNLOAD_PATH_POLICIES = PATHS_ACCESS_POLICIES
+
+export function normalizeDownloadPathPolicy(value) {
+  const v = String(value || '').trim()
+  if (v === 'shared' || v === 'personal' || v === 'choose') return v
+  return 'choose'
+}
+
+export const normalizePathsAccessPolicy = normalizeDownloadPathPolicy
 const TAG_DIRS_KEY = 'tag.dirs'
 const DEFAULT_DOWNLOAD_DIR = '/downloads'
 const DEFAULT_MUSIC_DIR = '/music'
@@ -182,13 +201,67 @@ function readLegacyFilePaths() {
   }
 }
 
-/** 音乐库扫描目录（可多个） */
-export function getMusicPaths() {
+/** 管理员配置的共用音乐库目录 */
+export function getSharedMusicPaths() {
   try {
     const paths = JSON.parse(getSetting(MUSIC_PATHS_KEY) || '[]')
     if (Array.isArray(paths) && paths.length) return paths.filter(Boolean)
   } catch {}
   return readLegacyFilePaths()
+}
+
+/** 音乐库扫描目录（可多个）；无 userId 时返回共用目录（兼容旧调用） */
+export function getMusicPaths(userId = null) {
+  if (userId) return getMusicPathsForUser(userId)
+  return getSharedMusicPaths()
+}
+
+export function getPersonalMusicPaths(userId) {
+  if (!userId) return []
+  try {
+    const raw = getUserSettings(userId)[MUSIC_PATHS_PERSONAL_KEY]
+    const paths = JSON.parse(raw || '[]')
+    if (Array.isArray(paths)) return paths.filter(Boolean)
+  } catch {}
+  return []
+}
+
+function setPersonalMusicPaths(userId, paths) {
+  const unique = dedupePaths((paths || []).map((p) => String(p || '').trim()).filter(Boolean))
+  setUserSettings(userId, { [MUSIC_PATHS_PERSONAL_KEY]: JSON.stringify(unique) })
+  return unique
+}
+
+/** 当前用户生效的音乐库目录（受路径权限策略约束） */
+export function getMusicPathsForUser(userId) {
+  if (!userId) return getSharedMusicPaths()
+  const mode = getEffectivePathsMode(userId)
+  if (mode === 'personal') return getPersonalMusicPaths(userId)
+  return getSharedMusicPaths()
+}
+
+/** 后台扫描用：共用 + 所有用户专属音乐库/下载目录 */
+export function getAllMusicScanRoots() {
+  const roots = [...getSharedMusicPaths()]
+  try {
+    const rows = getDB().prepare(`
+      SELECT user_id, key, value FROM user_settings
+      WHERE key IN (?, ?)
+    `).all(MUSIC_PATHS_PERSONAL_KEY, DOWNLOAD_PERSONAL_PATH_KEY)
+    for (const row of rows) {
+      if (row.key === DOWNLOAD_PERSONAL_PATH_KEY) {
+        if (row.value) roots.push(row.value)
+        continue
+      }
+      try {
+        const list = JSON.parse(row.value || '[]')
+        if (Array.isArray(list)) roots.push(...list.filter(Boolean))
+      } catch {}
+    }
+  } catch {}
+  const sharedDl = getSharedDownloadSavePath()
+  if (sharedDl) roots.push(sharedDl)
+  return dedupePaths(roots.map((p) => mapToContainerPath(p) || p).filter(Boolean))
 }
 
 /** @deprecated 请使用 getMusicPaths；保留兼容旧调用 */
@@ -197,7 +270,7 @@ export function getFilePaths() {
 }
 
 function syncLegacyFilePathsUnion() {
-  const music = getMusicPaths()
+  const music = getSharedMusicPaths()
   const dl = getSetting(DOWNLOAD_PATH_KEY)
   const union = dedupePaths(dl ? [...music, dl] : [...music])
   setSetting(FILE_PATHS_KEY, JSON.stringify(union))
@@ -287,7 +360,76 @@ function getUsernameById(userId) {
   }
 }
 
-/** 解析当前用户生效的下载目录（共用 / 个人） */
+function readPathsAccessPolicyFromSettings(userSettings = {}) {
+  const modern = userSettings[PATHS_ACCESS_POLICY_KEY]
+  if (modern) return normalizePathsAccessPolicy(modern)
+  return normalizePathsAccessPolicy(userSettings[DOWNLOAD_PATH_POLICY_KEY])
+}
+
+/** 管理员策略：shared / personal / choose */
+export function getPathsAccessPolicy(userId) {
+  if (!userId) return 'choose'
+  try {
+    return readPathsAccessPolicyFromSettings(getUserSettings(userId))
+  } catch {
+    return 'choose'
+  }
+}
+
+/** @deprecated 使用 getPathsAccessPolicy */
+export function getDownloadPathPolicy(userId) {
+  return getPathsAccessPolicy(userId)
+}
+
+/** 用户当前生效模式（已应用管理员策略） */
+export function getEffectivePathsMode(userId) {
+  const policy = getPathsAccessPolicy(userId)
+  if (policy === 'shared') return 'shared'
+  if (policy === 'personal') return 'personal'
+  if (!userId) return 'shared'
+  const userSettings = getUserSettings(userId)
+  if (userSettings[PATHS_MODE_KEY] === 'personal' || userSettings[PATHS_MODE_KEY] === 'shared') {
+    return userSettings[PATHS_MODE_KEY]
+  }
+  return userSettings[DOWNLOAD_USE_PERSONAL_KEY] === 'true' ? 'personal' : 'shared'
+}
+
+function ensureDefaultPersonalDownloadPath(userId, userSettings = {}) {
+  if (userSettings[DOWNLOAD_PERSONAL_PATH_KEY]) return userSettings[DOWNLOAD_PERSONAL_PATH_KEY]
+  const shared = getSharedDownloadSavePath()
+  const username = getUsernameById(userId)
+  return path.join(shared, sanitizeUsernameForPath(username))
+}
+
+/** 管理员为用户设定路径权限（音乐库+下载） */
+export function setPathsAccessPolicy(userId, policy) {
+  if (!userId) throw new Error('未登录')
+  const pathPolicy = normalizePathsAccessPolicy(policy)
+  const userSettings = getUserSettings(userId)
+  const entries = {
+    [PATHS_ACCESS_POLICY_KEY]: pathPolicy,
+    [DOWNLOAD_PATH_POLICY_KEY]: pathPolicy,
+  }
+
+  if (pathPolicy === 'shared') {
+    entries[DOWNLOAD_USE_PERSONAL_KEY] = 'false'
+    entries[PATHS_MODE_KEY] = 'shared'
+  } else if (pathPolicy === 'personal') {
+    entries[DOWNLOAD_USE_PERSONAL_KEY] = 'true'
+    entries[PATHS_MODE_KEY] = 'personal'
+    entries[DOWNLOAD_PERSONAL_PATH_KEY] = ensureDefaultPersonalDownloadPath(userId, userSettings)
+  }
+
+  setUserSettings(userId, entries)
+  return getPathsAccessInfo(userId)
+}
+
+/** @deprecated 使用 setPathsAccessPolicy */
+export function setDownloadPathPolicy(userId, policy) {
+  return setPathsAccessPolicy(userId, policy)
+}
+
+/** 解析当前用户生效的下载目录（共用 / 个人；受管理员策略约束） */
 export function resolveDownloadSavePath(userId = null) {
   const shared = getSharedDownloadSavePath()
   if (!userId) {
@@ -297,16 +439,20 @@ export function resolveDownloadSavePath(userId = null) {
       personalPath: '',
       usePersonal: false,
       mode: 'shared',
+      pathPolicy: 'choose',
+      canChoose: true,
     }
   }
 
   const userSettings = getUserSettings(userId)
-  const usePersonal = userSettings[DOWNLOAD_USE_PERSONAL_KEY] === 'true'
+  const pathPolicy = readPathsAccessPolicyFromSettings(userSettings)
+  const mode = getEffectivePathsMode(userId)
   const username = getUsernameById(userId)
   const suggestedPersonal = path.join(shared, sanitizeUsernameForPath(username))
   const storedPersonal = (userSettings[DOWNLOAD_PERSONAL_PATH_KEY] || '').trim()
   const personalRaw = storedPersonal || suggestedPersonal
   const personalPath = mapToContainerPath(personalRaw) || personalRaw
+  const usePersonal = mode === 'personal'
 
   if (usePersonal && personalPath) {
     try {
@@ -318,6 +464,8 @@ export function resolveDownloadSavePath(userId = null) {
       personalPath,
       usePersonal: true,
       mode: 'personal',
+      pathPolicy,
+      canChoose: pathPolicy === 'choose',
       username,
     }
   }
@@ -328,6 +476,8 @@ export function resolveDownloadSavePath(userId = null) {
     personalPath: storedPersonal ? personalPath : suggestedPersonal,
     usePersonal: false,
     mode: 'shared',
+    pathPolicy,
+    canChoose: pathPolicy === 'choose',
     username,
   }
 }
@@ -336,34 +486,134 @@ export function getDownloadPathInfo(userId = null) {
   return resolveDownloadSavePath(userId)
 }
 
+/** 给前端的完整路径权限/目录信息 */
+export function getPathsAccessInfo(userId = null) {
+  const download = resolveDownloadSavePath(userId)
+  const sharedMusic = getSharedMusicPaths()
+  const personalMusic = userId ? getPersonalMusicPaths(userId) : []
+  const mode = download.mode
+  const musicPaths = mode === 'personal' ? personalMusic : sharedMusic
+  const policy = download.pathPolicy || 'choose'
+  const canChoose = policy === 'choose'
+  const canEditMusicPaths = Boolean(
+    userId && (mode === 'personal' || /* admin edits shared separately */ false),
+  )
+  return {
+    ...download,
+    accessPolicy: policy,
+    pathPolicy: policy,
+    canChoose,
+    canChooseDownloadPath: canChoose,
+    canEditPersonalMusicPaths: Boolean(userId) && (policy === 'personal' || (canChoose && mode === 'personal')),
+    sharedMusicPaths: sharedMusic,
+    personalMusicPaths: personalMusic,
+    musicPaths,
+    downloadPath: download.savePath,
+    sharedDownloadPath: download.sharedPath,
+    personalDownloadPath: download.personalPath,
+    downloadPathMode: download.mode,
+    usePersonalDownloadPath: download.usePersonal,
+    downloadPathPolicy: policy,
+  }
+}
+
 export function setPersonalDownloadSavePath(userId, dirPath, { fromPicker = false, enable = true } = {}) {
   if (!userId) throw new Error('未登录')
+  const policy = getPathsAccessPolicy(userId)
+  if (policy === 'shared') {
+    throw new Error('管理员已指定你使用管理员路径，无法设置专属目录')
+  }
+  if (policy === 'choose' && enable === false) {
+    return setPathsMode(userId, 'shared')
+  }
   const p = validateDirectoryPath(dirPath, { fromPicker })
   const entries = {
     [DOWNLOAD_PERSONAL_PATH_KEY]: p,
   }
-  if (enable) entries[DOWNLOAD_USE_PERSONAL_KEY] = 'true'
+  if (enable || policy === 'personal') {
+    entries[DOWNLOAD_USE_PERSONAL_KEY] = 'true'
+    entries[PATHS_MODE_KEY] = 'personal'
+  }
   setUserSettings(userId, entries)
   try {
     if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true })
   } catch {}
-  return resolveDownloadSavePath(userId)
+  return getPathsAccessInfo(userId)
 }
 
-export function setDownloadPathMode(userId, mode = 'shared') {
+/** 用户切换「管理员路径 / 专属路径」（仅 choose 策略可用） */
+export function setPathsMode(userId, mode = 'shared') {
   if (!userId) throw new Error('未登录')
+  const policy = getPathsAccessPolicy(userId)
+  if (policy !== 'choose') {
+    throw new Error(
+      policy === 'personal'
+        ? '管理员已指定你使用专属路径，无法自行切换'
+        : '管理员已指定你使用管理员路径，无法自行切换',
+    )
+  }
   const usePersonal = mode === 'personal'
-  const entries = { [DOWNLOAD_USE_PERSONAL_KEY]: usePersonal ? 'true' : 'false' }
+  const entries = {
+    [DOWNLOAD_USE_PERSONAL_KEY]: usePersonal ? 'true' : 'false',
+    [PATHS_MODE_KEY]: usePersonal ? 'personal' : 'shared',
+  }
   if (usePersonal) {
     const userSettings = getUserSettings(userId)
     if (!userSettings[DOWNLOAD_PERSONAL_PATH_KEY]) {
-      const shared = getSharedDownloadSavePath()
-      const username = getUsernameById(userId)
-      entries[DOWNLOAD_PERSONAL_PATH_KEY] = path.join(shared, sanitizeUsernameForPath(username))
+      entries[DOWNLOAD_PERSONAL_PATH_KEY] = ensureDefaultPersonalDownloadPath(userId, userSettings)
     }
   }
   setUserSettings(userId, entries)
-  return resolveDownloadSavePath(userId)
+  return getPathsAccessInfo(userId)
+}
+
+export function setDownloadPathMode(userId, mode = 'shared') {
+  return setPathsMode(userId, mode)
+}
+
+export function addPersonalMusicPath(userId, dirPath, { fromPicker = false } = {}) {
+  if (!userId) throw new Error('未登录')
+  const policy = getPathsAccessPolicy(userId)
+  const mode = getEffectivePathsMode(userId)
+  if (policy === 'shared' || mode !== 'personal') {
+    throw new Error('当前策略不允许编辑专属音乐库路径')
+  }
+  const p = validateDirectoryPath(dirPath, { fromPicker })
+  const paths = getPersonalMusicPaths(userId)
+  const real = resolveReal(p)
+  if (paths.some((x) => resolveReal(x) === real)) {
+    throw new Error('路径已存在（与已添加目录指向同一位置）')
+  }
+  paths.push(p)
+  return setPersonalMusicPaths(userId, paths)
+}
+
+export function updatePersonalMusicPath(userId, oldPath, newPath, { fromPicker = false } = {}) {
+  if (!userId) throw new Error('未登录')
+  const mode = getEffectivePathsMode(userId)
+  if (mode !== 'personal') throw new Error('当前策略不允许编辑专属音乐库路径')
+  const from = mapToContainerPath(String(oldPath || '').trim())
+  const to = validateDirectoryPath(newPath, { fromPicker })
+  const paths = getPersonalMusicPaths(userId)
+  const idx = paths.findIndex((x) => x === from || x === String(oldPath || '').trim())
+  if (idx === -1) throw new Error('原路径不存在')
+  const realTo = resolveReal(to)
+  if (paths.some((x, i) => i !== idx && resolveReal(x) === realTo)) {
+    throw new Error('新路径已存在（与已添加目录指向同一位置）')
+  }
+  paths[idx] = to
+  return setPersonalMusicPaths(userId, paths)
+}
+
+export function removePersonalMusicPath(userId, dirPath) {
+  if (!userId) throw new Error('未登录')
+  const mode = getEffectivePathsMode(userId)
+  if (mode !== 'personal') throw new Error('当前策略不允许编辑专属音乐库路径')
+  const p = mapToContainerPath(String(dirPath || '').trim())
+  const paths = getPersonalMusicPaths(userId)
+  const next = paths.filter((x) => x !== p && x !== String(dirPath || '').trim())
+  if (next.length === paths.length) throw new Error('路径不存在')
+  return setPersonalMusicPaths(userId, next)
 }
 
 /** 判断路径是否位于已配置的音乐库/下载目录内（防任意文件读取） */
@@ -382,7 +632,7 @@ function pathIsUnderRoot(resolved, root) {
   return filePath.startsWith(prefix)
 }
 
-export function isAllowedMediaPath(filePath, { allowMissing = false } = {}) {
+export function isAllowedMediaPath(filePath, { allowMissing = false, userId = null } = {}) {
   if (!filePath || typeof filePath !== 'string') return false
   let resolved
   try {
@@ -395,25 +645,43 @@ export function isAllowedMediaPath(filePath, { allowMissing = false } = {}) {
     if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) return false
   }
 
-  let personalPaths = []
-  try {
-    personalPaths = getDB()
-      .prepare('SELECT value FROM user_settings WHERE key = ?')
-      .all(DOWNLOAD_PERSONAL_PATH_KEY)
-      .map((r) => r.value)
-      .filter(Boolean)
-  } catch {}
+  const rootList = userId
+    ? getUserAccessibleRoots(userId)
+    : (() => {
+      let personalPaths = []
+      let personalMusic = []
+      try {
+        personalPaths = getDB()
+          .prepare('SELECT value FROM user_settings WHERE key = ?')
+          .all(DOWNLOAD_PERSONAL_PATH_KEY)
+          .map((r) => r.value)
+          .filter(Boolean)
+        personalMusic = getDB()
+          .prepare('SELECT value FROM user_settings WHERE key = ?')
+          .all(MUSIC_PATHS_PERSONAL_KEY)
+          .flatMap((r) => {
+            try {
+              const list = JSON.parse(r.value || '[]')
+              return Array.isArray(list) ? list.filter(Boolean) : []
+            } catch {
+              return []
+            }
+          })
+      } catch {}
+      return [
+        ...getSharedMusicPaths(),
+        getSharedDownloadSavePath(),
+        ...personalPaths,
+        ...personalMusic,
+        process.env.DOWNLOAD_PATH,
+        process.env.MUSIC_HOST_PATH,
+        process.env.DOWNLOADS_HOST_PATH,
+        process.env.MUSIC_PATH,
+        ...(isNativeHostMode() ? [] : [DEFAULT_MUSIC_DIR, DEFAULT_DOWNLOAD_DIR]),
+      ].filter(Boolean)
+    })()
 
-  const roots = new Set([
-    ...getMusicPaths(),
-    getSharedDownloadSavePath(),
-    ...personalPaths,
-    process.env.DOWNLOAD_PATH,
-    process.env.MUSIC_HOST_PATH,
-    process.env.DOWNLOADS_HOST_PATH,
-    process.env.MUSIC_PATH,
-    ...(isNativeHostMode() ? [] : [DEFAULT_MUSIC_DIR, DEFAULT_DOWNLOAD_DIR]),
-  ].filter(Boolean).map(p => {
+  const roots = new Set(rootList.map((p) => {
     try { return path.resolve(mapToContainerPath(p) || p) } catch { return null }
   }).filter(Boolean))
 
@@ -577,15 +845,27 @@ export function removeFilePath(dirPath) {
   return removeMusicPath(dirPath)
 }
 
-export function isConfiguredMusicDir(dirPath) {
+/** 当前用户可访问的目录根：生效音乐库 + 生效下载目录 */
+export function getUserAccessibleRoots(userId) {
+  if (!userId) return getAllMusicScanRoots()
+  const roots = [...getMusicPathsForUser(userId)]
+  try {
+    const dl = getDownloadSavePath(userId)
+    if (dl) roots.push(dl)
+  } catch {}
+  return dedupePaths(roots.map((p) => mapToContainerPath(p) || p).filter(Boolean))
+}
+
+export function isConfiguredMusicDir(dirPath, userId = null) {
   const p = mapToContainerPath((dirPath || '').trim())
   if (!p) return false
   const real = resolveReal(p)
-  return getMusicPaths().some(x => resolveReal(x) === real || x === p)
+  const roots = userId ? getMusicPathsForUser(userId) : getMusicPaths()
+  return roots.some(x => resolveReal(x) === real || x === p)
 }
 
-/** 判断目录是否位于已配置的音乐库路径下（含子目录） */
-export function isUnderConfiguredMusicDir(dirPath) {
+/** 判断目录是否位于已配置的音乐库路径下（含子目录）；传入 userId 时仅校验该用户生效路径 */
+export function isUnderConfiguredMusicDir(dirPath, userId = null) {
   const p = mapToContainerPath((dirPath || '').trim())
   if (!p) return false
   let resolved
@@ -595,7 +875,8 @@ export function isUnderConfiguredMusicDir(dirPath) {
     return false
   }
   if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) return false
-  const roots = getMusicPaths().map((root) => {
+  const source = userId ? getMusicPathsForUser(userId) : getAllMusicScanRoots()
+  const roots = source.map((root) => {
     try {
       return path.resolve(mapToContainerPath(root) || root)
     } catch {
