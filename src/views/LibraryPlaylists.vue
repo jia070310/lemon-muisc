@@ -336,6 +336,7 @@
     <BatchQualityDialog
       :plan="batchDialog"
       :preferred-label="batchPreferredLabel"
+      :playlist-name="selectedCard?.name || ''"
       :busy="batchDownloading"
       @cancel="closeBatchDialog"
       @confirm="handleBatchConfirm"
@@ -462,6 +463,7 @@ const {
   getBatchQualities,
 } = useBatchDownload({
   getSource: () => playlistSource.value,
+  getPlaylistName: () => selectedCard.value?.name || '',
   onCompleted: (count, summary) => {
     showToast(formatBatchDownloadToast(count, summary), 'success')
     selectedDownloadKeys.value = new Set()

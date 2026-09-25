@@ -284,6 +284,7 @@
     <BatchQualityDialog
       :plan="batchDialog"
       :preferred-label="batchPreferredLabel"
+      :playlist-name="cleanText(discoverState.playlistInfo?.name) || ''"
       :busy="batchDownloading"
       @cancel="closeBatchDialog"
       @confirm="handleBatchConfirm"
@@ -364,6 +365,7 @@ const {
   getBatchQualities,
 } = useBatchDownload({
   getSource: () => activeSource.value,
+  getPlaylistName: () => cleanText(discoverState.playlistInfo?.name) || '',
   onCompleted: (count, summary) => {
     showToast(formatBatchDownloadToast(count, summary), 'success')
     clearSelection()

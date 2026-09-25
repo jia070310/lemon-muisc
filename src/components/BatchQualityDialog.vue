@@ -49,6 +49,19 @@
         当前目标为无损音质：已默认「不降档」。若接受自动降到 320K/128K，请改选上方其它策略。
       </p>
 
+      <template v-if="playlistName">
+        <label class="batch-folder">
+          <input v-model="saveListFolder" type="checkbox" />
+          <span>
+            保存到歌单文件夹
+            <em>（{{ playlistName }}）</em>
+          </span>
+        </label>
+        <p class="batch-quality-hint folder-hint">
+          开启后文件会放在下载目录下以歌单名命名的子文件夹中（可再叠加设置里的歌手/专辑分组）。
+        </p>
+      </template>
+
       <div class="batch-quality-actions">
         <button type="button" class="btn-ghost" :disabled="busy" @click="$emit('cancel')">取消</button>
         <button type="button" class="btn-primary" :disabled="busy" @click="onConfirm">
@@ -67,6 +80,7 @@ import { isLosslessQuality } from '../utils/musicPayload.js'
 const props = defineProps({
   plan: { type: Object, default: null },
   preferredLabel: { type: String, default: '' },
+  playlistName: { type: String, default: '' },
   busy: { type: Boolean, default: false },
 })
 
@@ -74,6 +88,7 @@ const emit = defineEmits(['cancel', 'confirm'])
 
 const strategy = ref('cascade')
 const floorQuality = ref('320k')
+const saveListFolder = ref(false)
 
 const totalCount = computed(() => props.plan?.entries?.length || 0)
 const unsupportedCount = computed(() => props.plan?.unsupportedCount || 0)
@@ -90,6 +105,7 @@ watch(() => props.plan, () => {
   strategy.value = isLosslessQuality(props.plan?.preferred) ? 'none' : 'cascade'
   const opts = floorOptions.value
   floorQuality.value = opts.includes('320k') ? '320k' : (opts[0] || preferred.value)
+  saveListFolder.value = false
 })
 
 watch(preferred, () => {
@@ -107,6 +123,7 @@ function onConfirm() {
   emit('confirm', {
     strategy: strategy.value,
     floorQuality: strategy.value === 'floor' ? floorQuality.value : '',
+    saveListFolder: Boolean(props.playlistName && saveListFolder.value),
   })
 }
 </script>
@@ -164,6 +181,32 @@ function onConfirm() {
   margin-top: -6px;
   margin-bottom: 14px;
   color: var(--accent);
+}
+
+.batch-folder {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 14px;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+
+.batch-folder input {
+  margin-top: 3px;
+  accent-color: var(--accent);
+}
+
+.batch-folder em {
+  font-style: normal;
+  color: var(--accent);
+}
+
+.folder-hint {
+  margin-top: 0;
+  margin-bottom: 16px;
 }
 
 .batch-strategy-list {

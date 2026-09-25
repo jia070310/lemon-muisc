@@ -79,11 +79,13 @@ export function buildBatchDownloadTasks(entries, source, {
   preferredQuality = '320k',
   strategy = 'cascade',
   floorQuality = '',
+  listName = '',
 } = {}) {
   const list = Array.isArray(entries) ? entries : []
   const preferred = preferredQuality || '320k'
   const policy = ['cascade', 'floor', 'none'].includes(strategy) ? strategy : 'cascade'
   const floor = policy === 'floor' ? (floorQuality || preferred) : ''
+  const folder = String(listName || '').trim()
 
   const tasks = []
   let skippedCount = 0
@@ -102,6 +104,7 @@ export function buildBatchDownloadTasks(entries, source, {
       autoCascade: policy === 'cascade',
       deferExistAsk: true,
       batchId,
+      listName: folder,
     }))
   }
 

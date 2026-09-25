@@ -15,7 +15,7 @@ export function formatBatchDownloadToast(count, summary) {
   return `已添加 ${count} 首到下载队列`
 }
 
-export function useBatchDownload({ getSource, onCompleted, onError } = {}) {
+export function useBatchDownload({ getSource, getPlaylistName, onCompleted, onError } = {}) {
   const batchDialog = ref(null)
   const batchDownloading = ref(false)
 
@@ -25,14 +25,22 @@ export function useBatchDownload({ getSource, onCompleted, onError } = {}) {
 
   const BATCH_CHUNK_SIZE = 20
 
-  async function executeBatchDownload(plan, { strategy = 'cascade', floorQuality = '' } = {}) {
+  async function executeBatchDownload(plan, {
+    strategy = 'cascade',
+    floorQuality = '',
+    saveListFolder = false,
+  } = {}) {
     if (!(await assertActiveSourceForDownload())) return null
     batchDownloading.value = true
     try {
+      const listName = saveListFolder
+        ? String(getPlaylistName?.() || plan?.playlistName || '').trim()
+        : ''
       const { tasks, skippedCount } = buildBatchDownloadTasks(plan.entries, getSource(), {
         preferredQuality: plan.preferred,
         strategy,
         floorQuality,
+        listName,
       })
       if (!tasks.length) {
         onError?.(new Error(skippedCount ? '所选歌曲均无要求音质，未添加下载' : '没有可下载的歌曲'))
@@ -46,6 +54,7 @@ export function useBatchDownload({ getSource, onCompleted, onError } = {}) {
         skippedCount,
         strategy,
         floorQuality,
+        listName,
       }
       onCompleted?.(tasks.length, summary)
       return tasks
@@ -62,15 +71,22 @@ export function useBatchDownload({ getSource, onCompleted, onError } = {}) {
     const plan = prepareBatchDownload(entries, preferredQuality)
     if (!plan.entries.length) return null
     // 批量下载固定只弹一次策略确认窗
-    batchDialog.value = plan
+    batchDialog.value = {
+      ...plan,
+      playlistName: String(getPlaylistName?.() || '').trim(),
+    }
     return null
   }
 
-  async function confirmBatchDialog({ strategy = 'cascade', floorQuality = '' } = {}) {
+  async function confirmBatchDialog({
+    strategy = 'cascade',
+    floorQuality = '',
+    saveListFolder = false,
+  } = {}) {
     const plan = batchDialog.value
     if (!plan) return null
     closeBatchDialog()
-    return executeBatchDownload(plan, { strategy, floorQuality })
+    return executeBatchDownload(plan, { strategy, floorQuality, saveListFolder })
   }
 
   return {
