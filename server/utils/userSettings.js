@@ -65,6 +65,7 @@ export const USER_SETTING_KEYS = new Set([
   'tag.matchRejectForeignArtist',
   'library.organizeArtistMode',
   'player.autoMatchOnPlay',
+  'mood.analyzer',
 ])
 
 export function isGlobalSettingKey(key) {

@@ -42,7 +42,16 @@ import {
   startMoodAnalyzeJob,
   stopMoodAnalyzeJob,
 } from '../utils/moodAnalyzeJob.js'
-import { MOOD_ALGO_VERSION } from '../utils/moodAnalyze.js'
+import { getActiveMoodAlgoVersion } from '../utils/moodAnalyze.js'
+import {
+  probeEssentiaAi,
+  getMoodModelsStatus,
+} from '../utils/moodAiEssentia.js'
+import {
+  runMoodAiPrepareWizard,
+  getMoodAiInstallStatus,
+  getMoodAiSetupSnapshot,
+} from '../utils/moodAiInstall.js'
 import {
   getLibraryScanSettings,
   setLibraryScanSettings,
@@ -292,9 +301,30 @@ libraryRouter.post('/mood/analyze-start', async (req, res) => {
     const { assertFfmpegFeatureReady } = await import('../utils/apePlay.js')
     await assertFfmpegFeatureReady('进行情绪分析')
     const force = Boolean(req.body?.force)
-    const mood = startMoodAnalyzeJob({ force })
+    const analyzer = String(req.body?.analyzer || '').toLowerCase()
+    const useEssentia = analyzer === 'essentia'
+    if (useEssentia) {
+      const probe = await probeEssentiaAi()
+      if (!probe.ready) {
+        return res.status(400).json({
+          error: probe.hint || 'AI 情绪分析未就绪',
+          probe,
+        })
+      }
+    }
+    const mood = startMoodAnalyzeJob({
+      force,
+      analyzer: useEssentia ? 'essentia' : (analyzer === 'heuristic' ? 'heuristic' : undefined),
+    })
     if (mood.blocked) {
       return res.status(409).json({ error: mood.errorMsg || '曲库正在扫描', mood })
+    }
+    // 记住用户偏好
+    if (analyzer === 'essentia' || analyzer === 'heuristic') {
+      try {
+        const { setUserSettings } = await import('../utils/userSettings.js')
+        if (req.user?.id) setUserSettings(req.user.id, { 'mood.analyzer': analyzer })
+      } catch {}
     }
     res.json({ ok: true, mood })
   } catch (e) {
@@ -320,19 +350,57 @@ libraryRouter.get('/mood/analyze-status', (_req, res) => {
   }
 })
 
+/** AI 情绪分析状态；?probe=1 时才做 Python/Essentia 完整检测（启用时用，装包/进页默认不探测） */
+libraryRouter.get('/mood/ai-status', async (req, res) => {
+  try {
+    const doProbe = req.query.probe === '1' || req.query.probe === 'true'
+    const snapshot = await getMoodAiSetupSnapshot({ probe: doProbe })
+    res.json({
+      ok: true,
+      data: {
+        ...snapshot,
+        models: getMoodModelsStatus(),
+        analyzer: (await import('../utils/moodAnalyze.js')).getMoodAnalyzer(),
+        algoVersion: getActiveMoodAlgoVersion(),
+      },
+    })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+/** 一键准备：便携 Python + venv + pip essentia + 模型（异步，前端轮询状态） */
+libraryRouter.post('/mood/ai-prepare', async (_req, res) => {
+  try {
+    // 异步跑向导，立刻返回当前进度；前端轮询 /mood/ai-prepare-status
+    runMoodAiPrepareWizard().catch(() => {})
+    res.json({ ok: true, data: getMoodAiInstallStatus() })
+  } catch (e) {
+    res.status(500).json({ error: e.message || '准备失败' })
+  }
+})
+
+libraryRouter.get('/mood/ai-prepare-status', (_req, res) => {
+  try {
+    res.json({ ok: true, data: getMoodAiInstallStatus() })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
 /** 情绪地图散点 */
 libraryRouter.get('/mood-map', (req, res) => {
   try {
     const limit = Number.parseInt(req.query.limit, 10) || 5000
     const userDirs = getMusicPathsForUser(req.user?.id)
     const data = queryMoodMapPoints({ limit, dirs: userDirs })
-    const stats = getMoodAnalyzeStats({ algoVersion: MOOD_ALGO_VERSION, dirs: userDirs })
+    const stats = getMoodAnalyzeStats({ algoVersion: getActiveMoodAlgoVersion(), dirs: userDirs })
     res.json({
       ok: true,
       data: {
         ...data,
         stats,
-        algoVersion: MOOD_ALGO_VERSION,
+        algoVersion: getActiveMoodAlgoVersion(),
       },
     })
   } catch (e) {

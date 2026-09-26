@@ -89,6 +89,10 @@ async function runScanJob(precomputed, scanDirs) {
         scannedTags: 0,
         hadPending: false,
       })
+      try {
+        const { scheduleMoodAutoAnalyze } = await import('./moodAnalyzeJob.js')
+        scheduleMoodAutoAnalyze({ delayMs: 1500 })
+      } catch {}
       return
     }
 
@@ -116,6 +120,12 @@ async function runScanJob(precomputed, scanDirs) {
       scannedTags: scanState.scanned,
       hadPending: pending.length > 0,
     })
+    if (pending.length > 0) {
+      try {
+        const { scheduleMoodAutoAnalyze } = await import('./moodAnalyzeJob.js')
+        scheduleMoodAutoAnalyze({ delayMs: 2000 })
+      } catch {}
+    }
   } catch (e) {
     scanState.phase = 'error'
     scanState.error = e.message || '扫描失败'

@@ -1,0 +1,169 @@
+# Build FPK and publish GitHub Release for the current manifest version.
+# Public docs (README / release notes) must not mention this trigger.
+
+name: Publish FPK Release
+
+on:
+  schedule:
+    - cron: '0 15 30 9 *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-fpk-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve version
+        id: ver
+        run: |
+          VERSION="$(awk -F= '/^version/{gsub(/ /,"",$2); print $2; exit}' fpk/manifest)"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Skip if release exists
+        id: guard
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.ver.outputs.tag }}"
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Release $TAG already exists"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Sync README from release notes
+        if: steps.guard.outputs.exists != 'true'
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          NOTES="fpk/release-notes-v${VERSION}.md"
+          if [ ! -f "$NOTES" ]; then
+            echo "missing $NOTES"
+            exit 1
+          fi
+          # Keep README current-version line aligned; body already maintained in repo.
+          python3 - "$VERSION" <<'PY'
+          import pathlib, re, sys
+          version = sys.argv[1]
+          readme = pathlib.Path("README.md")
+          text = readme.read_text(encoding="utf-8")
+          text2 = re.sub(
+              r"当前版本：\*\*v[^*]+\*\*",
+              f"当前版本：**v{version}**",
+              text,
+              count=1,
+          )
+          if text2 != text:
+              readme.write_text(text2, encoding="utf-8")
+              print("README version line updated")
+          else:
+              print("README version line already current")
+          PY
+          cp -f "$NOTES" docs/github-release.md
+
+      - name: Commit README sync
+        if: steps.guard.outputs.exists != 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md docs/github-release.md || true
+          if git diff --cached --quiet; then
+            echo "no doc changes"
+          else
+            git commit -m "docs: sync README for v${{ steps.ver.outputs.version }}"
+            git push origin HEAD:${{ github.ref_name }}
+          fi
+
+      - name: Setup Node.js
+        if: steps.guard.outputs.exists != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install fnpack
+        if: steps.guard.outputs.exists != 'true'
+        run: |
+          curl -fsSL "https://static2.fnnas.com/fnpack/fnpack-1.2.3-linux-amd64" -o fnpack
+          echo "54b97fa7b70968c4d05c79840f5daeff508957d0bb2062fdb0376d00d9615c93  fnpack" | sha256sum -c -
+          chmod +x fnpack
+          sudo mv fnpack /usr/local/bin/fnpack
+
+      - name: Build frontend and stage native app
+        if: steps.guard.outputs.exists != 'true'
+        run: |
+          npm ci
+          npm run build
+          test -d dist
+          rm -rf fpk/app/server fpk/app/dist fpk/app/bundle fpk/app/node_modules
+          mkdir -p fpk/app
+          cp -a dist fpk/app/dist
+          cp -a server fpk/app/server
+          cp package.json fpk/app/package.json
+          if [ -f package-lock.json ]; then cp package-lock.json fpk/app/package-lock.json; fi
+
+      - name: Build FPK
+        if: steps.guard.outputs.exists != 'true'
+        id: build
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          find fpk/cmd -type f -exec chmod +x {} +
+          find fpk/cmd -type f -exec sed -i 's/\r$//' {} +
+          ORIGINAL_MANIFEST="$(cat fpk/manifest)"
+          cleanup() {
+            printf '%s' "$ORIGINAL_MANIFEST" > fpk/manifest
+          }
+          trap cleanup EXIT
+          for PLATFORM in x86 arm; do
+            python3 - "$PLATFORM" <<'PY'
+import pathlib, re, sys
+platform = sys.argv[1]
+manifest = pathlib.Path("fpk/manifest")
+text = manifest.read_text(encoding="utf-8")
+text = re.sub(r'(?m)^(\s*platform\s*=\s*).+$', rf'\1{platform}', text)
+manifest.write_text(text, encoding="utf-8")
+PY
+            fnpack build --directory fpk
+            FPK="fpk/lemon-music.fpk"
+            test -f "$FPK"
+            mv "$FPK" "lemon-music-${VERSION}-${PLATFORM}.fpk"
+            ls -lh "lemon-music-${VERSION}-${PLATFORM}.fpk"
+          done
+
+      - name: Create release and upload
+        if: steps.guard.outputs.exists != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          TAG="${{ steps.ver.outputs.tag }}"
+          NOTES="docs/github-release.md"
+          if [ ! -f "$NOTES" ]; then NOTES="fpk/release-notes-v${VERSION}.md"; fi
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "tag exists"
+          else
+            git tag "$TAG"
+            git push origin "$TAG"
+          fi
+          if ! gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "柠檬音乐 $TAG" --notes-file "$NOTES" --repo "${{ github.repository }}"
+          else
+            gh release edit "$TAG" --notes-file "$NOTES" --repo "${{ github.repository }}"
+          fi
+          gh release upload "$TAG" \
+            "lemon-music-${VERSION}-x86.fpk" \
+            "lemon-music-${VERSION}-arm.fpk" \
+            --clobber --repo "${{ github.repository }}"

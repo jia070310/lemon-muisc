@@ -1841,6 +1841,10 @@ async function downloadTask(task, settings, abortSignal = null) {
             dlBroadcast('download:status', { id: task.id, status: 'completed', progress: 1, filePath, quality, source })
             scanBatchAndCache([{ filePath }]).catch(() => {})
             notifyLibraryChanged([filePath], { reason: 'download' })
+            try {
+              const { scheduleMoodAutoAnalyze } = await import('../utils/moodAnalyzeJob.js')
+              scheduleMoodAutoAnalyze({ delayMs: 3000 })
+            } catch {}
             return
           } catch (e) {
             cleanupDownloadPath(partPath)

@@ -429,13 +429,21 @@ export const api = {
       body: { files },
       timeout: 180000,
     }),
-    moodAnalyzeStart: (force = false) => request('/library/mood/analyze-start', {
+    moodAnalyzeStart: (force = false, analyzer) => request('/library/mood/analyze-start', {
       method: 'POST',
-      body: { force },
+      body: {
+        force,
+        ...(analyzer ? { analyzer } : {}),
+      },
       timeout: 60000,
     }),
     moodAnalyzeStop: () => request('/library/mood/analyze-stop', { method: 'POST' }),
     moodAnalyzeStatus: () => request('/library/mood/analyze-status'),
+    /** probe=true：启用 AI 时完整检测；默认只读安装进度，不 spawn Python */
+    moodAiStatus: ({ probe = false } = {}) =>
+      request(`/library/mood/ai-status${probe ? '?probe=1' : ''}`),
+    moodAiPrepare: () => request('/library/mood/ai-prepare', { method: 'POST' }),
+    moodAiPrepareStatus: () => request('/library/mood/ai-prepare-status'),
     moodMap: (params = {}) => {
       const q = new URLSearchParams()
       if (params.limit != null) q.set('limit', String(params.limit))

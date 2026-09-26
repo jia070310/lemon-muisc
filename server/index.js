@@ -138,4 +138,10 @@ server.listen(PORT, '::', () => {
   console.log(`Config path: ${CONFIG_PATH}`)
   startTelemetry()
   startLibraryAutoWatch()
+  // 启动后补跑未分析情绪（仅新/未完成文件）
+  setTimeout(() => {
+    import('./utils/moodAnalyzeJob.js')
+      .then(({ scheduleMoodAutoAnalyze }) => scheduleMoodAutoAnalyze({ delayMs: 1000 }))
+      .catch(() => {})
+  }, 12000).unref?.()
 })

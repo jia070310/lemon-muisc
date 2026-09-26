@@ -4,18 +4,35 @@
       <button class="btn-ghost btn-sm" type="button" @click="$router.back()">← 返回</button>
       <div class="page-title">情绪地图</div>
       <div class="mood-actions">
+        <AppSelect
+          v-model="analyzer"
+          :options="analyzerOptions"
+          title="分析引擎"
+          size="sm"
+          min-width="148px"
+          :disabled="analyzing || preparingAi"
+          @change="onAnalyzerChange"
+        />
         <button
-          v-if="!analyzing"
-          class="btn-primary btn-sm"
+          v-if="analyzer === 'essentia' && !aiReady"
+          class="btn-ghost btn-sm"
           type="button"
-          :disabled="starting"
-          @click="startAnalyze"
+          :disabled="preparingAi || analyzing"
+          @click="prepareAi"
         >
-          {{ stats.analyzed ? '继续分析' : '开始分析' }}
-          <template v-if="stats.pending">（待 {{ stats.pending }}）</template>
+          {{ preparingAi ? '准备中…' : '准备 AI' }}
         </button>
         <button
-          v-else
+          v-if="!analyzing && stats.pending > 0"
+          class="btn-primary btn-sm"
+          type="button"
+          :disabled="starting || (analyzer === 'essentia' && !aiReady)"
+          @click="startAnalyze"
+        >
+          补分析（待 {{ stats.pending }}）
+        </button>
+        <button
+          v-else-if="analyzing"
           class="btn-ghost btn-sm"
           type="button"
           @click="stopAnalyze"
@@ -27,20 +44,45 @@
 
     <p class="mood-hint">
       横轴悲伤 ↔ 开心，纵轴平静 ↔ 激昂。点击封面可播放或加入列表；心情连播时在底部播放栏用心形 / 破碎心反馈。滚轮或两指缩放，Shift 拖动平移。偏好约 20 分钟衰减。
-      分析算法已升级（v2）：升级后请再点「继续分析」以按新规则重算坐标。
+      新入库文件会自动后台分析，一般无需手动点分析。
+      <template v-if="analyzer === 'essentia'">
+        当前为 AI 通道（Essentia + MusiCNN + emoMusic）。
+        <span class="mood-hint-detail">Essentia：音频分析框架；MusiCNN：把片段编成音乐特征向量；emoMusic：由向量预测开心↔悲伤、平静↔激昂。缺依赖点「准备 AI」（约 280MB）。仅 Linux x86_64 / macOS。AI 未就绪时自动回退本地启发式。</span>
+      </template>
+      <template v-else>
+        当前为本地启发式（v5）：按本库相对分布铺开。需要更准可切 AI（Linux x86_64 / macOS）。
+      </template>
     </p>
+
+    <div v-if="aiStatusText" class="mood-ai-status" :class="{ ready: aiReady, bad: analyzer === 'essentia' && !aiReady }">
+      {{ aiStatusText }}
+    </div>
 
     <div v-if="progressText" class="mood-progress" role="status">{{ progressText }}</div>
 
     <div v-if="loading && !points.length" class="loading card">正在加载情绪地图…</div>
     <div v-else-if="!points.length" class="empty card">
-      <p>{{ stats.pending ? '尚未分析完成' : '暂无已分析曲目' }}</p>
+      <p>{{ stats.pending ? '情绪分析进行中或等待自动补分析' : '暂无已分析曲目' }}</p>
       <p class="empty-hint">
-        分析在服务端后台进行，可离开此页，完成后刷新地图。
-        若提示需要 ffmpeg，再到「设置 → 文件路径」点「检测并准备 ffmpeg」（优先系统自带）。
+        新入库 / 下载的文件会自动后台分析，无需手动点击。可离开此页，完成后刷新地图。
+        若提示需要 ffmpeg，再到「设置 → 文件路径」点「检测并准备 ffmpeg」。
       </p>
-      <button class="btn-primary btn-sm" type="button" :disabled="starting || analyzing" @click="startAnalyze">
-        {{ analyzing ? '分析中…' : '开始分析' }}
+      <button
+        v-if="stats.pending > 0 && !analyzing"
+        class="btn-primary btn-sm"
+        type="button"
+        :disabled="starting || (analyzer === 'essentia' && !aiReady)"
+        @click="startAnalyze"
+      >
+        立即补分析（待 {{ stats.pending }}）
+      </button>
+      <button
+        v-else-if="analyzing"
+        class="btn-ghost btn-sm"
+        type="button"
+        @click="stopAnalyze"
+      >
+        停止分析
       </button>
     </div>
     <div v-else class="mood-map-wrap mood-map-enter">
@@ -132,6 +174,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { api } from '../api.js'
 import { onWS } from '../ws.js'
 import { localCoverUrl } from '../stores/library.js'
+import AppSelect from '../components/AppSelect.vue'
 import {
   addMoodPointToQueue,
   moodRadioActive,
@@ -140,6 +183,11 @@ import {
   startMoodRadio,
 } from '../stores/moodRadio.js'
 
+const analyzerOptions = [
+  { value: 'heuristic', label: '本地启发式' },
+  { value: 'essentia', label: 'AI（Essentia）' },
+]
+
 const canvasEl = ref(null)
 const points = ref([])
 const stats = ref({ total: 0, analyzed: 0, pending: 0, skipped: 0, error: 0 })
@@ -147,6 +195,10 @@ const loading = ref(false)
 const starting = ref(false)
 const analyzing = ref(false)
 const progressText = ref('')
+const analyzer = ref('heuristic')
+const preparingAi = ref(false)
+const aiReady = ref(false)
+const aiStatusText = ref('')
 const hoverTip = ref(null)
 const hoverKey = ref('')
 const coverReadyCount = ref(0)
@@ -1019,6 +1071,106 @@ async function loadMap({ animate = false } = {}) {
   }
 }
 
+/** 只读偏好 / 安装进度，不 spawn Python */
+async function loadAnalyzerPref() {
+  try {
+    const settings = await api.settings.get()
+    const pref = settings?.['mood.analyzer']
+    if (pref === 'essentia' || pref === 'heuristic') analyzer.value = pref
+  } catch {}
+  try {
+    const res = await api.library.moodAiStatus({ probe: false })
+    const data = res.data || {}
+    if (!analyzer.value && (data.analyzer === 'essentia' || data.analyzer === 'heuristic')) {
+      analyzer.value = data.analyzer
+    }
+    const install = data.install || {}
+    if (install.running) {
+      const pct = Number(install.progress) || 0
+      aiStatusText.value = pct > 0
+        ? `${install.message || '准备中…'}（${pct}%）`
+        : (install.message || '准备中…')
+      return { resumePrepare: true }
+    }
+  } catch {}
+  return {}
+}
+
+/** 启用 AI 时完整检测环境（不自动安装） */
+async function refreshAiStatus({ probe = true } = {}) {
+  if (!probe) return loadAnalyzerPref()
+  try {
+    aiStatusText.value = '正在检测 AI 环境…'
+    const res = await api.library.moodAiStatus({ probe: true })
+    const data = res.data || {}
+    aiReady.value = Boolean(data.ready)
+    const install = data.install || {}
+    if (install.running) {
+      const pct = Number(install.progress) || 0
+      aiStatusText.value = pct > 0
+        ? `${install.message || '准备中…'}（${pct}%）`
+        : (install.message || '准备中…')
+      return { resumePrepare: true }
+    }
+    aiStatusText.value = data.hint || (aiReady.value ? 'AI 已就绪' : '')
+    if (data.platformOk === false && data.hint) {
+      aiStatusText.value = data.hint
+    }
+  } catch (e) {
+    aiReady.value = false
+    aiStatusText.value = e.message || '检测失败'
+  }
+}
+
+async function onAnalyzerChange() {
+  try {
+    await api.settings.update({ 'mood.analyzer': analyzer.value })
+  } catch {}
+  if (analyzer.value === 'essentia') {
+    // 启用时才检测；缺依赖只提示，不自动长时间安装
+    await refreshAiStatus({ probe: true })
+  } else {
+    aiStatusText.value = ''
+    aiReady.value = false
+  }
+}
+
+async function pollAiPrepareUntilDone() {
+  preparingAi.value = true
+  const deadline = Date.now() + 45 * 60 * 1000
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 1500))
+    const st = await api.library.moodAiPrepareStatus()
+    const data = st.data || {}
+    const pct = Number(data.progress) || 0
+    const msg = data.message || '准备中…'
+    aiStatusText.value = pct > 0 ? `${msg}（${pct}%）` : msg
+    if (data.phase === 'done') break
+    if (data.phase === 'error') {
+      throw new Error(data.error || data.message || '准备失败')
+    }
+    if (!data.running && data.finishedAt) break
+  }
+  await refreshAiStatus()
+  if (!aiReady.value) {
+    aiStatusText.value = aiStatusText.value || '尚未就绪，请重试'
+  }
+}
+
+async function prepareAi() {
+  preparingAi.value = true
+  aiStatusText.value = '正在准备 AI 环境…'
+  try {
+    await api.library.moodAiPrepare()
+    await pollAiPrepareUntilDone()
+  } catch (e) {
+    aiReady.value = false
+    aiStatusText.value = e.message || '准备失败'
+  } finally {
+    preparingAi.value = false
+  }
+}
+
 async function refreshStatus() {
   try {
     const res = await api.library.moodAnalyzeStatus()
@@ -1037,11 +1189,18 @@ async function refreshStatus() {
 }
 
 async function startAnalyze() {
+  if (starting.value || analyzing.value) return
+  if (analyzer.value === 'essentia' && !aiReady.value) {
+    progressText.value = '请先点「准备 AI」'
+    return
+  }
   starting.value = true
   try {
-    await api.library.moodAnalyzeStart(false)
+    await api.library.moodAnalyzeStart(false, analyzer.value)
     analyzing.value = true
-    progressText.value = '已开始后台分析…'
+    progressText.value = analyzer.value === 'essentia'
+      ? '已开始 AI 后台分析…'
+      : '已开始后台分析…'
     await refreshStatus()
   } catch (e) {
     progressText.value = e.message || '无法启动分析'
@@ -1079,6 +1238,18 @@ watch(canvasEl, (el, prev) => {
 
 onMounted(async () => {
   preferReducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches || false
+  // 先进页只读偏好；启发式不探测。已启用 AI 或正在准备时才检测/续跑
+  const aiSnap = await loadAnalyzerPref()
+  if (aiSnap?.resumePrepare) {
+    pollAiPrepareUntilDone()
+      .catch((e) => {
+        aiReady.value = false
+        aiStatusText.value = e.message || '准备失败'
+      })
+      .finally(() => { preparingAi.value = false })
+  } else if (analyzer.value === 'essentia') {
+    await refreshAiStatus({ probe: true })
+  }
   await loadMap({ animate: true })
   await refreshStatus()
   offProgress = onWS('library:mood-progress', async (payload) => {
@@ -1159,6 +1330,7 @@ onUnmounted(() => {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  align-items: center;
 }
 .mood-hint {
   margin: 0 0 8px;
@@ -1166,6 +1338,34 @@ onUnmounted(() => {
   font-size: 0.88rem;
   line-height: 1.45;
   flex-shrink: 0;
+}
+.mood-hint-detail {
+  display: block;
+  margin-top: 4px;
+  opacity: 0.92;
+}
+.mood-hint code {
+  font-size: 0.82em;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+.mood-ai-status {
+  margin: 0 0 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  color: var(--text-muted);
+  font-size: 0.86rem;
+  flex-shrink: 0;
+}
+.mood-ai-status.ready {
+  background: color-mix(in srgb, #2f9e44 14%, transparent);
+  color: var(--text);
+}
+.mood-ai-status.bad {
+  background: color-mix(in srgb, #e67700 16%, transparent);
+  color: var(--text);
 }
 .mood-progress {
   margin-bottom: 8px;

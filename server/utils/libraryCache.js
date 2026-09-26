@@ -53,6 +53,8 @@ function ensureSearchColumns(db) {
   // SensMe 风格情绪地图（本地音频分析）
   add('mood_valence', 'mood_valence REAL')
   add('mood_arousal', 'mood_arousal REAL')
+  add('mood_raw_valence', 'mood_raw_valence REAL')
+  add('mood_raw_arousal', 'mood_raw_arousal REAL')
   add('mood_bpm', 'mood_bpm REAL NOT NULL DEFAULT 0')
   add('mood_status', "mood_status TEXT NOT NULL DEFAULT ''")
   add('mood_version', 'mood_version INTEGER NOT NULL DEFAULT 0')
@@ -1031,25 +1033,24 @@ export function queryGenres(opts = {}) {
   return { items, total, page, limit }
 }
 
-/** 需要情绪分析的曲目（未分析 / 版本过期 / 文件已变） */
+/** 需要情绪分析的曲目：未分析 / 失败 / 文件已变（不因算法版本变更整库重跑） */
 export function listMoodAnalyzePending({ algoVersion = 1, limit = 0 } = {}) {
   ensureLibraryCacheTable()
   const db = getDB()
   if (!db) return []
-  const ver = Number(algoVersion) || 1
+  void algoVersion // 保留参数兼容调用方；待分析不再按 version 过滤
   const sql = `
     SELECT file_path, mtime, size, title, artist, album, duration
     FROM library_index
     WHERE mood_status = ''
        OR mood_status = 'pending'
        OR mood_status = 'error'
-       OR mood_version != ?
        OR ABS(mood_file_mtime - mtime) > 0.5
     ORDER BY mtime DESC
   `
   const rows = limit > 0
-    ? db.prepare(`${sql} LIMIT ?`).all(ver, limit)
-    : db.prepare(sql).all(ver)
+    ? db.prepare(`${sql} LIMIT ?`).all(limit)
+    : db.prepare(sql).all()
   return rows.map((r) => ({
     filePath: r.file_path,
     mtime: r.mtime || 0,
@@ -1067,18 +1068,18 @@ export function getMoodAnalyzeStats({ algoVersion = 1, dirs = null } = {}) {
   if (!db) {
     return { total: 0, analyzed: 0, pending: 0, skipped: 0, error: 0 }
   }
-  const ver = Number(algoVersion) || 1
+  void algoVersion
   const filter = buildDirSqlFilter(dirs)
   const whereExtra = filter ? ` AND (${filter.where})` : ''
   const params = filter ? filter.params : []
   const total = db.prepare(`SELECT COUNT(*) AS c FROM library_index WHERE 1=1${whereExtra}`).get(...params)?.c || 0
   const analyzed = db.prepare(`
     SELECT COUNT(*) AS c FROM library_index
-    WHERE mood_status = 'ok' AND mood_version = ? AND ABS(mood_file_mtime - mtime) <= 0.5${whereExtra}
-  `).get(ver, ...params)?.c || 0
+    WHERE mood_status = 'ok' AND ABS(mood_file_mtime - mtime) <= 0.5${whereExtra}
+  `).get(...params)?.c || 0
   const skipped = db.prepare(`
-    SELECT COUNT(*) AS c FROM library_index WHERE mood_status = 'skipped' AND mood_version = ?${whereExtra}
-  `).get(ver, ...params)?.c || 0
+    SELECT COUNT(*) AS c FROM library_index WHERE mood_status = 'skipped'${whereExtra}
+  `).get(...params)?.c || 0
   const error = db.prepare(`
     SELECT COUNT(*) AS c FROM library_index WHERE mood_status = 'error'${whereExtra}
   `).get(...params)?.c || 0
@@ -1094,6 +1095,12 @@ export function updateMoodResult(filePath, result = {}) {
   const status = String(result.status || '').trim() || 'ok'
   const valence = result.valence == null ? null : Number(result.valence)
   const arousal = result.arousal == null ? null : Number(result.arousal)
+  const rawValence = result.rawValence == null
+    ? (Number.isFinite(valence) ? valence : null)
+    : Number(result.rawValence)
+  const rawArousal = result.rawArousal == null
+    ? (Number.isFinite(arousal) ? arousal : null)
+    : Number(result.rawArousal)
   const bpm = Number(result.bpm) || 0
   const version = Number(result.version) || 0
   const fileMtime = Number(result.fileMtime) || 0
@@ -1101,6 +1108,8 @@ export function updateMoodResult(filePath, result = {}) {
     UPDATE library_index SET
       mood_valence = ?,
       mood_arousal = ?,
+      mood_raw_valence = ?,
+      mood_raw_arousal = ?,
       mood_bpm = ?,
       mood_status = ?,
       mood_version = ?,
@@ -1110,6 +1119,8 @@ export function updateMoodResult(filePath, result = {}) {
   `).run(
     Number.isFinite(valence) ? valence : null,
     Number.isFinite(arousal) ? arousal : null,
+    Number.isFinite(rawValence) ? rawValence : null,
+    Number.isFinite(rawArousal) ? rawArousal : null,
     bpm,
     status,
     version,
@@ -1117,6 +1128,78 @@ export function updateMoodResult(filePath, result = {}) {
     key,
   )
   return true
+}
+
+/**
+ * 按库内 raw 情绪百分位写回展示坐标（相对分布）。
+ * 仅处理指定 mood_version；AI 通道版本不要调用。
+ * @returns {{ updated: number }}
+ */
+export function recalibrateMoodPercentiles({ version, dirs = null } = {}) {
+  ensureLibraryCacheTable()
+  const db = getDB()
+  if (!db) return { updated: 0 }
+  const ver = Number(version)
+  if (!Number.isFinite(ver)) return { updated: 0 }
+
+  const filter = buildDirSqlFilter(dirs)
+  if (dirs && !filter) return { updated: 0 }
+  const whereExtra = filter ? ` AND (${filter.where})` : ''
+  const baseParams = filter ? filter.params : []
+
+  const rows = db.prepare(`
+    SELECT file_path, mood_raw_valence, mood_raw_arousal
+    FROM library_index
+    WHERE mood_status = 'ok'
+      AND mood_version = ?
+      AND mood_raw_valence IS NOT NULL
+      AND mood_raw_arousal IS NOT NULL${whereExtra}
+  `).all(ver, ...baseParams)
+
+  if (rows.length < 2) return { updated: 0 }
+
+  const xs = rows.map((r) => Number(r.mood_raw_valence)).filter(Number.isFinite).sort((a, b) => a - b)
+  const ys = rows.map((r) => Number(r.mood_raw_arousal)).filter(Number.isFinite).sort((a, b) => a - b)
+  if (xs.length < 2 || ys.length < 2) return { updated: 0 }
+
+  function percentileRank(sorted, value) {
+    let lo = 0
+    let eq = 0
+    for (const v of sorted) {
+      if (v < value) lo += 1
+      else if (v === value) eq += 1
+    }
+    const n = sorted.length
+    if (n <= 1) return 0.5
+    return (lo + eq * 0.5) / n
+  }
+
+  function rankToSigned(rank01) {
+    // 轻微拉开中段，避免全挤在 0 附近
+    const x = Math.min(1, Math.max(0, rank01))
+    const curved = 0.55 * x + 0.45 * (x * x * (3 - 2 * x))
+    return Math.round((curved * 2 - 1) * 1000) / 1000
+  }
+
+  const upd = db.prepare(`
+    UPDATE library_index SET mood_valence = ?, mood_arousal = ?
+    WHERE file_path = ?
+  `)
+  const tx = db.transaction((list) => {
+    let n = 0
+    for (const r of list) {
+      const rv = Number(r.mood_raw_valence)
+      const ra = Number(r.mood_raw_arousal)
+      if (!Number.isFinite(rv) || !Number.isFinite(ra)) continue
+      const vx = rankToSigned(percentileRank(xs, rv))
+      const ay = rankToSigned(percentileRank(ys, ra))
+      upd.run(vx, ay, r.file_path)
+      n += 1
+    }
+    return n
+  })
+  const updated = tx(rows)
+  return { updated }
 }
 
 /**

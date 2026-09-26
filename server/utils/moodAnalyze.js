@@ -1,13 +1,47 @@
 import { spawn } from 'child_process'
 import fs from 'fs'
 import { assertFfmpegFeatureReady } from './apePlay.js'
+import { getMergedSettings } from './userSettings.js'
+import { MOOD_ESSENTIA_VERSION, predictMoodWithEssentia } from './moodAiEssentia.js'
 
 /**
  * 算法版本：bump 后会触发全库重分析。
  * v2：跳过前奏、多频段能量、谱滚降/带宽、onset 密度、更稳的 BPM 与映射。
+ * v3：降低低音惩罚、节奏纳入开心轴（矫枉过正，多数点挤到欢快）。
+ * v4：开心↔悲伤以音色为主、快慢以节奏能量为主，两轴解耦并去掉正向偏置。
+ * v5：多段中位数 + 粗 chroma 调式弱先验；库内百分位标定（相对分布，非绝对情绪）。
+ * v204：Essentia emoMusic AI（效价/唤醒）测试通道。
  */
-export const MOOD_ALGO_VERSION = 2
+export const MOOD_HEURISTIC_VERSION = 5
+/** @deprecated 兼容旧引用；请用 getActiveMoodAlgoVersion() */
+export const MOOD_ALGO_VERSION = MOOD_HEURISTIC_VERSION
 
+/** 本次分析任务覆盖（由 analyze-start 传入，优先于设置） */
+let analyzerOverride = null
+
+export function setMoodAnalyzerOverride(value) {
+  const v = String(value || '').toLowerCase()
+  if (v === 'essentia') analyzerOverride = 'essentia'
+  else if (v === 'heuristic') analyzerOverride = 'heuristic'
+  else analyzerOverride = null
+}
+
+export function getMoodAnalyzer() {
+  if (analyzerOverride === 'essentia' || analyzerOverride === 'heuristic') {
+    return analyzerOverride
+  }
+  try {
+    const s = getMergedSettings(null)
+    const v = String(s['mood.analyzer'] || 'heuristic').toLowerCase()
+    return v === 'essentia' ? 'essentia' : 'heuristic'
+  } catch {
+    return 'heuristic'
+  }
+}
+
+export function getActiveMoodAlgoVersion() {
+  return getMoodAnalyzer() === 'essentia' ? MOOD_ESSENTIA_VERSION : MOOD_HEURISTIC_VERSION
+}
 const SAMPLE_RATE = 22050
 const MAX_SECONDS = 50
 const INTRO_SKIP_SEC = 14
@@ -19,11 +53,14 @@ function clamp(n, lo, hi) {
   return Math.min(hi, Math.max(lo, n))
 }
 
-/** 平滑映射到 [-1,1]，中间更敏感、两端压缩 */
+/**
+ * 映射到 [-1,1]。
+ * 线性与 smoothstep 混合，避免中段塌缩到一侧。
+ */
 function softMap01ToSigned(x01) {
   const x = clamp(x01, 0, 1)
-  // 略作 S 形，避免大量点挤在 0 附近
-  const curved = x * x * (3 - 2 * x)
+  const smooth = x * x * (3 - 2 * x)
+  const curved = 0.62 * x + 0.38 * smooth
   return curved * 2 - 1
 }
 
@@ -207,6 +244,62 @@ function spectralBandwidth(mag, sampleRate, centroidHz) {
   return Math.sqrt(varSum / total)
 }
 
+/** Krumhansl–Kessler 简化大/小调模板（相对权重） */
+const MAJOR_PROFILE = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88]
+const MINOR_PROFILE = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17]
+
+function corr12(a, b) {
+  let sumA = 0
+  let sumB = 0
+  for (let i = 0; i < 12; i += 1) {
+    sumA += a[i]
+    sumB += b[i]
+  }
+  const meanA = sumA / 12
+  const meanB = sumB / 12
+  let num = 0
+  let denA = 0
+  let denB = 0
+  for (let i = 0; i < 12; i += 1) {
+    const da = a[i] - meanA
+    const db = b[i] - meanB
+    num += da * db
+    denA += da * da
+    denB += db * db
+  }
+  const den = Math.sqrt(denA * denB)
+  return den > 1e-12 ? num / den : 0
+}
+
+/**
+ * chroma → 大调倾向 ∈ [0,1]（0.5 中性）
+ */
+function chromaMajorTendency(chroma) {
+  let bestMaj = -2
+  let bestMin = -2
+  for (let shift = 0; shift < 12; shift += 1) {
+    const rotated = new Float32Array(12)
+    for (let i = 0; i < 12; i += 1) rotated[i] = chroma[(i + shift) % 12]
+    bestMaj = Math.max(bestMaj, corr12(rotated, MAJOR_PROFILE))
+    bestMin = Math.max(bestMin, corr12(rotated, MINOR_PROFILE))
+  }
+  const delta = bestMaj - bestMin
+  // 映射到 [0,1]，弱信号
+  return clamp(0.5 + delta * 0.85, 0, 1)
+}
+
+function accumulateChroma(mag, sampleRate, chromaOut) {
+  for (let k = 1; k < mag.length; k += 1) {
+    const hz = (k * sampleRate) / FRAME
+    if (hz < 80 || hz > 5000) continue
+    const midi = 69 + 12 * Math.log2(hz / 440)
+    if (!Number.isFinite(midi)) continue
+    const pc = ((Math.round(midi) % 12) + 12) % 12
+    const m = mag[k]
+    chromaOut[pc] += m * m
+  }
+}
+
 /**
  * 在已解码样本中取能量最高的一段（约 windowSec），避开前奏淡入。
  */
@@ -253,6 +346,7 @@ function extractFeatures(samples, sampleRate = SAMPLE_RATE) {
   let sumHigh = 0
   let onsetCount = 0
   const onsetEnv = new Float32Array(frameCount)
+  const chroma = new Float32Array(12)
   let prevFlux = 0
   let prevMag = null
   let fluxPeak = 0
@@ -278,6 +372,7 @@ function extractFeatures(samples, sampleRate = SAMPLE_RATE) {
     sumZcr += zcr / FRAME
 
     const mag = fftMagnitudes(frame)
+    accumulateChroma(mag, sampleRate, chroma)
     let weighted = 0
     let total = 0
     for (let k = 1; k < mag.length; k += 1) {
@@ -338,6 +433,7 @@ function extractFeatures(samples, sampleRate = SAMPLE_RATE) {
   const durationSec = (frameCount * HOP) / sampleRate
   const onsetRate = durationSec > 0.5 ? onsetCount / durationSec : 0
   const bpm = estimateBpm(onsetEnv, sampleRate, HOP)
+  const modeMajor = chromaMajorTendency(chroma)
 
   return {
     meanRms,
@@ -352,6 +448,7 @@ function extractFeatures(samples, sampleRate = SAMPLE_RATE) {
     highRatio,
     onsetRate,
     bpm,
+    modeMajor,
     frameCount,
   }
 }
@@ -414,61 +511,118 @@ function estimateBpm(onsetEnv, sampleRate, hop) {
 }
 
 function featuresToMood(features) {
-  // —— 亮度 / 音色（偏 valence）——
-  const centroidN = clamp((features.meanCentroid - 900) / 3800, 0, 1)
-  const rolloffN = clamp((features.meanRolloff - 2500) / 7000, 0, 1)
-  const highN = clamp((features.highRatio - 0.08) / 0.35, 0, 1)
-  const lowDark = clamp((features.lowRatio - 0.22) / 0.45, 0, 1) // 低频占比高 → 更「沉」
-  const zcrN = clamp(features.meanZcr / 0.22, 0, 1)
-  const bright = clamp(centroidN * 0.4 + rolloffN * 0.25 + highN * 0.25 + zcrN * 0.1, 0, 1)
-  // 慢歌略偏负向，快歌略偏正向（弱权重，避免 BPM 主导情绪）
-  const tempoValence = clamp((features.bpm - 85) / 70, -0.35, 0.35)
-
-  let valence01 = clamp(
-    bright * 0.72
-    + (1 - lowDark) * 0.18
-    + (tempoValence + 0.35) / 0.7 * 0.1,
+  // —— 音色（开心轴主力；与节奏轴尽量解耦）——
+  const centroidN = clamp((features.meanCentroid - 1500) / 3000, 0, 1)
+  const rolloffN = clamp((features.meanRolloff - 4200) / 6000, 0, 1)
+  const highN = clamp((features.highRatio - 0.06) / 0.3, 0, 1)
+  const midN = clamp((features.midRatio - 0.3) / 0.4, 0, 1)
+  const zcrN = clamp(features.meanZcr / 0.18, 0, 1)
+  const excessLow = clamp(
+    (features.lowRatio - Math.max(features.midRatio, features.highRatio, 0.28) - 0.06) / 0.34,
+    0,
+    1,
+  )
+  const timbreOpen = clamp(
+    centroidN * 0.3
+    + rolloffN * 0.22
+    + highN * 0.2
+    + midN * 0.18
+    + zcrN * 0.1,
     0,
     1,
   )
 
-  // —— 激活度（偏 arousal）——
-  const bpmN = clamp((features.bpm - 68) / 95, 0, 1)
-  const energyN = clamp(features.meanRms / 0.16, 0, 1)
-  const onsetN = clamp(features.onsetRate / 3.2, 0, 1)
+  // —— 节奏 / 能量（快慢轴主力）——
+  const bpmN = clamp((features.bpm - 72) / 90, 0, 1)
+  const energyN = clamp(features.meanRms / 0.145, 0, 1)
+  const onsetN = clamp(features.onsetRate / 3.1, 0, 1)
   const fluxN = clamp(features.meanFlux / (features.meanFlux + 8), 0, 1)
-  // 动态起伏：过大可能偏「激烈」，过平偏「平静」
   const dynN = clamp(features.rmsStd / (features.meanRms + 1e-4) / 0.85, 0, 1)
 
-  let arousal01 = clamp(
-    bpmN * 0.38
-    + energyN * 0.28
-    + onsetN * 0.22
-    + fluxN * 0.07
-    + dynN * 0.05,
+  // 调式弱先验：大调略偏开心，小调略偏悲伤（权重小）
+  const modeN = Number.isFinite(features.modeMajor) ? features.modeMajor : 0.5
+
+  const tempoHint = clamp((features.bpm - 108) / 55, -0.5, 0.5)
+  let valence01 = clamp(
+    timbreOpen * 0.52
+    + (1 - excessLow) * 0.18
+    + modeN * 0.14
+    + (tempoHint + 0.5) * 0.1
+    + highN * 0.06,
     0,
     1,
   )
 
-  // 极暗且慢：略压 arousal，避免「沉重慢歌」被标成兴奋
-  if (lowDark > 0.55 && bpmN < 0.35) {
-    arousal01 = clamp(arousal01 * 0.82, 0, 1)
+  let arousal01 = clamp(
+    bpmN * 0.4
+    + energyN * 0.24
+    + onsetN * 0.22
+    + fluxN * 0.08
+    + dynN * 0.06,
+    0,
+    1,
+  )
+
+  if (excessLow > 0.55 && bpmN < 0.3) {
+    valence01 = clamp(valence01 * 0.9 - 0.02, 0, 1)
+    arousal01 = clamp(arousal01 * 0.88, 0, 1)
   }
-  // 很亮且打击密：略抬 arousal
-  if (highN > 0.45 && onsetN > 0.55) {
-    arousal01 = clamp(arousal01 * 1.08, 0, 1)
+  if (highN > 0.42 && onsetN > 0.55 && bpmN > 0.5) {
+    valence01 = clamp(valence01 * 1.04 + 0.015, 0, 1)
+    arousal01 = clamp(arousal01 * 1.05, 0, 1)
   }
 
+  // v5：不再用全局固定中性锚硬拉；保留 raw 供库内百分位标定
   const valence = softMap01ToSigned(valence01)
   const arousal = softMap01ToSigned(arousal01)
-
-  // 轻微打散同质堆积：用带宽作极小扰动（稳定、同曲可复现）
   const jitter = clamp((features.meanBandwidth - 1200) / 8000, -0.04, 0.04)
 
   return {
-    valence: Math.round(clamp(valence + jitter * 0.5, -1, 1) * 1000) / 1000,
-    arousal: Math.round(clamp(arousal + jitter * 0.35, -1, 1) * 1000) / 1000,
+    valence: Math.round(clamp(valence + jitter * 0.35, -1, 1) * 1000) / 1000,
+    arousal: Math.round(clamp(arousal + jitter * 0.3, -1, 1) * 1000) / 1000,
     bpm: Math.round(features.bpm * 10) / 10,
+  }
+}
+
+function medianNumber(values) {
+  const a = values.filter((v) => Number.isFinite(v)).sort((x, y) => x - y)
+  if (!a.length) return 0
+  const mid = Math.floor(a.length / 2)
+  return a.length % 2 ? a[mid] : (a[mid - 1] + a[mid]) / 2
+}
+
+/** 将长样本切成最多 3 段；过短则整段分析 */
+function splitAnalysisSegments(samples, count = 3) {
+  const minSeg = SAMPLE_RATE * 5
+  if (!samples?.length || samples.length < minSeg * 2) return [samples]
+  const n = Math.min(count, Math.floor(samples.length / minSeg))
+  if (n < 2) return [samples]
+  const segLen = Math.floor(samples.length / n)
+  const segs = []
+  for (let i = 0; i < n; i += 1) {
+    const start = i * segLen
+    const end = i === n - 1 ? samples.length : start + segLen
+    segs.push(samples.subarray(start, end))
+  }
+  return segs
+}
+
+/**
+ * 多段特征 → 中位数 mood（raw ∈ [-1,1]）
+ */
+function analyzeHeuristicMultiSegment(samples) {
+  const segs = splitAnalysisSegments(samples, 3)
+  const moods = []
+  for (const seg of segs) {
+    const features = extractFeatures(seg, SAMPLE_RATE)
+    if (!features) continue
+    moods.push(featuresToMood(features))
+  }
+  if (!moods.length) return null
+  return {
+    valence: Math.round(medianNumber(moods.map((m) => m.valence)) * 1000) / 1000,
+    arousal: Math.round(medianNumber(moods.map((m) => m.arousal)) * 1000) / 1000,
+    bpm: Math.round(medianNumber(moods.map((m) => m.bpm)) * 10) / 10,
   }
 }
 
@@ -486,33 +640,76 @@ async function loadAnalysisSamples(filePath) {
 
 /**
  * 分析单个音频文件的情绪坐标
- * @returns {Promise<{ status: string, valence?: number, arousal?: number, bpm?: number, version: number }>}
+ * @returns {Promise<{ status: string, valence?: number, arousal?: number, bpm?: number, version: number, engine?: string }>}
  */
 export async function analyzeTrackMood(filePath) {
+  const version = getActiveMoodAlgoVersion()
+  const analyzer = getMoodAnalyzer()
+
   let samples
   try {
     samples = await loadAnalysisSamples(filePath)
   } catch (e) {
     return {
       status: 'error',
-      version: MOOD_ALGO_VERSION,
+      version,
       error: e.message || String(e),
     }
   }
 
   if (!samples?.length || samples.length < SAMPLE_RATE * 3) {
-    return { status: 'skipped', version: MOOD_ALGO_VERSION, reason: 'too-short' }
+    return { status: 'skipped', version, reason: 'too-short' }
   }
 
-  const features = extractFeatures(samples, SAMPLE_RATE)
-  if (!features) {
-    return { status: 'skipped', version: MOOD_ALGO_VERSION, reason: 'no-features' }
+  // AI 通道：Essentia emoMusic；失败时回退启发式（仍标记当前引擎版本，便于排查）
+  if (analyzer === 'essentia') {
+    const features = extractFeatures(samples, SAMPLE_RATE)
+    if (!features) {
+      return { status: 'skipped', version, reason: 'no-features' }
+    }
+    try {
+      const ai = await predictMoodWithEssentia(filePath)
+      if (ai?.ok && Number.isFinite(ai.valence) && Number.isFinite(ai.arousal)) {
+        return {
+          status: 'ok',
+          version: MOOD_ESSENTIA_VERSION,
+          engine: ai.engine || 'essentia-emomusic',
+          valence: Math.round(clamp(ai.valence, -1, 1) * 1000) / 1000,
+          arousal: Math.round(clamp(ai.arousal, -1, 1) * 1000) / 1000,
+          bpm: Math.round(features.bpm * 10) / 10,
+        }
+      }
+      const mood = analyzeHeuristicMultiSegment(samples) || featuresToMood(features)
+      return {
+        status: 'ok',
+        version: MOOD_ESSENTIA_VERSION,
+        engine: 'heuristic-fallback',
+        fallbackError: ai?.error || 'ai-failed',
+        ...mood,
+      }
+    } catch (e) {
+      const mood = analyzeHeuristicMultiSegment(samples) || featuresToMood(features)
+      return {
+        status: 'ok',
+        version: MOOD_ESSENTIA_VERSION,
+        engine: 'heuristic-fallback',
+        fallbackError: e.message || String(e),
+        ...mood,
+      }
+    }
   }
 
-  const mood = featuresToMood(features)
+  const mood = analyzeHeuristicMultiSegment(samples)
+  if (!mood) {
+    return { status: 'skipped', version, reason: 'no-features' }
+  }
   return {
     status: 'ok',
-    version: MOOD_ALGO_VERSION,
+    version: MOOD_HEURISTIC_VERSION,
+    engine: 'heuristic',
+    // raw 与 valence 同值；库内百分位标定后只改展示坐标
+    rawValence: mood.valence,
+    rawArousal: mood.arousal,
     ...mood,
   }
 }

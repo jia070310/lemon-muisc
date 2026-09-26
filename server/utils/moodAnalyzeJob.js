@@ -3,8 +3,15 @@ import {
   listMoodAnalyzePending,
   getMoodAnalyzeStats,
   updateMoodResult,
+  recalibrateMoodPercentiles,
 } from './libraryCache.js'
-import { analyzeTrackMood, MOOD_ALGO_VERSION } from './moodAnalyze.js'
+import {
+  analyzeTrackMood,
+  getActiveMoodAlgoVersion,
+  getMoodAnalyzer,
+  setMoodAnalyzerOverride,
+  MOOD_HEURISTIC_VERSION,
+} from './moodAnalyze.js'
 import { getLibraryScanStatus } from './libraryScanJob.js'
 import {
   notifyLibraryMoodProgress,
@@ -12,6 +19,8 @@ import {
 } from './libraryNotify.js'
 
 const CONCURRENCY = 1
+/** 每分析多少首做一次库内百分位重标定（启发式） */
+const CALIBRATE_EVERY = 25
 
 /** @type {{ running: boolean, phase: string, current: number, total: number, analyzed: number, skipped: number, error: number, errorMsg: string, startedAt: number, finishedAt: number }} */
 let moodState = {
@@ -31,10 +40,11 @@ let jobPromise = null
 let abortRequested = false
 
 export function getMoodAnalyzeStatus() {
-  const stats = getMoodAnalyzeStats({ algoVersion: MOOD_ALGO_VERSION })
+  const algoVersion = getActiveMoodAlgoVersion()
+  const stats = getMoodAnalyzeStats({ algoVersion })
   return {
     ...moodState,
-    algoVersion: MOOD_ALGO_VERSION,
+    algoVersion,
     library: stats,
   }
 }
@@ -49,21 +59,35 @@ function emitProgress(extra = {}) {
     error: moodState.error,
     running: moodState.running,
     errorMsg: moodState.errorMsg || '',
-    algoVersion: MOOD_ALGO_VERSION,
+    algoVersion: getActiveMoodAlgoVersion(),
     ...extra,
   })
+}
+
+function maybeCalibrateHeuristic(force = false) {
+  if (getMoodAnalyzer() !== 'heuristic') return
+  if (!force && moodState.analyzed > 0 && moodState.analyzed % CALIBRATE_EVERY !== 0) return
+  try {
+    const { updated } = recalibrateMoodPercentiles({ version: MOOD_HEURISTIC_VERSION })
+    if (updated > 0) {
+      emitProgress({ text: `相对标定 ${updated} 首`, calibrated: updated })
+    }
+  } catch {
+    // 标定失败不阻断分析
+  }
 }
 
 async function analyzeOne(item) {
   const filePath = item.filePath
   let fileMtime = item.mtime || 0
+  const algoVersion = getActiveMoodAlgoVersion()
   try {
     const st = fs.statSync(filePath)
     fileMtime = st.mtimeMs || fileMtime
   } catch {
     updateMoodResult(filePath, {
       status: 'error',
-      version: MOOD_ALGO_VERSION,
+      version: algoVersion,
       fileMtime,
     })
     return 'error'
@@ -74,8 +98,10 @@ async function analyzeOne(item) {
     status: result.status,
     valence: result.valence,
     arousal: result.arousal,
+    rawValence: result.rawValence ?? result.valence,
+    rawArousal: result.rawArousal ?? result.arousal,
     bpm: result.bpm,
-    version: MOOD_ALGO_VERSION,
+    version: result.version || algoVersion,
     fileMtime,
   })
   if (result.status === 'ok') return 'ok'
@@ -89,7 +115,8 @@ async function runMoodJob() {
     moodState.errorMsg = ''
     emitProgress({ text: '准备分析队列' })
 
-    const pending = listMoodAnalyzePending({ algoVersion: MOOD_ALGO_VERSION })
+    const algoVersion = getActiveMoodAlgoVersion()
+    const pending = listMoodAnalyzePending({ algoVersion })
     moodState.total = pending.length
     moodState.current = 0
     moodState.analyzed = 0
@@ -99,12 +126,16 @@ async function runMoodJob() {
     emitProgress({ text: pending.length ? `分析 0/${pending.length}` : '无需分析' })
 
     if (!pending.length || abortRequested) {
+      if (!abortRequested && getMoodAnalyzer() === 'heuristic') {
+        moodState.phase = 'calibrate'
+        maybeCalibrateHeuristic(true)
+      }
       moodState.phase = abortRequested ? 'idle' : 'done'
       moodState.running = false
       moodState.finishedAt = Date.now()
       emitProgress()
       notifyLibraryMoodComplete({
-        ...getMoodAnalyzeStats({ algoVersion: MOOD_ALGO_VERSION }),
+        ...getMoodAnalyzeStats({ algoVersion }),
         aborted: abortRequested,
       })
       return
@@ -121,7 +152,14 @@ async function runMoodJob() {
       }
       moodState.current = Math.min(i + batch.length, pending.length)
       emitProgress({ text: `分析 ${moodState.current}/${pending.length}` })
+      maybeCalibrateHeuristic(false)
       await new Promise((resolve) => setImmediate(resolve))
+    }
+
+    if (!abortRequested && getMoodAnalyzer() === 'heuristic') {
+      moodState.phase = 'calibrate'
+      emitProgress({ text: '正在按曲库相对分布标定…' })
+      maybeCalibrateHeuristic(true)
     }
 
     moodState.phase = abortRequested ? 'idle' : 'done'
@@ -129,7 +167,7 @@ async function runMoodJob() {
     moodState.finishedAt = Date.now()
     emitProgress()
     notifyLibraryMoodComplete({
-      ...getMoodAnalyzeStats({ algoVersion: MOOD_ALGO_VERSION }),
+      ...getMoodAnalyzeStats({ algoVersion: getActiveMoodAlgoVersion() }),
       analyzedNow: moodState.analyzed,
       skippedNow: moodState.skipped,
       errorNow: moodState.error,
@@ -146,8 +184,9 @@ async function runMoodJob() {
 
 /**
  * 启动本地情绪分析（与曲库扫描互斥）
+ * @param {{ force?: boolean, analyzer?: string }} opts
  */
-export function startMoodAnalyzeJob({ force = false } = {}) {
+export function startMoodAnalyzeJob({ force = false, analyzer } = {}) {
   const scan = getLibraryScanStatus()
   if (scan.running) {
     return {
@@ -161,6 +200,8 @@ export function startMoodAnalyzeJob({ force = false } = {}) {
     if (!force) return getMoodAnalyzeStatus()
     abortRequested = true
   }
+
+  if (analyzer != null) setMoodAnalyzerOverride(analyzer)
 
   abortRequested = false
   moodState = {
@@ -192,4 +233,50 @@ export function stopMoodAnalyzeJob() {
 
 export function waitForMoodAnalyzeJob() {
   return jobPromise || Promise.resolve()
+}
+
+let autoTimer = null
+let autoScheduled = false
+
+/**
+ * 新文件入库后自动补情绪分析（防抖）。
+ * 仅处理未分析 / 失败 / 已改文件；不因算法版本整库重跑。
+ */
+export function scheduleMoodAutoAnalyze({ delayMs = 2500 } = {}) {
+  autoScheduled = true
+  if (autoTimer) clearTimeout(autoTimer)
+  autoTimer = setTimeout(() => {
+    autoTimer = null
+    runMoodAutoAnalyze().catch((e) => {
+      console.warn('[mood-auto]', e?.message || e)
+    })
+  }, Math.max(500, Number(delayMs) || 2500))
+  if (typeof autoTimer.unref === 'function') autoTimer.unref()
+}
+
+async function runMoodAutoAnalyze() {
+  if (!autoScheduled && !listMoodAnalyzePending({}).length) return
+  autoScheduled = false
+
+  if (getLibraryScanStatus().running) {
+    scheduleMoodAutoAnalyze({ delayMs: 5000 })
+    return
+  }
+  if (moodState.running) return
+
+  const pending = listMoodAnalyzePending({})
+  if (!pending.length) return
+
+  let analyzer = getMoodAnalyzer()
+  if (analyzer === 'essentia') {
+    try {
+      const { probeEssentiaAi } = await import('./moodAiEssentia.js')
+      const probe = await probeEssentiaAi()
+      if (!probe.ready) analyzer = 'heuristic'
+    } catch {
+      analyzer = 'heuristic'
+    }
+  }
+
+  startMoodAnalyzeJob({ analyzer })
 }
