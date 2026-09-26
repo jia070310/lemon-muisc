@@ -27,6 +27,11 @@
 
 - 「晴天」与「晴天 (Live)」等版本变体可归为同一组，是否删除由用户决定
 
+### 漫游播放
+
+- 随机抽歌进入漫游歌单，临近播完自动续填、已播曲目自动清理
+- 鸣谢 [@theroad](https://github.com/theroad)（[PR #18](https://github.com/jia070310/lemon-muisc/pull/18)）提交漫游播放相关能力
+
 ### 其它
 
 - 仅 Linux x86_64 / macOS 支持官方 Essentia 预编译包；ARM NAS / Windows 请使用本地启发式

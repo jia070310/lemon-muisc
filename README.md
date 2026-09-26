@@ -20,6 +20,7 @@
 - **情绪地图启发式 v5**：多段中位数、调式弱先验、本库相对分布标定；新文件自动后台补分析
 - **AI（Essentia）一键准备**：自动安装依赖与 MusiCNN / emoMusic 模型；配置目录持久化，保留数据升级可复用
 - **音乐库音质升级**：按库内格式筛选并循序升到目标无损档（含 FLAC→更高档），覆盖原文件
+- **漫游播放**：随机抽歌、自动续填与已播清理（鸣谢 [@theroad](https://github.com/theroad) · [#18](https://github.com/jia070310/lemon-muisc/pull/18)）
 - 查重支持 Live / Remix 等版本变体归组；情绪引擎下拉统一为 AppSelect
 
 ### v1.2.16.11
@@ -137,7 +138,7 @@
 
 ### v1.2.15 亮点
 
-> 鸣谢社区 PR：[@theroad](https://github.com/theroad)（[#18](https://github.com/jia070310/lemon-muisc/pull/18)）提供歌手浏览、文件管理、播放自动匹配等能力（合入时未包含「漫游歌单」）。
+> 鸣谢社区 PR：[@theroad](https://github.com/theroad)（[#18](https://github.com/jia070310/lemon-muisc/pull/18)）提供歌手浏览、文件管理、播放自动匹配、漫游播放等能力。
 
 **情绪地图（本版主打）**
 

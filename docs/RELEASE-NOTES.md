@@ -356,7 +356,7 @@
 
 ## 更新内容
 
-> **鸣谢**：[@theroad](https://github.com/theroad) 在 [PR #18](https://github.com/jia070310/lemon-muisc/pull/18) 中贡献歌手浏览、文件管理、播放自动匹配等能力（合入时未包含「漫游歌单」）。
+> **鸣谢**：[@theroad](https://github.com/theroad) 在 [PR #18](https://github.com/jia070310/lemon-muisc/pull/18) 中贡献歌手浏览、文件管理、播放自动匹配、漫游播放等能力。
 
 ### 情绪地图（主打）
 
@@ -389,7 +389,7 @@
 
 ## 更新内容
 
-> **鸣谢**：[(@theroad)](https://github.com/theroad) 在 [PR #18](https://github.com/jia070310/lemon-muisc/pull/18) 中贡献歌手浏览、文件管理、播放自动匹配等能力（本版合入时未包含「漫游歌单」）。
+> **鸣谢**：[(@theroad)](https://github.com/theroad) 在 [PR #18](https://github.com/jia070310/lemon-muisc/pull/18) 中贡献歌手浏览、文件管理、播放自动匹配、漫游播放等能力。
 
 ### 文件管理
 
