@@ -2,12 +2,15 @@
   <div class="library-page">
     <div class="library-topbar">
       <form class="library-search-form" @submit.prevent="applySearch">
-        <ClearableInput
+        <SearchInput
+          ref="librarySearchRef"
           v-model="keyword"
+          :history-key="SEARCH_HISTORY_KEYS.library"
           variant="pill"
           show-search-icon
           placeholder="搜索歌曲 / 歌手 / 专辑 / 歌单"
           @clear="clearSearch"
+          @select="applySearch"
         />
       </form>
       <button type="button" class="btn-ghost btn-sm" :disabled="libraryScanning" @click="refreshLibrary">
@@ -157,21 +160,12 @@
             size="sm"
           />
           <button
-            v-if="showAlbumMoreBtn"
             type="button"
             class="section-more-btn"
+            title="查看全部专辑"
             @click="openAllAlbums"
           >
-            <span>更多</span>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
-          </button>
-          <button
-            v-else-if="isNarrow && sortedDisplayAlbums.length"
-            type="button"
-            class="section-more-btn"
-            @click="openAllAlbums"
-          >
-            <span>全部</span>
+            <span>所有专辑</span>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
           </button>
         </div>
@@ -252,8 +246,12 @@
             </button>
             <div class="song-meta">
               <div class="song-title" :title="song.name">{{ song.name }}</div>
-              <div class="song-artist" :title="song.singer">{{ song.singer }}</div>
-              <div class="song-tags" :title="formatTrackTags(song)">{{ formatTrackTags(song) }}</div>
+              <TrackMetaLinks
+                class="song-artist"
+                :singer="song.singer"
+                :album="song.album"
+              />
+              <div class="song-tags" :title="formatTrackTags({ ...song, album: '' })">{{ formatTrackTags({ ...song, album: '' }) }}</div>
             </div>
             <MobileRowActions
               :open="actionsOpenKey === song.key"
@@ -325,10 +323,12 @@ import { api } from '../api.js'
 import PlaylistCover from '../components/PlaylistCover.vue'
 import CoverArt from '../components/CoverArt.vue'
 import MobileRowActions from '../components/MobileRowActions.vue'
+import TrackMetaLinks from '../components/TrackMetaLinks.vue'
 import CreatePlaylistModal from '../components/CreatePlaylistModal.vue'
 import PickPlaylistModal from '../components/PickPlaylistModal.vue'
 import AppSelect from '../components/AppSelect.vue'
-import ClearableInput from '../components/ClearableInput.vue'
+import SearchInput from '../components/SearchInput.vue'
+import { SEARCH_HISTORY_KEYS } from '../composables/useSearchHistory.js'
 import { formatTrackTags, formatAlbumTags } from '../utils/format.js'
 import { getTrackFilePath } from '../utils/trackPath.js'
 import { countAutoFillColumns } from '../utils/grid.js'
@@ -342,6 +342,7 @@ import {
   scanLibrary, isFavorite, toggleFavorite,
   librarySongColumns, loadLibrarySongColumns,
   fetchLibraryTracksPage, fetchLibraryArtists, fetchLibraryAlbums, fetchLibraryGenres,
+  libraryBrowseRevision,
   loadPlaylistCardsFromServer,
 } from '../stores/library.js'
 
@@ -350,6 +351,7 @@ const ALBUM_SORT_KEY = 'lemon-library-album-sort'
 const SONG_SORT_KEY = 'lemon-library-song-sort'
 
 const router = useRouter()
+const librarySearchRef = ref(null)
 const keyword = ref('')
 const page = ref(1)
 const pageSize = 20
@@ -455,10 +457,6 @@ const visibleAlbums = computed(() => {
   const limit = isNarrow.value ? albumPreviewLimitMobile : albumPreviewLimit
   return sortedDisplayAlbums.value.slice(0, limit)
 })
-const showAlbumMoreBtn = computed(() => {
-  const limit = isNarrow.value ? albumPreviewLimitMobile : albumPreviewLimit
-  return sortedDisplayAlbums.value.length > limit
-})
 
 const filteredSongs = computed(() => libraryTracks.value)
 const sortedFilteredSongs = computed(() => sortLibrarySongs(filteredSongs.value, songSort.value))
@@ -515,6 +513,12 @@ watch(playlistSort, (value) => {
 watch(albumSort, (value) => {
   try { localStorage.setItem(ALBUM_SORT_KEY, value) } catch {}
   loadBrowsePreviews()
+})
+
+watch(libraryBrowseRevision, () => {
+  loadBrowsePreviews()
+  loadSongPage()
+  loadScanSummary()
 })
 
 watch(songSort, (value) => {
@@ -601,6 +605,7 @@ async function refreshLibrary() {
 }
 
 function applySearch() {
+  librarySearchRef.value?.remember?.()
   const q = keyword.value.trim()
   if (!q) return
   router.push({ path: '/library/search', query: { q } })
@@ -729,6 +734,11 @@ function onAddedToPlaylist({ playlist, duplicate }) {
 }
 
 function openPlaylist(card) {
+  // 漫游播放入口：进入歌单页后自动开播
+  if (card?.id === 'random-start') {
+    router.push({ path: '/library/playlists', query: { id: 'random-start' } })
+    return
+  }
   router.push({ path: '/library/playlists', query: { id: card.id } })
 }
 

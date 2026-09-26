@@ -133,12 +133,16 @@
       <!-- 中间：文件列表 -->
       <section class="file-panel card">
         <div class="file-toolbar">
-          <ClearableInput
+          <SearchInput
+            ref="tagFilterRef"
             v-model="filterText"
+            :history-key="SEARCH_HISTORY_KEYS.tagFilter"
             variant="plain"
             input-class="filter-input"
-            class="filter-input-wrap"
+            input-wrap-class="filter-input-wrap"
             placeholder="按文件名过滤..."
+            @enter="rememberTagFilter"
+            @select="rememberTagFilter"
           />
           <div class="file-toolbar-info">
             <span v-if="loadingMeta" class="meta-progress">
@@ -178,6 +182,10 @@
                 @click="resumeManualTagCheck"
               >继续</button>
               <button class="btn-ghost btn-sm meta-stop" type="button" @click="stopManualTagCheck">停止</button>
+            </span>
+            <span v-else-if="tagCheckApplying" class="meta-progress match-progress" :title="tagCheckProgress.current">
+              批量采用建议
+              {{ tagCheckProgress.done }}/{{ tagCheckProgress.total }}<template v-if="tagCheckProgress.current"> · {{ tagCheckProgress.current }}</template>
             </span>
           </div>
           <div class="file-toolbar-meta">
@@ -241,6 +249,17 @@
             >
               {{ tagChecking ? '检测中...' : '手动检测' }}
             </button>
+            <button
+              v-if="pendingCheckSuggestCount"
+              class="btn-primary btn-sm"
+              :disabled="tagChecking || matching || tagCheckApplying || !pendingCheckSuggestCount"
+              title="把手动检测给出的建议（含封面/歌词）批量写到列表，再点顶部「保存全部修改」落盘"
+              @click="applyBatchCheckSuggestions"
+            >
+              {{ tagCheckApplying
+                ? `采用中 ${tagCheckProgress.done}/${tagCheckProgress.total || pendingCheckSuggestCount}`
+                : `批量采用建议 (${pendingCheckSuggestCount})` }}
+            </button>
             <AppSelect
               v-model="fetchSource"
               :options="sourceOptions"
@@ -249,7 +268,7 @@
             />
           </div>
         </div>
-        <div v-if="(matching && matchProgress.total) || (tagChecking && tagCheckProgress.total)" class="match-progress-bar">
+        <div v-if="(matching && matchProgress.total) || ((tagChecking || tagCheckApplying) && tagCheckProgress.total)" class="match-progress-bar">
           <div
             class="match-progress-fill"
             :style="{ width: (matching ? matchPercent : tagCheckPercent) + '%' }"
@@ -467,12 +486,22 @@
                 <span v-if="tagCheckResult.suggested?.album">专辑建议：{{ tagCheckResult.suggested.album }}</span>
                 <span>将同时更新封面与歌词</span>
               </div>
-              <button
-                type="button"
-                class="btn-primary btn-sm"
-                :disabled="tagCheckApplying"
-                @click="applyAllCheckSuggestions"
-              >{{ tagCheckApplying ? '获取封面/歌词…' : '全部采用建议' }}</button>
+              <div class="tag-check-actions">
+                <button
+                  type="button"
+                  class="btn-primary btn-sm"
+                  :disabled="tagCheckApplying"
+                  @click="applyAllCheckSuggestions"
+                >{{ tagCheckApplying && pendingCheckSuggestCount <= 1 ? '获取封面/歌词…' : '全部采用建议' }}</button>
+                <button
+                  v-if="pendingCheckSuggestCount > 1"
+                  type="button"
+                  class="btn-ghost btn-sm"
+                  :disabled="tagCheckApplying || tagChecking || matching"
+                  title="对已检测出建议的多首文件一次性采用"
+                  @click="applyBatchCheckSuggestions"
+                >批量采用建议 ({{ pendingCheckSuggestCount }})</button>
+              </div>
             </template>
           </div>
 
@@ -560,7 +589,11 @@
               <div v-else class="cover-placeholder">无封面</div>
             </div>
             <input type="file" accept="image/*" @change="onCoverUpload" />
-            <input v-model="editForm.picUrl" placeholder="或输入封面 URL" @input="markModified" />
+            <input
+              v-model="editForm.picUrl"
+              placeholder="或输入封面 URL"
+              @input="onCoverUrlInput"
+            />
           </label>
 
           <label class="field-block">歌词
@@ -596,19 +629,32 @@
               </label>
             </div>
           </div>
-          <button class="btn-primary" @click="saveCurrent" :disabled="saving" title="只写入当前正在编辑的这一首">
-            {{ saving ? '保存中...' : '保存当前到文件' }}
-          </button>
-          <button
-            class="btn-ghost"
-            @click="applyToFiles"
-            :disabled="!editForm"
-            :title="isBatchMode
-              ? `把勾选字段复制到选中的 ${selectedFiles.length} 个文件（仅列表，需再点顶部「保存全部修改」写盘）`
-              : '仅更新列表显示，不会写入磁盘'"
-          >
-            应用到{{ isBatchMode ? `选中(${selectedFiles.length})` : '当前' }}
-          </button>
+          <label class="rename-on-save">
+            <input v-model="renameOnSave" type="checkbox" />
+            <span>保存时同步改文件名为「歌名 - 歌手」</span>
+          </label>
+          <div class="edit-actions-btns">
+            <button
+              class="btn-primary"
+              type="button"
+              @click="saveCurrent"
+              :disabled="saving"
+              title="只写入当前正在编辑的这一首"
+            >
+              {{ saving ? '保存中…' : '保存当前文件' }}
+            </button>
+            <button
+              class="btn-ghost"
+              type="button"
+              @click="applyToFiles"
+              :disabled="!editForm"
+              :title="isBatchMode
+                ? `把勾选字段复制到选中的 ${selectedFiles.length} 个文件（仅列表，需再点顶部「保存全部修改」写盘）`
+                : '仅更新列表显示，不会写入磁盘'"
+            >
+              应用到{{ isBatchMode ? `选中(${selectedFiles.length})` : '当前' }}
+            </button>
+          </div>
         </div>
       </aside>
     </div>
@@ -751,16 +797,20 @@ import {
   resumeTagMatch,
   stopTagMatch,
   syncFilesFromMatchPatches,
+  clearTagMatchPatchesForPaths,
+  relocateTagMatchPatch,
   saveTagEditorSession,
   tagEditorSession,
   clearTagMatchResult,
 } from '../stores/tagMatch.js'
 import AppSelect from '../components/AppSelect.vue'
 import ClearableInput from '../components/ClearableInput.vue'
+import SearchInput from '../components/SearchInput.vue'
+import { SEARCH_HISTORY_KEYS } from '../composables/useSearchHistory.js'
 import CoverArt from '../components/CoverArt.vue'
 import PickPlaylistModal from '../components/PickPlaylistModal.vue'
 import { collectDefaultExpandedPaths } from '../utils/dirTreeExpand.js'
-import { resolveSearchArtistTitle, parseFilename } from '../utils/filenameParse.js'
+import { resolveSearchArtistTitle, parseFilename, isPlaceholderName } from '../utils/filenameParse.js'
 import { withStreamAuth } from '../utils/streamAuth.js'
 
 defineOptions({ name: 'Tag' })
@@ -790,10 +840,17 @@ const files = ref([])
 const browseMode = ref('dir')
 const activeArtist = ref('')
 const filterText = ref('')
+const tagFilterRef = ref(null)
+
+function rememberTagFilter() {
+  tagFilterRef.value?.remember?.()
+}
 const missingFilter = ref('all')
 const selectAll = ref(false)
 const saving = ref(false)
 const renamingFile = ref(false)
+/** 保存标签时按「歌名 - 歌手」同步改文件名（默认开，便于清掉 Unknown） */
+const renameOnSave = ref(true)
 const fetchSource = ref('tx')
 const fetchLoading = ref(false)
 const fetchResults = ref([])
@@ -1091,6 +1148,22 @@ const missingMatchCount = computed(() => {
 const selectedFiles = computed(() => files.value.filter(f => f._selected))
 const isBatchMode = computed(() => selectedFiles.value.length > 1)
 const hasChanges = computed(() => files.value.some(f => f._modified))
+
+/** 手动检测后、尚未采用建议的文件（优先当前勾选） */
+function fileHasAdoptAbleCheck(file) {
+  const result = file?._tagCheckResult
+  if (!result || result.ok) return false
+  if (!result.match) return false
+  const suggested = result.suggested || {}
+  return Boolean(suggested.title || suggested.artist || suggested.album)
+}
+
+const pendingCheckSuggestFiles = computed(() => {
+  const selected = selectedFiles.value.filter(fileHasAdoptAbleCheck)
+  if (selected.length) return selected
+  return files.value.filter(fileHasAdoptAbleCheck)
+})
+const pendingCheckSuggestCount = computed(() => pendingCheckSuggestFiles.value.length)
 const batchFieldOptions = [
   { key: 'title', label: '标题' },
   { key: 'artist', label: '歌手' },
@@ -1613,6 +1686,9 @@ function applyRenameToLocalFile(from, to, fileName, parsed) {
     patch(editingFile.value)
   }
   try {
+    relocateTagMatchPatch(from, to)
+  } catch {}
+  try {
     const next = [...libraryTracks.value]
     const idx = next.findIndex((t) => t.localPath === from || t.filePath === from)
     if (idx >= 0) {
@@ -1732,6 +1808,11 @@ function markModified() {
   if (editingFile.value) editingFile.value._modified = true
 }
 
+function onCoverUrlInput() {
+  markModified()
+  if (editingFile.value) editingFile.value._coverDirty = true
+}
+
 function normCmpText(value) {
   return String(value || '')
     .toLowerCase()
@@ -1781,101 +1862,210 @@ function applyCheckSuggestion(field) {
   }
 }
 
+async function applyCheckSuggestionsToFile(file, { syncForm = false } = {}) {
+  const result = file?._tagCheckResult
+  const match = result?.match
+  const suggested = result?.suggested || {}
+  if (!file || !match) return { ok: false, reason: 'no-match' }
+
+  const res = await api.tag.matchApply(match, fetchSource.value, [
+    'title', 'artist', 'albumArtist', 'album', 'year', 'genre', 'comment', 'cover', 'lyric',
+  ])
+  const meta = res.data || {}
+
+  const next = {
+    title: meta.title || suggested.title || file.title || '',
+    artist: meta.artist || suggested.artist || file.artist || '',
+    albumArtist: meta.albumArtist || file.albumArtist || '',
+    album: meta.album || suggested.album || file.album || '',
+    year: meta.year != null && meta.year !== '' ? String(meta.year) : (file.year ? String(file.year) : ''),
+    genre: meta.genre || file.genre || '',
+    comment: meta.comment || file.comment || '',
+    lyric: typeof meta.lyric === 'string' ? meta.lyric : (file.lyric || ''),
+    pictureBase64: meta.pic || file.pictureBase64 || '',
+    picUrl: meta.pic ? '' : (meta.picUrl || match.picUrl || file.picUrl || ''),
+  }
+
+  file.title = next.title
+  file.artist = next.artist
+  file.albumArtist = next.albumArtist
+  file.album = next.album
+  if (next.year) file.year = next.year
+  if (next.genre) file.genre = next.genre
+  if (next.comment) file.comment = next.comment
+  if (next.lyric) {
+    file.lyric = next.lyric
+    file.hasLyrics = true
+  }
+  if (next.pictureBase64) {
+    file.pictureBase64 = next.pictureBase64
+    file.picUrl = ''
+    file.hasPicture = true
+    file._coverDirty = true
+  } else if (next.picUrl) {
+    file.picUrl = next.picUrl
+    file.hasPicture = true
+    file._coverDirty = true
+  }
+
+  const cleared = {
+    ...result,
+    ok: true,
+    reason: '',
+    mismatches: { title: false, artist: false, album: false },
+  }
+  file._checkMismatch = { title: false, artist: false, album: false }
+  file._checkSuggested = { ...(suggested || {}) }
+  file._tagCheckResult = cleared
+  file._modified = true
+
+  if (syncForm && editForm.value && editingFile.value?.filePath === file.filePath) {
+    editForm.value.title = next.title
+    editForm.value.artist = next.artist
+    editForm.value.albumArtist = next.albumArtist
+    editForm.value.album = next.album
+    if (next.year) editForm.value.year = next.year
+    if (next.genre) editForm.value.genre = next.genre
+    if (next.comment) editForm.value.comment = next.comment
+    if (next.lyric) editForm.value.lyric = next.lyric
+    if (next.pictureBase64) {
+      editForm.value.pictureBase64 = next.pictureBase64
+      editForm.value.picUrl = ''
+    } else if (next.picUrl) {
+      editForm.value.picUrl = next.picUrl
+    }
+    tagCheckResult.value = cleared
+  }
+
+  return { ok: true, hasCover: Boolean(next.pictureBase64 || next.picUrl), hasLyric: Boolean(next.lyric) }
+}
+
 async function applyAllCheckSuggestions() {
   if (!editForm.value || !tagCheckResult.value?.suggested) return
-  const match = tagCheckResult.value.match
-  if (!match) {
+  if (!editingFile.value) {
+    showToast('请先选择文件', 'info')
+    return
+  }
+  if (!tagCheckResult.value.match) {
     showToast('缺少匹配结果，请重新检测', 'info')
     return
   }
 
+  // 把当前面板结果写回文件对象后再统一采用
+  editingFile.value._tagCheckResult = tagCheckResult.value
   tagCheckApplying.value = true
+  tagCheckProgress.value = { done: 0, total: 1, current: editingFile.value.fileName || '' }
   try {
-    const res = await api.tag.matchApply(match, fetchSource.value, [
-      'title', 'artist', 'albumArtist', 'album', 'year', 'genre', 'comment', 'cover', 'lyric',
-    ])
-    const meta = res.data || {}
-
-    if (meta.title) editForm.value.title = meta.title
-    else if (tagCheckResult.value.suggested.title) editForm.value.title = tagCheckResult.value.suggested.title
-    if (meta.artist) editForm.value.artist = meta.artist
-    else if (tagCheckResult.value.suggested.artist) editForm.value.artist = tagCheckResult.value.suggested.artist
-    if (meta.albumArtist) editForm.value.albumArtist = meta.albumArtist
-    if (meta.album) editForm.value.album = meta.album
-    else if (tagCheckResult.value.suggested.album) editForm.value.album = tagCheckResult.value.suggested.album
-    if (meta.year) editForm.value.year = String(meta.year)
-    if (meta.genre) editForm.value.genre = meta.genre
-    if (meta.comment) editForm.value.comment = meta.comment
-
-    if (meta.pic) {
-      editForm.value.pictureBase64 = meta.pic
-      editForm.value.picUrl = ''
-    } else if (meta.picUrl) {
-      editForm.value.picUrl = meta.picUrl
-    } else if (match.picUrl) {
-      editForm.value.picUrl = match.picUrl
+    const out = await applyCheckSuggestionsToFile(editingFile.value, { syncForm: true })
+    tagCheckProgress.value = { done: 1, total: 1, current: editingFile.value.fileName || '' }
+    if (!out.ok) {
+      showToast('采用建议失败', 'error')
+      return
     }
-
-    if (typeof meta.lyric === 'string') {
-      editForm.value.lyric = meta.lyric
-    }
-
-    if (tagCheckResult.value.mismatches) {
-      tagCheckResult.value.mismatches.title = false
-      tagCheckResult.value.mismatches.artist = false
-      tagCheckResult.value.mismatches.album = false
-    }
-    markModified()
-    tagCheckResult.value = { ...tagCheckResult.value, ok: true, reason: '' }
-
-    if (editingFile.value) {
-      const f = editingFile.value
-      f._checkMismatch = { title: false, artist: false, album: false }
-      f._tagCheckResult = tagCheckResult.value
-      f.title = editForm.value.title
-      f.artist = editForm.value.artist
-      f.albumArtist = editForm.value.albumArtist
-      f.album = editForm.value.album
-      if (editForm.value.pictureBase64 || editForm.value.picUrl) {
-        f.hasPicture = true
-        f._coverDirty = true
-        if (editForm.value.pictureBase64) f.pictureBase64 = editForm.value.pictureBase64
-        if (editForm.value.picUrl) f.picUrl = editForm.value.picUrl
-      }
-      if (editForm.value.lyric) {
-        f.hasLyrics = true
-        f.lyric = editForm.value.lyric
-      }
-    }
-
     const parts = ['标签']
-    if (editForm.value.pictureBase64 || editForm.value.picUrl) parts.push('封面')
-    if (editForm.value.lyric) parts.push('歌词')
+    if (out.hasCover) parts.push('封面')
+    if (out.hasLyric) parts.push('歌词')
     showToast(`已采用${parts.join('、')}，记得保存到文件`, 'success')
   } catch (e) {
     showToast(e.message || '获取封面/歌词失败', 'error')
   } finally {
     tagCheckApplying.value = false
+    tagCheckProgress.value = { done: 0, total: 0, current: '' }
+  }
+}
+
+async function applyBatchCheckSuggestions() {
+  const targets = pendingCheckSuggestFiles.value.slice()
+  if (!targets.length) {
+    showToast('没有可采用的检测建议，请先手动检测', 'info')
+    return
+  }
+  if (tagChecking.value) {
+    showToast('请先等待或停止手动检测', 'info')
+    return
+  }
+  if (matching.value) {
+    showToast('请先等待或停止匹配任务', 'info')
+    return
+  }
+  if (tagCheckApplying.value) {
+    showToast('正在采用建议', 'info')
+    return
+  }
+
+  tagCheckApplying.value = true
+  tagCheckProgress.value = { done: 0, total: targets.length, current: '' }
+  let okCount = 0
+  let failCount = 0
+  try {
+    for (let i = 0; i < targets.length; i++) {
+      const f = targets[i]
+      tagCheckProgress.value = {
+        done: i,
+        total: targets.length,
+        current: f.fileName || '',
+      }
+      try {
+        const out = await applyCheckSuggestionsToFile(f, {
+          syncForm: editingFile.value?.filePath === f.filePath,
+        })
+        if (out.ok) okCount += 1
+        else failCount += 1
+      } catch {
+        failCount += 1
+      }
+      tagCheckProgress.value = {
+        done: i + 1,
+        total: targets.length,
+        current: f.fileName || '',
+      }
+    }
+    if (okCount && !failCount) {
+      showToast(`已批量采用 ${okCount} 首建议，记得点「保存全部修改」`, 'success')
+    } else if (okCount) {
+      showToast(`已采用 ${okCount} 首，失败 ${failCount} 首，记得保存`, 'info')
+    } else {
+      showToast(`批量采用失败（${failCount} 首）`, 'error')
+    }
+  } finally {
+    tagCheckApplying.value = false
+    tagCheckProgress.value = { done: 0, total: 0, current: '' }
   }
 }
 
 /**
- * 按文件名搜索（含歌手-歌名 / 歌名-歌手），与内嵌标签对比。
+ * 按文件名搜索（忽略 Unknown 占位），与内嵌标签对比。
  */
 async function inspectFileTagAccuracy(file, formSnapshot = null) {
-  const parsed = parseFilename(file.fileName || '')
-  if (!parsed.title && !parsed.artist) {
+  const current = formSnapshot || {
+    title: file.title || '',
+    artist: file.artist || '',
+    album: file.album || '',
+  }
+  // 手动检测以文件名为准；文件名里的 Unknown 不当歌手，也不用错误内嵌歌手去搜
+  const resolved = resolveSearchArtistTitle({
+    artist: '',
+    title: '',
+    fileName: file.fileName || '',
+    parsedArtist: file.parsedArtist || '',
+    parsedTitle: file.parsedTitle || '',
+  })
+  const parsed = resolved.parsed || parseFilename(file.fileName || '')
+  const searchTitle = resolved.title || ''
+  const searchArtist = resolved.artist || ''
+
+  if (!searchTitle && !searchArtist) {
     return { ok: false, reason: 'parse', mismatches: {}, suggested: {}, parsed }
   }
 
   const res = await api.tag.match({
-    artist: parsed.artist || '',
-    title: parsed.title || '',
-    album: String(file.album || formSnapshot?.album || '').trim(),
+    artist: searchArtist,
+    title: searchTitle,
+    album: '',
   }, fetchSource.value)
   const matches = res.data || []
   if (!matches.length) {
-    return { ok: false, reason: 'no-match', mismatches: {}, suggested: {}, parsed }
+    return { ok: false, reason: 'no-match', mismatches: {}, suggested: {}, parsed, searchArtist, searchTitle }
   }
 
   const best = matches[0]
@@ -1885,25 +2075,30 @@ async function inspectFileTagAccuracy(file, formSnapshot = null) {
     album: String(best.album || best.albumName || '').trim(),
   }
 
-  const current = formSnapshot || {
-    title: file.title || '',
-    artist: file.artist || '',
-    album: file.album || '',
-  }
-
   const mismatches = {
     title: !fieldLikelyMatch(current.title, suggested.title),
     artist: !fieldLikelyMatch(current.artist, suggested.artist),
     album: suggested.album ? !fieldLikelyMatch(current.album, suggested.album) : false,
   }
 
-  // 内嵌标题与文件名两侧都不像，且搜索结果贴近文件名 → 强化标题错误
-  const titleFitsFilename = fieldLikelyMatch(current.title, parsed.title)
+  // 内嵌标题是 Unknown / 与文件名歌名对不上 → 标错
+  if (isPlaceholderName(current.title) && suggested.title) {
+    mismatches.title = true
+  }
+  if (isPlaceholderName(current.artist) && suggested.artist) {
+    mismatches.artist = true
+  }
+
+  const titleFitsFilename = fieldLikelyMatch(current.title, searchTitle)
     || (parsed.swapped && fieldLikelyMatch(current.title, parsed.swapped.title))
-  const suggestFitsFilename = fieldLikelyMatch(suggested.title, parsed.title)
+  const suggestFitsFilename = fieldLikelyMatch(suggested.title, searchTitle)
     || (parsed.swapped && fieldLikelyMatch(suggested.title, parsed.swapped.title))
   if (!titleFitsFilename && suggestFitsFilename && suggested.title) {
     mismatches.title = true
+  }
+  // 文件名歌名清晰，但内嵌歌手和搜索结果差很远
+  if (searchTitle && suggested.artist && !fieldLikelyMatch(current.artist, suggested.artist)) {
+    mismatches.artist = true
   }
 
   const hasMismatch = mismatches.title || mismatches.artist || mismatches.album
@@ -1914,6 +2109,8 @@ async function inspectFileTagAccuracy(file, formSnapshot = null) {
     suggested,
     match: best,
     parsed,
+    searchArtist,
+    searchTitle,
   }
 }
 
@@ -2058,21 +2255,42 @@ function buildMetaFromForm() {
 
 function applyMetaToFile(f, meta, fieldSet = null) {
   const allow = (key) => !fieldSet || fieldSet.has(key)
-  if (allow('title') && meta.title != null) f.title = meta.title
-  if (allow('artist') && meta.artist != null) f.artist = meta.artist
-  if (allow('albumArtist') && meta.albumArtist != null) f.albumArtist = meta.albumArtist
-  if (allow('album') && meta.album != null) f.album = meta.album
-  if (allow('year') && meta.year != null) f.year = meta.year
-  if (allow('genre') && meta.genre != null) f.genre = meta.genre
-  if (allow('comment') && meta.comment != null) f.comment = meta.comment
-  if (allow('lyric') && meta.lyric != null) f.lyric = meta.lyric
-  if (allow('cover')) {
-    if (meta.pic) f.pictureBase64 = meta.pic
-    if (meta.picUrl) f.picUrl = meta.picUrl
+  let changed = false
+  const setIf = (key, value) => {
+    if (!allow(key) || value == null) return
+    if (f[key] === value) return
+    f[key] = value
+    changed = true
   }
-  f.hasPicture = Boolean(f.pictureBase64 || f.picUrl || f.hasPicture)
-  f.hasLyrics = Boolean(f.lyric)
-  f._modified = true
+  setIf('title', meta.title)
+  setIf('artist', meta.artist)
+  setIf('albumArtist', meta.albumArtist)
+  setIf('album', meta.album)
+  setIf('year', meta.year)
+  setIf('genre', meta.genre)
+  setIf('comment', meta.comment)
+  setIf('lyric', meta.lyric)
+  if (allow('cover')) {
+    if (meta.pic && f.pictureBase64 !== meta.pic) {
+      f.pictureBase64 = meta.pic
+      changed = true
+    }
+    if (meta.picUrl && f.picUrl !== meta.picUrl) {
+      f.picUrl = meta.picUrl
+      changed = true
+    }
+  }
+  const nextHasPicture = Boolean(f.pictureBase64 || f.picUrl || f.hasPicture)
+  const nextHasLyrics = Boolean(f.lyric)
+  if (f.hasPicture !== nextHasPicture) {
+    f.hasPicture = nextHasPicture
+    changed = true
+  }
+  if (f.hasLyrics !== nextHasLyrics) {
+    f.hasLyrics = nextHasLyrics
+    changed = true
+  }
+  if (changed) f._modified = true
 }
 
 /** 仅把表单同步到当前正在编辑的那一首，绝不波及其他选中项 */
@@ -2080,7 +2298,8 @@ function syncFormToEditingFile() {
   if (!editForm.value || !editingFile.value) return
   const meta = buildMetaFromForm()
   applyMetaToFile(editingFile.value, meta)
-  if (editingFile.value._coverDirty || meta.pic || meta.picUrl) {
+  // 用户换了 base64 封面，或此前已标脏；勿因展示用 picUrl 每次同步都误标封面脏
+  if (!editingFile.value._coverDirty && meta.pic) {
     editingFile.value._coverDirty = true
   }
 }
@@ -2128,6 +2347,47 @@ async function applyToFiles({ silent = false } = {}) {
   if (!silent) showToast('已更新当前文件的列表显示，尚未写入磁盘', 'info')
 }
 
+function sanitizeFileBaseName(name) {
+  return String(name || '')
+    .replace(/[\\/:*?"<>|]/g, '_')
+    .replace(/\s+/g, ' ')
+    .replace(/[. ]+$/g, '')
+    .trim()
+}
+
+/** 按「歌名 - 歌手.ext」生成目标文件名（与下载默认模板一致） */
+function buildTaggedFileName(file, meta = {}) {
+  const current = String(file?.fileName || '')
+  const extMatch = current.match(/(\.[^.\\/]+)$/)
+  const ext = extMatch ? extMatch[1] : ''
+  const title = sanitizeFileBaseName(meta.title || file?.title || '') || 'Unknown'
+  const artistRaw = meta.artist || file?.artist || ''
+  const artist = sanitizeFileBaseName(isPlaceholderName(artistRaw) ? '' : artistRaw) || 'Unknown'
+  return `${title} - ${artist}${ext}`
+}
+
+/** 写标签成功后按需改名；失败不阻断保存结果 */
+async function maybeRenameAfterSave(file) {
+  if (!renameOnSave.value || !file?.filePath) return { renamed: false }
+  const nextName = buildTaggedFileName(file, {
+    title: file.title,
+    artist: file.artist,
+  })
+  if (!nextName || nextName === file.fileName) return { renamed: false }
+  try {
+    const res = await api.library.renameFile(file.filePath, nextName)
+    const data = res.data || {}
+    const to = data.filePath || ''
+    const fileName = data.fileName || nextName
+    if (!to) return { renamed: false, error: '改名未返回路径' }
+    const parsed = parseFilename(fileName)
+    applyRenameToLocalFile(file.filePath, to, fileName, parsed)
+    return { renamed: true, fileName }
+  } catch (e) {
+    return { renamed: false, error: e?.message || '改名失败' }
+  }
+}
+
 async function saveCurrent() {
   // 右侧主按钮：永远只保存「当前编辑」这一首，避免全选时误伤
   if (editForm.value) syncFormToEditingFile()
@@ -2167,8 +2427,22 @@ async function saveCurrent() {
       target._modified = false
       target._coverDirty = false
       target._coverRev = Date.now()
+      clearTagMatchPatchesForPaths([target.filePath])
+      const renameResult = await maybeRenameAfterSave(target)
       await refreshPlayerAfterSave([target])
-      showToast('已保存当前文件', 'success')
+      saveTagEditorSession({
+        mode: browseMode.value,
+        activeDir: activeDir.value,
+        activeArtist: activeArtist.value,
+        files: files.value,
+      })
+      if (renameResult.renamed) {
+        showToast(`已保存，并改名为 ${renameResult.fileName}`, 'success')
+      } else if (renameResult.error) {
+        showToast(`已保存标签，但改名失败：${renameResult.error}`, 'info')
+      } else {
+        showToast('已保存当前文件', 'success')
+      }
     } else {
       showToast(row?.error || '保存失败', 'error')
     }
@@ -2226,17 +2500,37 @@ async function saveAll() {
     const rows = res.data || []
     const ok = rows.filter(r => r.ok).length
     const fail = rows.filter(r => !r.ok)
+    const savedFiles = []
     modified.forEach(f => {
       if (rows.some(r => r.filePath === f.filePath && r.ok)) {
         f._modified = false
         f._coverDirty = false
         f._coverRev = Date.now()
+        savedFiles.push(f)
       }
     })
-    await refreshPlayerAfterSave(modified.filter(f => !f._modified))
+    clearTagMatchPatchesForPaths(savedFiles.map(f => f.filePath))
+    let renamed = 0
+    let renameFail = 0
+    if (renameOnSave.value) {
+      for (const f of savedFiles) {
+        const r = await maybeRenameAfterSave(f)
+        if (r.renamed) renamed += 1
+        else if (r.error) renameFail += 1
+      }
+    }
+    await refreshPlayerAfterSave(savedFiles)
+    saveTagEditorSession({
+      mode: browseMode.value,
+      activeDir: activeDir.value,
+      activeArtist: activeArtist.value,
+      files: files.value,
+    })
     if (fail.length) {
       const tip = fail[0]?.error || '写入失败'
       showToast(`已保存 ${ok}/${modified.length}，失败 ${fail.length}：${tip}`, ok ? 'info' : 'error')
+    } else if (renamed) {
+      showToast(`已保存 ${ok} 个文件，并同步改名 ${renamed} 个` + (renameFail ? `（${renameFail} 个改名失败）` : ''), 'success')
     } else {
       showToast(`已保存 ${ok}/${modified.length} 个文件`, 'success')
     }
@@ -3229,8 +3523,11 @@ tr.playing .play-btn,
   gap: 8px;
   flex-wrap: wrap;
 }
-.split-btn { display: flex; align-items: stretch; gap: 0; }
-.split-btn .btn-primary { border-radius: var(--radius) 0 0 var(--radius); }
+.split-btn { display: flex; align-items: stretch; gap: 0; min-width: 0; }
+.split-btn .btn-primary {
+  border-radius: var(--radius) 0 0 var(--radius);
+  white-space: nowrap;
+}
 .split-btn .app-select { flex-shrink: 0; }
 
 .tag-check-banner {
@@ -3260,6 +3557,13 @@ tr.playing .play-btn,
   flex-direction: column;
   gap: 2px;
   opacity: 0.95;
+}
+.tag-check-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
 }
 .field-label-row {
   display: flex;
@@ -3461,11 +3765,29 @@ tr.playing .play-btn,
 
 .edit-actions {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  flex-direction: column;
+  gap: 10px;
   margin-top: 8px;
   flex-shrink: 0;
-  align-items: center;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-light);
+}
+.edit-actions-btns {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  width: 100%;
+}
+.edit-actions-btns .btn-primary,
+.edit-actions-btns .btn-ghost {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 40px;
+  padding: 10px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  line-height: 1.25;
 }
 .batch-field-picker {
   width: 100%;
@@ -3495,6 +3817,26 @@ tr.playing .play-btn,
 }
 .batch-field-item input {
   accent-color: var(--accent);
+}
+.rename-on-save {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 0;
+  cursor: pointer;
+  user-select: none;
+  line-height: 1.45;
+}
+.rename-on-save input {
+  accent-color: var(--accent);
+  margin: 2px 0 0;
+  flex-shrink: 0;
+}
+.rename-on-save span {
+  min-width: 0;
 }
 
 .detail-loading {
@@ -3682,11 +4024,62 @@ tr.playing .play-btn,
     flex-direction: column;
     align-items: stretch;
   }
-  .edit-actions {
-    flex-wrap: wrap;
+
+  .panel-title {
+    align-items: flex-start;
+    gap: 10px;
   }
-  .edit-actions button {
-    flex: 1;
+  .panel-title-actions {
+    gap: 6px;
+  }
+  .panel-title-actions .play-inline {
+    min-height: 32px;
+    padding: 6px 10px;
+    border-radius: 8px;
+    font-size: 12px;
+  }
+
+  .meta-fetch-toolbar {
+    gap: 8px;
+  }
+  .meta-fetch-toolbar .split-btn {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .meta-fetch-toolbar .split-btn .btn-primary {
+    flex: 1 1 auto;
+    min-width: 0;
+    justify-content: center;
+  }
+  .meta-fetch-toolbar > .btn-ghost {
+    flex: 0 0 auto;
+    min-height: 32px;
+    padding: 6px 12px;
+    border-radius: 8px;
+    white-space: nowrap;
+  }
+  .field-toolbar .split-btn {
+    width: 100%;
+  }
+  .field-toolbar .split-btn .btn-primary {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+
+  .edit-actions {
+    gap: 12px;
+    padding: 12px 0 calc(4px + env(safe-area-inset-bottom, 0px));
+  }
+  .edit-actions-btns {
+    gap: 10px;
+  }
+  .edit-actions-btns .btn-primary,
+  .edit-actions-btns .btn-ghost {
+    min-height: 44px;
+    padding: 12px 14px;
+    border-radius: 10px;
+    font-size: 14px;
+    letter-spacing: 0.02em;
   }
   .toast {
     left: 12px;

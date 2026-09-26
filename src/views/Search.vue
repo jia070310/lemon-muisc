@@ -9,13 +9,16 @@
 
     <div class="search-header card">
       <form class="search-row" @submit.prevent="doSearch">
-        <ClearableInput
+        <SearchInput
+          ref="searchInputRef"
           v-model="searchState.keyword"
+          :history-key="SEARCH_HISTORY_KEYS.online"
           variant="bar"
           show-search-icon
-          class="search-bar"
+          input-wrap-class="search-bar"
           :placeholder="searchPlaceholder"
           enterkeyhint="search"
+          @select="doSearch"
         />
         <button type="submit" class="btn-primary search-btn" :disabled="isSearching">
           {{ isSearching ? '搜索中...' : '搜索' }}
@@ -304,7 +307,8 @@ import { useRouter } from 'vue-router'
 import BatchQualityDialog from '../components/BatchQualityDialog.vue'
 import ConfirmModal from '../components/ConfirmModal.vue'
 import CoverArt from '../components/CoverArt.vue'
-import ClearableInput from '../components/ClearableInput.vue'
+import SearchInput from '../components/SearchInput.vue'
+import { SEARCH_HISTORY_KEYS } from '../composables/useSearchHistory.js'
 import TrackResultRow from '../components/TrackResultRow.vue'
 import { useBatchDownload, formatBatchDownloadToast } from '../composables/useBatchDownload.js'
 import { useTrackListView } from '../composables/useTrackListView.js'
@@ -323,6 +327,7 @@ import { useQualityMenuPosition } from '../utils/qualityMenu.js'
 import { playlistPickTarget, addToPickingPlaylist, importPlaylistFromLoaded } from '../stores/library.js'
 
 const router = useRouter()
+const searchInputRef = ref(null)
 const MAX_PLAYLIST_QUEUE = 100
 const toast = ref(null)
 const importingPlaylist = ref(false)
@@ -641,6 +646,7 @@ function isAbortedError(e) {
 }
 
 async function doSearch() {
+  searchInputRef.value?.remember?.()
   if (!searchState.keyword.trim() || !searchState.activeSource) return
   if (searchState.searchMode === 'album') {
     searchState.viewMode = 'list'

@@ -13,11 +13,16 @@
       </div>
 
       <div v-if="tab === 'library'" class="panel">
-        <ClearableInput
+        <SearchInput
+          ref="pickFilterRef"
           v-model="keyword"
+          :history-key="SEARCH_HISTORY_KEYS.playlistPick"
           variant="plain"
           class="search-input-wrap"
+          input-wrap-class="search-input-wrap"
           placeholder="筛选歌曲 / 歌手 / 专辑"
+          @enter="rememberPickFilter"
+          @select="rememberPickFilter"
         />
         <div class="list-toolbar">
           <label class="select-all">
@@ -64,7 +69,8 @@
 import { ref, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import CoverArt from './CoverArt.vue'
-import ClearableInput from './ClearableInput.vue'
+import SearchInput from './SearchInput.vue'
+import { SEARCH_HISTORY_KEYS } from '../composables/useSearchHistory.js'
 import { libraryTracks, addTracksToPlaylist, startPlaylistPick } from '../stores/library.js'
 import { formatTrackTags } from '../utils/format.js'
 
@@ -79,9 +85,14 @@ const emit = defineEmits(['close', 'added'])
 const router = useRouter()
 const tab = ref('library')
 const keyword = ref('')
+const pickFilterRef = ref(null)
 const page = ref(1)
 const pageSize = 20
 const selectedKeys = ref([])
+
+function rememberPickFilter() {
+  pickFilterRef.value?.remember?.()
+}
 
 const existingSet = computed(() => new Set(props.existingKeys || []))
 

@@ -90,8 +90,12 @@
               </button>
               <div class="track-meta">
                 <div class="track-name">{{ song.name }}</div>
-                <div class="track-artist">{{ song.singer }}</div>
-                <div class="track-tags">{{ formatTrackTags(song) }}</div>
+                <TrackMetaLinks
+                  class="track-artist"
+                  :singer="song.singer"
+                  :album="song.album"
+                />
+                <div class="track-tags">{{ formatTrackTags({ ...song, album: '' }) }}</div>
               </div>
               <MobileRowActions
                 :open="actionsOpenKey === song.key"
@@ -145,6 +149,7 @@ import { formatTrackTags } from '../utils/format.js'
 import PickPlaylistModal from '../components/PickPlaylistModal.vue'
 import CoverArt from '../components/CoverArt.vue'
 import MobileRowActions from '../components/MobileRowActions.vue'
+import TrackMetaLinks from '../components/TrackMetaLinks.vue'
 import { playItem, addToQueue, isInQueue, isPlayingItem, isPaused } from '../stores/player.js'
 import {
   libraryScanned,

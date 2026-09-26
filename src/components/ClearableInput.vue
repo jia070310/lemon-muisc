@@ -28,6 +28,8 @@
       :class="inputClass"
       @input="onInput"
       @keydown.enter="$emit('enter', $event)"
+      @focus="$emit('focus', $event)"
+      @blur="$emit('blur', $event)"
     />
     <button
       v-if="showClear"
@@ -62,7 +64,7 @@ const props = defineProps({
   inputClass: { type: String, default: '' },
 })
 
-const emit = defineEmits(['update:modelValue', 'enter', 'clear'])
+const emit = defineEmits(['update:modelValue', 'enter', 'clear', 'focus', 'blur'])
 
 const inputRef = ref(null)
 const showClear = computed(() => Boolean(props.modelValue?.length))

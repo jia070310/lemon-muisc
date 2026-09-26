@@ -68,13 +68,11 @@
               </button>
               <div class="track-meta">
                 <div class="track-name">{{ song.name }}</div>
-                <div class="track-artist">
-                  <span>{{ song.singer }}</span>
-                  <template v-if="song.album && song.album !== '未知专辑'">
-                    <span class="track-album-sep">·</span>
-                    <span class="track-album">{{ song.album }}</span>
-                  </template>
-                </div>
+                <TrackMetaLinks
+                  class="track-artist"
+                  :singer="song.singer"
+                  :album="song.album"
+                />
                 <div class="track-path" :title="trackPath(song)">{{ trackPath(song) }}</div>
               </div>
               <MobileRowActions
@@ -128,6 +126,7 @@ import { api } from '../api.js'
 import PickPlaylistModal from '../components/PickPlaylistModal.vue'
 import CoverArt from '../components/CoverArt.vue'
 import MobileRowActions from '../components/MobileRowActions.vue'
+import TrackMetaLinks from '../components/TrackMetaLinks.vue'
 import { playItem, addToQueue, isInQueue, isPlayingItem, isPaused } from '../stores/player.js'
 import {
   libraryScanned,
@@ -569,12 +568,7 @@ function showToast(text, type = 'info') {
   margin-top: 2px;
   font-size: 13px;
   color: var(--text-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
-.track-album-sep { margin: 0 5px; opacity: 0.6; }
-.track-album { color: var(--text-muted); }
 .track-path {
   margin-top: 2px;
   font-size: 12px;

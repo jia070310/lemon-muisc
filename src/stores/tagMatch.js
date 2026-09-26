@@ -97,6 +97,40 @@ export function syncFilesFromMatchPatches(files) {
   }
 }
 
+/**
+ * 手动「保存到磁盘」成功后清除对应匹配 patch，
+ * 避免后续 sync 用未落盘标记把 _modified 重新打回 true。
+ */
+export function clearTagMatchPatchesForPaths(filePaths = []) {
+  const paths = (filePaths || []).filter(Boolean)
+  if (!paths.length) return
+  let changed = false
+  const next = { ...tagMatchPatches.value }
+  for (const p of paths) {
+    if (next[p]) {
+      delete next[p]
+      changed = true
+    }
+  }
+  if (!changed) return
+  tagMatchPatches.value = next
+  tagMatchPatchVersion.value += 1
+}
+
+/**
+ * 文件改名后同步转移匹配 patch 的 key，避免旧路径残留。
+ */
+export function relocateTagMatchPatch(fromPath, toPath) {
+  if (!fromPath || !toPath || fromPath === toPath) return
+  const prev = tagMatchPatches.value[fromPath]
+  if (!prev) return
+  const next = { ...tagMatchPatches.value }
+  delete next[fromPath]
+  next[toPath] = { ...prev }
+  tagMatchPatches.value = next
+  tagMatchPatchVersion.value += 1
+}
+
 function rememberPatch(filePath, meta) {
   // 先原地写入再替换引用，避免并行完成时互相覆盖丢失 patch
   tagMatchPatches.value[filePath] = { ...meta }

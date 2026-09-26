@@ -9,17 +9,17 @@
 
     <div class="discover-header card">
       <form class="discover-row" @submit.prevent="fetchPlaylistByInput">
-        <div class="discover-bar">
-          <svg class="discover-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>
-          </svg>
-          <input
-            v-model="discoverState.url"
-            :placeholder="currentPlaceholder"
-            class="discover-input"
-            enterkeyhint="go"
-          />
-        </div>
+        <SearchInput
+          ref="discoverSearchRef"
+          v-model="discoverState.url"
+          :history-key="SEARCH_HISTORY_KEYS.discoverUrl"
+          variant="bar"
+          show-search-icon
+          input-wrap-class="discover-bar"
+          :placeholder="currentPlaceholder"
+          enterkeyhint="go"
+          @select="fetchPlaylistByInput"
+        />
         <button type="submit" class="btn-primary discover-btn" :disabled="discoverState.loading">
           {{ discoverState.loading ? '加载中...' : '确认' }}
         </button>
@@ -313,6 +313,8 @@ import BatchQualityDialog from '../components/BatchQualityDialog.vue'
 import PlaylistPacedDownloadDialog from '../components/PlaylistPacedDownloadDialog.vue'
 import ConfirmModal from '../components/ConfirmModal.vue'
 import CoverArt from '../components/CoverArt.vue'
+import SearchInput from '../components/SearchInput.vue'
+import { SEARCH_HISTORY_KEYS } from '../composables/useSearchHistory.js'
 import DiscoverSongItem from '../components/discover/DiscoverSongItem.vue'
 import DiscoverSongActions from '../components/discover/DiscoverSongActions.vue'
 import DiscoverPlaylistSection from '../components/discover/DiscoverPlaylistSection.vue'
@@ -344,6 +346,7 @@ import { assertActiveSourceForDownload } from '../stores/downloadGuard.js'
 
 const router = useRouter()
 const route = useRoute()
+const discoverSearchRef = ref(null)
 const toast = ref(null)
 const importingPlaylist = ref(false)
 const importConfirm = ref(null)
@@ -906,6 +909,7 @@ async function openRecommendPlaylist(item) {
 }
 
 async function fetchPlaylistByInput() {
+  discoverSearchRef.value?.remember?.()
   if (!discoverState.url.trim()) {
     backToRecommend()
     return

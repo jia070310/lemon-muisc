@@ -374,7 +374,7 @@
       <div class="tab-more-wrap" ref="mobileMoreRef">
         <button
           type="button"
-          class="tab-item tab-more-btn"
+          class="tab-item tab-more-btn tab-item-icon-only"
           :class="{ active: showMobileMore || isMobileMoreNav }"
           aria-label="更多"
           :aria-expanded="showMobileMore"
@@ -383,7 +383,6 @@
           <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
             <circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/>
           </svg>
-          <span>更多</span>
           <span v-if="hasUpdate" class="tab-dot"></span>
         </button>
         <div v-if="showMobileMore" class="mobile-more-sheet card" role="menu">
@@ -1702,6 +1701,13 @@ onUnmounted(() => {
     background: transparent;
     font: inherit;
     cursor: pointer;
+  }
+  .tab-item-icon-only {
+    gap: 0;
+  }
+  .tab-item-icon-only svg {
+    width: 22px;
+    height: 22px;
   }
 
   .mobile-more-sheet {

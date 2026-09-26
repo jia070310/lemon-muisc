@@ -21,9 +21,15 @@ export function resolveExistFileMode(settings = {}) {
 
 export function resolveTaskBaseName(task, settings = {}) {
   const template = settings['download.fileName'] || '{name} - {singer}'
+  let albumArtist = ''
+  try {
+    const meta = typeof task?.meta === 'string' ? JSON.parse(task.meta || '{}') : (task?.meta || {})
+    albumArtist = String(meta.albumArtist || '').trim()
+  } catch { /* ignore */ }
+  const singer = String(task?.singer || albumArtist || '').trim()
   return sanitizeFileBase(template
     .replace(/\{name\}/g, task.name || 'Unknown')
-    .replace(/\{singer\}/g, task.singer || 'Unknown')
+    .replace(/\{singer\}/g, singer || 'Unknown')
     .replace(/\{album\}/g, task.album || ''))
 }
 

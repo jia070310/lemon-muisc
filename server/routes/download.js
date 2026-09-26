@@ -9,7 +9,7 @@ import { writeMeta } from '../meta.js'
 import { joinArtists } from '../utils/artistTag.js'
 import { buildMusicInfoFromTask } from '../utils/musicInfo.js'
 import { buildEmbedLyrics } from '../utils/lyric.js'
-import { getDownloadSavePath } from '../utils/filePaths.js'
+import { getDownloadSavePath, isAllowedMediaPath } from '../utils/filePaths.js'
 import { getMergedSettings } from '../utils/userSettings.js'
 import { fetchTrackLyric, fetchTrackCover } from '../utils/trackMeta.js'
 import {
@@ -39,8 +39,8 @@ import { buildMusicCdnHeaders } from '../utils/musicCdnHeaders.js'
 import { formatUserError } from '../utils/userError.js'
 import { buildSourceFallbackOffer } from '../utils/sourceFallback.js'
 import { extractMusicUrl } from '../utils/sourceResult.js'
-import { notifyLibraryChanged } from '../utils/libraryNotify.js'
-import { scanBatchAndCache } from '../utils/libraryCache.js'
+import { notifyLibraryChanged, notifyLibraryRemoved } from '../utils/libraryNotify.js'
+import { scanBatchAndCache, removeCachePaths } from '../utils/libraryCache.js'
 import { resolveDownloadGroupDir } from '../utils/downloadPath.js'
 import {
   resolveExistFileMode,
@@ -169,6 +169,10 @@ export function enqueueDownloadTasks(userId, tasks, { broadcastAdded = true } = 
       if (key) activeKeys.add(key)
 
       const id = `dl_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+      let replacePath = String(t.replacePath || '').trim()
+      if (replacePath && !isAllowedMediaPath(replacePath, { allowMissing: true, userId })) {
+        replacePath = ''
+      }
       const meta = JSON.stringify({
         songId: t.songId || t.id,
         hash: t.hash || '',
@@ -196,8 +200,11 @@ export function enqueueDownloadTasks(userId, tasks, { broadcastAdded = true } = 
         deferExistAsk: Boolean(t.deferExistAsk),
         batchId: t.batchId || '',
         listName: t.listName || '',
+        albumArtist: t.albumArtist || t.singer || '',
+        replacePath,
+        forceOverwrite: Boolean(t.forceOverwrite || replacePath),
       })
-      insert.run(id, t.name, t.singer || '', t.source || '', t.album || '', t.interval || '', quality, meta, userId)
+      insert.run(id, t.name, t.singer || t.albumArtist || '', t.source || '', t.album || '', t.interval || '', quality, meta, userId)
       added.push(id)
     }
   })
@@ -755,6 +762,12 @@ function parseTaskMeta(task) {
   }
 }
 
+/** 任务歌手：列字段优先，空则回落 meta.albumArtist */
+function resolveTaskSinger(task, meta = null) {
+  const m = meta || (task ? parseTaskMeta(task) : {})
+  return String(task?.singer || m.albumArtist || '').trim()
+}
+
 function saveTaskMeta(taskId, meta) {
   getDB().prepare('UPDATE download_tasks SET meta = ? WHERE id = ?').run(JSON.stringify(meta), taskId)
 }
@@ -817,8 +830,14 @@ function applyCrossPlatformDownloadHit(task, meta, hit, quality) {
   meta.types = Array.isArray(hit.types) ? hit.types : meta.types
   meta.qualitys = Array.isArray(hit.qualitys) ? hit.qualitys : meta.qualitys
   meta.duration = hit.duration ?? hit.interval ?? meta.duration
-  delete meta.sourceApiId
-  delete meta.skipSourceIds
+  // 跨平台仍锁定当前音源插件；仅在换音源时才放开
+  if (!meta.lockedSourceApiId) {
+    delete meta.sourceApiId
+    delete meta.skipSourceIds
+  } else {
+    delete meta.sourceApiId
+    meta.skipSourceIds = []
+  }
   meta.lastPlatformSwitch = {
     from,
     to,
@@ -883,6 +902,7 @@ function applyQualityDowngrade(row, toQuality, { autoCascade = false, reason = '
   delete meta.downgradeOffer
   // 换音质后重新按激活音源顺序尝试，不锁死在上一档用过的音源 / 平台
   delete meta.sourceApiId
+  delete meta.lockedSourceApiId
   delete meta.skipSourceIds
   delete meta.skipPlatforms
   delete meta.crossPlatformExhausted
@@ -995,14 +1015,17 @@ function processQueue() {
 }
 
 async function resolveDownloadUrl(source, quality, musicInfo, settings, meta = {}, userId = null) {
-  // 下载：每一档音质都按该用户激活音源顺序全量尝试，再交给降档策略
+  // 锁定音源时：只打当前插件（换平台后再换其它插件）
+  // 未锁定时：同平台按激活音源顺序全量尝试
+  const lockedId = String(meta.lockedSourceApiId || '').trim() || null
   const result = await requestSourceWithMeta(source, 'musicUrl', {
     type: quality,
     quality,
     musicInfo,
   }, {
     fallbackMode: 'auto',
-    skipSourceIds: meta.skipSourceIds || [],
+    preferredSourceId: lockedId || undefined,
+    skipSourceIds: lockedId ? [] : (meta.skipSourceIds || []),
     allowedSourceIds: getStoredActiveSourceIds(userId),
   })
   const url = extractMusicUrl(result.data)
@@ -1177,6 +1200,13 @@ async function markAwaitExist(task, meta, offer, { deferred = false } = {}) {
  * 下载前检测同名文件。返回 true 表示已处理完毕（跳过/等待确认），调用方应直接 return。
  */
 async function handleExistingSameNameFile(task, meta, settings) {
+  // 专辑音质升级：指定覆盖原文件，跳过同名询问
+  if (meta.replacePath || meta.forceOverwrite) {
+    meta.forceRedownload = true
+    meta.existFileConfirmed = true
+    saveTaskMeta(task.id, meta)
+    return false
+  }
   if (meta.forceRedownload || meta.existFileConfirmed) return false
 
   const existingPaths = findExistingSameNameFiles(task, settings)
@@ -1469,9 +1499,10 @@ function cleanupGroupDirPartFiles(task, settings, except = new Set()) {
 
 function resolveTaskFileBaseName(task, settings) {
   const template = settings['download.fileName'] || '{name} - {singer}'
+  const singer = resolveTaskSinger(task)
   return sanitize(template
     .replace(/\{name\}/g, task.name || 'Unknown')
-    .replace(/\{singer\}/g, task.singer || 'Unknown')
+    .replace(/\{singer\}/g, singer || 'Unknown')
     .replace(/\{album\}/g, task.album || ''))
 }
 
@@ -1518,10 +1549,26 @@ function prepareTaskForRetry(taskRow, { cleanupFiles = true, forceRedownload = f
   if (meta.downgradeOffer) delete meta.downgradeOffer
   if (meta.existFileOffer) delete meta.existFileOffer
   if (meta.sourceFallbackOffer) delete meta.sourceFallbackOffer
+  // 重试原音质：清空本档已跳过的音源/平台，避免一直卡在「没有可用的音源」
+  delete meta.skipSourceIds
+  delete meta.skipPlatforms
+  delete meta.crossPlatformExhausted
+  delete meta.lockedSourceApiId
+  delete meta.sourceApiId
   return { meta, settings }
 }
 
 function resolveTaskFilePath(task, settings, ext) {
+  const meta = typeof task.meta === 'string'
+    ? (() => { try { return JSON.parse(task.meta || '{}') } catch { return {} } })()
+    : (task.meta && typeof task.meta === 'object' ? task.meta : {})
+  const replacePath = String(meta.replacePath || '').trim()
+  if (replacePath) {
+    const dir = path.dirname(replacePath)
+    const base = path.basename(replacePath, path.extname(replacePath)) || 'track'
+    const safeExt = String(ext || path.extname(replacePath) || '.mp3').replace(/^\.?/, '.')
+    return path.join(dir, `${base}${safeExt}`)
+  }
   const fileName = buildFileName(settings['download.fileName'] || '{name} - {singer}', task, ext)
   const savePath = taskSavePath(task)
   const groupDir = resolveDownloadGroupDir(savePath, settings, task)
@@ -1534,207 +1581,327 @@ function finalizePartFile(partPath, filePath) {
   fs.renameSync(partPath, filePath)
 }
 
+/** 多音源时：优先当前/最近音源，再其余激活音源；无激活列表时退回未锁定一轮 */
+function orderDownloadSourceIds(activeIds, meta = {}) {
+  const ids = [...new Set((activeIds || []).map(String).filter(Boolean))]
+  if (!ids.length) return [null]
+  const prefer = String(meta.sourceApiId || meta.lockedSourceApiId || '').trim()
+  if (prefer && ids.includes(prefer)) {
+    return [prefer, ...ids.filter((id) => id !== prefer)]
+  }
+  return ids
+}
+
+function snapshotTrackIdentity(task, meta) {
+  return {
+    source: String(meta.source || task.source || ''),
+    songId: meta.songId || '',
+    hash: meta.hash || '',
+    songmid: meta.songmid || '',
+    strMediaMid: meta.strMediaMid || '',
+    copyrightId: meta.copyrightId || '',
+    albumAudioId: meta.albumAudioId || '',
+    albumId: meta.albumId || '',
+    albumMid: meta.albumMid || '',
+    albummid: meta.albummid || '',
+    musicId: meta.musicId || '',
+    rid: meta.rid || '',
+    dcTargetId: meta.dcTargetId || '',
+    types: meta.types,
+    qualitys: meta.qualitys,
+    picUrl: meta.picUrl || '',
+    img: meta.img || '',
+    duration: meta.duration,
+  }
+}
+
+function restoreTrackIdentity(task, meta, snap) {
+  if (!snap) return
+  meta.source = snap.source
+  task.source = snap.source
+  meta.songId = snap.songId
+  meta.hash = snap.hash
+  meta.songmid = snap.songmid
+  meta.strMediaMid = snap.strMediaMid
+  meta.copyrightId = snap.copyrightId
+  meta.albumAudioId = snap.albumAudioId
+  meta.albumId = snap.albumId
+  meta.albumMid = snap.albumMid
+  meta.albummid = snap.albummid
+  meta.musicId = snap.musicId
+  meta.rid = snap.rid
+  meta.dcTargetId = snap.dcTargetId
+  meta.types = snap.types
+  meta.qualitys = snap.qualitys
+  meta.picUrl = snap.picUrl
+  meta.img = snap.img
+  meta.duration = snap.duration
+}
+
 async function downloadTask(task, settings, abortSignal = null) {
   const abort = abortSignal || new AbortController()
   activeDownloads.set(task.id, { abort })
 
   const meta = parseTaskMeta(task)
+  if (!String(task.singer || '').trim() && meta.albumArtist) {
+    task.singer = meta.albumArtist
+  }
+  if (!String(task.albumArtist || '').trim() && meta.albumArtist) {
+    task.albumArtist = meta.albumArtist
+  }
   const quality = task.quality || '320k'
   let lastError = null
   let lastAttemptPath = ''
   const MAX_PLATFORM_HOPS = 5
+  const sourceOrder = orderDownloadSourceIds(getStoredActiveSourceIds(task.user_id), meta)
+  const identitySnap = snapshotTrackIdentity(task, meta)
 
   try {
     // 取链前先按「主文件名」检测本地同名（扩展名不同也算），避免无效请求
     if (await handleExistingSameNameFile(task, meta, settings)) return
 
-    for (let hop = 0; hop < MAX_PLATFORM_HOPS; hop++) {
-      let source = meta.source || task.source
-      let musicInfo = buildMusicInfoFromTask(task, meta)
-
-      for (let attempt = 1; attempt <= SAME_QUALITY_ATTEMPTS; attempt++) {
-      // 任务可能已被暂停
-      const latest = getDB().prepare('SELECT status FROM download_tasks WHERE id = ?').get(task.id)
-      if (!latest || latest.status === 'paused') return
-
-      let filePath = ''
-      let partPath = ''
-      let publishedDest = false
-      try {
-        if (attempt > 1 || hop > 0) {
-          dlBroadcast('download:status', {
-            id: task.id,
-            status: 'downloading',
-            quality,
-            source,
-            retryAttempt: attempt,
-            retryTotal: SAME_QUALITY_ATTEMPTS,
-          })
-          if (attempt > 1) await sleep(RETRY_DELAY_MS * (attempt - 1))
-        }
-
-        const { url, sourceInfo } = await resolveDownloadUrl(source, quality, musicInfo, settings, meta, task.user_id)
-        if (sourceInfo?.sourceId && sourceInfo.sourceId !== meta.sourceApiId) {
-          meta.sourceApiId = sourceInfo.sourceId
-          if (sourceInfo.switched) {
-            meta.lastSourceSwitch = {
-              fromId: sourceInfo.fromSourceId,
-              fromName: sourceInfo.fromSourceName,
-              toId: sourceInfo.sourceId,
-              toName: sourceInfo.sourceName,
-              at: new Date().toISOString(),
-            }
-            saveTaskMeta(task.id, meta)
-            dlBroadcast('download:source-switched', {
-              id: task.id,
-              name: task.name,
-              fromName: sourceInfo.fromSourceName,
-              toName: sourceInfo.sourceName,
-            })
-          }
-        }
-
-        const ext = guessExt(url, quality)
-        filePath = resolveTaskFilePath(task, settings, ext)
-        const stagingDir = getDownloadStagingDir(task.id)
-        fs.mkdirSync(stagingDir, { recursive: true })
-        const stagedPath = path.join(stagingDir, path.basename(filePath))
-        partPath = partPathFor(stagedPath)
-        lastAttemptPath = filePath
-        publishedDest = false
-        saveTaskMeta(task.id, meta)
-
-        fs.mkdirSync(path.dirname(filePath), { recursive: true })
-
-        const forceRedownload = meta.forceRedownload === true
-        const keepOtherFormats = meta.keepOtherFormats === true
-        if (forceRedownload) {
-          if (keepOtherFormats) {
-            // 并存：只清理即将写入的目标路径（及 .part），保留同名 flac/mp3 等其它格式
-            cleanupDownloadPath(filePath)
-            cleanupGroupDirPartFiles(task, settings, new Set([filePath]))
-          } else {
-            cleanupTaskDownloadArtifacts(task, meta, settings)
-          }
-          delete meta.forceRedownload
-          delete meta.keepOtherFormats
-          saveTaskMeta(task.id, meta)
-        }
-
-        // 取链后再次按目标路径兜底（极少：同名但不同目录策略变更等）
-        if (!forceRedownload && !meta.existFileConfirmed) {
-          const sameNameAgain = findExistingSameNameFiles(task, settings)
-          if (sameNameAgain.length) {
-            if (await handleExistingSameNameFile(task, meta, settings)) return
-          }
-        }
-
-        cleanupTaskDownloadArtifacts(task, meta, settings, { exceptPath: filePath, onlyTracked: true })
-
-        const expectedSec = parseDurationSeconds(
-          task.interval || meta.duration || meta.interval || musicInfo.interval || musicInfo.duration,
-        )
-
-        // 落盘前：用音源音频自带的总时长判断（试听源常为短片段）
-        const remoteSec = await probeRemoteAudioDurationSeconds(url, { source, quality })
-        const preErr = assertNotPreviewClip(remoteSec, expectedSec, { forDownload: true })
-        if (preErr) {
-          skipCurrentDownloadSource(meta, task.id, source)
-          throw preErr
-        }
-
-        // 先在应用配置目录内写完（含标签），再一次性发布到下载目录，降低夸克等网盘挂载产生 name(1) 的概率
-        await streamToFile(url, partPath, task.id, abort, quality, source)
-        finalizePartFile(partPath, stagedPath)
-
-        // 落盘后必检实际文件时长（远程 Range 探测可能偏短/失败，不能只依赖它）
-        {
-          const actualSec = await probeFileDurationSeconds(stagedPath)
-          const checkSec = actualSec > 0 ? actualSec : remoteSec
-          const postErr = assertNotPreviewClip(checkSec, expectedSec, { forDownload: true })
-          if (postErr) {
-            cleanupDownloadPath(stagedPath)
-            cleanupStagingDir(task.id)
-            skipCurrentDownloadSource(meta, task.id, source)
-            throw postErr
-          }
-        }
-
-        // 无损档必须校验真实 FLAC，拒绝 QQ 等返回的「假 flac」（实为 MP3）
-        try {
-          assertLosslessFile(stagedPath, quality)
-        } catch (formatErr) {
-          cleanupDownloadPath(stagedPath)
-          cleanupStagingDir(task.id)
-          if (formatErr?.code === 'FAKE_LOSSLESS') {
-            skipCurrentDownloadSource(meta, task.id, source)
-          }
-          throw formatErr
-        }
-
-        await writeMetaIfNeeded(task, meta, stagedPath, ext, settings)
-        publishStagedDownload(stagedPath, filePath)
-        publishedDest = true
-        if (meta.sourceApiId) recordSourceHealthOutcome(meta.sourceApiId, false, source)
-        cleanupStagingDir(task.id)
-        cleanupTaskDownloadArtifacts(task, meta, settings, { exceptPath: filePath, onlyTracked: true })
-        rememberDownloadArtifact(meta, filePath)
-        meta.downloadArtifacts = [filePath]
-        delete meta.existFileConfirmed
-        saveTaskMeta(task.id, meta)
-
-        getDB().prepare("UPDATE download_tasks SET status = 'completed', file_path = ?, progress = 1, error = NULL WHERE id = ?")
-          .run(filePath, task.id)
-        dlBroadcast('download:status', { id: task.id, status: 'completed', progress: 1, filePath, quality, source })
-        scanBatchAndCache([{ filePath }]).catch(() => {})
-        notifyLibraryChanged([filePath], { reason: 'download' })
-        return
-      } catch (e) {
-        cleanupDownloadPath(partPath)
-        cleanupStagingDir(task.id)
-        // 仅当本轮已发布到目标路径后又失败时才删目标；未发布时绝不动用户已有成品
-        if (filePath && publishedDest) {
-          cleanupDownloadPath(filePath)
-          rememberDownloadArtifact(meta, filePath)
-        }
-        if (e.name === 'AbortError') return
-        lastError = e
-        const retryable = isRetryableDownloadError(e)
-        // 流式下载 403/假无损等：跳过当前音源，避免同档重试仍打同一源
-        if (retryable && meta.sourceApiId) {
-          const alreadySkipped = (meta.skipSourceIds || []).includes(meta.sourceApiId)
-          if (!alreadySkipped) skipCurrentDownloadSource(meta, task.id, source)
-        }
-        console.warn(`[下载] ${task.name} ${quality}@${source} 第 ${attempt}/${SAME_QUALITY_ATTEMPTS} 次失败: ${e.message}`)
-        if (!retryable || attempt >= SAME_QUALITY_ATTEMPTS) break
-      }
+    // 顺序：当前音源 → 换平台同档 → 再换下一个音源 → 再换平台
+    for (let si = 0; si < sourceOrder.length; si++) {
+      const lockedId = sourceOrder[si]
+      if (lockedId) {
+        meta.lockedSourceApiId = lockedId
+      } else {
+        delete meta.lockedSourceApiId
       }
 
-      // 本平台同档失败：先跨平台补源，再考虑降档
-      if (isNoActiveSourceError(lastError)) break
-      try {
+      if (si > 0) {
+        restoreTrackIdentity(task, meta, identitySnap)
+        meta.skipPlatforms = []
+        delete meta.crossPlatformExhausted
+        delete meta.sourceApiId
+        meta.skipSourceIds = []
+        meta.lastSourcePluginSwitch = {
+          toId: lockedId,
+          at: new Date().toISOString(),
+        }
+        saveTaskMeta(task.id, meta)
         dlBroadcast('download:status', {
           id: task.id,
           status: 'downloading',
           quality,
-          error: '',
-          tip: '正在跨平台补源…',
+          source: meta.source || task.source,
+          tip: '正在切换音源继续查找…',
         })
-        const switched = await tryCrossPlatformSameQuality(task, meta, quality, settings)
-        if (switched) {
-          lastError = null
-          continue
-        }
-      } catch (e) {
-        console.warn(`[下载] ${task.name} 跨平台补源失败: ${e.message}`)
+      } else {
+        saveTaskMeta(task.id, meta)
       }
-      break
+
+      for (let hop = 0; hop < MAX_PLATFORM_HOPS; hop++) {
+        let source = meta.source || task.source
+        let musicInfo = buildMusicInfoFromTask(task, meta)
+
+        for (let attempt = 1; attempt <= SAME_QUALITY_ATTEMPTS; attempt++) {
+          const latest = getDB().prepare('SELECT status FROM download_tasks WHERE id = ?').get(task.id)
+          if (!latest || latest.status === 'paused') return
+
+          let filePath = ''
+          let partPath = ''
+          let publishedDest = false
+          try {
+            if (attempt > 1 || hop > 0 || si > 0) {
+              dlBroadcast('download:status', {
+                id: task.id,
+                status: 'downloading',
+                quality,
+                source,
+                retryAttempt: attempt,
+                retryTotal: SAME_QUALITY_ATTEMPTS,
+              })
+              if (attempt > 1) await sleep(RETRY_DELAY_MS * (attempt - 1))
+            }
+
+            const { url, sourceInfo } = await resolveDownloadUrl(source, quality, musicInfo, settings, meta, task.user_id)
+            if (sourceInfo?.sourceId && sourceInfo.sourceId !== meta.sourceApiId) {
+              meta.sourceApiId = sourceInfo.sourceId
+              if (sourceInfo.switched) {
+                meta.lastSourceSwitch = {
+                  fromId: sourceInfo.fromSourceId,
+                  fromName: sourceInfo.fromSourceName,
+                  toId: sourceInfo.sourceId,
+                  toName: sourceInfo.sourceName,
+                  at: new Date().toISOString(),
+                }
+                saveTaskMeta(task.id, meta)
+                dlBroadcast('download:source-switched', {
+                  id: task.id,
+                  name: task.name,
+                  fromName: sourceInfo.fromSourceName,
+                  toName: sourceInfo.sourceName,
+                })
+              }
+            }
+
+            const ext = guessExt(url, quality)
+            filePath = resolveTaskFilePath(task, settings, ext)
+            const stagingDir = getDownloadStagingDir(task.id)
+            fs.mkdirSync(stagingDir, { recursive: true })
+            const stagedPath = path.join(stagingDir, path.basename(filePath))
+            partPath = partPathFor(stagedPath)
+            lastAttemptPath = filePath
+            publishedDest = false
+            saveTaskMeta(task.id, meta)
+
+            fs.mkdirSync(path.dirname(filePath), { recursive: true })
+
+            const forceRedownload = meta.forceRedownload === true
+            const keepOtherFormats = meta.keepOtherFormats === true
+            if (forceRedownload) {
+              if (keepOtherFormats) {
+                cleanupDownloadPath(filePath)
+                cleanupGroupDirPartFiles(task, settings, new Set([filePath]))
+              } else {
+                cleanupTaskDownloadArtifacts(task, meta, settings)
+              }
+              delete meta.forceRedownload
+              delete meta.keepOtherFormats
+              saveTaskMeta(task.id, meta)
+            }
+
+            if (!forceRedownload && !meta.existFileConfirmed) {
+              const sameNameAgain = findExistingSameNameFiles(task, settings)
+              if (sameNameAgain.length) {
+                if (await handleExistingSameNameFile(task, meta, settings)) return
+              }
+            }
+
+            cleanupTaskDownloadArtifacts(task, meta, settings, { exceptPath: filePath, onlyTracked: true })
+
+            const expectedSec = parseDurationSeconds(
+              task.interval || meta.duration || meta.interval || musicInfo.interval || musicInfo.duration,
+            )
+
+            const remoteSec = await probeRemoteAudioDurationSeconds(url, { source, quality })
+            const preErr = assertNotPreviewClip(remoteSec, expectedSec, { forDownload: true })
+            if (preErr) {
+              if (!meta.lockedSourceApiId) skipCurrentDownloadSource(meta, task.id, source)
+              throw preErr
+            }
+
+            await streamToFile(url, partPath, task.id, abort, quality, source)
+            finalizePartFile(partPath, stagedPath)
+
+            {
+              const actualSec = await probeFileDurationSeconds(stagedPath)
+              const checkSec = actualSec > 0 ? actualSec : remoteSec
+              const postErr = assertNotPreviewClip(checkSec, expectedSec, { forDownload: true })
+              if (postErr) {
+                cleanupDownloadPath(stagedPath)
+                cleanupStagingDir(task.id)
+                if (!meta.lockedSourceApiId) skipCurrentDownloadSource(meta, task.id, source)
+                throw postErr
+              }
+            }
+
+            try {
+              assertLosslessFile(stagedPath, quality)
+            } catch (formatErr) {
+              cleanupDownloadPath(stagedPath)
+              cleanupStagingDir(task.id)
+              if (formatErr?.code === 'FAKE_LOSSLESS' && !meta.lockedSourceApiId) {
+                skipCurrentDownloadSource(meta, task.id, source)
+              }
+              throw formatErr
+            }
+
+            await writeMetaIfNeeded(task, meta, stagedPath, ext, settings)
+            publishStagedDownload(stagedPath, filePath)
+            publishedDest = true
+
+            const replacePath = String(meta.replacePath || '').trim()
+            if (replacePath) {
+              try {
+                const oldResolved = path.resolve(replacePath)
+                const newResolved = path.resolve(filePath)
+                if (oldResolved !== newResolved && fs.existsSync(replacePath)) {
+                  fs.unlinkSync(replacePath)
+                  try { removeCachePaths([replacePath]) } catch {}
+                  try { notifyLibraryRemoved([replacePath], { reason: 'album-sync-upgrade' }) } catch {}
+                }
+              } catch {}
+              delete meta.replacePath
+              delete meta.forceOverwrite
+            }
+
+            if (meta.sourceApiId) recordSourceHealthOutcome(meta.sourceApiId, false, source)
+            cleanupStagingDir(task.id)
+            cleanupTaskDownloadArtifacts(task, meta, settings, { exceptPath: filePath, onlyTracked: true })
+            rememberDownloadArtifact(meta, filePath)
+            meta.downloadArtifacts = [filePath]
+            delete meta.existFileConfirmed
+            delete meta.lockedSourceApiId
+            saveTaskMeta(task.id, meta)
+
+            getDB().prepare("UPDATE download_tasks SET status = 'completed', file_path = ?, progress = 1, error = NULL WHERE id = ?")
+              .run(filePath, task.id)
+            dlBroadcast('download:status', { id: task.id, status: 'completed', progress: 1, filePath, quality, source })
+            scanBatchAndCache([{ filePath }]).catch(() => {})
+            notifyLibraryChanged([filePath], { reason: 'download' })
+            return
+          } catch (e) {
+            cleanupDownloadPath(partPath)
+            cleanupStagingDir(task.id)
+            if (filePath && publishedDest) {
+              cleanupDownloadPath(filePath)
+              rememberDownloadArtifact(meta, filePath)
+            }
+            if (e.name === 'AbortError') return
+            lastError = e
+            const retryable = isRetryableDownloadError(e)
+            if (meta.lockedSourceApiId) {
+              // 锁定音源：网络抖动可同源重试；假无损/试听等立刻换平台或下一音源
+              console.warn(`[下载] ${task.name} ${quality}@${source} 音源锁定第 ${attempt}/${SAME_QUALITY_ATTEMPTS} 次失败: ${e.message}`)
+              if (!retryable || shouldSkipSourceAfterError(e) || attempt >= SAME_QUALITY_ATTEMPTS) break
+            } else {
+              if (retryable && meta.sourceApiId) {
+                const alreadySkipped = (meta.skipSourceIds || []).includes(meta.sourceApiId)
+                if (!alreadySkipped) skipCurrentDownloadSource(meta, task.id, source)
+              }
+              console.warn(`[下载] ${task.name} ${quality}@${source} 第 ${attempt}/${SAME_QUALITY_ATTEMPTS} 次失败: ${e.message}`)
+              if (!retryable || attempt >= SAME_QUALITY_ATTEMPTS) break
+            }
+          }
+        }
+
+        // 当前音源下本平台失败：先跨平台同档，再换下一个音源
+        if (isNoActiveSourceError(lastError)) break
+        try {
+          dlBroadcast('download:status', {
+            id: task.id,
+            status: 'downloading',
+            quality,
+            error: '',
+            tip: '正在跨平台补源…',
+          })
+          const switched = await tryCrossPlatformSameQuality(task, meta, quality, settings)
+          if (switched) {
+            lastError = null
+            continue
+          }
+        } catch (e) {
+          console.warn(`[下载] ${task.name} 跨平台补源失败: ${e.message}`)
+        }
+        break
+      }
+
+      // 当前音源插件已试完各平台
+      if (lockedId) {
+        skipFailedSource(meta, task.id, meta.source || task.source, {
+          markPreview: lastError?.code === 'PREVIEW_CLIP' || /试听/i.test(String(lastError?.message || '')),
+        })
+      }
+      if (isNoActiveSourceError(lastError) && si === sourceOrder.length - 1) break
     }
 
     // 失败收尾：不要按路径名删除音乐库里已有成品（仅清本任务跟踪产物与 .part）
     cleanupTaskDownloadArtifacts(task, meta, settings, { onlyTracked: true })
     clearTaskStoredFilePath(task.id)
     cleanupStagingDir(task.id)
+    delete meta.lockedSourceApiId
     const reason = lastError?.message || '下载失败'
     if (isNoActiveSourceError(lastError) || isNoActiveSourceError(reason)) {
       markError(task.id, reason, meta)
@@ -1754,20 +1921,24 @@ async function downloadTask(task, settings, abortSignal = null) {
       ...(Array.isArray(meta.types) ? meta.types.map(t => t?.type || t).filter(Boolean) : []),
     ]
 
-    // 「不降档」策略：拿不到目标音质则直接失败（降档交互另议，此处不强行改档）
-    if (policy === 'none') {
-      const msg = lastError?.code === 'FAKE_LOSSLESS'
-        ? (lastError.message || formatMissingQualityError(preferred, '', reason))
-        : formatMissingQualityError(preferred, '', reason)
-      markError(task.id, msg, meta)
-      return
-    }
-
     const nextQuality = getNextLowerQuality(
       quality,
       available,
       policy === 'floor' ? floor : '',
     )
+
+    // 「不降档」：不自动改档，但弹出确认是否降到下一档（避免重试死循环）
+    if (policy === 'none') {
+      if (nextQuality) {
+        const msg = lastError?.code === 'FAKE_LOSSLESS'
+          ? (lastError.message || formatMissingQualityError(preferred, '', reason))
+          : formatMissingQualityError(preferred, '', reason)
+        markAwaitConfirm(task, meta, quality, nextQuality, msg)
+        return
+      }
+      markError(task.id, formatMissingQualityError(preferred, '', reason), meta)
+      return
+    }
 
     if (nextQuality) {
       const latestMeta = parseTaskMeta(getDB().prepare('SELECT meta FROM download_tasks WHERE id = ?').get(task.id) || {})
@@ -1802,15 +1973,19 @@ async function writeMetaIfNeeded(task, meta, filePath, ext, settings) {
   const wantEmbedPic = on('download.isEmbedPic')
   const wantEmbedLyric = on('download.isEmbedLyric')
   const wantLrcFile = on('download.isDownloadLrc')
+  const canEmbed = ['.mp3', '.flac', '.wav', '.ape'].includes(ext)
+  const artist = joinArtists(task.singer || meta.albumArtist || '')
+  const albumArtist = joinArtists(task.albumArtist || meta.albumArtist || task.singer || '')
+  const album = task.album || meta.album || ''
+  // 有歌名/歌手时始终写入基础标签，避免文件名落成 Unknown 且内置标签空白
+  const wantBasicTags = canEmbed && Boolean(task.name || artist || albumArtist || album)
 
-  // 未开启任何封面/歌词相关选项则跳过
-  if (!wantEmbedPic && !wantEmbedLyric && !wantLrcFile) {
+  if (!wantBasicTags && !wantEmbedPic && !wantEmbedLyric && !wantLrcFile) {
     return
   }
 
   const source = meta.source || task.source
   const musicInfo = buildMusicInfoFromTask(task, meta)
-  const canEmbed = ['.mp3', '.flac', '.wav', '.ape'].includes(ext)
 
   let picBuf = null
   if (wantEmbedPic && canEmbed) {
@@ -1848,14 +2023,12 @@ async function writeMetaIfNeeded(task, meta, filePath, ext, settings) {
     }
   }
 
-  // 仅在开启内嵌且格式支持时写入音频内置标签
-  if (canEmbed && (wantEmbedPic || wantEmbedLyric)) {
+  if (wantBasicTags || (canEmbed && (wantEmbedPic || wantEmbedLyric))) {
     const metaData = {
       title: task.name || '',
-      artist: joinArtists(task.singer || ''),
-      // 无单独专辑艺人时用歌手，便于音乐库按专辑归类
-      albumArtist: joinArtists(task.albumArtist || task.singer || ''),
-      album: task.album || '',
+      artist,
+      albumArtist,
+      album,
     }
     if (wantEmbedPic && picBuf) metaData.pic = picBuf
     if (wantEmbedLyric && lrcResult?.lyric) {

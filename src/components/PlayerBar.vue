@@ -3,7 +3,17 @@
     <div v-if="visualizerEnabled" class="bar-spectrum">
       <SpectrumVisualizer mode="bar" :active="visualizerEnabled && !!currentPlaying && !showFullscreenPlayer" />
     </div>
-    <div class="bar-left">
+    <div
+      class="bar-left"
+      :class="{ 'song-info-pressing': songInfoPressing }"
+      :title="barLeftTitle"
+      @contextmenu.prevent="onSongInfoContextMenu"
+      @pointerdown="onBarLeftPointerDown"
+      @pointermove="onBarLeftPointerMove"
+      @pointerup="onBarLeftPointerUp"
+      @pointercancel="onBarLeftPointerUp"
+      @pointerleave="onBarLeftPointerUp"
+    >
       <div
         class="cover-progress-wrap"
         :class="[coverStyle === 'disc' ? 'wrap-disc' : 'wrap-card', { clickable: !!currentPlaying }]"
@@ -414,6 +424,14 @@
       </div>
     </div>
 
+    <SongInfoModal
+      ref="songInfoRef"
+      :open="showSongInfo"
+      :track="currentPlaying"
+      :sheet="isMobilePlayer || isCompact"
+      @close="showSongInfo = false"
+    />
+
     <div class="queue-panel card" v-if="showQueuePanel" ref="queuePanelRef" @click.stop>
       <div class="queue-header">
         <span class="queue-title">{{ queuePanelTitle }} <em>{{ playQueue.length }}</em></span>
@@ -499,6 +517,7 @@ import { cleanText, formatArtists } from '../utils/text.js'
 import SpectrumVisualizer from './SpectrumVisualizer.vue'
 import CoverArt from './CoverArt.vue'
 import PickPlaylistModal from './PickPlaylistModal.vue'
+import SongInfoModal from './SongInfoModal.vue'
 import { isFavorite, toggleFavorite } from '../stores/library.js'
 import {
   moodRadioActive,
@@ -517,6 +536,7 @@ import { useQualityMenuPosition } from '../utils/qualityMenu.js'
 
 const queuePanelRef = ref(null)
 const queueBtnRef = ref(null)
+const songInfoRef = ref(null)
 const moreWrapRef = ref(null)
 const playerBarRef = ref(null)
 const volumeWrapRef = ref(null)
@@ -527,6 +547,8 @@ const showMorePanel = ref(false)
 const showMoreDlQuality = ref(false)
 const downloadMenuOpen = ref(false)
 const pickPlaylistTrack = ref(null)
+const showSongInfo = ref(false)
+const songInfoPressing = ref(false)
 const scrubbing = ref(false)
 const scrubTime = ref(0)
 let seekCommitLock = false
@@ -711,6 +733,7 @@ watch(isCompact, (compact) => {
 }, { immediate: true })
 
 watch(currentPlaying, () => {
+  showSongInfo.value = false
   closeDownloadMenu()
   showMoreDlQuality.value = false
 })
@@ -764,6 +787,7 @@ onUnmounted(() => {
   window.visualViewport?.removeEventListener('resize', updateMobilePlayer)
   compactObserver?.disconnect()
   compactObserver = null
+  clearSongInfoLongPress()
   clearTimeout(volumeLeaveTimer)
   clearDownloadMenuPosition()
   document.documentElement.style.removeProperty('--player-height')
@@ -786,6 +810,15 @@ function onDocumentClick(e) {
     const more = moreWrapRef.value
     if (!panel?.contains(t) && !btn?.contains(t) && !more?.contains(t)) showQueuePanel.value = false
   }
+  if (showSongInfo.value) {
+    if (isMobilePlayer.value || isCompact.value) {
+      // 抽屉用遮罩关闭
+    } else {
+      const panel = songInfoRef.value?.panelRef
+      const left = playerBarRef.value?.querySelector?.('.bar-left')
+      if (!panel?.contains?.(t) && !left?.contains?.(t)) showSongInfo.value = false
+    }
+  }
   if (showVolumePanel.value) {
     if (!volumeWrapRef.value?.contains(t)) showVolumePanel.value = false
   }
@@ -793,7 +826,10 @@ function onDocumentClick(e) {
 
 function onToggleQueuePanel() {
   showQueuePanel.value = !showQueuePanel.value
-  if (showQueuePanel.value) showMorePanel.value = false
+  if (showQueuePanel.value) {
+    showMorePanel.value = false
+    showSongInfo.value = false
+  }
 }
 
 function toggleMorePanel() {
@@ -808,6 +844,7 @@ function toggleMorePanel() {
 
 function onMoreOpenQueue() {
   showMorePanel.value = false
+  showSongInfo.value = false
   showQueuePanel.value = true
 }
 
@@ -835,8 +872,73 @@ function onSeekCommit(e) {
 }
 
 function onCoverClick() {
+  if (suppressCoverClickAfterSongInfo) {
+    suppressCoverClickAfterSongInfo = false
+    return
+  }
   if (!currentPlaying.value) return
   openFullscreenPlayer()
+}
+
+const SONG_INFO_LONG_PRESS_MS = 480
+let songInfoLongPressTimer = null
+let suppressCoverClickAfterSongInfo = false
+let longPressStartX = 0
+let longPressStartY = 0
+
+const barLeftTitle = computed(() => {
+  if (!currentPlaying.value) return undefined
+  return isMobilePlayer.value ? '长按查看歌曲信息' : '右键查看歌曲信息'
+})
+
+function clearSongInfoLongPress() {
+  if (songInfoLongPressTimer) {
+    clearTimeout(songInfoLongPressTimer)
+    songInfoLongPressTimer = null
+  }
+  songInfoPressing.value = false
+}
+
+function openSongInfoPanel() {
+  if (!currentPlaying.value) return
+  showSongInfo.value = true
+  showQueuePanel.value = false
+  showMorePanel.value = false
+  closeDownloadMenu()
+}
+
+function onSongInfoContextMenu() {
+  // 手机用长按；桌面右键
+  if (isMobilePlayer.value) return
+  openSongInfoPanel()
+}
+
+function onBarLeftPointerDown(e) {
+  if (!currentPlaying.value || !isMobilePlayer.value) return
+  if (e.pointerType === 'mouse') return
+  if (typeof e.button === 'number' && e.button !== 0) return
+  longPressStartX = e.clientX
+  longPressStartY = e.clientY
+  clearSongInfoLongPress()
+  songInfoPressing.value = true
+  songInfoLongPressTimer = window.setTimeout(() => {
+    songInfoLongPressTimer = null
+    songInfoPressing.value = false
+    suppressCoverClickAfterSongInfo = true
+    openSongInfoPanel()
+    try { navigator.vibrate?.(12) } catch {}
+  }, SONG_INFO_LONG_PRESS_MS)
+}
+
+function onBarLeftPointerMove(e) {
+  if (!songInfoLongPressTimer) return
+  const dx = Math.abs(e.clientX - longPressStartX)
+  const dy = Math.abs(e.clientY - longPressStartY)
+  if (dx > 12 || dy > 12) clearSongInfoLongPress()
+}
+
+function onBarLeftPointerUp() {
+  clearSongInfoLongPress()
 }
 
 function onVolumePercent(e) {
@@ -941,6 +1043,12 @@ async function onQueuePlayClick(index) {
   width: 260px;
   flex-shrink: 0;
   min-width: 0;
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.bar-left.song-info-pressing {
+  opacity: 0.82;
 }
 
 .cover-progress-wrap {

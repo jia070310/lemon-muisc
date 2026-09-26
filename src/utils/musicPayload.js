@@ -143,9 +143,10 @@ export function buildDownloadTask(item, source, quality, extra = {}) {
   const albumMid = pickField(item.albumMid, item.albummid, item.albumId)
   return {
     name: item.name,
-    singer: item.singer,
+    singer: pickField(item.singer, item.artist, item.albumArtist, extra.singer, extra.albumArtist),
     source: item.source || source,
-    album: item.album || item.albumName || '',
+    album: pickField(item.album, item.albumName, extra.album),
+    albumArtist: pickField(item.albumArtist, item.album_artist, extra.albumArtist, item.singer, item.artist),
     interval: item.interval || '',
     quality: q,
     songId: item.songId ?? item.songmid ?? item.hash ?? item.copyrightId ?? item.id,
@@ -173,6 +174,8 @@ export function buildDownloadTask(item, source, quality, extra = {}) {
     deferExistAsk: Boolean(extra.deferExistAsk),
     batchId: extra.batchId || '',
     listName: extra.listName || '',
+    replacePath: extra.replacePath || '',
+    forceOverwrite: Boolean(extra.forceOverwrite || extra.replacePath),
   }
 }
 

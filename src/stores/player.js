@@ -14,6 +14,12 @@ import {
   recordRecentPlay,
   localCoverUrl,
   bumpLibraryCoverVersion,
+  removeRoamTrack,
+  appendRoamTracks,
+  randomPickLibraryTracks,
+  ROAM_PLAYLIST_ID,
+  ROAM_PICK_SIZE,
+  ROAM_REFILL_THRESHOLD,
 } from './library.js'
 import { parseLyricRich, lyricHasWords, lyricHasTiming, synthesizeWordTimings, resolveActiveWordIndex, getLyricLineEndTime } from '../utils/lrc.js'
 import { formatArtists } from '../utils/text.js'
@@ -139,6 +145,12 @@ export const playQueue = ref([])
 export const currentQueueIndex = ref(-1)
 /** 当前列表来源：main=普通试听，mood=心情地图试听（互不混用） */
 export const queueSource = ref('main')
+/**
+ * 动态歌单模式：当前播放列表是否绑定「漫游歌单」
+ * 从漫游播放入口启动时设为 roam；普通/心情模式为 null（驱动自动续填/清已播）
+ * @type {import('vue').Ref<string|null>}
+ */
+export const activeDynamicList = ref(null)
 /** @type {import('vue').Ref<'list'|'loop'|'single'|'random'>} */
 export const playMode = ref('list')
 export const showQueuePanel = ref(false)
@@ -211,6 +223,7 @@ export function enterMoodQueueMode() {
   playQueue.value = []
   playHistory = []
   currentQueueIndex.value = -1
+  activeDynamicList.value = null
   queueSource.value = 'mood'
   saveQueueState({ immediate: true })
 }
@@ -1485,6 +1498,7 @@ function persistQueueState() {
       currentIndex: currentQueueIndex.value,
       playMode: playMode.value,
       queueSource: queueSource.value,
+      activeDynamicList: activeDynamicList.value,
     }))
     localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({
       currentPlaying: currentPlaying.value ? pickItemFields(currentPlaying.value) : null,
@@ -1585,6 +1599,7 @@ function loadQueueState() {
     } else {
       queueSource.value = 'main'
     }
+    activeDynamicList.value = data.activeDynamicList === ROAM_PLAYLIST_ID ? ROAM_PLAYLIST_ID : null
   } catch {}
 }
 
@@ -1984,10 +1999,88 @@ async function onTrackEnded() {
       isPaused.value = false
       return
     }
+    if (activeDynamicList.value === ROAM_PLAYLIST_ID) {
+      await playNextRoamAuto()
+      return
+    }
     await playNextAuto()
   } finally {
     endedHandling = false
   }
+}
+
+/** 漫游歌单自动连播：清已播 + 残歌少时自动续填后再播下一首 */
+async function playNextRoamAuto() {
+  const finished = playQueue.value[currentQueueIndex.value]
+  if (finished) {
+    removeRoamTrack(finished.item)
+    playQueue.value.splice(currentQueueIndex.value, 1)
+    if (currentQueueIndex.value >= playQueue.value.length) {
+      currentQueueIndex.value = playQueue.value.length - 1
+    }
+    saveQueueState()
+  }
+
+  if (playQueue.value.length <= ROAM_REFILL_THRESHOLD) {
+    maybeRefillRoamQueue()
+  }
+
+  if (!playQueue.value.length) {
+    activeDynamicList.value = null
+    isPaused.value = true
+    return
+  }
+
+  const maxSkip = Math.min(playQueue.value.length, 8)
+  const tried = new Set()
+  for (let i = 0; i < maxSkip; i++) {
+    const next = resolveNextRoamIndex()
+    if (next < 0) {
+      isPaused.value = true
+      return
+    }
+    if (tried.has(next)) {
+      isPaused.value = true
+      return
+    }
+    tried.add(next)
+    try {
+      await playTrackAt(next)
+      return
+    } catch (e) {
+      if (e?.aborted) return
+      if (i === 0) showPlayerNotice('当前曲目无法播放，已跳过', 4000)
+    }
+  }
+  isPaused.value = true
+}
+
+/**
+ * 漫游模式下一首下标：
+ * 已播曲目已从队列删除，splice 后 currentQueueIndex 仍指向下一首；
+ * 列表/循环模式直接播当前位置即可，不要 +1；随机模式仍随机选。
+ */
+function resolveNextRoamIndex() {
+  const len = playQueue.value.length
+  if (!len) return -1
+  if (playMode.value === 'random') return pickRandomIndex(currentQueueIndex.value)
+  let idx = currentQueueIndex.value
+  if (idx < 0 || idx >= len) idx = 0
+  return idx
+}
+
+/** 剩余不多于阈值时，从音乐库再抽 10 首追加到漫游歌单 + 播放队列 */
+function maybeRefillRoamQueue() {
+  if (activeDynamicList.value !== ROAM_PLAYLIST_ID) return
+  const added = appendRoamTracks(randomPickLibraryTracks(ROAM_PICK_SIZE))
+  for (const t of added) {
+    const cleaned = cleanTrackItem({ ...t, source: t.source || 'local' })
+    const src = cleaned.source || 'local'
+    const key = getTrackKey(cleaned, src)
+    if (playQueue.value.some(q => q.key === key)) continue
+    playQueue.value.push({ key, item: cleaned, source: src })
+  }
+  saveQueueState()
 }
 
 async function playNextAuto() {
@@ -2477,9 +2570,58 @@ export function addToQueue(item, source, { play = false, replace = false, mood =
   return idx
 }
 
+/** 设置当前播放绑定的动态歌单：'roam' = 漫游歌单，null = 普通 */
+export function setActiveDynamicList(listId) {
+  activeDynamicList.value = listId === ROAM_PLAYLIST_ID ? ROAM_PLAYLIST_ID : null
+  saveQueueState()
+}
+
+/**
+ * 用指定曲目列表替换播放队列并立即播放（漫游播放入口使用）。
+ * 同时标记当前为漫游动态歌单（驱动自动续填/已播清理逻辑）。
+ */
+export async function startPlayTracks(tracks, sourceOverride = '') {
+  // 与心情试听互斥：进入漫游前先退出心情模式
+  if (queueSource.value === 'mood') {
+    try {
+      const { stopMoodRadio } = await import('./moodRadio.js')
+      stopMoodRadio()
+    } catch {}
+    exitMoodQueueMode({ restore: false })
+  }
+
+  const list = (tracks || []).map(t => {
+    const cleaned = cleanTrackItem({ ...t, source: t.source || sourceOverride || 'local' })
+    const src = cleaned.source || sourceOverride || 'local'
+    const key = getTrackKey(cleaned, src)
+    return { key, item: cleaned, source: src }
+  }).filter(e => e.key)
+  if (!list.length) return
+
+  const seen = new Set()
+  const dedup = []
+  for (const e of list) {
+    if (seen.has(e.key)) continue
+    seen.add(e.key)
+    dedup.push({ ...e, item: cleanTrackItem({ ...e.item, source: e.source }) })
+  }
+  playQueue.value = dedup
+  playHistory = []
+
+  activeDynamicList.value = ROAM_PLAYLIST_ID
+  if (currentQueueIndex.value >= playQueue.value.length) currentQueueIndex.value = -1
+  await playTrackAt(0)
+  saveQueueState()
+}
+
 export function removeFromQueue(index) {
   if (index < 0 || index >= playQueue.value.length) return
+  const removedEntry = playQueue.value[index]
   playQueue.value.splice(index, 1)
+  // 漫游模式：手动移除队列曲目时，同步从漫游歌单移除
+  if (activeDynamicList.value === ROAM_PLAYLIST_ID && removedEntry?.item) {
+    removeRoamTrack(removedEntry.item)
+  }
   if (currentQueueIndex.value === index) {
     if (playQueue.value.length) {
       const next = Math.min(index, playQueue.value.length - 1)
@@ -2497,6 +2639,7 @@ export function clearQueue() {
   playQueue.value = []
   playHistory = []
   currentQueueIndex.value = -1
+  activeDynamicList.value = null
   stopPlay()
   // 清空的是当前模式列表；心情模式下不销毁已暂存的主列表
   saveQueueState()
@@ -2519,6 +2662,8 @@ export async function playItem(item, activeSource, { mood = false } = {}) {
     } catch {}
     exitMoodQueueMode({ restore: true })
   }
+
+  if (activeDynamicList.value) activeDynamicList.value = null
 
   const key = getTrackKey(item, activeSource)
   const idx = playQueue.value.findIndex(q => q.key === key)
@@ -2978,6 +3123,11 @@ export async function playNext() {
     if (playMode.value === 'loop') {
       await playTrackAt(0)
       return
+    }
+    // 漫游歌单播到末尾：自动续填后再从第一首继续
+    if (activeDynamicList.value === ROAM_PLAYLIST_ID) {
+      maybeRefillRoamQueue()
+      if (playQueue.value.length) await playTrackAt(0)
     }
     return
   }

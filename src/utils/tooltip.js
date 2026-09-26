@@ -107,11 +107,17 @@ function placeTip(anchor) {
     place = 'top'
   }
 
-  let left = rect.left + rect.width / 2 - tw / 2
+  // 宽锚点（如列表里左对齐省略的歌名）：按文字起点附近定位，避免整行居中导致气泡飘到右侧
+  const wideAnchor = rect.width > Math.max(tw, 72) * 1.35
+  const focusX = wideAnchor
+    ? rect.left + Math.min(36, Math.max(12, rect.width * 0.12))
+    : rect.left + rect.width / 2
+
+  let left = focusX - tw / 2
   left = Math.min(Math.max(8, left), vw - tw - 8)
 
   const arrowX = Math.min(
-    Math.max(12, rect.left + rect.width / 2 - left),
+    Math.max(12, focusX - left),
     tw - 12,
   )
 

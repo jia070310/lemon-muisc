@@ -55,6 +55,7 @@ import {
   ALBUM_SORT_OPTIONS,
   scanLibrary,
   fetchLibraryAlbums,
+  libraryBrowseRevision,
 } from '../stores/library.js'
 
 const ALBUM_SORT_KEY = 'lemon-library-album-sort'
@@ -95,6 +96,10 @@ watch(albumSort, (value) => {
 })
 
 watch(page, () => { loadPage() })
+
+watch(libraryBrowseRevision, () => {
+  loadPage()
+})
 
 onMounted(async () => {
   if (!libraryScanned.value) {

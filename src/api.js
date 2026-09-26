@@ -482,6 +482,11 @@ export const api = {
       body: { filePath, newName },
       timeout: 30000,
     }),
+    albumSyncPreview: (payload) => request('/library/album-sync/preview', {
+      method: 'POST',
+      body: payload,
+      timeout: 120000,
+    }),
   },
   backup: {
     export: () => request('/backup/export', { timeout: 60000 }),

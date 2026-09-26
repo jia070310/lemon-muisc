@@ -23,6 +23,14 @@
           <div class="detail-actions">
             <button class="btn-primary btn-sm" :disabled="!album.tracks.length" @click="playAll">播放全部</button>
             <button class="btn-ghost btn-sm" :disabled="!album.tracks.length" @click="queueAll">加入试听列表</button>
+            <button
+              class="btn-ghost btn-sm"
+              type="button"
+              :disabled="albumSyncBusy || !(album.trackCount || album.tracks.length)"
+              @click="openAlbumSync"
+            >
+              {{ albumSyncBusy ? '准备中…' : '专辑检测' }}
+            </button>
           </div>
         </div>
       </div>
@@ -65,7 +73,12 @@
             </button>
             <div class="track-meta">
               <div class="track-name">{{ song.name }}</div>
-              <div class="track-artist">{{ song.singer }}</div>
+              <TrackMetaLinks
+                class="track-artist"
+                :singer="song.singer"
+                :album="song.album"
+                :show-album-link="false"
+              />
               <div class="track-tags">{{ formatTrackTags(song) }}</div>
             </div>
             <MobileRowActions
@@ -108,6 +121,16 @@
       @close="pickPlaylistTrack = null"
       @added="onAddedToPlaylist"
     />
+
+    <AlbumSyncDialog
+      :open="albumSyncOpen"
+      :artist="album?.artist || ''"
+      :album="album?.name || ''"
+      :local-tracks="albumSyncTracks"
+      default-quality="flac"
+      @cancel="closeAlbumSync"
+      @done="onAlbumSyncDone"
+    />
   </div>
 </template>
 
@@ -119,9 +142,12 @@ import { formatTrackTags, formatAlbumTags } from '../utils/format.js'
 import { getTrackFilePath } from '../utils/trackPath.js'
 import { parseAlbumId } from '../utils/albumId.js'
 import PickPlaylistModal from '../components/PickPlaylistModal.vue'
+import AlbumSyncDialog from '../components/AlbumSyncDialog.vue'
 import CoverArt from '../components/CoverArt.vue'
 import MobileRowActions from '../components/MobileRowActions.vue'
+import TrackMetaLinks from '../components/TrackMetaLinks.vue'
 import { playItem, addToQueue, isInQueue, isPlayingItem, isPaused } from '../stores/player.js'
+import { assertActiveSourceForDownload } from '../stores/downloadGuard.js'
 import {
   libraryScanned,
   scanLibrary,
@@ -151,6 +177,9 @@ const coverPendingPauseKey = ref('')
 const isNarrow = ref(false)
 const toast = ref(null)
 const pickPlaylistTrack = ref(null)
+const albumSyncOpen = ref(false)
+const albumSyncBusy = ref(false)
+const albumSyncTracks = ref([])
 let narrowMq = null
 
 function updateNarrow() {
@@ -207,6 +236,17 @@ async function loadAlbum() {
       total = 0
     }
     if (!items.length) {
+      // 指定了专辑艺人却无结果：不要放宽成「所有未知专辑」，否则点进幽灵卡片会看到别的歌
+      if (albumArtist) {
+        if (seq !== loadSeq) return
+        album.value = albumShell(artist, name, {
+          artist: artist || '未知艺术家',
+          cover: '',
+          trackCount: 0,
+          tracks: [],
+        })
+        return
+      }
       const fallback = await fetchLibraryTracksPage(api, {
         page: page.value,
         limit: pageSize,
@@ -366,6 +406,42 @@ function onAddedToPlaylist({ playlist, duplicate }) {
   pickPlaylistTrack.value = null
   if (duplicate) showToast('歌曲已在歌单中', 'info')
   else showToast(`已加入歌单：${playlist?.name || ''}`, 'success')
+}
+
+async function openAlbumSync() {
+  if (!(await assertActiveSourceForDownload())) return
+  albumSyncBusy.value = true
+  try {
+    const list = await loadAllAlbumTracks()
+    if (!list.length) {
+      showToast('该专辑暂无本地曲目', 'info')
+      return
+    }
+    albumSyncTracks.value = list
+    albumSyncOpen.value = true
+  } catch (e) {
+    showToast(e.message || '加载专辑曲目失败', 'error')
+  } finally {
+    albumSyncBusy.value = false
+  }
+}
+
+function closeAlbumSync() {
+  albumSyncOpen.value = false
+  albumSyncTracks.value = []
+}
+
+function onAlbumSyncDone({ added = 0, missing = 0, upgradable = 0 } = {}) {
+  closeAlbumSync()
+  const parts = []
+  if (missing) parts.push(`补全 ${missing}`)
+  if (upgradable) parts.push(`升级 ${upgradable}`)
+  showToast(
+    added
+      ? `已加入下载队列 ${added} 首${parts.length ? `（${parts.join(' · ')}）` : ''}`
+      : '没有任务入队',
+    added ? 'success' : 'info',
+  )
 }
 
 async function queueAll() {

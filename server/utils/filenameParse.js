@@ -119,9 +119,29 @@ function parseParenForm(base) {
   return null
 }
 
+export function isPlaceholderName(value) {
+  const v = collapseSpace(value)
+  if (!v) return true
+  return /^(unknown|unknow|n\/a|null|undefined|未知|未知歌手|未知艺人|未知艺术家|未知标题|未知专辑|track\s*\d+)$/i.test(v)
+}
+
+function scrubPlaceholder(value) {
+  const v = collapseSpace(value)
+  return isPlaceholderName(v) ? '' : v
+}
+
 function buildResult(artist, title, extra = {}) {
-  const a = collapseSpace(artist)
-  const t = collapseSpace(title)
+  let a = scrubPlaceholder(artist)
+  let t = scrubPlaceholder(title)
+  // 一侧是 Unknown 占位、另一侧有内容 → 有内容的一侧当作歌名（「歌名 - Unknown」）
+  if (!a && !t && (artist || title)) {
+    // both scrubbed empty
+  } else if (!t && a && isPlaceholderName(title) && !isPlaceholderName(artist)) {
+    t = a
+    a = ''
+  } else if (!a && t && isPlaceholderName(artist) && !isPlaceholderName(title)) {
+    // already title-only
+  }
   const keyword = [a, t].filter(Boolean).join(' ')
   const out = {
     artist: a,
@@ -154,6 +174,13 @@ export function parseFilename(fileName) {
   if (parts.length >= 2) {
     const left = parts[0]
     const right = parts.slice(1).join(' - ')
+    // 「歌名 - Unknown」/「Unknown - 歌名」：占位侧丢弃，另一侧当歌名
+    if (isPlaceholderName(left) && !isPlaceholderName(right)) {
+      return buildResult('', right, { usedSwap: false, confidence: 3 })
+    }
+    if (isPlaceholderName(right) && !isPlaceholderName(left)) {
+      return buildResult('', left, { usedSwap: true, confidence: 3 })
+    }
     const oriented = guessOrientation(left, right)
     return buildResult(oriented.artist, oriented.title, oriented)
   }
@@ -172,7 +199,7 @@ function isSameAsFilename(value, fileName) {
 function isUsefulTagField(value, fileName) {
   const v = collapseSpace(value)
   if (!v) return false
-  if (/^(unknown|unknow|未知|未知歌手|未知艺人|未知标题|track\s*\d+)$/i.test(v)) return false
+  if (isPlaceholderName(v)) return false
   if (fileName && isSameAsFilename(v, fileName)) return false
   return true
 }
@@ -182,6 +209,7 @@ function isUsefulTagField(value, fileName) {
  * 1) 优先用内嵌标签（有意义时）
  * 2) 缺的一侧用文件名补
  * 3) 两侧都无标签时用文件名智能解析（含颠倒判断）
+ * 4) 文件名一侧是 Unknown 占位时，不把错误内嵌歌手带进搜索
  */
 export function resolveSearchArtistTitle({
   artist = '',
@@ -193,6 +221,9 @@ export function resolveSearchArtistTitle({
   const tagArtist = collapseSpace(artist)
   const tagTitle = collapseSpace(title)
   const parsed = parseFilename(fileName || '')
+  const rawBase = cleanFilenameNoise(stripExt(fileName || ''))
+  const filenameHasPlaceholder = SEPARATOR_RE.test(rawBase)
+    && rawBase.split(SEPARATOR_RE).some((p) => isPlaceholderName(p))
 
   const useTagArtist = isUsefulTagField(tagArtist, fileName)
   const useTagTitle = isUsefulTagField(tagTitle, fileName)
@@ -204,8 +235,20 @@ export function resolveSearchArtistTitle({
   if (!outArtist && isUsefulTagField(parsedArtist, fileName)) outArtist = collapseSpace(parsedArtist)
   if (!outTitle && isUsefulTagField(parsedTitle, fileName)) outTitle = collapseSpace(parsedTitle)
 
-  if (!outArtist) outArtist = parsed.artist
-  if (!outTitle) outTitle = parsed.title
+  if (!outTitle) outTitle = scrubPlaceholder(parsed.title)
+  if (!outArtist) outArtist = scrubPlaceholder(parsed.artist)
+
+  // 文件名含 Unknown：标题以文件名为准；内嵌歌手不可信（除非标题也一致）
+  if (filenameHasPlaceholder && parsed.title) {
+    outTitle = scrubPlaceholder(parsed.title) || outTitle
+    if (!(useTagTitle && fieldTitleAgrees(tagTitle, parsed.title))) {
+      outArtist = scrubPlaceholder(parsed.artist)
+    }
+  } else if (!useTagTitle && parsed.title && parsed.artist) {
+    // 内嵌标题不可用（如 UNKNOWN），文件名两侧都有 → 整段信文件名，勿带错歌手
+    outTitle = scrubPlaceholder(parsed.title)
+    outArtist = scrubPlaceholder(parsed.artist)
+  }
 
   // 标签两侧都空但文件名解析出颠倒结果时，已在 parse 里处理
   // 若只有整段 title、无 artist，再尝试从 title 里二次拆分
@@ -222,11 +265,18 @@ export function resolveSearchArtistTitle({
   }
 
   return {
-    artist: outArtist,
-    title: outTitle,
+    artist: scrubPlaceholder(outArtist),
+    title: scrubPlaceholder(outTitle) || outTitle,
     parsed,
     fromTag: { artist: useTagArtist, title: useTagTitle },
   }
+}
+
+function fieldTitleAgrees(a, b) {
+  const x = collapseSpace(a).toLowerCase()
+  const y = collapseSpace(b).toLowerCase()
+  if (!x || !y) return false
+  return x === y || x.includes(y) || y.includes(x)
 }
 
 function scoreOne(item, parsed) {

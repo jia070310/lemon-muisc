@@ -53,7 +53,7 @@
           <input v-model="strategy" type="radio" value="none" />
           <div class="batch-strategy-body">
             <div class="batch-strategy-title">不降档（只要目标音质）</div>
-            <div class="batch-strategy-desc">拿不到目标音质则直接失败。无损推荐此项。</div>
+            <div class="batch-strategy-desc">不自动降档；仍拿不到时会询问是否降档。无损推荐此项。</div>
           </div>
         </label>
       </div>

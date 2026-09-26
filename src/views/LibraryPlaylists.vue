@@ -221,8 +221,12 @@
                 <span v-if="song.isLocal" class="track-origin-badge local">本地</span>
                 <span v-else class="track-origin-badge online">{{ onlineBadgeLabel(song) }}</span>
               </div>
-              <div class="track-artist">{{ song.singer }}</div>
-              <div class="track-tags">{{ formatTrackTags(song) }}</div>
+              <TrackMetaLinks
+                class="track-artist"
+                :singer="song.singer"
+                :album="song.album"
+              />
+              <div class="track-tags">{{ formatTrackTags({ ...song, album: '' }) }}</div>
             </div>
             <MobileRowActions
               :open="actionsOpenKey === song.key"
@@ -363,6 +367,7 @@ import { useRoute, useRouter } from 'vue-router'
 import PlaylistCover from '../components/PlaylistCover.vue'
 import CoverArt from '../components/CoverArt.vue'
 import MobileRowActions from '../components/MobileRowActions.vue'
+import TrackMetaLinks from '../components/TrackMetaLinks.vue'
 import PlaylistEditModal from '../components/PlaylistEditModal.vue'
 import CreatePlaylistModal from '../components/CreatePlaylistModal.vue'
 import AddToPlaylistModal from '../components/AddToPlaylistModal.vue'
@@ -376,14 +381,18 @@ import { platformLabel } from '../utils/platforms.js'
 import { getQualityLabel, getQualityDisplay } from '../utils/quality.js'
 import { buildDownloadTask, getItemQualities } from '../utils/musicPayload.js'
 import { useQualityMenuPosition } from '../utils/qualityMenu.js'
-import { playItem, addToQueue, isInQueue, isPlayingItem, isPaused } from '../stores/player.js'
+import { playItem, addToQueue, isInQueue, isPlayingItem, isPaused, startPlayTracks } from '../stores/player.js'
 import { formatTrackTags } from '../utils/format.js'
 import { countAutoFillColumns } from '../utils/grid.js'
 import {
+  libraryTracks,
   libraryScanned,
+  libraryTrackTotal,
   buildPlaylistCards,
   loadPlaylistCardsFromServer,
   SMART_PLAYLIST_IDS,
+  ROAM_PLAYLIST_ID,
+  ROAM_PICK_SIZE,
   updatePlaylist,
   removeTrackFromPlaylist,
   deletePlaylist,
@@ -397,6 +406,9 @@ import {
   scanLibrary,
   isFavorite,
   toggleFavorite,
+  randomPickLibraryTracks,
+  setRoamTracks,
+  ensureRoamPickPool,
 } from '../stores/library.js'
 import { api } from '../api.js'
 import { assertActiveSourceForDownload } from '../stores/downloadGuard.js'
@@ -440,6 +452,7 @@ const pacedBusy = ref(false)
 const pacedDefaults = ref({ batchSize: 50, intervalHours: 24 })
 const activePlaylistJob = ref(null)
 const cancellingJob = ref(false)
+const randomPlaying = ref(false)
 const { menuStyle, positionMenu, clearMenuPosition } = useQualityMenuPosition()
 const { menuStyle: batchMenuStyle, positionMenu: positionBatchMenu, clearMenuPosition: clearBatchMenuPosition } = useQualityMenuPosition()
 const { menuStyle: pacedMenuStyle, positionMenu: positionPacedMenu, clearMenuPosition: clearPacedMenuPosition } = useQualityMenuPosition()
@@ -481,10 +494,15 @@ const cardsLoading = ref(false)
 const visibleCards = computed(() => allCards.value.filter((c) => !c.hidden))
 const customCards = computed(() => visibleCards.value.filter((c) => !SMART_PLAYLIST_IDS.has(c.id)))
 const smartCards = computed(() => visibleCards.value.filter((c) => SMART_PLAYLIST_IDS.has(c.id)))
-/** 有自定义/导入歌单时只展示这些；没有时才展示最近添加 / 收藏 / 最近播放 */
-const sourceCards = computed(() => (
-  customCards.value.length ? customCards.value : smartCards.value
-))
+/** 「漫游播放」入口始终置顶；有曲目时一并置顶「漫游歌单」。有自定义/导入歌单时其余只展示这些，否则展示智能歌单 */
+const sourceCards = computed(() => {
+  const entry = smartCards.value.find((c) => c.id === 'random-start')
+  const roam = smartCards.value.find((c) => c.id === 'roam')
+  const rest = customCards.value.length
+    ? customCards.value
+    : smartCards.value.filter((c) => c.id !== 'random-start' && c.id !== 'roam')
+  return [entry, roam, ...rest].filter(Boolean)
+})
 const gridCards = computed(() => {
   if (isNarrow.value || showAllPlaylistCards.value) return sourceCards.value
   return sourceCards.value.slice(0, playlistPreviewLimit.value)
@@ -562,7 +580,13 @@ watch(selectedId, () => {
 })
 
 watch(() => route.query.id, (id) => {
-  selectedId.value = id ? String(id) : ''
+  const next = id ? String(id) : ''
+  // 首页/外链点「漫游播放」入口：直接开播，不停留在空入口卡
+  if (next === 'random-start') {
+    startRandomPlay()
+    return
+  }
+  selectedId.value = next
 })
 
 watch([selectedId, playlistPreviewLimit, sourceCards], () => {
@@ -581,8 +605,8 @@ onMounted(async () => {
     if (playlistGridEl.value) playlistGridRo.observe(playlistGridEl.value)
   }
   updatePlaylistCols()
-  const q = route.query.id
-  if (q) selectedId.value = String(q)
+  const q = route.query.id ? String(route.query.id) : ''
+  if (q && q !== 'random-start') selectedId.value = q
   loadPacedDefaults()
   wsUnsubs.push(onWS('playlist-download:progress', (job) => {
     if (job?.playlistId && job.playlistId === selectedId.value) activePlaylistJob.value = job
@@ -608,6 +632,7 @@ onMounted(async () => {
     cardsLoading.value = false
   }
   refreshActiveJob()
+  if (q === 'random-start') await startRandomPlay()
 })
 
 onUnmounted(() => {
@@ -621,7 +646,45 @@ onUnmounted(() => {
 })
 
 function selectCard(card) {
+  // 漫游播放入口卡：点击直接触发漫游播放并跳到漫游歌单
+  if (card.id === 'random-start') {
+    startRandomPlay()
+    return
+  }
   selectedId.value = card.id
+}
+
+/** 漫游播放入口：抽 10 首覆盖漫游歌单并立即播放 */
+async function startRandomPlay() {
+  if (randomPlaying.value) return
+  randomPlaying.value = true
+  try {
+    if (!libraryScanned.value) {
+      try { await scanLibrary(api, { resync: true }) } catch {}
+    }
+    const pool = await ensureRoamPickPool(api)
+    if (!pool.length && !libraryTracks.value.length && !(libraryTrackTotal.value > 0)) {
+      showToast('音乐库暂无歌曲，请先添加音乐', 'info')
+      return
+    }
+    const picked = randomPickLibraryTracks(ROAM_PICK_SIZE, pool)
+    if (!picked.length) {
+      showToast('音乐库暂无歌曲，无法漫游播放', 'info')
+      return
+    }
+    setRoamTracks(picked)
+    await startPlayTracks(picked)
+    showToast(`已开始漫游播放 ${picked.length} 首，可在漫游歌单查看`, 'success')
+    selectedId.value = ROAM_PLAYLIST_ID
+    if (String(route.query.id || '') !== ROAM_PLAYLIST_ID) {
+      router.replace({ path: '/library/playlists', query: { id: ROAM_PLAYLIST_ID } })
+    }
+    void refreshPlaylistCards()
+  } catch (e) {
+    showToast(e?.message || '漫游播放失败', 'error')
+  } finally {
+    randomPlaying.value = false
+  }
 }
 
 function trackPayload(song) {
@@ -900,6 +963,15 @@ async function onTrackCoverClick(song) {
 async function playAll() {
   const list = selectedCard.value?.tracks || []
   if (!list.length) return
+  // 漫游歌单走动态播放：自动续填 + 已播清理
+  if (selectedCard.value?.id === ROAM_PLAYLIST_ID) {
+    try {
+      await startPlayTracks(list)
+    } catch (e) {
+      showToast(e.message || '播放失败', 'error')
+    }
+    return
+  }
   for (const s of list) {
     const source = s.source || (s.localPath ? 'local' : '')
     addToQueue(trackPayload(s), source)

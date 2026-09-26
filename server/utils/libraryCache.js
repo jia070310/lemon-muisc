@@ -361,7 +361,7 @@ export function upsertCacheEntry(filePath, mtime, size, meta) {
 export function removeCachePaths(paths) {
   ensureLibraryCacheTable()
   const db = getDB()
-  const list = [...new Set((paths || []).filter(Boolean))]
+  const list = [...new Set((paths || []).map((p) => normalizePathKey(p)).filter(Boolean))]
   if (!list.length) return 0
   const stmt = db.prepare('DELETE FROM library_index WHERE file_path = ?')
   const delMany = db.transaction((ps) => {

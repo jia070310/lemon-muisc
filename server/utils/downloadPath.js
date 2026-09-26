@@ -16,7 +16,7 @@ function resolveGroupMode(settings = {}) {
 
 /** 多歌手归档到群星；单歌手取唯一署名 */
 function pickArtistSegment(task = {}) {
-  const artists = splitArtists(task.singer || '')
+  const artists = splitArtists(task.singer || task.albumArtist || '')
   if (artists.length >= 2) return VARIOUS_ARTISTS_DIR
   return artists[0] || ''
 }

@@ -639,15 +639,15 @@ function mapTxSongItem(item) {
     : (item.songid != null && item.songid !== '' ? String(item.songid) : songmid)
   const strMediaMid = item.file?.media_mid || item.strMediaMid || item.media_mid || ''
   const img = txCoverUrl(item, albumMid, albumName)
+  const singer = formatTxSingers(item.singer)
+    || formatTxSingers(item.singerList)
+    || formatTxSingers(item.singers)
+    || formatArtists(item.singername || item.singerName || item.singer_name || item.artist || '')
 
   return withTypes({
     id: songmid,
     name: cleanHtml(item.title || item.songname || item.name || ''),
-    singer: formatArtists(
-      Array.isArray(item.singer)
-        ? item.singer.map(s => s.name).join('/')
-        : (item.singername || ''),
-    ),
+    singer,
     album: albumName,
     albumName,
     interval: formatTime(item.interval || 0),
@@ -804,8 +804,19 @@ async function kgAlbumSearch(keyword, page = 1, limit = 30) {
 
 function formatTxSingers(singers) {
   if (!singers) return ''
-  if (Array.isArray(singers)) return formatArtists(singers.map(s => s.name).filter(Boolean).join('/'))
-  if (typeof singers === 'object') return formatArtists(singers.name || '')
+  if (Array.isArray(singers)) {
+    return formatArtists(singers.map((s) => {
+      if (!s) return ''
+      if (typeof s === 'string') return s
+      return s.name || s.title || s.singer_name || s.singerName || ''
+    }).filter(Boolean).join('/'))
+  }
+  if (typeof singers === 'object') {
+    // QQ 专辑详情：{ singerList: [{ name }] }；单歌手对象：{ name }
+    if (Array.isArray(singers.singerList)) return formatTxSingers(singers.singerList)
+    if (Array.isArray(singers.singers)) return formatTxSingers(singers.singers)
+    return formatArtists(singers.name || singers.title || singers.singer_name || singers.singerName || '')
+  }
   return formatArtists(String(singers))
 }
 
@@ -1063,15 +1074,23 @@ async function txAlbum(id) {
   if (!list.length) throw new Error('无法获取 QQ 音乐专辑')
 
   const basic = detail?.basicInfo || detail || {}
+  const author = formatTxSingers(detail?.singer || basic.singer)
+    || formatTxSingers(detail?.singerList || basic.singerList)
+    || formatTxSingers(detail?.singers || basic.singers)
+    || formatArtists(basic.singername || basic.singerName || basic.singer_name || '')
+  const filledList = list.map((track) => {
+    if (String(track?.singer || '').trim() || !author) return track
+    return { ...track, singer: author }
+  })
   return {
-    list,
-    total: total || list.length,
+    list: filledList,
+    total: total || filledList.length,
     source: 'tx',
     info: {
-      name: cleanHtml(basic.name || basic.title || list[0]?.album || ''),
-      img: basic.pic || basic.picUrl || list[0]?.img || '',
+      name: cleanHtml(basic.name || basic.title || filledList[0]?.album || ''),
+      img: basic.pic || basic.picUrl || filledList[0]?.img || '',
       desc: cleanHtml(detail?.desc || detail?.description || basic.desc || ''),
-      author: formatTxSingers(detail?.singer || basic.singer),
+      author,
       publishTime: basic.publishDate || basic.aDate || basic.pubTime || basic.time_public || '',
       genre: cleanHtml(basic.genreNew || basic.genre || ''),
       language: cleanHtml(basic.language || ''),
@@ -1131,15 +1150,21 @@ async function kwAlbum(id) {
   }
   if (!list.length) throw new Error('无法获取酷我专辑')
 
+  const author = formatArtists(meta.artist || meta.ARTIST || '')
+  const filledList = list.map((track) => {
+    if (String(track?.singer || '').trim() || !author) return track
+    return { ...track, singer: author }
+  })
+
   return {
-    list,
-    total: parseInt(meta.total, 10) || list.length,
+    list: filledList,
+    total: parseInt(meta.total, 10) || filledList.length,
     source: 'kw',
     info: {
       name: cleanHtml(meta.album || meta.name || ''),
       img: meta.pic || '',
       desc: cleanHtml(meta.albuminfo || meta.info || meta.desc || ''),
-      author: formatArtists(meta.artist || meta.ARTIST || ''),
+      author,
       publishTime: meta.releaseDate || meta.pub || meta.RELEASEDATE || '',
       genre: cleanHtml(meta.lang || meta.content_type || ''),
     },
@@ -1166,9 +1191,16 @@ async function kgAlbum(id) {
   }
   if (!all.length) throw new Error('无法获取酷狗专辑')
   const albumCover = String(albumInfo.imgurl || albumInfo.img || '').replace(/\{size\}/g, '400')
-  const list = albumCover
+  const author = formatArtists(albumInfo.singername || albumInfo.author_name || '')
+  let list = albumCover
     ? all.map((s) => (s.picUrl || s.img ? s : { ...s, picUrl: albumCover, img: albumCover }))
     : all
+  if (author) {
+    list = list.map((track) => {
+      if (String(track?.singer || '').trim()) return track
+      return { ...track, singer: author }
+    })
+  }
   return {
     list,
     total: total || list.length,
@@ -1177,7 +1209,7 @@ async function kgAlbum(id) {
       name: cleanHtml(albumInfo.albumname || albumInfo.name || ''),
       img: albumCover,
       desc: cleanHtml(albumInfo.intro || albumInfo.description || ''),
-      author: formatArtists(albumInfo.singername || albumInfo.author_name || ''),
+      author,
       publishTime: albumInfo.publishtime || albumInfo.publish_date || '',
       genre: cleanHtml(albumInfo.language || albumInfo.type || albumInfo.genre || ''),
     },
@@ -1361,18 +1393,30 @@ async function wyFetchSongsByIds(ids, headers) {
 
 function mapWyPlaylistTrack(item, priv, pl) {
   const types = parseWyTypes({ ...item, privilege: priv })
+  const artists = item.ar || item.artists || []
+  const albumName = cleanHtml(item.al?.name || pl?.name || '')
+  const albumArtist = formatArtists(
+    (pl?.artist ? [pl.artist] : [])
+      .concat(pl?.artists || [])
+      .map((a) => (typeof a === 'string' ? a : a?.name))
+      .filter(Boolean)
+      .join('/'),
+  )
+  const singer = formatArtists(artists.map((a) => a.name).filter(Boolean).join('/'))
+    || albumArtist
   return withTypes({
     id: String(item.id),
     name: cleanHtml(item.name),
-    singer: formatArtists((item.ar || []).map(a => a.name).join('/')),
-    album: cleanHtml(item.al?.name),
-    albumName: cleanHtml(item.al?.name),
+    singer,
+    albumArtist: albumArtist || singer,
+    album: albumName,
+    albumName,
     interval: formatTime(Math.floor((item.dt || 0) / 1000)),
     source: 'wy',
     songId: String(item.id),
     songmid: String(item.id),
-    picUrl: item.al?.picUrl || pl.coverImgUrl || '',
-    img: item.al?.picUrl || pl.coverImgUrl || '',
+    picUrl: item.al?.picUrl || pl.coverImgUrl || pl.picUrl || '',
+    img: item.al?.picUrl || pl.coverImgUrl || pl.picUrl || '',
   }, types)
 }
 

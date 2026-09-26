@@ -39,7 +39,7 @@
           <div class="batch-strategy-body">
             <div class="batch-strategy-title">不降档（只要目标音质）</div>
             <div class="batch-strategy-desc">
-              拿不到目标音质则直接失败。选 FLAC 等无损时推荐此项；服务端会校验真实 FLAC，拒绝「假 flac / 实为 MP3」的文件。
+              不自动降档：先同音源跨平台找目标音质，再换其它音源。仍拿不到时会询问是否降档；服务端会校验真实 FLAC，拒绝「假 flac / 实为 MP3」。
             </div>
           </div>
         </label>
