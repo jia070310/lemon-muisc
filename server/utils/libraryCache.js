@@ -1,5 +1,6 @@
 import fs from 'fs'
 import path from 'path'
+import { randomUUID } from 'crypto'
 import { getDB } from '../db.js'
 import { getMusicPaths, getAllMusicScanRoots, isUnderConfiguredMusicDir, isPathUnderMusicDirs } from './filePaths.js'
 import { listAudioFiles } from './audioScan.js'
@@ -60,6 +61,7 @@ function ensureSearchColumns(db) {
   add('mood_version', 'mood_version INTEGER NOT NULL DEFAULT 0')
   add('mood_analyzed_at', 'mood_analyzed_at INTEGER NOT NULL DEFAULT 0')
   add('mood_file_mtime', 'mood_file_mtime REAL NOT NULL DEFAULT 0')
+  add('track_id', "track_id TEXT NOT NULL DEFAULT ''")
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_library_title ON library_index(title COLLATE NOCASE);
     CREATE INDEX IF NOT EXISTS idx_library_artist ON library_index(artist COLLATE NOCASE);
@@ -68,7 +70,18 @@ function ensureSearchColumns(db) {
     CREATE INDEX IF NOT EXISTS idx_library_album_artist ON library_index(album_artist COLLATE NOCASE);
     CREATE INDEX IF NOT EXISTS idx_library_mood_status ON library_index(mood_status);
     CREATE INDEX IF NOT EXISTS idx_library_mood_xy ON library_index(mood_valence, mood_arousal);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_library_track_id ON library_index(track_id) WHERE track_id != '';
   `)
+  try {
+    const missing = db.prepare(`SELECT file_path FROM library_index WHERE track_id IS NULL OR track_id = ''`).all()
+    if (missing.length) {
+      const upd = db.prepare('UPDATE library_index SET track_id = ? WHERE file_path = ?')
+      const fill = db.transaction((rows) => {
+        for (const r of rows) upd.run(randomUUID(), r.file_path)
+      })
+      fill(missing)
+    }
+  } catch { /* ignore backfill errors */ }
   if (columnsReady) return
   // 从 meta_json 回填可查询列（只填仍为空的行，避免反复全表写）
   try {
@@ -152,17 +165,26 @@ function buildStubEntry(filePath) {
   }
 }
 
+function attachTrackId(out, row) {
+  const id = String(row?.track_id || '').trim()
+  if (id) {
+    out.id = id
+    out.trackId = id
+  }
+  return out
+}
+
 function rowToFile(row) {
   try {
     const meta = sanitizeCacheMeta(JSON.parse(row.meta_json || '{}'))
-    return {
+    return attachTrackId({
       filePath: row.file_path,
       mtime: row.mtime,
       size: row.size,
       ...meta,
-    }
+    }, row)
   } catch {
-    return buildStubEntry(row.file_path)
+    return attachTrackId(buildStubEntry(row.file_path), row)
   }
 }
 
@@ -203,7 +225,7 @@ function rowToSlimFile(row) {
   for (const key of CACHE_LIST_FIELDS) {
     if (meta[key] != null && meta[key] !== '') out[key] = meta[key]
   }
-  return out
+  return attachTrackId(out, row)
 }
 
 function buildDirSqlFilter(dirs) {
@@ -231,8 +253,8 @@ export function getAllCachedTracks(dirsOverride = null) {
 
   const filter = buildDirSqlFilter(dirs)
   const rows = filter
-    ? db.prepare(`SELECT file_path, mtime, size, meta_json FROM library_index WHERE ${filter.where} ORDER BY mtime DESC`).all(...filter.params)
-    : db.prepare('SELECT file_path, mtime, size, meta_json FROM library_index ORDER BY mtime DESC').all()
+    ? db.prepare(`SELECT file_path, mtime, size, meta_json, track_id FROM library_index WHERE ${filter.where} ORDER BY mtime DESC`).all(...filter.params)
+    : db.prepare('SELECT file_path, mtime, size, meta_json, track_id FROM library_index ORDER BY mtime DESC').all()
 
   return rows.map(rowToSlimFile)
 }
@@ -271,8 +293,8 @@ export function syncLibraryIndex(dirs, { partial = false } = {}) {
 
   const filter = partial ? buildDirSqlFilter(musicDirs) : null
   const cachedRows = filter
-    ? db.prepare(`SELECT file_path, mtime, size, meta_json FROM library_index WHERE ${filter.where}`).all(...filter.params)
-    : db.prepare('SELECT file_path, mtime, size, meta_json FROM library_index').all()
+    ? db.prepare(`SELECT file_path, mtime, size, meta_json, track_id FROM library_index WHERE ${filter.where}`).all(...filter.params)
+    : db.prepare('SELECT file_path, mtime, size, meta_json, track_id FROM library_index').all()
   const cachedMap = new Map(cachedRows.map(r => [normalizePathKey(r.file_path), r]))
 
   const cached = []
@@ -311,7 +333,7 @@ export function syncLibraryIndex(dirs, { partial = false } = {}) {
   return { cached, pending, removed, total: disk.size }
 }
 
-export function upsertCacheEntry(filePath, mtime, size, meta) {
+export function upsertCacheEntry(filePath, mtime, size, meta, { preserveTrackId } = {}) {
   ensureLibraryCacheTable()
   const db = getDB()
   const key = normalizePathKey(filePath)
@@ -319,17 +341,23 @@ export function upsertCacheEntry(filePath, mtime, size, meta) {
   const clean = sanitizeCacheMeta(rest)
   const metaJson = JSON.stringify(clean)
   const fields = extractSearchFields(clean, key)
+  const existing = db.prepare('SELECT track_id FROM library_index WHERE file_path = ?').get(key)
+  const trackId = String(preserveTrackId || existing?.track_id || '').trim() || randomUUID()
   db.prepare(`
     INSERT INTO library_index (
-      file_path, mtime, size, meta_json, scanned_at,
+      file_path, mtime, size, meta_json, scanned_at, track_id,
       title, artist, album_artist, album, year, genre, duration, format, track_no, has_picture, has_lyrics
     )
-    VALUES (?, ?, ?, ?, unixepoch(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, unixepoch(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(file_path) DO UPDATE SET
       mtime = excluded.mtime,
       size = excluded.size,
       meta_json = excluded.meta_json,
       scanned_at = excluded.scanned_at,
+      track_id = CASE
+        WHEN library_index.track_id IS NOT NULL AND library_index.track_id != '' THEN library_index.track_id
+        ELSE excluded.track_id
+      END,
       title = excluded.title,
       artist = excluded.artist,
       album_artist = excluded.album_artist,
@@ -346,6 +374,7 @@ export function upsertCacheEntry(filePath, mtime, size, meta) {
     mtime || 0,
     size || 0,
     metaJson,
+    trackId,
     fields.title,
     fields.artist,
     fields.albumArtist,
@@ -385,7 +414,7 @@ export function renameCachePath(oldPath, newPath) {
   const newKey = normalizePathKey(newPath)
   if (!oldKey || !newKey || oldKey === newKey) return false
 
-  const row = db.prepare('SELECT file_path, mtime, size, meta_json FROM library_index WHERE file_path = ?').get(oldKey)
+  const row = db.prepare('SELECT file_path, mtime, size, meta_json, track_id FROM library_index WHERE file_path = ?').get(oldKey)
   if (!row) return false
 
   let meta = {}
@@ -401,12 +430,13 @@ export function renameCachePath(oldPath, newPath) {
   meta.parsedArtist = parsed.artist
   const format = path.extname(fileName).replace(/^\./, '').toLowerCase()
   if (format) meta.format = format
+  const preserveTrackId = String(row.track_id || '').trim()
 
   const tx = db.transaction(() => {
     db.prepare('DELETE FROM library_index WHERE file_path = ?').run(oldKey)
     // 目标路径若已有幽灵记录先清掉
     db.prepare('DELETE FROM library_index WHERE file_path = ?').run(newKey)
-    upsertCacheEntry(newPath, row.mtime || 0, row.size || 0, meta)
+    upsertCacheEntry(newPath, row.mtime || 0, row.size || 0, meta, { preserveTrackId })
   })
   tx()
   return true
@@ -492,7 +522,7 @@ export function getCacheEntry(filePath) {
   if (!db || !filePath) return null
   const key = normalizePathKey(filePath)
   const row = db.prepare(`
-    SELECT file_path, mtime, size, meta_json, has_picture, has_lyrics
+    SELECT file_path, mtime, size, meta_json, has_picture, has_lyrics, track_id
     FROM library_index WHERE file_path = ?
   `).get(key)
   if (!row) return null
@@ -501,6 +531,43 @@ export function getCacheEntry(filePath) {
   file.hasPicture = Boolean(file.hasPicture || row.has_picture)
   file.hasLyrics = Boolean(file.hasLyrics || row.has_lyrics)
   return file
+}
+
+/** 按稳定 trackId 取曲 */
+export function getTrackById(trackId, dirsOverride = null) {
+  ensureLibraryCacheTable()
+  const db = getDB()
+  const id = String(trackId || '').trim()
+  if (!db || !id) return null
+  const row = db.prepare(`
+    SELECT file_path, mtime, size, meta_json, has_picture, has_lyrics, track_id,
+           title, artist, album_artist, album, year, genre, duration, format, track_no
+    FROM library_index WHERE track_id = ?
+  `).get(id)
+  if (!row) return null
+  const dirs = (Array.isArray(dirsOverride) ? dirsOverride : null)
+  if (dirs?.length && !isPathUnderMusicDirs(row.file_path, dirs)) return null
+  const file = rowToQueryFile(row)
+  file.hasPicture = Boolean(file.hasPicture || row.has_picture)
+  file.hasLyrics = Boolean(file.hasLyrics || row.has_lyrics)
+  try {
+    const meta = sanitizeCacheMeta(JSON.parse(row.meta_json || '{}'))
+    Object.assign(file, meta, { filePath: row.file_path })
+    attachTrackId(file, row)
+  } catch {
+    attachTrackId(file, row)
+  }
+  return file
+}
+
+/** trackId → 绝对路径 */
+export function resolvePathByTrackId(trackId) {
+  ensureLibraryCacheTable()
+  const db = getDB()
+  const id = String(trackId || '').trim()
+  if (!db || !id) return ''
+  const row = db.prepare('SELECT file_path FROM library_index WHERE track_id = ?').get(id)
+  return row?.file_path || ''
 }
 
 /** 用 SQLite 缓存补全文件列表（标签编辑 / 快速扫描） */
@@ -586,7 +653,7 @@ function tracksOrderSql(sort) {
 
 function rowToQueryFile(row) {
   const fileName = path.basename(row.file_path || '')
-  return {
+  return attachTrackId({
     filePath: row.file_path,
     mtime: row.mtime,
     size: row.size,
@@ -604,7 +671,7 @@ function rowToQueryFile(row) {
     hasLyrics: Boolean(row.has_lyrics),
     parsedTitle: row.title || '',
     parsedArtist: row.artist || '',
-  }
+  }, row)
 }
 
 /**
@@ -678,7 +745,7 @@ export function queryCachedTracks(opts = {}) {
   const total = db.prepare(`SELECT COUNT(*) AS n FROM library_index WHERE ${where}`).get(...params)?.n || 0
   const rows = db.prepare(`
     SELECT file_path, mtime, size, title, artist, album_artist, album, year, genre,
-           duration, format, track_no, has_picture, has_lyrics
+           duration, format, track_no, has_picture, has_lyrics, track_id
     FROM library_index
     WHERE ${where}
     ORDER BY ${order}
@@ -703,7 +770,7 @@ export function queryTracksByPaths(paths, { limit = 500 } = {}) {
   const placeholders = list.map(() => '?').join(',')
   const rows = db.prepare(`
     SELECT file_path, mtime, size, title, artist, album_artist, album, year, genre,
-           duration, format, track_no, has_picture, has_lyrics
+           duration, format, track_no, has_picture, has_lyrics, track_id
     FROM library_index
     WHERE file_path IN (${placeholders})
   `).all(...list)
@@ -1222,7 +1289,7 @@ export function queryMoodMapPoints({ limit = 5000, dirs = null } = {}) {
       AND mood_arousal IS NOT NULL${whereExtra}
   `).get(...params)?.c || 0
   const rows = db.prepare(`
-    SELECT file_path, title, artist, album, duration, mood_valence, mood_arousal, mood_bpm, has_picture
+    SELECT file_path, title, artist, album, duration, mood_valence, mood_arousal, mood_bpm, has_picture, track_id
     FROM library_index
     WHERE mood_status = 'ok'
       AND mood_valence IS NOT NULL
@@ -1232,17 +1299,22 @@ export function queryMoodMapPoints({ limit = 5000, dirs = null } = {}) {
   `).all(...params, max)
   return {
     total,
-    points: rows.map((r) => ({
-      filePath: r.file_path,
-      title: r.title || path.basename(r.file_path || ''),
-      artist: r.artist || '',
-      album: r.album || '',
-      duration: r.duration || 0,
-      x: Number(r.mood_valence),
-      y: Number(r.mood_arousal),
-      bpm: Number(r.mood_bpm) || 0,
-      hasPicture: Boolean(r.has_picture),
-    })),
+    points: rows.map((r) => {
+      const id = String(r.track_id || '').trim()
+      return {
+        id: id || undefined,
+        trackId: id || undefined,
+        filePath: r.file_path,
+        title: r.title || path.basename(r.file_path || ''),
+        artist: r.artist || '',
+        album: r.album || '',
+        duration: r.duration || 0,
+        x: Number(r.mood_valence),
+        y: Number(r.mood_arousal),
+        bpm: Number(r.mood_bpm) || 0,
+        hasPicture: Boolean(r.has_picture),
+      }
+    }),
   }
 }
 
@@ -1307,7 +1379,7 @@ export function queryMoodTracksInRegion({ bbox = null, polygon = null, limit = 5
   const dirParams = filter ? filter.params : []
   const rows = db.prepare(`
     SELECT file_path, title, artist, album, album_artist, year, genre, duration, format,
-           mood_valence, mood_arousal, mood_bpm, has_picture, has_lyrics, mtime, size
+           mood_valence, mood_arousal, mood_bpm, has_picture, has_lyrics, mtime, size, track_id
     FROM library_index
     WHERE mood_status = 'ok'
       AND mood_valence IS NOT NULL

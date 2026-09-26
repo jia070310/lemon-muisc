@@ -16,9 +16,13 @@ import { libraryRouter } from './library.js'
 import { albumSyncRouter } from './albumSync.js'
 import { qualityUpgradeRouter } from './qualityUpgrade.js'
 import { backupRouter } from './backup.js'
+import { openApiPublicRouter } from './openApi.js'
 import { requireAuth } from '../middleware/auth.js'
 
 export const apiRouter = Router()
+
+// 未鉴权：元信息 / OpenAPI / 文档（亦挂在 /api 与 /api/v1）
+apiRouter.use(openApiPublicRouter)
 
 apiRouter.use('/auth', authRouter)
 apiRouter.use('/health', healthRouter)

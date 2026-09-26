@@ -8,6 +8,7 @@ import { fileURLToPath } from 'url'
 import { initDB, getDB } from './db.js'
 import { migrateFilePaths } from './utils/filePaths.js'
 import { apiRouter } from './routes/index.js'
+import { apiVersionHeader } from './routes/openApi.js'
 import { initDownloadQueue } from './routes/download.js'
 import { setupWebSocket } from './ws.js'
 import { loadSource } from './sourceManager.js'
@@ -34,6 +35,7 @@ const server = http.createServer(app)
 
 app.use(cors({ origin: true, credentials: true }))
 app.use(express.json({ limit: '25mb' }))
+app.use(apiVersionHeader)
 
 app.locals.dataPath = DATA_PATH
 app.locals.configPath = CONFIG_PATH
@@ -42,6 +44,8 @@ initDB(CONFIG_PATH)
 migrateFilePaths(DATA_PATH)
 refreshStoredSourceMeta()
 
+// 兼容 Web：/api；开放客户端优先：/api/v1（同一路由器）
+app.use('/api/v1', apiRouter)
 app.use('/api', apiRouter)
 
 const publicDir = path.join(__dirname, '..', 'dist', 'public')

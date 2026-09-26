@@ -11,6 +11,8 @@
 
 飞牛 FPK 为**独立原生应用**，运行时使用应用中心 **Node.js v22**。
 
+**开放 API（第三方 / APP 客户端）**：[docs/open-api.md](docs/open-api.md) · 本机文档 `http://<主机>:7983/api/docs` · [OpenAPI](docs/openapi.yaml)
+
 -QQ 互动群「飞牛柠檬🍋muisc」（群号 1126326017）
 - ![群](docs/screenshots/QQ195632.png)
 
@@ -20,6 +22,7 @@
 - **情绪地图启发式 v5**：多段中位数、调式弱先验、本库相对分布标定；新文件自动后台补分析
 - **AI（Essentia）一键准备**：自动安装依赖与 MusiCNN / emoMusic 模型；配置目录持久化，保留数据升级可复用
 - **音乐库音质升级**：按库内格式筛选并循序升到目标无损档（含 FLAC→更高档），覆盖原文件
+- **开放 API**：`/api/v1`、稳定 `trackId`、短时效媒体票；文档 `/api/docs`（[说明](docs/open-api.md)）
 - **漫游播放**：随机抽歌、自动续填与已播清理（鸣谢 [@theroad](https://github.com/theroad) · [#18](https://github.com/jia070310/lemon-muisc/pull/18)）
 - 查重支持 Live / Remix 等版本变体归组；情绪引擎下拉统一为 AppSelect
 
@@ -465,6 +468,7 @@ npm run fpk:build
 | `npm run dev` | 同时启动前后端开发服务 |
 | `npm run build` | 构建前端到 `dist/public` |
 | `npm run start` | 启动后端 |
+| `npm run openapi:build` | 重新生成 `docs/openapi.json` / `openapi.yaml` |
 | `npm run auth:reset-password -- --list` | 列出所有用户 |
 | `npm run auth:reset-password -- <用户> <新密码>` | 重置用户密码 |
 | `npm run auth:reset-users -- --list` | 查看用户（清空前预览） |

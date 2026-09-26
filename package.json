@@ -11,6 +11,7 @@
     "dev:client": "vite --host 0.0.0.0",
     "build": "vite build",
     "start": "node server/index.js",
+    "openapi:build": "node scripts/build-openapi.mjs",
     "auth:reset-password": "node scripts/reset-password.js",
     "auth:reset-users": "node scripts/reset-users.js",
     "fpk:build": "powershell -ExecutionPolicy Bypass -File scripts/build-fpk.ps1",

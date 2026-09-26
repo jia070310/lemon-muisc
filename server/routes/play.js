@@ -16,6 +16,8 @@ import { getDB } from '../db.js'
 import { buildSourceFallbackOffer, buildSourceInfoPayload, getSourceFallbackMode } from '../utils/sourceFallback.js'
 import { extractMusicUrl } from '../utils/sourceResult.js'
 import { appendStreamToken } from '../utils/streamAuth.js'
+import { createStreamTicket, ticketClaimsFromStreamUrl } from '../utils/streamTicket.js'
+import { resolvePathByTrackId } from '../utils/libraryCache.js'
 import { ensureApePlayWav } from '../utils/apePlay.js'
 import { buildMusicCdnHeaders } from '../utils/musicCdnHeaders.js'
 import { ensureSmoothPlayAac, needsSmoothPlayTranscode, warmSmoothPlayAac } from '../utils/smoothPlay.js'
@@ -74,16 +76,25 @@ function guessMimeFromUrl(url) {
 }
 
 function signPlayStreamUrl(url, req) {
-  return appendStreamToken(url, req.authToken)
+  return appendStreamToken(url, {
+    sessionToken: req.authToken,
+    userId: req.user?.id,
+    role: req.user?.role,
+  })
 }
 
 function wrapPlayUrl(url, source) {
-  if (!url || url.startsWith('/api/play/')) return url
+  if (!url || url.startsWith('/api/play/') || url.startsWith('/api/v1/play/')) return url
   if (!/^https?:\/\//i.test(url)) return url
   return `/api/play/proxy?url=${encodeURIComponent(url)}&source=${encodeURIComponent(source || '')}`
 }
 
 function resolveLocalFilePath(body = {}) {
+  const trackId = body.trackId || body.id
+  if (trackId) {
+    const byId = resolvePathByTrackId(trackId)
+    if (byId) return byId
+  }
   const direct = body.localPath || body.filePath
   if (direct) return String(direct)
   const key = body.key || ''
@@ -91,10 +102,58 @@ function resolveLocalFilePath(body = {}) {
   return ''
 }
 
+/** 续签短时效媒体票（也可对任意流式相对 URL 签票） */
+playRouter.post('/ticket', (req, res) => {
+  try {
+    if (!req.user?.id) {
+      return res.status(401).json({ error: '未登录', code: 'UNAUTHORIZED' })
+    }
+    let streamUrl = String(req.body?.url || '').trim()
+    const localFilePath = resolveLocalFilePath(req.body || {})
+    if (!streamUrl && localFilePath) {
+      if (!isAllowedMediaPath(localFilePath, { userId: req.user.id })) {
+        return res.status(400).json({ error: '本地文件不可用或不在允许目录内' })
+      }
+      streamUrl = `/api/play/local?path=${encodeURIComponent(path.resolve(localFilePath))}`
+    }
+    if (!streamUrl) {
+      return res.status(400).json({ error: '请提供 url 或 trackId/localPath' })
+    }
+    if (!streamUrl.startsWith('/api/play/') && !streamUrl.startsWith('/api/v1/play/') && !streamUrl.startsWith('/api/tag/cover')) {
+      return res.status(400).json({ error: '仅支持本站流式路径' })
+    }
+    const claims = ticketClaimsFromStreamUrl(streamUrl)
+    const ttlSec = Number(req.body?.ttlSec) || undefined
+    const ticket = createStreamTicket({
+      userId: req.user.id,
+      role: req.user.role,
+      path: claims.path,
+      scope: claims.scope,
+      ttlSec,
+    })
+    const url = appendStreamToken(streamUrl, {
+      userId: req.user.id,
+      role: req.user.role,
+      ttlSec,
+    })
+    res.json({
+      ok: true,
+      ticket,
+      url,
+      expiresIn: Math.max(60, Number(ttlSec) || 2 * 60 * 60),
+    })
+  } catch (e) {
+    res.status(500).json({ error: e.message || '签发失败' })
+  }
+})
+
 playRouter.post('/url', async (req, res) => {
   try {
     const { songId, source, quality, sourceApiId, skipSourceIds, refresh } = req.body
     const localFilePath = resolveLocalFilePath(req.body)
+    if ((req.body?.trackId || req.body?.id) && !localFilePath) {
+      return res.status(404).json({ error: '未找到对应曲目', code: 'TRACK_NOT_FOUND' })
+    }
 
     // 本地文件：返回可流式播放的同源 URL（APE 走转码缓存端点）
     if (localFilePath) {

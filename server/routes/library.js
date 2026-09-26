@@ -30,6 +30,7 @@ import {
   getMoodAnalyzeStats,
   queryMoodMapPoints,
   queryMoodTracksInRegion,
+  getTrackById,
 } from '../utils/libraryCache.js'
 import { inspectFakeFlacFile } from '../utils/audioFormat.js'
 import { parseFilename } from '../utils/filenameParse.js'
@@ -111,6 +112,22 @@ libraryRouter.get('/tracks/count', (req, res) => {
   try {
     const userDirs = getMusicPathsForUser(req.user?.id)
     res.json({ ok: true, total: countCachedTracks(userDirs) })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+/** 按稳定 trackId 取单曲 */
+libraryRouter.get('/tracks/:trackId', (req, res) => {
+  try {
+    const trackId = String(req.params.trackId || '').trim()
+    if (!trackId || trackId === 'count') {
+      return res.status(400).json({ error: '无效的 trackId' })
+    }
+    const userDirs = getMusicPathsForUser(req.user?.id)
+    const track = getTrackById(trackId, userDirs)
+    if (!track) return res.status(404).json({ error: '未找到曲目', code: 'TRACK_NOT_FOUND' })
+    res.json({ ok: true, data: track })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }

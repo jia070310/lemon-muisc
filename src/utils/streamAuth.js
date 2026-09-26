@@ -1,6 +1,6 @@
 import { getToken } from './auth.js'
 
-const STREAM_PREFIXES = ['/api/play/', '/api/tag/cover']
+const STREAM_PREFIXES = ['/api/play/', '/api/tag/cover', '/api/v1/play/', '/api/v1/tag/cover']
 
 export function needsStreamAuth(url) {
   if (!url) return false
@@ -12,6 +12,7 @@ export function stripStreamAuth(url) {
   try {
     const u = new URL(url, window.location.origin)
     u.searchParams.delete('token')
+    u.searchParams.delete('ticket')
     // 用 %20 重写，避免空格变成 +
     const qs = []
     u.searchParams.forEach((value, key) => {
@@ -19,13 +20,17 @@ export function stripStreamAuth(url) {
     })
     return `${u.pathname}${qs.length ? `?${qs.join('&')}` : ''}`
   } catch {
-    return String(url).replace(/([?&])token=[^&]*&?/g, '$1').replace(/[?&]$/, '')
+    return String(url)
+      .replace(/([?&])(?:token|ticket)=[^&]*&?/g, '$1')
+      .replace(/[?&]$/, '')
   }
 }
 
-/** 为 audio/img 等无法带 Header 的媒体请求附加登录 token（不重编码 path） */
+/** 为 audio/img 等无法带 Header 的媒体请求附加登录凭证（不重编码 path） */
 export function withStreamAuth(url) {
   if (!url || !needsStreamAuth(url)) return url
+  // 服务端 play/url 已签发短时效 ticket 时无需再叠 session token
+  if (/[?&]ticket=/.test(String(url))) return url
   const token = getToken()
   if (!token) return url
   if (/[?&]token=/.test(String(url))) {

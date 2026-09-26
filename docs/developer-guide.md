@@ -72,10 +72,12 @@ lemon-muisc/
 ### 认证体系
 
 - `POST /api/auth/login` 签发会话 → `sessions` 表；前端存 `localStorage["lemon-auth-token"]`
-- 除 `/auth/*`、`/health` 外，所有 `/api/*` 均经 `requireAuth` 中间件
+- 除 `/auth/*`、`/health`、以及开放元信息（`/`、`/openapi.json`、`/docs`）外，所有 `/api/*` 均经 `requireAuth` 中间件
+- **开放 API**：同一路由器双挂载 `/api` 与 `/api/v1`；曲目稳定 `trackId`；流式优先 `?ticket=` 短时效媒体票（兼容 `?token=`）
 - WebSocket 以 URL 参数 `?token=` 校验（`validateWsToken`）
-- 音频流 URL 由 `appendStreamToken` 追加短期 token（`/api/play/`、`/api/tag/cover`）
+- 音频流 URL 由 `appendStreamToken` 签发（优先 ticket）
 - 角色：`admin`（用户/路径管理）、`user`（普通用户）
+- 对接文档：[open-api.md](./open-api.md) · 交互：`/api/docs` · 规格：[`openapi.yaml`](./openapi.yaml)
 
 ## 5. 前端设计
 

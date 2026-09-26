@@ -32,6 +32,11 @@
 - 随机抽歌进入漫游歌单，临近播完自动续填、已播曲目自动清理
 - 鸣谢 [@theroad](https://github.com/theroad)（[PR #18](https://github.com/jia070310/lemon-muisc/pull/18)）提交漫游播放相关能力
 
+### 开放 API
+
+- 双挂载 `/api` 与 `/api/v1`；稳定曲目 `trackId`；播放流短时效 `ticket`
+- 未登录可打开 `/api/docs`（Swagger）；规格见 `docs/openapi.yaml` / [open-api.md](../docs/open-api.md)
+
 ### 其它
 
 - 仅 Linux x86_64 / macOS 支持官方 Essentia 预编译包；ARM NAS / Windows 请使用本地启发式
