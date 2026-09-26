@@ -5,6 +5,7 @@
 
     <div class="toolbar">
       <button class="btn-ghost btn-sm" @click="loadList">刷新</button>
+      <button class="btn-ghost btn-sm" @click="openQualityUpgrade">音质升级</button>
       <button class="btn-ghost btn-sm" @click="resumeAll" :disabled="!pausableCount">全部继续</button>
       <button class="btn-ghost btn-sm" @click="pauseAll" :disabled="!activeCount">全部暂停</button>
       <button
@@ -27,6 +28,21 @@
       <button class="btn-ghost btn-sm" @click="clearCompleted">清除已完成</button>
       <button class="btn-ghost btn-sm" @click="dismissAll" :disabled="!tasks.length">清理全部列表</button>
       <button class="btn-primary btn-sm" @click="playAllPlayable" :disabled="!playableTasks.length">试听全部</button>
+    </div>
+
+    <div v-if="upgradeJob" class="upgrade-job card">
+      <div class="upgrade-job-text">
+        音质升级循序下载中：已入队 {{ upgradeJob.cursor }}/{{ upgradeJob.total }} 首
+        <span v-if="upgradeJob.nextRunAt" class="upgrade-job-next">
+          · 下一批约 {{ formatJobNext(upgradeJob.nextRunAt) }}
+        </span>
+      </div>
+      <button
+        type="button"
+        class="btn-ghost btn-sm"
+        :disabled="cancellingUpgrade"
+        @click="cancelUpgradeJob"
+      >{{ cancellingUpgrade ? '取消中…' : '取消升级' }}</button>
     </div>
 
     <div v-if="batchMode && tasks.length" class="batch-bar card">
@@ -223,6 +239,14 @@
       @close="pickPlaylistTrack = null"
       @added="onAddedToPlaylist"
     />
+
+    <QualityUpgradeDialog
+      :open="upgradeDialogOpen"
+      :default-batch-size="upgradeDefaults.batchSize"
+      :default-interval-hours="upgradeDefaults.intervalHours"
+      @cancel="upgradeDialogOpen = false"
+      @done="onUpgradeDone"
+    />
   </div>
 </template>
 
@@ -241,6 +265,7 @@ import { localCoverUrl, isFavorite, toggleFavorite } from '../stores/library.js'
 import MobileRowActions from '../components/MobileRowActions.vue'
 import CoverArt from '../components/CoverArt.vue'
 import PickPlaylistModal from '../components/PickPlaylistModal.vue'
+import QualityUpgradeDialog from '../components/QualityUpgradeDialog.vue'
 
 const tasks = ref([])
 const toast = ref(null)
@@ -252,6 +277,10 @@ const actionsOpenId = ref('')
 const pickPlaylistTrack = ref(null)
 const tappingTaskId = ref('')
 const coverPendingPauseId = ref('')
+const upgradeDialogOpen = ref(false)
+const upgradeJob = ref(null)
+const cancellingUpgrade = ref(false)
+const upgradeDefaults = ref({ batchSize: 50, intervalHours: 24 })
 
 /** 解析任务本地文件路径（兼容 file_path / filePath / meta 残留） */
 function resolveTaskFilePath(task) {
@@ -308,8 +337,15 @@ function onAddedToPlaylist({ playlist, duplicate }) {
   else showToast(`已加入歌单：${playlist?.name || ''}`, 'success')
 }
 
-onMounted(() => loadList())
-onActivated(() => loadList())
+onMounted(() => {
+  loadList()
+  refreshUpgradeJob()
+  loadUpgradeDefaults()
+})
+onActivated(() => {
+  loadList()
+  refreshUpgradeJob()
+})
 
 const unsubs = []
 const progressPending = new Map()
@@ -396,6 +432,18 @@ unsubs.push(onWS('download:cleared', (d) => {
     return
   }
   tasks.value = tasks.value.filter(x => x.status !== 'completed')
+}))
+unsubs.push(onWS('playlist-download:progress', (job) => {
+  if (job?.playlistId === 'quality-upgrade') upgradeJob.value = job
+}))
+unsubs.push(onWS('playlist-download:done', (job) => {
+  if (job?.playlistId === 'quality-upgrade') {
+    upgradeJob.value = null
+    showToast('音质升级循序任务已全部入队', 'success')
+  }
+}))
+unsubs.push(onWS('playlist-download:cancelled', (job) => {
+  if (job?.playlistId === 'quality-upgrade') upgradeJob.value = null
 }))
 onUnmounted(() => {
   if (progressFlushTimer) {
@@ -1125,6 +1173,78 @@ function showToast(text, type = 'info') {
   toast.value = { text, type }
   setTimeout(() => { toast.value = null }, 3000)
 }
+
+function openQualityUpgrade() {
+  upgradeDialogOpen.value = true
+}
+
+async function loadUpgradeDefaults() {
+  try {
+    const s = await api.settings.get()
+    const batch = Number(s?.['download.playlistBatchSize'])
+    const hours = Number(s?.['download.playlistIntervalHours'])
+    upgradeDefaults.value = {
+      batchSize: [10, 20, 50, 100, 200, 300, 500, 1000].includes(batch) ? batch : 50,
+      intervalHours: [1, 3, 6, 12, 24, 48].includes(hours) ? hours : 24,
+    }
+  } catch {}
+}
+
+async function refreshUpgradeJob() {
+  try {
+    const res = await api.library.qualityUpgradeActiveJob()
+    upgradeJob.value = res?.job || null
+  } catch {
+    upgradeJob.value = null
+  }
+}
+
+function formatJobNext(ts) {
+  const n = Number(ts) || 0
+  if (!n) return ''
+  const d = new Date(n * 1000)
+  if (Number.isNaN(d.getTime())) return ''
+  const pad = (x) => String(x).padStart(2, '0')
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+async function onUpgradeDone(payload) {
+  upgradeDialogOpen.value = false
+  upgradeJob.value = payload?.job || null
+  const matched = payload?.matchedCount || 0
+  const unmatched = payload?.unmatchedCount || 0
+  const first = Math.min(payload?.batchSize || 50, matched)
+  const unmatchedHint = unmatched ? `，未匹配 ${unmatched} 首` : ''
+  showToast(
+    `已开始音质升级：首批 ${first} 首已入队，共 ${matched} 首，每 ${payload?.intervalHours || 24} 小时一批${unmatchedHint}`,
+    'success',
+  )
+  try {
+    await api.settings.update({
+      'download.playlistBatchSize': String(payload.batchSize),
+      'download.playlistIntervalHours': String(payload.intervalHours),
+    })
+    upgradeDefaults.value = {
+      batchSize: payload.batchSize,
+      intervalHours: payload.intervalHours,
+    }
+  } catch {}
+  loadList().catch(() => {})
+}
+
+async function cancelUpgradeJob() {
+  if (!upgradeJob.value?.id) return
+  cancellingUpgrade.value = true
+  try {
+    await api.library.qualityUpgradeCancel()
+    upgradeJob.value = null
+    showToast('已取消音质升级循序任务', 'success')
+  } catch (e) {
+    showToast(e.message || '取消失败', 'error')
+  } finally {
+    cancellingUpgrade.value = false
+  }
+}
 </script>
 
 <style scoped>
@@ -1143,6 +1263,23 @@ function showToast(text, type = 'info') {
   color: var(--accent);
   border-color: var(--accent);
   background: var(--accent-muted);
+}
+
+.upgrade-job {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+}
+.upgrade-job-text {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.upgrade-job-next {
+  color: var(--text-muted);
 }
 
 .batch-bar {

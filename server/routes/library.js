@@ -451,8 +451,42 @@ function normalizeDupField(value) {
 }
 
 /**
+ * 版本/变体标记：用于把「晴天」与「晴天 (Live)」归为同一查重组。
+ * 仅剥离像版本说明的括号/后缀，不剥 feat. 等合作信息。
+ */
+const DUP_VERSION_INNER_RE =
+  /^(?:.*\b)?(?:live|remix|mix|cover|inst\.?|instrumental|acoustic|demo|edit|ver\.?|version|remaster(?:ed)?|mono|stereo|explicit|clean|radio|extended|bonus|karaoke|unplugged|acoustic|伴奏|纯音乐|钢琴曲|弦乐|现场|完整版|正式版|片头曲|片尾曲|插曲|主题曲|宣传曲|推广曲|剧中曲|抖音|热播|原版|翻唱|慢摇|加速|减速|剪辑|纯享|夜芯|dj)\b|(?:.*版)$/i
+
+const DUP_VERSION_TAIL_RE =
+  /\s*(?:[-–—_～~]\s*)?(?:live|remix|mix|cover|inst\.?|instrumental|acoustic|demo|edit|ver\.?|version|remaster(?:ed)?|karaoke|unplugged|伴奏|纯音乐|钢琴曲|弦乐|现场|完整版|正式版|翻唱|慢摇|dj)(?:\s*版)?\s*$/i
+
+function isDupVersionLabel(inner) {
+  const s = String(inner || '').trim()
+  if (!s) return false
+  if (/(?:feat\.?|ft\.?|featuring|with)\b/i.test(s)) return false
+  return DUP_VERSION_INNER_RE.test(s)
+}
+
+/** 去掉标题末尾的 Live/Remix/现场版 等，得到查重用的基名 */
+function canonicalizeDupTitle(title) {
+  let t = normalizeDupField(title)
+  if (!t) return ''
+  let prev = ''
+  while (t && t !== prev) {
+    prev = t
+    t = t.replace(/\s*[\(\[（【]([^\)\]）】]*)[\)\]）】]\s*$/u, (full, inner) => (
+      isDupVersionLabel(inner) ? '' : full
+    ))
+    t = t.replace(DUP_VERSION_TAIL_RE, '')
+    t = t.replace(/\s+/g, ' ').trim()
+  }
+  return t
+}
+
+/**
  * 查重身份：优先文件名解析的标题/歌手。
  * 内嵌标签常被批量写错（多首共用同一 title），会导致不同文件名被误判为重复。
+ * 标题会剥离 Live/Remix 等版本后缀后再分组，便于提示用户自行取舍。
  */
 function resolveDupIdentity(track) {
   const parsedTitle = normalizeDupField(track.parsedTitle)
@@ -463,13 +497,14 @@ function resolveDupIdentity(track) {
   const artist = parsedArtist || tagArtist
   return {
     title,
+    baseTitle: canonicalizeDupTitle(title) || title,
     artist,
     displayTitle: track.parsedTitle || track.title || '',
     displayArtist: track.parsedArtist || track.artist || '',
   }
 }
 
-/** 检测重复曲目（同标题+歌手；优先文件名解析，忽略大小写与空白） */
+/** 检测重复曲目（同基名歌名+歌手；含 Live 等版本变体；优先文件名解析） */
 libraryRouter.get('/duplicates', (req, res) => {
   try {
     const userDirs = getMusicPathsForUser(req.user?.id)
@@ -477,8 +512,8 @@ libraryRouter.get('/duplicates', (req, res) => {
     const groups = new Map()
     for (const t of tracks) {
       const id = resolveDupIdentity(t)
-      if (!id.title) continue
-      const key = `${id.title}\n${id.artist}`
+      if (!id.baseTitle) continue
+      const key = `${id.baseTitle}\n${id.artist}`
       if (!groups.has(key)) groups.set(key, [])
       groups.get(key).push({
         filePath: t.filePath,
@@ -492,12 +527,17 @@ libraryRouter.get('/duplicates', (req, res) => {
     }
     const duplicates = [...groups.values()]
       .filter((g) => g.length > 1)
-      .map((files) => ({
-        title: files[0].title,
-        artist: files[0].artist,
-        count: files.length,
-        files,
-      }))
+      .map((files) => {
+        // 组标题优先展示较短的基名形态，便于识别「晴天 / 晴天 (Live)」这类组合
+        const titles = files.map((f) => String(f.title || '').trim()).filter(Boolean)
+        const groupTitle = titles.sort((a, b) => a.length - b.length)[0] || files[0].title
+        return {
+          title: groupTitle,
+          artist: files[0].artist,
+          count: files.length,
+          files,
+        }
+      })
       .sort((a, b) => b.count - a.count)
     res.json({
       ok: true,

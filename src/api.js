@@ -470,6 +470,24 @@ export const api = {
       }),
     },
     duplicates: () => request('/library/duplicates', { timeout: 60000 }),
+    qualityUpgradeScan: (payload = {}) => request('/library/quality-upgrade/scan', {
+      method: 'POST',
+      body: payload,
+      timeout: 120000,
+    }),
+    qualityUpgradeOptions: () => request('/library/quality-upgrade/options'),
+    qualityUpgradeMatch: (payload) => request('/library/quality-upgrade/match', {
+      method: 'POST',
+      body: payload,
+      timeout: 180000,
+    }),
+    qualityUpgradeStart: (payload) => request('/library/quality-upgrade/start', {
+      method: 'POST',
+      body: payload,
+      timeout: 60000,
+    }),
+    qualityUpgradeActiveJob: () => request('/library/quality-upgrade/active-job'),
+    qualityUpgradeCancel: () => request('/library/quality-upgrade/cancel', { method: 'POST' }),
     organize: (targetDir, options = {}) => request('/library/organize', {
       method: 'POST',
       body: { targetDir, ...options },

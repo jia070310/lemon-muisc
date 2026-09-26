@@ -5,7 +5,7 @@ import { getStoredActiveSourceIds } from './activeSources.js'
 
 const TICK_MS = 60_000
 const MAX_JOB_TASKS = 2000
-const ALLOWED_BATCH = new Set([50, 100, 200, 300, 500, 1000])
+const ALLOWED_BATCH = new Set([10, 20, 50, 100, 200, 300, 500, 1000])
 const ALLOWED_INTERVAL_HOURS = new Set([1, 3, 6, 12, 24, 48])
 
 /** @type {{ enqueueDownloadTasks: (userId: string, tasks: object[]) => { added: string[], skipped: number } } | null} */

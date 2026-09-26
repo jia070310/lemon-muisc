@@ -90,7 +90,7 @@
       </div>
 
       <div v-if="!dupResult.groups.length" class="fm-empty">
-        <p>{{ dupScanned ? '未发现重复曲目' : '点击「扫描重复曲目」查找同歌名+歌手的重复文件' }}</p>
+        <p>{{ dupScanned ? '未发现重复曲目' : '点击「扫描重复曲目」查找同歌名+歌手的重复文件（含 Live / Remix 等版本变体，是否删除由你决定）' }}</p>
       </div>
 
       <div v-else class="dup-list">

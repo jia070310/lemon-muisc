@@ -14,6 +14,7 @@ import { aboutRouter } from './about.js'
 import { healthRouter } from './health.js'
 import { libraryRouter } from './library.js'
 import { albumSyncRouter } from './albumSync.js'
+import { qualityUpgradeRouter } from './qualityUpgrade.js'
 import { backupRouter } from './backup.js'
 import { requireAuth } from '../middleware/auth.js'
 
@@ -36,5 +37,6 @@ apiRouter.use('/play', playRouter)
 apiRouter.use('/paths', pathsRouter)
 apiRouter.use('/about', aboutRouter)
 apiRouter.use('/library/album-sync', albumSyncRouter)
+apiRouter.use('/library/quality-upgrade', qualityUpgradeRouter)
 apiRouter.use('/library', libraryRouter)
 apiRouter.use('/backup', backupRouter)
