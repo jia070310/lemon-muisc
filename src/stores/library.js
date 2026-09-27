@@ -877,9 +877,26 @@ export function recordRecentPlay(track) {
 }
 
 export function getPlaylistCover(playlist, tracks = []) {
-  if (playlist?.coverMode === 'custom' && playlist.coverUrl) return playlist.coverUrl
-  const first = tracks.find(t => t?.picUrl || t?.img)
-  return first?.picUrl || first?.img || playlist?.coverUrl || ''
+  return getPlaylistCoverUrls(playlist, tracks, 1)[0] || ''
+}
+
+/** 取歌单内不重复封面，用于宽卡拼贴（默认最多 4 张） */
+export function getPlaylistCoverUrls(playlist, tracks = [], limit = 4) {
+  const max = Math.max(1, Math.min(4, Number(limit) || 4))
+  if (playlist?.coverMode === 'custom' && playlist.coverUrl) {
+    return [playlist.coverUrl]
+  }
+  const urls = []
+  const seen = new Set()
+  for (const t of tracks || []) {
+    const url = String(t?.picUrl || t?.img || '').trim()
+    if (!url || seen.has(url)) continue
+    seen.add(url)
+    urls.push(url)
+    if (urls.length >= max) break
+  }
+  if (!urls.length && playlist?.coverUrl) urls.push(playlist.coverUrl)
+  return urls
 }
 
 function trackHasDisplayCover(track) {
@@ -969,7 +986,7 @@ function buildPlaylistCardsUncached(allTracks, { limit } = {}) {
     else if (card.id === 'roam') tracks = resolveRoamTracks(allTracks)
     // random-start 为入口卡，无固定曲目
     const useGradientStyle = GRADIENT_CARD_IDS.has(card.id)
-    const coverUrl = useGradientStyle ? '' : getPlaylistCover({ coverMode: 'auto' }, tracks)
+    const coverUrls = useGradientStyle ? [] : getPlaylistCoverUrls({ coverMode: 'auto' }, tracks)
     return {
       ...card,
       // 漫游歌单有曲目时展示，便于从「漫游播放」启动后回看
@@ -978,12 +995,14 @@ function buildPlaylistCardsUncached(allTracks, { limit } = {}) {
       coverStyle: useGradientStyle ? 'gradient' : 'cover',
       count: card.id === 'random-start' ? ROAM_PICK_SIZE : tracks.length,
       tracks,
-      coverUrl,
+      coverUrl: coverUrls[0] || '',
+      coverUrls,
     }
   })
   const custom = customPlaylists.value.map(pl => {
     const normalized = normalizePlaylist(pl)
     const tracks = resolvePlaylistTracks(normalized, allTracks)
+    const coverUrls = getPlaylistCoverUrls(normalized, tracks)
     return {
       id: normalized.id,
       name: normalized.name,
@@ -994,7 +1013,8 @@ function buildPlaylistCardsUncached(allTracks, { limit } = {}) {
       playlist: normalized,
       count: normalized.trackKeys.length,
       tracks,
-      coverUrl: getPlaylistCover(normalized, tracks),
+      coverUrl: coverUrls[0] || '',
+      coverUrls,
       coverMode: normalized.coverMode,
     }
   })

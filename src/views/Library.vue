@@ -74,6 +74,7 @@
               :size="isNarrow ? 'compact' : 'row'"
               :cover-style="card.coverStyle"
               :cover-url="card.coverUrl"
+              :cover-urls="card.coverUrls"
               :gradient="card.gradient"
               :icon="card.icon"
               :name="card.name"
