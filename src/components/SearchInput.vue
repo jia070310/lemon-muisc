@@ -21,15 +21,23 @@
       v-if="panelOpen && visibleHistory.length"
       class="search-history-panel"
       role="listbox"
-      aria-label="搜索历史"
+      aria-label="历史记录"
       @mousedown.prevent
     >
       <div class="search-history-head">
-        <span>搜索历史</span>
-        <button type="button" class="search-history-clear-all" @click="clearAll">清除全部</button>
+        <span class="search-history-title">历史记录</span>
+        <button type="button" class="search-history-clear-all" @click="clearAll">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+            <polyline points="3 6 5 6 21 6"/>
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+            <line x1="10" y1="11" x2="10" y2="17"/>
+            <line x1="14" y1="11" x2="14" y2="17"/>
+          </svg>
+          清除记录
+        </button>
       </div>
-      <ul class="search-history-list">
-        <li v-for="item in visibleHistory" :key="item" class="search-history-item">
+      <ul class="search-history-chips">
+        <li v-for="item in visibleHistory" :key="item" class="search-history-chip">
           <button
             type="button"
             class="search-history-pick"
@@ -37,20 +45,16 @@
             :title="item"
             @click="pick(item)"
           >
-            <svg class="search-history-clock" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-              <circle cx="12" cy="12" r="9"/>
-              <polyline points="12 7 12 12 15 14"/>
-            </svg>
             <span class="search-history-text">{{ item }}</span>
           </button>
           <button
             type="button"
             class="search-history-remove"
             :aria-label="`删除 ${item}`"
-            title="删除这条"
-            @click="removeOne(item)"
+            title="删除"
+            @click.stop="removeOne(item)"
           >
-            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2">
+            <svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.6" aria-hidden="true">
               <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
             </svg>
           </button>
@@ -199,6 +203,7 @@ defineExpose({
   border: 1px solid var(--border);
   background: var(--bg-card);
   box-shadow: var(--shadow);
+  padding: 10px 12px 14px;
 }
 
 .search-history-head {
@@ -206,8 +211,8 @@ defineExpose({
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 8px 12px 4px;
-  font-size: 12px;
+  margin-bottom: 10px;
+  font-size: 13px;
   color: var(--text-muted);
   position: sticky;
   top: 0;
@@ -215,84 +220,108 @@ defineExpose({
   z-index: 1;
 }
 
+.search-history-title {
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
 .search-history-clear-all {
-  border: none;
-  background: none;
-  padding: 2px 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  padding: 6px 12px;
   font-size: 12px;
-  color: var(--accent);
+  font-weight: 500;
+  color: var(--text);
   cursor: pointer;
+  line-height: 1.2;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 .search-history-clear-all:hover {
-  text-decoration: underline;
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-elevated));
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  color: var(--text);
+}
+.search-history-clear-all:active {
+  background: color-mix(in srgb, var(--accent) 22%, var(--bg-elevated));
+}
+.search-history-clear-all svg {
+  flex-shrink: 0;
+  color: var(--text);
+  opacity: 0.92;
+  stroke: currentColor;
 }
 
-.search-history-list {
+.search-history-chips {
   list-style: none;
   margin: 0;
-  padding: 4px 0 8px;
+  padding: 4px 2px 2px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 10px;
 }
 
-.search-history-item {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 0 6px;
+.search-history-chip {
+  position: relative;
+  display: inline-flex;
+  max-width: 100%;
+  margin: 0;
+  padding: 0;
 }
 
 .search-history-pick {
-  flex: 1;
-  min-width: 0;
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
+  max-width: 100%;
   margin: 0;
-  padding: 8px 8px;
+  padding: 7px 14px;
   border: none;
-  border-radius: 8px;
-  background: transparent;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--text) 10%, var(--bg-elevated, var(--bg-card)));
   color: var(--text);
   font: inherit;
   font-size: 13px;
+  line-height: 1.3;
   text-align: left;
   cursor: pointer;
 }
 .search-history-pick:hover {
-  background: color-mix(in srgb, var(--text) 8%, transparent);
-}
-
-.search-history-clock {
-  flex-shrink: 0;
-  color: var(--text-muted);
-  opacity: 0.85;
+  background: color-mix(in srgb, var(--text) 16%, var(--bg-elevated, var(--bg-card)));
 }
 
 .search-history-text {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  max-width: min(220px, 56vw);
 }
 
+/* 右上角骑缝 ×，贴近参考样式 */
 .search-history-remove {
-  flex-shrink: 0;
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  z-index: 2;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 16px;
+  height: 16px;
   margin: 0;
   padding: 0;
   border: none;
   border-radius: 50%;
-  background: transparent;
-  color: var(--text-muted);
+  background: color-mix(in srgb, var(--bg-card) 35%, #2a2a2e 65%);
+  color: color-mix(in srgb, var(--text) 88%, #fff);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--text) 18%, transparent);
   cursor: pointer;
-  opacity: 0.55;
+  line-height: 0;
 }
-.search-history-item:hover .search-history-remove,
 .search-history-remove:hover {
-  opacity: 1;
-  background: color-mix(in srgb, var(--text) 10%, transparent);
+  background: color-mix(in srgb, var(--text) 22%, var(--bg-card));
   color: var(--text);
 }
 </style>
