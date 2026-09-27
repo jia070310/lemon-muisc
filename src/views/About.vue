@@ -141,7 +141,7 @@
         <template v-else>
           <button
             v-if="pwa.canInstall"
-            class="btn-primary btn-sm"
+            class="btn-primary btn-sm pwa-install-btn"
             type="button"
             :disabled="pwaInstalling"
             @click="installPwa"
@@ -1066,6 +1066,16 @@ function formatDate(iso) {
 
 .pwa-card {
   padding: 14px 18px;
+}
+
+.pwa-install-btn {
+  align-self: flex-start;
+  width: auto;
+  min-width: 0;
+  max-width: 100%;
+  padding: 8px 16px;
+  font-size: 13px;
+  border-radius: var(--radius-pill, 999px);
 }
 
 .pwa-desc {
