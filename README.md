@@ -25,6 +25,7 @@
 - **开放 API**：`/api/v1`、稳定 `trackId`、短时效媒体票；文档 `/api/docs`（[说明](docs/open-api.md)）
 - **漫游播放**：随机抽歌、自动续填与已播清理（鸣谢 [@theroad](https://github.com/theroad) · [#18](https://github.com/jia070310/lemon-muisc/pull/18)）
 - 查重支持 Live / Remix 等版本变体归组；情绪引擎下拉统一为 AppSelect
+- **手机端**：网络获取标签弹层按视口高度自适应，矮屏不再裁掉「取消 / 确定」
 
 ### v1.2.16.11
 

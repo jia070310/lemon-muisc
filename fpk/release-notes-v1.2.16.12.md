@@ -37,6 +37,10 @@
 - 双挂载 `/api` 与 `/api/v1`；稳定曲目 `trackId`；播放流短时效 `ticket`
 - 未登录可打开 `/api/docs`（Swagger）；规格见 `docs/openapi.yaml` / [open-api.md](../docs/open-api.md)
 
+### 标签编辑 · 手机端
+
+- 「网络获取标签」弹层按视口高度自适应（`dvh` / 矮屏档）；页脚固定，中间列表与预览分摊剩余高度并内滚，避免矮屏裁掉「取消 / 确定」
+
 ### 其它
 
 - 仅 Linux x86_64 / macOS 支持官方 Essentia 预编译包；ARM NAS / Windows 请使用本地启发式
