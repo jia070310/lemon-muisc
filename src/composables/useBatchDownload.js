@@ -15,7 +15,7 @@ export function formatBatchDownloadToast(count, summary) {
   return `已添加 ${count} 首到下载队列`
 }
 
-export function useBatchDownload({ getSource, getPlaylistName, onCompleted, onError } = {}) {
+export function useBatchDownload({ getSource, getPlaylistName, getAlbumMeta, onCompleted, onError } = {}) {
   const batchDialog = ref(null)
   const batchDownloading = ref(false)
 
@@ -36,11 +36,13 @@ export function useBatchDownload({ getSource, getPlaylistName, onCompleted, onEr
       const listName = saveListFolder
         ? String(getPlaylistName?.() || plan?.playlistName || '').trim()
         : ''
+      const albumMeta = typeof getAlbumMeta === 'function' ? getAlbumMeta() : null
       const { tasks, skippedCount } = buildBatchDownloadTasks(plan.entries, getSource(), {
         preferredQuality: plan.preferred,
         strategy,
         floorQuality,
         listName,
+        albumMeta,
       })
       if (!tasks.length) {
         onError?.(new Error(skippedCount ? '所选歌曲均无要求音质，未添加下载' : '没有可下载的歌曲'))

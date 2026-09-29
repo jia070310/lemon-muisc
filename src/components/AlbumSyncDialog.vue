@@ -310,6 +310,8 @@ async function onConfirm() {
     const policy = strategy.value === 'none' ? 'none' : 'cascade'
     const albumName = props.album || diffResult.value?.onlineAlbum?.name || ''
     const albumArtist = diffResult.value?.onlineAlbum?.artist || props.artist || ''
+    const albumYear = diffResult.value?.onlineAlbum?.publishTime || ''
+    const albumGenre = diffResult.value?.onlineAlbum?.genre || ''
     const tasks = []
 
     for (const row of missRows) {
@@ -327,6 +329,9 @@ async function onConfirm() {
         listName: albumName,
         album: albumName,
         albumArtist,
+        year: albumYear,
+        genre: albumGenre,
+        publishTime: albumYear,
         singer: item.singer || albumArtist,
       }))
     }
@@ -347,6 +352,9 @@ async function onConfirm() {
         replacePath: row.filePath || '',
         album: albumName,
         albumArtist,
+        year: albumYear,
+        genre: albumGenre,
+        publishTime: albumYear,
         singer: item.singer || albumArtist,
       }))
     }

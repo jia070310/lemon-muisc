@@ -8,6 +8,14 @@ function pickField(...values) {
   return ''
 }
 
+/** 从发行日期/年份字段提取四位年份 */
+export function normalizeTagYear(value) {
+  const s = String(value || '').trim()
+  if (!s) return ''
+  const m = s.match(/(19|20)\d{2}/)
+  return m ? m[0] : ''
+}
+
 /** 无损目标音质：默认不自动降到 MP3 */
 export function isLosslessQuality(quality) {
   const q = String(quality || '').toLowerCase()
@@ -80,12 +88,14 @@ export function buildBatchDownloadTasks(entries, source, {
   strategy = 'cascade',
   floorQuality = '',
   listName = '',
+  albumMeta = null,
 } = {}) {
   const list = Array.isArray(entries) ? entries : []
   const preferred = preferredQuality || '320k'
   const policy = ['cascade', 'floor', 'none'].includes(strategy) ? strategy : 'cascade'
   const floor = policy === 'floor' ? (floorQuality || preferred) : ''
   const folder = String(listName || '').trim()
+  const album = albumMeta && typeof albumMeta === 'object' ? albumMeta : null
 
   const tasks = []
   let skippedCount = 0
@@ -105,6 +115,11 @@ export function buildBatchDownloadTasks(entries, source, {
       deferExistAsk: true,
       batchId,
       listName: folder,
+      album: album?.name || album?.album || '',
+      albumArtist: album?.author || album?.albumArtist || album?.artist || '',
+      year: album?.year || album?.publishTime || '',
+      genre: album?.genre || '',
+      publishTime: album?.publishTime || '',
     }))
   }
 
@@ -141,12 +156,23 @@ export function buildDownloadTask(item, source, quality, extra = {}) {
     || (isLosslessQuality(preferred) ? 'none' : '')
   const q = policy ? preferred : resolveItemQuality(item, preferred)
   const albumMid = pickField(item.albumMid, item.albummid, item.albumId)
+  const year = normalizeTagYear(pickField(
+    item.year,
+    item.publishTime,
+    item.publish_date,
+    extra.year,
+    extra.publishTime,
+  ))
+  const genre = pickField(item.genre, extra.genre)
   return {
     name: item.name,
     singer: pickField(item.singer, item.artist, item.albumArtist, extra.singer, extra.albumArtist),
     source: item.source || source,
     album: pickField(item.album, item.albumName, extra.album),
     albumArtist: pickField(item.albumArtist, item.album_artist, extra.albumArtist, item.singer, item.artist),
+    year,
+    genre,
+    publishTime: pickField(item.publishTime, extra.publishTime, year),
     interval: item.interval || '',
     quality: q,
     songId: item.songId ?? item.songmid ?? item.hash ?? item.copyrightId ?? item.id,

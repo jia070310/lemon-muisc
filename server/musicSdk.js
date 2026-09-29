@@ -444,6 +444,8 @@ function parseKwTypes(item) {
   const formats = {}
   /** @type {{ bitrate: number, level: string, fmt: string, size: string }[]} */
   const hiresCandidates = []
+  /** @type {{ bitrate: number, level: string, fmt: string, size: string }[]} */
+  const masterCandidates = []
 
   for (const part of String(minfo).split(';')) {
     // level 可能含数字：zpga201 / zpga501 / zply …
@@ -473,31 +475,51 @@ function parseKwTypes(item) {
       formats.flac = 'flac'
       continue
     }
-    // 旧接口 Hi-Res
-    if (bitrate === 4000 && (fmt === 'flac' || fmt === 'mflac')) {
-      map.flac24bit = size
-      formats.flac24bit = 'flac'
-      continue
-    }
-    // 新接口 Hi-Res：zpga201(20201) / zpga501 / zply 等 mflac，落雪显示「FLAC Hires」
+    // Hi-Res / 母带：mflac 或高码率 flac
     if ((fmt === 'mflac' || fmt === 'flac') && bitrate >= 4000) {
-      hiresCandidates.push({ bitrate, level, fmt, size })
+      const entry = { bitrate, level, fmt, size }
+      // 超清母带：zply / zpga501 / 更高码率档
+      if (
+        /zply/i.test(level)
+        || /zpga501/i.test(level)
+        || /master/i.test(level)
+        || bitrate === 20501
+        || bitrate >= 24000
+      ) {
+        masterCandidates.push(entry)
+      } else {
+        // 标准 Hi-Res：zpga201(20201)、bitrate 4000 等
+        hiresCandidates.push(entry)
+      }
     }
   }
 
-  if (!map.flac24bit && hiresCandidates.length) {
-    // 优先 zpga201 / 20201（体量接近「标准 Hi-Res」）；否则取 bitrate 最低的一档，避免一上来就是上百 MB 母带
+  if (hiresCandidates.length) {
     hiresCandidates.sort((a, b) => {
       const rank = (c) => {
         if (c.level === 'zpga201' || c.bitrate === 20201) return 0
-        if (c.level === 'zpga501' || c.bitrate === 20501) return 1
+        if (c.bitrate === 4000) return 1
         return 10 + c.bitrate
       }
       return rank(a) - rank(b)
     })
-    const best = hiresCandidates[0]
-    map.flac24bit = best.size
+    map.flac24bit = hiresCandidates[0].size
     formats.flac24bit = 'flac'
+  }
+
+  if (masterCandidates.length) {
+    // 取码率最高的母带档
+    masterCandidates.sort((a, b) => b.bitrate - a.bitrate)
+    map.master = masterCandidates[0].size
+    formats.master = 'flac'
+  } else if (map.flac24bit && hiresCandidates.length > 1) {
+    // 仅有多档 Hi-Res、无明确母带标记时：最高档也标为母带，便于下载菜单可选
+    const ranked = [...hiresCandidates].sort((a, b) => b.bitrate - a.bitrate)
+    const top = ranked[0]
+    if (top && top.size !== map.flac24bit) {
+      map.master = top.size
+      formats.master = 'flac'
+    }
   }
 
   return buildTypes(map, formats)
@@ -509,6 +531,10 @@ function parseKgTypes(item) {
   if (item.HQFileSize) map['320k'] = item.HQFileSize
   if (item.SQFileSize) map.flac = item.SQFileSize
   if (item.ResFileSize) map.flac24bit = item.ResFileSize
+  // 部分接口提供超清/母带体积
+  const masterSize = item.MasterFileSize || item.filesize_master || item.filesize_super
+    || item.ExtFileSize || item.filesize_ext
+  if (masterSize) map.master = masterSize
   return buildTypes(map)
 }
 
@@ -520,25 +546,53 @@ function parseTxTypes(item) {
   const s320 = f.size_320mp3 ?? item.size320
   const sflac = f.size_flac ?? item.sizeflac
   const shires = f.size_hires ?? item.sizehires
+  const smaster = f.size_new_master ?? f.size_master ?? item.sizemaster ?? item.size_new_master
+  const satmos = f.size_new_dolby ?? f.size_dolby ?? f.size_atmos ?? item.sizedolby
+  const satmosPlus = f.size_new_atmos ?? f.size_atmos_plus ?? item.sizeatmos
   if (s128) { map['128k'] = s128; formats['128k'] = 'mp3' }
   if (s320) { map['320k'] = s320; formats['320k'] = 'mp3' }
   if (sflac) { map.flac = sflac; formats.flac = 'flac' }
   if (shires) { map.flac24bit = shires; formats.flac24bit = 'flac' }
+  if (smaster) { map.master = smaster; formats.master = 'flac' }
+  if (satmos) { map.atmos = satmos; formats.atmos = 'm4a' }
+  if (satmosPlus) { map.atmos_plus = satmosPlus; formats.atmos_plus = 'm4a' }
   return buildTypes(map, formats)
 }
 
 function parseWyTypes(item) {
   const map = {}
+  // jm=臻品母带，hr=Hi-Res，sq=无损，h=320，l/m=标准
+  if (item.jm?.size) map.master = item.jm.size
   if (item.hr?.size) map.flac24bit = item.hr.size
   if (item.sq?.size) map.flac = item.sq.size
   if (item.h?.size) map['320k'] = item.h.size
+  if (item.m?.size && !map['320k']) map['320k'] = item.m.size
   if (item.l?.size) map['128k'] = item.l.size
-  // 仅有 maxbr、无分档体积时：只标最高可达档，不臆造 128+320+flac 全开
-  if (!Object.keys(map).length && item.privilege?.maxbr) {
-    const br = item.privilege.maxbr
-    if (br >= 999000) map.flac = true
-    else if (br >= 320000) map['320k'] = true
-    else if (br >= 128000) map['128k'] = true
+  // 沉浸环绕声等（有体积才标，避免空档）
+  if (item.je?.size) map.atmos = item.je.size
+  if (item.db?.size && !map.atmos) map.atmos = item.db.size
+
+  const priv = item.privilege || {}
+  const level = String(
+    priv.playMaxbrLevel
+    || priv.downloadMaxbrLevel
+    || priv.maxBrLevel
+    || priv.plLevel
+    || '',
+  ).toLowerCase()
+
+  // 分档体积缺失时，按权益等级标出可达最高档（不臆造中间档）
+  if (!Object.keys(map).length && (priv.maxbr || level)) {
+    if (/jymaster|master/.test(level)) map.master = true
+    else if (/hires/.test(level)) map.flac24bit = true
+    else if (/lossless/.test(level) || priv.maxbr >= 999000) map.flac = true
+    else if (priv.maxbr >= 320000 || /exhigh|higher/.test(level)) map['320k'] = true
+    else if (priv.maxbr >= 128000 || /standard/.test(level)) map['128k'] = true
+  } else {
+    // 已有部分体积时，仍用权益等级补更高档（常见：有 sq 无 jm 体积，但 playMaxbrLevel=jymaster）
+    if (/jymaster|master/.test(level) && !map.master) map.master = true
+    if (/hires/.test(level) && !map.flac24bit) map.flac24bit = true
+    if (/lossless/.test(level) && !map.flac) map.flac = true
   }
   return buildTypes(map)
 }
@@ -548,11 +602,23 @@ function parseMgTypes(item) {
   const formats = item.newRateFormats || item.rateFormats || item.newFormat || item.audioFormats || []
   for (const type of formats) {
     const size = type.asize ?? type.isize ?? type.fileSize ?? type.size
-    switch (type.formatType || type.format) {
+    const key = String(type.formatType || type.format || '').toUpperCase()
+    switch (key) {
       case 'PQ': map['128k'] = size; break
       case 'HQ': map['320k'] = size; break
       case 'SQ': map.flac = size; break
+      case 'ZQ':
       case 'ZQ24': map.flac24bit = size; break
+      case 'ZQ3D':
+      case 'ATM':
+      case 'ATMOS': map.atmos = size; break
+      case 'master':
+      case 'ZQM':
+      case 'SQ24':
+        if (!map.master) map.master = size
+        break
+      default:
+        break
     }
   }
   return buildTypes(map)
@@ -1788,6 +1854,8 @@ function mapKgSongItem(item) {
     HQFileSize: audio.filesize_320 || item.filesize_320 || item['320filesize'] || item.HQFileSize,
     SQFileSize: audio.filesize_flac || item.filesize_flac || item.sqfilesize || item.SQFileSize,
     ResFileSize: audio.filesize_high || item.filesize_high || item.ResFileSize,
+    MasterFileSize: audio.filesize_super || item.filesize_super || audio.filesize_master
+      || item.filesize_master || item.ExtFileSize || item.MasterFileSize,
   })
   if (hash && types.length) types[0].hash = hash
 

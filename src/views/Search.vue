@@ -347,6 +347,10 @@ const {
   getBatchQualities,
 } = useBatchDownload({
   getSource: () => searchState.activeSource,
+  getAlbumMeta: () => {
+    if (searchState.viewMode !== 'album-detail' || !searchState.albumInfo) return null
+    return searchState.albumInfo
+  },
   onCompleted: (count, summary) => {
     showToast(formatBatchDownloadToast(count, summary), 'success')
     clearSelection()
@@ -955,7 +959,14 @@ async function downloadOne(item, quality) {
   closeMenus()
   if (!(await assertActiveSourceForDownload())) return
   try {
-    await api.download.add([buildDownloadTask(item, searchState.activeSource, quality)])
+    const album = searchState.viewMode === 'album-detail' ? searchState.albumInfo : null
+    await api.download.add([buildDownloadTask(item, searchState.activeSource, quality, album ? {
+      album: album.name,
+      albumArtist: album.author,
+      year: album.publishTime || album.year,
+      genre: album.genre,
+      publishTime: album.publishTime,
+    } : {})])
     showToast(`已添加下载: ${item.name} (${getQualityLabel(quality, item.types)})`, 'success')
   } catch (e) {
     showToast(e.message, 'error')

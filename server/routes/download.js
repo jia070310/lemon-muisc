@@ -12,6 +12,7 @@ import { buildEmbedLyrics } from '../utils/lyric.js'
 import { getDownloadSavePath, isAllowedMediaPath } from '../utils/filePaths.js'
 import { getMergedSettings } from '../utils/userSettings.js'
 import { fetchTrackLyric, fetchTrackCover } from '../utils/trackMeta.js'
+import { resolveDownloadEmbedMeta } from '../utils/downloadEmbedMeta.js'
 import {
   getNextLowerQuality,
   isNoActiveSourceError,
@@ -201,6 +202,10 @@ export function enqueueDownloadTasks(userId, tasks, { broadcastAdded = true } = 
         batchId: t.batchId || '',
         listName: t.listName || '',
         albumArtist: t.albumArtist || t.singer || '',
+        year: String(t.year || '').trim(),
+        genre: String(t.genre || '').trim(),
+        publishTime: String(t.publishTime || t.year || '').trim(),
+        album: t.album || '',
         replacePath,
         forceOverwrite: Boolean(t.forceOverwrite || replacePath),
       })
@@ -1649,6 +1654,15 @@ async function downloadTask(task, settings, abortSignal = null) {
   if (!String(task.albumArtist || '').trim() && meta.albumArtist) {
     task.albumArtist = meta.albumArtist
   }
+  if (!String(task.year || '').trim() && (meta.year || meta.publishTime)) {
+    task.year = meta.year || meta.publishTime
+  }
+  if (!String(task.genre || '').trim() && meta.genre) {
+    task.genre = meta.genre
+  }
+  if (!String(task.album || '').trim() && meta.album) {
+    task.album = meta.album
+  }
   const quality = task.quality || '320k'
   let lastError = null
   let lastAttemptPath = ''
@@ -1979,10 +1993,9 @@ async function writeMetaIfNeeded(task, meta, filePath, ext, settings) {
   const wantLrcFile = on('download.isDownloadLrc')
   const canEmbed = ['.mp3', '.flac', '.wav', '.ape'].includes(ext)
   const artist = joinArtists(task.singer || meta.albumArtist || '')
-  const albumArtist = joinArtists(task.albumArtist || meta.albumArtist || task.singer || '')
-  const album = task.album || meta.album || ''
+  const albumHint = task.album || meta.album || ''
   // 有歌名/歌手时始终写入基础标签，避免文件名落成 Unknown 且内置标签空白
-  const wantBasicTags = canEmbed && Boolean(task.name || artist || albumArtist || album)
+  const wantBasicTags = canEmbed && Boolean(task.name || artist || albumHint)
 
   if (!wantBasicTags && !wantEmbedPic && !wantEmbedLyric && !wantLrcFile) {
     return
@@ -2028,12 +2041,28 @@ async function writeMetaIfNeeded(task, meta, filePath, ext, settings) {
   }
 
   if (wantBasicTags || (canEmbed && (wantEmbedPic || wantEmbedLyric))) {
+    let albumArtist = joinArtists(task.albumArtist || meta.albumArtist || task.singer || '')
+    let album = albumHint
+    let year = ''
+    let genre = ''
+    try {
+      const enriched = await resolveDownloadEmbedMeta(task, meta)
+      albumArtist = enriched.albumArtist || albumArtist
+      album = enriched.album || album
+      year = enriched.year || ''
+      genre = enriched.genre || ''
+    } catch (e) {
+      console.warn('补全专辑标签失败:', task.name, e.message)
+    }
+
     const metaData = {
       title: task.name || '',
       artist,
       albumArtist,
       album,
     }
+    if (year) metaData.year = year
+    if (genre) metaData.genre = genre
     if (wantEmbedPic && picBuf) metaData.pic = picBuf
     if (wantEmbedLyric && lrcResult?.lyric) {
       metaData.lyric = buildEmbedLyrics(lrcResult, settings)
