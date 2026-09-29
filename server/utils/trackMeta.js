@@ -6,6 +6,7 @@ import { resolveCoverCandidates } from './cover.js'
 import { fetchPicBuffer } from './fetchPic.js'
 import { fixKgLyric } from './lyric.js'
 import { fetchKugouWordLyricByKeyword } from './krcFetch.js'
+import { scoreMatch } from './filenameParse.js'
 
 function normalizeLyricSearchName(name) {
   if (!name) return ''
@@ -14,6 +15,41 @@ function normalizeLyricSearchName(name) {
     .replace(/\s*(国语|粤语|英语|伴奏|纯音乐|DJ|Live|live|版|合唱版|低频公益版|3D环绕版)\s*/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
+}
+
+function lyricExpectedFromMerged(merged = {}, task = {}) {
+  return {
+    title: String(merged.name || task?.name || merged.title || task?.title || '').trim(),
+    artist: String(merged.singer || task?.singer || merged.artist || task?.artist || '').trim(),
+  }
+}
+
+/**
+ * 搜索补歌词时校验命中：避免批量时拿同名异曲首条结果写入。
+ * 歌名至少要对上；有目标歌手时歌手也要有交集（或总分足够高）。
+ */
+export function isAcceptableLyricHit(hit, expected = {}) {
+  if (!hit) return false
+  const title = String(expected.title || expected.name || '').trim()
+  const artist = String(expected.artist || expected.singer || '').trim()
+  if (!title) return false
+  const score = scoreMatch(hit, {
+    title,
+    artist,
+    keyword: [artist, title].filter(Boolean).join(' '),
+  })
+  if (score < 3) return false
+  if (!artist) return true
+  const singer = String(hit.singer || '').toLowerCase()
+  const a = artist.toLowerCase()
+  if (!singer) return score >= 5
+  const artistMain = a.split(/[/|,，、;；\s]+/).filter(Boolean)[0] || a
+  const singerMain = singer.split(/[/|,，、;；\s]+/).filter(Boolean)[0] || singer
+  const artistOk = singer.includes(artistMain)
+    || a.includes(singerMain)
+    || singerMain.includes(artistMain)
+    || artistMain.includes(singerMain)
+  return artistOk || score >= 8
 }
 
 function lyricSearchKeywords(merged = {}, task = {}) {
@@ -113,6 +149,7 @@ export async function fetchTrackLyric({
   try {
     const keywords = lyricSearchKeywords(merged, task)
     if (!keywords.length) return null
+    const expected = lyricExpectedFromMerged(merged, task)
     const allowOther = !src || (useOtherSource && settings?.['download.isUseOtherSource'] !== 'false')
     // 需要逐字时优先搜网易（YRC）
     const fallbackSources = (allowOther ? ['wy', 'tx', 'kw', 'kg', 'mg'] : [src]).filter(isOnlineSource)
@@ -123,6 +160,7 @@ export async function fetchTrackLyric({
         seen.add(`${keyword}:${trySrc}`)
         const result = await searchMusic(keyword, trySrc, 1, 8)
         for (const hit of result.list || []) {
+          if (!isAcceptableLyricHit(hit, expected)) continue
           const hitId = pickLyricSongId(hit.source || trySrc, hit.songmid || hit.hash || hit.songId || hit.copyrightId || hit.id, hit)
           if (!hitId) continue
           const lrc = await getLyric(hitId, hit.source || trySrc, lyricLookupExtra(hit))
@@ -170,9 +208,11 @@ async function attachWordLyric(lrc, merged = {}, task = {}) {
   // 2) 网易云 YRC（无登录时经常为空，作为兜底）
   try {
     const keywords = lyricSearchKeywords(merged, task)
+    const expected = lyricExpectedFromMerged(merged, task)
     for (const keyword of keywords.slice(0, 2)) {
       const result = await searchMusic(keyword, 'wy', 1, 6)
       for (const hit of result.list || []) {
+        if (!isAcceptableLyricHit(hit, expected)) continue
         const hitId = pickLyricSongId('wy', hit.songId || hit.songmid || hit.id, hit)
         if (!hitId) continue
         const wy = await getLyric(hitId, 'wy', lyricLookupExtra(hit))

@@ -1,4 +1,5 @@
 import needle from 'needle'
+import { scoreMatch } from './utils/filenameParse.js'
 
 const req = (method, url, body, headers = {}) => {
   return needle(method, url, body, {
@@ -2560,11 +2561,30 @@ async function kwLyric(songId, extra = {}) {
   }
 
   // 按歌名再搜一次，尝试其它 musicId（部分条目 m.kuwo 会失败但同曲其它 id 可用）
+  // 必须校验歌名/歌手，避免批量时误用同名异曲歌词
   const keyword = [extra.name, extra.singer].filter(Boolean).join(' ')
-  if (keyword) {
+  if (keyword && extra.name) {
     try {
+      const expected = {
+        title: String(extra.name || '').trim(),
+        artist: String(extra.singer || '').trim(),
+        keyword,
+      }
       const result = await kwSearch(keyword, 1, 8)
       for (const hit of result.list || []) {
+        const score = scoreMatch(hit, expected)
+        if (score < 3) continue
+        if (expected.artist) {
+          const singer = String(hit.singer || '').toLowerCase()
+          const a = expected.artist.toLowerCase()
+          const artistMain = a.split(/[/|,，、;；\s]+/).filter(Boolean)[0] || a
+          const singerMain = singer.split(/[/|,，、;；\s]+/).filter(Boolean)[0] || singer
+          const artistOk = singer.includes(artistMain)
+            || a.includes(singerMain)
+            || singerMain.includes(artistMain)
+            || artistMain.includes(singerMain)
+          if (!artistOk && score < 8) continue
+        }
         const hitIds = [hit.songId, hit.id, hit.musicId, hit.rid].filter(Boolean).map(String)
         for (const id of hitIds) {
           if (ids.includes(id)) continue

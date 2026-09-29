@@ -365,7 +365,7 @@ tagRouter.post('/match-batch', async (req, res) => {
           }
           picked = acceptable
         }
-        let meta = await fetchMatchMeta(picked, sdkSource)
+        let meta = await fetchMatchMeta(picked, sdkSource, null, { title, artist })
         if (fillMissingOnly) {
           meta = mergeMatchMetaFillMissing({
             title: cached.title || title,

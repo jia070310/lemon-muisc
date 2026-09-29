@@ -347,7 +347,8 @@ export async function matchByArtistTitle(artist = '', title = '', source = 'wy',
   if (!finalPool.length && sdkSource !== 'tx' && (parsed.title || parsed.artist)) {
     return matchByArtistTitle(artist, title, 'tx', limit, parsed, album, folderAlb)
   }
-  if (!finalPool.length) finalPool = fallback.slice(0, limit)
+  // 无可靠评分时宁可空结果，勿直接取搜索首条（易串歌歌词）
+  if (!finalPool.length) return []
   const seen = new Set()
   return finalPool
     .sort((a, b) => b._score - a._score)
@@ -360,7 +361,7 @@ export async function matchByArtistTitle(artist = '', title = '', source = 'wy',
     .slice(0, limit)
 }
 
-export async function fetchMatchMeta(match, source, fields = null) {
+export async function fetchMatchMeta(match, source, fields = null, expectLocal = null) {
   const sdkSource = normalizeTagSource(source || match.source)
   const songId = match.songmid || match.hash || match.songId || match.copyrightId || match.id
   const wantLyric = wantsField(fields, 'lyric')
@@ -401,11 +402,20 @@ export async function fetchMatchMeta(match, source, fields = null) {
 
   if (wantLyric) {
     try {
+      // 用本地期望歌名/歌手约束搜索补歌词，避免仅信 match 时仍落到同名异曲
+      const localName = String(expectLocal?.title || expectLocal?.name || '').trim()
+      const localSinger = String(expectLocal?.artist || expectLocal?.singer || '').trim()
       const lrc = await fetchTrackLyric({
         source: sdkSource,
         songId,
         musicInfo: match,
         meta: match,
+        task: {
+          name: localName || match.name || '',
+          singer: localSinger || match.singer || '',
+          title: localName || match.name || '',
+          artist: localSinger || match.singer || '',
+        },
         useOtherSource: true,
       })
       meta.lyric = lrc?.lyric || ''

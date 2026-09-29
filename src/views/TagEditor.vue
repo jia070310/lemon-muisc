@@ -862,6 +862,8 @@ const fetchTitle = ref('')
 const fetchAlbum = ref('')
 const fetchIntent = ref('cover')
 const editingFile = ref(null)
+/** 打开详情序号：防止快速切换时过期 tag.read 写回错误歌词 */
+let editOpenSeq = 0
 const editForm = ref(null)
 const toast = ref(null)
 const pickPlaylistTracks = ref(null)
@@ -1726,6 +1728,8 @@ function applyRenameToLocalFile(from, to, fileName, parsed) {
 }
 
 async function openEdit(f) {
+  const openSeq = ++editOpenSeq
+  const openPath = f.filePath
   editingFile.value = f
   fetchResults.value = []
   fetchPreview.value = null
@@ -1766,9 +1770,11 @@ async function openEdit(f) {
 
   try {
     const res = await api.tag.read(f.filePath)
+    // 用户已切到另一首：丢弃过期读取，避免歌词/封面串到当前编辑项
+    if (openSeq !== editOpenSeq || editingFile.value?.filePath !== openPath) return
     const meta = res.data || {}
     // 仅回填尚未有值的字段，避免冲掉列表里已有信息
-    if (!f._modified) {
+    if (!f._modified && editingFile.value?.filePath === openPath) {
       Object.assign(f, {
         title: meta.title || f.title,
         artist: meta.artist || f.artist,
@@ -1798,9 +1804,11 @@ async function openEdit(f) {
       })
     }
   } catch (e) {
-    showToast(`读取文件详情失败：${e.message}`, 'error')
+    if (openSeq === editOpenSeq && editingFile.value?.filePath === openPath) {
+      showToast(`读取文件详情失败：${e.message}`, 'error')
+    }
   } finally {
-    loadingDetail.value = false
+    if (openSeq === editOpenSeq) loadingDetail.value = false
   }
 }
 

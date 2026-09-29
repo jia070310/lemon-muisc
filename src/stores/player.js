@@ -816,7 +816,9 @@ function isMissingLocalTag(meta) {
 async function saveAutoMatchedMeta(filePath, meta) {
   try {
     const res = await api.tag.writeBatch([{ filePath, meta: buildAutoMatchWriteMeta(meta) }])
-    const row = (res.data || []).find(r => r.filePath === filePath) || (res.data || [])[0]
+    const norm = (p) => String(p || '').replace(/\\/g, '/').toLowerCase()
+    const want = norm(filePath)
+    const row = (res.data || []).find(r => norm(r.filePath) === want)
     return Boolean(row?.ok)
   } catch {
     return false

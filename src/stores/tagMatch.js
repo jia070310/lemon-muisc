@@ -159,7 +159,10 @@ function buildWriteMeta(meta) {
 
 async function saveMatchMetaToDisk(filePath, meta) {
   const res = await api.tag.writeBatch([{ filePath, meta: buildWriteMeta(meta) }])
-  const row = (res.data || []).find(r => r.filePath === filePath) || (res.data || [])[0]
+  const norm = (p) => String(p || '').replace(/\\/g, '/').toLowerCase()
+  const want = norm(filePath)
+  const row = (res.data || []).find(r => norm(r.filePath) === want)
+  // 勿回退到 [0]：路径不一致时宁可当失败，避免误判写成功
   return Boolean(row?.ok)
 }
 
