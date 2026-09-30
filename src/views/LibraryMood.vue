@@ -47,7 +47,7 @@
       新入库文件会自动后台分析，一般无需手动点分析。
       <template v-if="analyzer === 'essentia'">
         当前为 AI 通道（Essentia + MusiCNN + emoMusic）。
-        <span class="mood-hint-detail">Essentia：音频分析框架；MusiCNN：把片段编成音乐特征向量；emoMusic：由向量预测开心↔悲伤、平静↔激昂。缺依赖点「准备 AI」（约 280MB）。仅 Linux x86_64 / macOS。AI 未就绪时自动回退本地启发式。</span>
+        <span class="mood-hint-detail">Essentia：音频分析框架；MusiCNN：把片段编成音乐特征向量；emoMusic：由向量预测开心↔悲伤、平静↔激昂。缺依赖点「准备 AI」（主要下载约 280MB 引擎；情绪模型已内置）。仅 Linux x86_64 / macOS。AI 未就绪时自动回退本地启发式。</span>
       </template>
       <template v-else>
         当前为本地启发式（v5）：按本库相对分布铺开。需要更准可切 AI（Linux x86_64 / macOS）。

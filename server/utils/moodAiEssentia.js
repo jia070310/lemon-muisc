@@ -15,18 +15,36 @@ export const MOOD_ESSENTIA_VERSION = 204
  * Essentia 官方两段式情绪模型（配合使用，非二选一）：
  * 1) MusiCNN：Million Song 预训练，把音频编成 embedding（「听成」向量）
  * 2) emoMusic：接在 MusiCNN 后，预测 arousal（唤醒/激昂）与 valence（效价/开心）
- * 运行时需 essentia-tensorflow；本文件只负责下载 .pb 与调用 Python 脚本。
+ * 运行时需 essentia-tensorflow。模型获取顺序：
+ * 1) 配置目录已有 → 直接用
+ * 2) 安装包内置 assets/mood-models → 本地拷贝
+ * 3) 多源下载（jsDelivr / ghfast / GitHub raw / 官方），卡住自动换源
  */
+const MODEL_STALL_MS = 45 * 1000
+const MODEL_HARD_TIMEOUT_MS = 8 * 60 * 1000
+const BUNDLED_MODELS_DIR = path.join(__dirname, '../assets/mood-models')
+const GH_RAW_BASE = 'https://raw.githubusercontent.com/jia070310/lemon-muisc/main/server/assets/mood-models'
+
 const MODEL_FILES = [
   {
     name: 'msd-musicnn-1.pb',
     // MusiCNN 特征提取器
-    url: 'https://essentia.upf.edu/models/feature-extractors/musicnn/msd-musicnn-1.pb',
+    urls: [
+      `https://cdn.jsdelivr.net/gh/jia070310/lemon-muisc@main/server/assets/mood-models/msd-musicnn-1.pb`,
+      `https://ghfast.top/${GH_RAW_BASE}/msd-musicnn-1.pb`,
+      `${GH_RAW_BASE}/msd-musicnn-1.pb`,
+      'https://essentia.upf.edu/models/feature-extractors/musicnn/msd-musicnn-1.pb',
+    ],
   },
   {
     name: 'emomusic-msd-musicnn-2.pb',
     // emoMusic 分类头：embedding → arousal / valence
-    url: 'https://essentia.upf.edu/models/classification-heads/emomusic/emomusic-msd-musicnn-2.pb',
+    urls: [
+      `https://cdn.jsdelivr.net/gh/jia070310/lemon-muisc@main/server/assets/mood-models/emomusic-msd-musicnn-2.pb`,
+      `https://ghfast.top/${GH_RAW_BASE}/emomusic-msd-musicnn-2.pb`,
+      `${GH_RAW_BASE}/emomusic-msd-musicnn-2.pb`,
+      'https://essentia.upf.edu/models/classification-heads/emomusic/emomusic-msd-musicnn-2.pb',
+    ],
   },
 ]
 
@@ -61,28 +79,102 @@ function ensureDir(dir) {
   fs.mkdirSync(dir, { recursive: true })
 }
 
+function isUsableModelFile(filePath) {
+  try {
+    return fs.existsSync(filePath) && fs.statSync(filePath).size > 1000
+  } catch {
+    return false
+  }
+}
+
+/** 安装包内自带模型（约 3MB）；失败返回 false，由调用方改走网络下载 */
+function copyBundledModel(name, dest) {
+  const bundled = path.join(BUNDLED_MODELS_DIR, name)
+  if (!isUsableModelFile(bundled)) return false
+  try {
+    ensureDir(path.dirname(dest))
+    const tmp = `${dest}.part`
+    fs.copyFileSync(bundled, tmp)
+    fs.renameSync(tmp, dest)
+    return isUsableModelFile(dest)
+  } catch {
+    try { fs.unlinkSync(`${dest}.part`) } catch {}
+    try { fs.unlinkSync(dest) } catch {}
+    return false
+  }
+}
+
 async function downloadFile(url, dest, onProgress) {
-  const res = await fetch(url, { redirect: 'follow' })
-  if (!res.ok) throw new Error(`下载失败 ${res.status}: ${url}`)
-  const total = Number(res.headers.get('content-length') || 0)
-  if (!res.body || typeof res.body.getReader !== 'function') {
-    const buf = Buffer.from(await res.arrayBuffer())
-    fs.writeFileSync(dest, buf)
+  const ctrl = new AbortController()
+  const hardTimer = setTimeout(() => ctrl.abort(), MODEL_HARD_TIMEOUT_MS)
+  let stallTimer = null
+  const armStall = () => {
+    if (stallTimer) clearTimeout(stallTimer)
+    stallTimer = setTimeout(() => {
+      try { ctrl.abort() } catch {}
+    }, MODEL_STALL_MS)
+  }
+  try {
+    armStall()
+    const res = await fetch(url, {
+      redirect: 'follow',
+      signal: ctrl.signal,
+      headers: { 'User-Agent': 'lemon-music-mood-models/1.0' },
+    })
+    if (!res.ok) throw new Error(`下载失败 ${res.status}: ${url}`)
+    const total = Number(res.headers.get('content-length') || 0)
+    ensureDir(path.dirname(dest))
+    if (!res.body || typeof res.body.getReader !== 'function') {
+      const buf = Buffer.from(await res.arrayBuffer())
+      fs.writeFileSync(dest, buf)
+      onProgress?.(1)
+      return dest
+    }
+    const reader = res.body.getReader()
+    const bufs = []
+    let received = 0
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      bufs.push(Buffer.from(value))
+      received += value.length
+      armStall()
+      if (onProgress) onProgress(total > 0 ? received / total : Math.min(0.95, received / (3 * 1024 * 1024)))
+    }
+    const out = Buffer.concat(bufs)
+    if (total > 0 && out.length < total * 0.98) throw new Error('下载不完整')
+    if (out.length < 1000) throw new Error('下载文件过小')
+    fs.writeFileSync(dest, out)
     onProgress?.(1)
     return dest
+  } catch (e) {
+    if (ctrl.signal.aborted) throw new Error('下载无进度超时，正在换源')
+    throw e
+  } finally {
+    clearTimeout(hardTimer)
+    if (stallTimer) clearTimeout(stallTimer)
   }
-  const reader = res.body.getReader()
-  const bufs = []
-  let received = 0
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    bufs.push(Buffer.from(value))
-    received += value.length
-    if (onProgress && total) onProgress(received / total)
+}
+
+async function downloadModelWithMirrors(model, dest, onProgress) {
+  const urls = Array.isArray(model.urls) ? model.urls : [model.url].filter(Boolean)
+  let lastErr = null
+  for (let i = 0; i < urls.length; i++) {
+    const url = urls[i]
+    const tmp = `${dest}.part`
+    try {
+      try { fs.unlinkSync(tmp) } catch {}
+      await downloadFile(url, tmp, (p) => onProgress?.(p, { url, sourceIndex: i, sourceTotal: urls.length }))
+      fs.renameSync(tmp, dest)
+      if (!isUsableModelFile(dest)) throw new Error('模型文件无效')
+      return
+    } catch (e) {
+      lastErr = e
+      try { fs.unlinkSync(tmp) } catch {}
+      try { fs.unlinkSync(dest) } catch {}
+    }
   }
-  fs.writeFileSync(dest, Buffer.concat(bufs))
-  return dest
+  throw lastErr || new Error(`下载模型失败：${model.name}`)
 }
 
 export function getMoodModelsStatus() {
@@ -90,7 +182,7 @@ export function getMoodModelsStatus() {
   const dir = modelsDir()
   const files = MODEL_FILES.map((m) => {
     const filePath = path.join(dir, m.name)
-    const ok = fs.existsSync(filePath) && fs.statSync(filePath).size > 1000
+    const ok = isUsableModelFile(filePath)
     return { name: m.name, ok, path: filePath, size: ok ? fs.statSync(filePath).size : 0 }
   })
   return {
@@ -110,20 +202,43 @@ export async function ensureMoodModels({ onProgress } = {}) {
   let i = 0
   for (const m of MODEL_FILES) {
     const dest = path.join(dir, m.name)
-    if (fs.existsSync(dest) && fs.statSync(dest).size > 1000) {
+    if (isUsableModelFile(dest)) {
       i += 1
       continue
     }
-    const tmp = `${dest}.part`
-    await downloadFile(m.url, tmp, (p) => {
+
+    if (copyBundledModel(m.name, dest)) {
+      onProgress?.({
+        file: m.name,
+        index: i,
+        total: MODEL_FILES.length,
+        progress: 1,
+        source: 'bundled',
+      })
+      i += 1
+      continue
+    }
+
+    // 无内置或拷贝失败 → 多源下载（国内镜像优先，卡住自动换源，官方垫底）
+    onProgress?.({
+      file: m.name,
+      index: i,
+      total: MODEL_FILES.length,
+      progress: 0,
+      source: 'download',
+      sourceIndex: 0,
+      sourceTotal: (m.urls || []).length,
+    })
+    await downloadModelWithMirrors(m, dest, (p, meta) => {
       onProgress?.({
         file: m.name,
         index: i,
         total: MODEL_FILES.length,
         progress: p,
+        source: 'download',
+        ...meta,
       })
     })
-    fs.renameSync(tmp, dest)
     i += 1
   }
   return getMoodModelsStatus()

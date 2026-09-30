@@ -675,11 +675,18 @@ export async function runMoodAiPrepareWizard() {
       const venvPy = await ensureVenv(basePy)
       await pipInstallEssentia(venvPy)
 
-      setPhase('models', '正在下载 Essentia 情绪模型…', 76)
+      setPhase('models', '正在准备 Essentia 情绪模型…', 76)
       await ensureMoodModels({
-        onProgress: ({ file, index, total, progress }) => {
+        onProgress: ({ file, index, total, progress, source, sourceIndex, sourceTotal }) => {
           const base = 76 + Math.round(((index + progress) / Math.max(1, total)) * 20)
-          setPhase('models', `下载模型 ${file}… ${Math.round(progress * 100)}%`, base)
+          if (source === 'bundled') {
+            setPhase('models', `正在安装内置模型 ${file}…`, base)
+            return
+          }
+          const srcHint = Number.isFinite(sourceIndex) && sourceTotal
+            ? `源 ${sourceIndex + 1}/${sourceTotal} `
+            : ''
+          setPhase('models', `下载模型 ${file}… ${srcHint}${Math.round(progress * 100)}%`, base)
         },
       })
 
