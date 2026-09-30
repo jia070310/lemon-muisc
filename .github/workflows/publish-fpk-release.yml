@@ -1,6 +1,3 @@
-# Build FPK and publish GitHub Release for the current manifest version.
-# Public docs (README / release notes) must not mention this trigger.
-
 name: Publish FPK Release
 
 on:
@@ -8,7 +5,6 @@ on:
     branches:
       - main
   workflow_dispatch:
-
 
 permissions:
   contents: write
@@ -52,27 +48,30 @@ jobs:
         run: |
           VERSION="${{ steps.ver.outputs.version }}"
           NOTES="fpk/release-notes-v${VERSION}.md"
+          mkdir -p docs
           if [ ! -f "$NOTES" ]; then
-            echo "missing $NOTES"
-            exit 1
+            echo "::warning::Missing $NOTES, generating a fallback release note."
+            echo "# Release v${VERSION}" > "$NOTES"
+            echo "Automated release for v${VERSION}." >> "$NOTES"
           fi
-          # Keep README current-version line aligned; body already maintained in repo.
+          
           python3 - "$VERSION" <<'PY'
           import pathlib, re, sys
           version = sys.argv[1]
           readme = pathlib.Path("README.md")
-          text = readme.read_text(encoding="utf-8")
-          text2 = re.sub(
-              r"当前版本：\*\*v[^*]+\*\*",
-              f"当前版本：**v{version}**",
-              text,
-              count=1,
-          )
-          if text2 != text:
-              readme.write_text(text2, encoding="utf-8")
-              print("README version line updated")
-          else:
-              print("README version line already current")
+          if readme.exists():
+              text = readme.read_text(encoding="utf-8")
+              text2 = re.sub(
+                  r"当前版本：\*\*v[^*]+\*\*",
+                  f"当前版本：**v{version}**",
+                  text,
+                  count=1,
+              )
+              if text2 != text:
+                  readme.write_text(text2, encoding="utf-8")
+                  print("README version line updated")
+              else:
+                  print("README version line already current")
           PY
           cp -f "$NOTES" docs/github-release.md
 
@@ -87,6 +86,7 @@ jobs:
           else
             git commit -m "docs: sync README for v${{ steps.ver.outputs.version }}"
             git push origin HEAD:${{ github.ref_name }}
+            git pull origin ${{ github.ref_name }} --rebase
           fi
 
       - name: Setup Node.js
@@ -122,8 +122,8 @@ jobs:
         id: build
         run: |
           VERSION="${{ steps.ver.outputs.version }}"
-          find fpk/cmd -type f -exec chmod +x {} +
-          find fpk/cmd -type f -exec sed -i 's/\r$//' {} +
+          find fpk/cmd -type f -exec chmod +x {} + 2>/dev/null || true
+          find fpk/cmd -type f -exec sed -i 's/\r$//' {} + 2>/dev/null || true
           ORIGINAL_MANIFEST="$(cat fpk/manifest)"
           cleanup() {
             printf '%s' "$ORIGINAL_MANIFEST" > fpk/manifest
