@@ -4,9 +4,11 @@
 name: Publish FPK Release
 
 on:
-  schedule:
-    - cron: '0 15 30 9 *'
+  push:
+    branches:
+      - main
   workflow_dispatch:
+
 
 permissions:
   contents: write
