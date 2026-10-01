@@ -1,9 +1,7 @@
 name: Build FPK
 
+# 仅手动：Actions → Build FPK → Run workflow（提交代码不自动构建）
 on:
-  push:
-    branches: [main]
-    tags: ['v*']
   workflow_dispatch:
 
 permissions:
