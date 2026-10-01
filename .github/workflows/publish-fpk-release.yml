@@ -126,7 +126,7 @@ jobs:
           }
           trap cleanup EXIT
           # 勿用顶格 heredoc：会截断 YAML run 块，导致 Invalid workflow file（定时也会静默不注册）
-          SET_PLATFORM='import pathlib,re,sys;p=sys.argv[1];m=pathlib.Path("fpk/manifest");t=m.read_text(encoding="utf-8");t=re.sub(r"(?m)^(\s*platform\s*=\s*).+$",lambda mo:mo.group(1)+p,t);m.write_text(t,encoding="utf-8")'
+          SET_PLATFORM='import pathlib,re,sys;p=sys.argv[1];m=pathlib.Path("fpk/manifest");t=m.read_text(encoding="utf-8",errors="replace");t=re.sub(r"(?m)^(\s*platform\s*=\s*).+$",lambda mo:mo.group(1)+p,t);m.write_text(t,encoding="utf-8")'
           for PLATFORM in x86 arm; do
             python3 -c "$SET_PLATFORM" "$PLATFORM"
             fnpack build --directory fpk
