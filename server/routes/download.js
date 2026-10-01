@@ -204,6 +204,8 @@ export function enqueueDownloadTasks(userId, tasks, { broadcastAdded = true } = 
         albumArtist: t.albumArtist || t.singer || '',
         year: String(t.year || '').trim(),
         genre: String(t.genre || '').trim(),
+        comment: String(t.comment || t.desc || t.description || '').trim(),
+        desc: String(t.desc || t.comment || t.description || '').trim(),
         publishTime: String(t.publishTime || t.year || '').trim(),
         album: t.album || '',
         replacePath,
@@ -1660,6 +1662,9 @@ async function downloadTask(task, settings, abortSignal = null) {
   if (!String(task.genre || '').trim() && meta.genre) {
     task.genre = meta.genre
   }
+  if (!String(task.comment || '').trim() && (meta.comment || meta.desc || meta.description)) {
+    task.comment = meta.comment || meta.desc || meta.description
+  }
   if (!String(task.album || '').trim() && meta.album) {
     task.album = meta.album
   }
@@ -2045,12 +2050,14 @@ async function writeMetaIfNeeded(task, meta, filePath, ext, settings) {
     let album = albumHint
     let year = ''
     let genre = ''
+    let comment = ''
     try {
       const enriched = await resolveDownloadEmbedMeta(task, meta)
       albumArtist = enriched.albumArtist || albumArtist
       album = enriched.album || album
       year = enriched.year || ''
       genre = enriched.genre || ''
+      comment = enriched.comment || ''
     } catch (e) {
       console.warn('补全专辑标签失败:', task.name, e.message)
     }
@@ -2063,6 +2070,7 @@ async function writeMetaIfNeeded(task, meta, filePath, ext, settings) {
     }
     if (year) metaData.year = year
     if (genre) metaData.genre = genre
+    if (comment) metaData.comment = comment
     if (wantEmbedPic && picBuf) metaData.pic = picBuf
     if (wantEmbedLyric && lrcResult?.lyric) {
       metaData.lyric = buildEmbedLyrics(lrcResult, settings)

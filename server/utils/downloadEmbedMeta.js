@@ -11,19 +11,59 @@ export function normalizeTagYear(value) {
   return m ? m[0] : ''
 }
 
+function cleanHtml(str) {
+  if (!str) return ''
+  return String(str).replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim()
+}
+
+function normalizeGenre(value) {
+  const s = cleanHtml(value)
+  if (!s) return ''
+  return s.split(/[,，/|、;；]/)[0].trim()
+}
+
+function pickGenreFromInfo(info = {}) {
+  const primary = normalizeGenre(info.genre || info.genreNew || info.tags)
+  if (primary) return primary
+  return normalizeGenre(info.language || info.lang || info.albumType || info.subType)
+}
+
+/** 描述写入 COMMENT：过长截断，避免撑爆部分播放器标签面板 */
+function truncateComment(text, max = 1000) {
+  const s = cleanHtml(text)
+  if (!s) return ''
+  return s.length > max ? `${s.slice(0, max - 1)}…` : s
+}
+
+function pickComment(...candidates) {
+  for (const c of candidates) {
+    const text = truncateComment(c)
+    if (text) return text
+  }
+  return ''
+}
+
 /**
- * 解析下载内嵌用的专辑级字段（专辑艺术家 / 年份 / 风格）。
+ * 解析下载内嵌用的专辑级字段（专辑艺术家 / 年份 / 风格 / 描述）。
  * 任务里已有的优先；缺省时按 albumId 拉专辑详情补全（失败不阻断下载）。
  */
 export async function resolveDownloadEmbedMeta(task, meta = {}, { timeoutMs = 8000 } = {}) {
   const m = meta && typeof meta === 'object' ? meta : {}
   let year = normalizeTagYear(m.year || task?.year || m.publishTime || task?.publishTime)
-  let genre = String(m.genre || task?.genre || '').trim()
+  let genre = normalizeGenre(m.genre || task?.genre)
+  let comment = pickComment(
+    m.comment,
+    task?.comment,
+    m.desc,
+    task?.desc,
+    m.description,
+    task?.description,
+  )
   const hadExplicitAlbumArtist = Boolean(String(task?.albumArtist || m.albumArtist || '').trim())
   let albumArtist = joinArtists(task?.albumArtist || m.albumArtist || task?.singer || '')
   let album = String(task?.album || m.album || '').trim()
 
-  const needFetch = !year || !genre || !hadExplicitAlbumArtist || !album
+  const needFetch = !year || !genre || !comment || !hadExplicitAlbumArtist || !album
   const albumId = String(m.albumId || m.albumMid || m.albummid || task?.albumId || task?.albumMid || '').trim()
   const source = String(m.source || task?.source || '').trim()
 
@@ -37,7 +77,8 @@ export async function resolveDownloadEmbedMeta(task, meta = {}, { timeoutMs = 80
       )
       const info = data?.info || {}
       if (!year) year = normalizeTagYear(info.publishTime)
-      if (!genre) genre = String(info.genre || '').trim()
+      if (!genre) genre = pickGenreFromInfo(info)
+      if (!comment) comment = pickComment(info.desc, info.description, info.intro)
       if (!hadExplicitAlbumArtist && info.author) {
         albumArtist = joinArtists(info.author) || albumArtist
       }
@@ -47,5 +88,5 @@ export async function resolveDownloadEmbedMeta(task, meta = {}, { timeoutMs = 80
     }
   }
 
-  return { year, genre, albumArtist, album }
+  return { year, genre, comment, albumArtist, album }
 }

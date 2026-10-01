@@ -1114,6 +1114,7 @@ async function downloadOne(item, quality) {
       albumArtist: album.author,
       year: album.publishTime || album.year,
       genre: album.genre,
+      comment: album.desc || album.comment || '',
       publishTime: album.publishTime,
     } : {})])
     showToast(`已添加下载: ${item.name} (${getQualityLabel(quality, item.types)})`, 'success')

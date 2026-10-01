@@ -312,6 +312,10 @@ async function onConfirm() {
     const albumArtist = diffResult.value?.onlineAlbum?.artist || props.artist || ''
     const albumYear = diffResult.value?.onlineAlbum?.publishTime || ''
     const albumGenre = diffResult.value?.onlineAlbum?.genre || ''
+    const albumComment = diffResult.value?.onlineAlbum?.desc
+      || diffResult.value?.onlineAlbum?.comment
+      || diffResult.value?.onlineAlbum?.description
+      || ''
     const tasks = []
 
     for (const row of missRows) {
@@ -331,6 +335,7 @@ async function onConfirm() {
         albumArtist,
         year: albumYear,
         genre: albumGenre,
+        comment: albumComment,
         publishTime: albumYear,
         singer: item.singer || albumArtist,
       }))
@@ -354,6 +359,7 @@ async function onConfirm() {
         albumArtist,
         year: albumYear,
         genre: albumGenre,
+        comment: albumComment,
         publishTime: albumYear,
         singer: item.singer || albumArtist,
       }))

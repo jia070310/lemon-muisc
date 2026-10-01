@@ -119,6 +119,7 @@ export function buildBatchDownloadTasks(entries, source, {
       albumArtist: album?.author || album?.albumArtist || album?.artist || '',
       year: album?.year || album?.publishTime || '',
       genre: album?.genre || '',
+      comment: album?.desc || album?.comment || album?.description || '',
       publishTime: album?.publishTime || '',
     }))
   }
@@ -164,6 +165,14 @@ export function buildDownloadTask(item, source, quality, extra = {}) {
     extra.publishTime,
   ))
   const genre = pickField(item.genre, extra.genre)
+  const comment = pickField(
+    item.comment,
+    item.desc,
+    item.description,
+    extra.comment,
+    extra.desc,
+    extra.description,
+  )
   return {
     name: item.name,
     singer: pickField(item.singer, item.artist, item.albumArtist, extra.singer, extra.albumArtist),
@@ -172,6 +181,8 @@ export function buildDownloadTask(item, source, quality, extra = {}) {
     albumArtist: pickField(item.albumArtist, item.album_artist, extra.albumArtist, item.singer, item.artist),
     year,
     genre,
+    comment,
+    desc: comment,
     publishTime: pickField(item.publishTime, extra.publishTime, year),
     interval: item.interval || '',
     quality: q,
