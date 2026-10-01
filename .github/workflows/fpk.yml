@@ -59,8 +59,15 @@ jobs:
           for PLATFORM in x86 arm; do
             python3 -c "$SET_PLATFORM" "$PLATFORM"
             fnpack build --directory fpk
-            FPK="fpk/lemon-music.fpk"
-            test -f "$FPK"
+            if [ -f fpk/lemon-music.fpk ]; then
+              FPK="fpk/lemon-music.fpk"
+            elif [ -f lemon-music.fpk ]; then
+              FPK="lemon-music.fpk"
+            else
+              echo "lemon-music.fpk not found after fnpack"
+              ls -la fpk lemon-music.fpk 2>/dev/null || true
+              exit 1
+            fi
             mv "$FPK" "lemon-music-${VERSION}-${PLATFORM}.fpk"
             ls -lh "lemon-music-${VERSION}-${PLATFORM}.fpk"
           done
