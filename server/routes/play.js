@@ -89,8 +89,29 @@ function wrapPlayUrl(url, source) {
   return `/api/play/proxy?url=${encodeURIComponent(url)}&source=${encodeURIComponent(source || '')}`
 }
 
+const LIBRARY_TRACK_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+/**
+ * 仅解析音乐库稳定 trackId。
+ * 在线曲目也有平台 id（酷狗 hash 数字、网易 songId 等），绝不能当成库 trackId，
+ * 否则 /play/url 会误返回 TRACK_NOT_FOUND，导致所有在线音源无法播放。
+ */
+function pickLibraryTrackId(body = {}) {
+  const explicit = String(body.trackId || '').trim()
+  if (explicit) return explicit
+  const id = String(body.id || '').trim()
+  if (!id || !LIBRARY_TRACK_ID_RE.test(id)) return ''
+  // 带在线身份字段时，id 属于平台曲目
+  if (body.songId || body.songmid || body.hash || body.copyrightId || body.musicId || body.strMediaMid) {
+    return ''
+  }
+  const src = String(body.source || '').trim()
+  if (src && src !== 'local') return ''
+  return id
+}
+
 function resolveLocalFilePath(body = {}) {
-  const trackId = body.trackId || body.id
+  const trackId = pickLibraryTrackId(body)
   if (trackId) {
     const byId = resolvePathByTrackId(trackId)
     if (byId) return byId
@@ -150,8 +171,10 @@ playRouter.post('/ticket', (req, res) => {
 playRouter.post('/url', async (req, res) => {
   try {
     const { songId, source, quality, sourceApiId, skipSourceIds, refresh } = req.body
+    const libraryTrackId = pickLibraryTrackId(req.body)
     const localFilePath = resolveLocalFilePath(req.body)
-    if ((req.body?.trackId || req.body?.id) && !localFilePath) {
+    // 仅显式音乐库 trackId 找不到时 404；在线曲目的平台 id 不得走此分支
+    if (libraryTrackId && !localFilePath) {
       return res.status(404).json({ error: '未找到对应曲目', code: 'TRACK_NOT_FOUND' })
     }
 
