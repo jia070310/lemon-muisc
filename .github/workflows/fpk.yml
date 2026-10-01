@@ -54,15 +54,10 @@ jobs:
             printf '%s' "$ORIGINAL_MANIFEST" > fpk/manifest
           }
           trap cleanup EXIT
+          # 勿用顶格 heredoc：会截断 YAML run 块，导致 Invalid workflow file
+          SET_PLATFORM='import pathlib,re,sys;p=sys.argv[1];m=pathlib.Path("fpk/manifest");t=m.read_text(encoding="utf-8");t=re.sub(r"(?m)^(\s*platform\s*=\s*).+$",lambda mo:mo.group(1)+p,t);m.write_text(t,encoding="utf-8")'
           for PLATFORM in x86 arm; do
-            python3 - "$PLATFORM" <<'PY'
-import pathlib, re, sys
-platform = sys.argv[1]
-manifest = pathlib.Path("fpk/manifest")
-text = manifest.read_text(encoding="utf-8")
-text = re.sub(r'(?m)^(\s*platform\s*=\s*).+$', rf'\1{platform}', text)
-manifest.write_text(text, encoding="utf-8")
-PY
+            python3 -c "$SET_PLATFORM" "$PLATFORM"
             fnpack build --directory fpk
             FPK="fpk/lemon-music.fpk"
             test -f "$FPK"
