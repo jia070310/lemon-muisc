@@ -1214,8 +1214,10 @@ onUnmounted(() => {
   font-size: 15px;
 }
 .auth-splash-logo {
-  width: 56px;
-  height: 56px;
+  width: 96px;
+  height: 96px;
+  border-radius: 22px;
+  object-fit: cover;
 }
 
 .sidebar {

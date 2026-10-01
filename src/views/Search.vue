@@ -184,7 +184,7 @@
         <div class="results-actions">
           <div class="dl-wrap batch-dl-wrap">
             <button
-              class="btn-primary btn-sm"
+              :class="searchState.viewMode === 'playlist-detail' ? 'btn-ghost btn-sm' : 'btn-primary btn-sm'"
               :disabled="!selectedCount || batchDownloading"
               @click.stop="toggleBatchQualityMenu($event)"
             >
@@ -201,6 +201,31 @@
                 >{{ getQualityLabel(q) }}</button>
               </template>
               <div v-else class="quality-empty">所选歌曲暂无可用音质信息</div>
+            </div>
+          </div>
+          <div
+            v-if="searchState.viewMode === 'playlist-detail'"
+            class="dl-wrap batch-dl-wrap"
+          >
+            <button
+              class="btn-primary btn-sm"
+              :disabled="!searchState.results.length || pacedBusy || searchState.playlistLoadingMore"
+              @click.stop="togglePacedQualityMenu($event)"
+              title="整单循序下载，无需勾选；可设每批数量与间隔"
+            >
+              {{ pacedBusy ? '创建中…' : `下载歌单 (${searchState.results.length})` }}
+            </button>
+            <div class="quality-menu" v-if="showPacedQualityMenu" :style="pacedMenuStyle" @click.stop>
+              <div class="quality-menu-title">整单循序下载：选择目标音质</div>
+              <template v-if="pacedQualities.length">
+                <button
+                  v-for="q in pacedQualities"
+                  :key="q"
+                  class="quality-option"
+                  @click="openPacedDialog(q)"
+                >{{ getQualityLabel(q) }}</button>
+              </template>
+              <div v-else class="quality-empty">暂无可用音质信息</div>
             </div>
           </div>
           <button
@@ -293,9 +318,23 @@
     <BatchQualityDialog
       :plan="batchDialog"
       :preferred-label="batchPreferredLabel"
+      :playlist-name="searchState.viewMode === 'playlist-detail' ? (cleanText(searchState.playlistInfo?.name) || '') : ''"
       :busy="batchDownloading"
       @cancel="closeBatchDialog"
       @confirm="handleBatchConfirm"
+    />
+
+    <PlaylistPacedDownloadDialog
+      :open="Boolean(pacedDialog)"
+      :total-count="searchState.results.length"
+      :preferred="pacedDialog?.preferred || '320k'"
+      :preferred-label="pacedPreferredLabel"
+      :playlist-name="cleanText(searchState.playlistInfo?.name) || '歌单'"
+      :default-batch-size="pacedDefaults.batchSize"
+      :default-interval-hours="pacedDefaults.intervalHours"
+      :busy="pacedBusy"
+      @cancel="pacedDialog = null"
+      @confirm="handlePacedConfirm"
     />
   </div>
 </template>
@@ -305,6 +344,7 @@ defineOptions({ name: 'Search' })
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import BatchQualityDialog from '../components/BatchQualityDialog.vue'
+import PlaylistPacedDownloadDialog from '../components/PlaylistPacedDownloadDialog.vue'
 import ConfirmModal from '../components/ConfirmModal.vue'
 import CoverArt from '../components/CoverArt.vue'
 import SearchInput from '../components/SearchInput.vue'
@@ -322,6 +362,7 @@ import { cleanText, cleanTrackItem } from '../utils/text.js'
 import {
   trackSelectKey,
   buildDownloadTask,
+  buildBatchDownloadTasks,
 } from '../utils/musicPayload.js'
 import { useQualityMenuPosition } from '../utils/qualityMenu.js'
 import { playlistPickTarget, addToPickingPlaylist, importPlaylistFromLoaded } from '../stores/library.js'
@@ -334,10 +375,14 @@ const importingPlaylist = ref(false)
 const importConfirm = ref(null)
 const qualityMenuId = ref(null)
 const showBatchQualityMenu = ref(false)
+const showPacedQualityMenu = ref(false)
 const selectedKeys = ref(new Set())
+const pacedDialog = ref(null)
+const pacedBusy = ref(false)
+const pacedDefaults = ref({ batchSize: 50, intervalHours: 24 })
 const { menuStyle, positionMenu, clearMenuPosition } = useQualityMenuPosition()
 const { menuStyle: batchMenuStyle, positionMenu: positionBatchMenu, clearMenuPosition: clearBatchMenuPosition } = useQualityMenuPosition()
-
+const { menuStyle: pacedMenuStyle, positionMenu: positionPacedMenu, clearMenuPosition: clearPacedMenuPosition } = useQualityMenuPosition()
 const {
   batchDialog,
   batchDownloading,
@@ -370,6 +415,17 @@ const batchQualities = computed(() => getBatchQualities(selectedItems.value))
 const batchPreferredLabel = computed(() => {
   const q = batchDialog.value?.preferred
   return q ? getQualityLabel(q) : ''
+})
+const pacedQualities = computed(() => getBatchQualities(searchState.results))
+const pacedPreferredLabel = computed(() => {
+  const q = pacedDialog.value?.preferred
+  return q ? getQualityLabel(q) : ''
+})
+const searchPlaylistJobId = computed(() => {
+  const info = searchState.playlistInfo || {}
+  const src = searchState.activeSource || ''
+  const id = info.id || info.listId || info.sourceListId || info.url || info.name || ''
+  return `search:${src}:${id}`
 })
 
 const {
@@ -457,6 +513,7 @@ function getSelectedEntries() {
 
 onMounted(async () => {
   await loadSearchSources(api)
+  loadPacedDefaults()
   document.addEventListener('click', closeMenus)
 })
 
@@ -500,6 +557,8 @@ function clearSelection() {
 function toggleQualityMenu(item, i, event) {
   showBatchQualityMenu.value = false
   clearBatchMenuPosition()
+  showPacedQualityMenu.value = false
+  clearPacedMenuPosition()
   const key = trackSelectKey(item, i)
   if (qualityMenuId.value === key) {
     qualityMenuId.value = null
@@ -514,6 +573,8 @@ function toggleBatchQualityMenu(event) {
   if (!selectedCount.value) return
   qualityMenuId.value = null
   clearMenuPosition()
+  showPacedQualityMenu.value = false
+  clearPacedMenuPosition()
   showBatchQualityMenu.value = !showBatchQualityMenu.value
   if (showBatchQualityMenu.value) {
     positionBatchMenu(event?.currentTarget, { align: 'left' })
@@ -522,11 +583,99 @@ function toggleBatchQualityMenu(event) {
   }
 }
 
+function togglePacedQualityMenu(event) {
+  if (!searchState.results.length) return
+  qualityMenuId.value = null
+  clearMenuPosition()
+  showBatchQualityMenu.value = false
+  clearBatchMenuPosition()
+  showPacedQualityMenu.value = !showPacedQualityMenu.value
+  if (showPacedQualityMenu.value) {
+    positionPacedMenu(event?.currentTarget, { align: 'left' })
+  } else {
+    clearPacedMenuPosition()
+  }
+}
+
 function closeMenus() {
   qualityMenuId.value = null
   showBatchQualityMenu.value = false
+  showPacedQualityMenu.value = false
   clearMenuPosition()
   clearBatchMenuPosition()
+  clearPacedMenuPosition()
+}
+
+async function loadPacedDefaults() {
+  try {
+    const s = await api.settings.get()
+    const batchSize = Number(s?.['download.playlistBatchSize']) || 50
+    const intervalHours = Number(s?.['download.playlistIntervalHours']) || 24
+    pacedDefaults.value = {
+      batchSize: [50, 100, 200, 300, 500, 1000].includes(batchSize) ? batchSize : 50,
+      intervalHours: [1, 3, 6, 12, 24, 48].includes(intervalHours) ? intervalHours : 24,
+    }
+  } catch {}
+}
+
+function openPacedDialog(quality) {
+  closeMenus()
+  pacedDialog.value = { preferred: quality }
+}
+
+async function handlePacedConfirm(payload) {
+  const preferred = pacedDialog.value?.preferred || '320k'
+  const entries = searchState.results.map((item, i) => ({
+    item,
+    key: trackSelectKey(item, i),
+  }))
+  if (!entries.length) return
+  if (!(await assertActiveSourceForDownload())) return
+
+  pacedBusy.value = true
+  try {
+    const { tasks, skippedCount } = buildBatchDownloadTasks(entries, searchState.activeSource, {
+      preferredQuality: preferred,
+      strategy: payload.strategy,
+      floorQuality: payload.floorQuality,
+    })
+    if (!tasks.length) {
+      showToast(skippedCount ? '所选歌曲均无要求音质，未创建任务' : '没有可下载的歌曲', 'error')
+      return
+    }
+    await api.download.createPlaylistJob({
+      playlistId: searchPlaylistJobId.value,
+      playlistName: cleanText(searchState.playlistInfo?.name) || '歌单',
+      batchSize: payload.batchSize,
+      intervalHours: payload.intervalHours,
+      saveListFolder: payload.saveListFolder,
+      preferredQuality: preferred,
+      strategy: payload.strategy,
+      floorQuality: payload.floorQuality,
+      tasks,
+    })
+    pacedDialog.value = null
+    const first = Math.min(payload.batchSize, tasks.length)
+    const skippedHint = skippedCount ? `（策略跳过 ${skippedCount} 首）` : ''
+    showToast(
+      `已开始循序下载：首批 ${first} 首已入队，共 ${tasks.length} 首，每 ${payload.intervalHours} 小时一批${skippedHint}`,
+      'success',
+    )
+    try {
+      await api.settings.update({
+        'download.playlistBatchSize': String(payload.batchSize),
+        'download.playlistIntervalHours': String(payload.intervalHours),
+      })
+      pacedDefaults.value = {
+        batchSize: payload.batchSize,
+        intervalHours: payload.intervalHours,
+      }
+    } catch {}
+  } catch (e) {
+    showToast(e.message || '创建失败', 'error')
+  } finally {
+    pacedBusy.value = false
+  }
 }
 
 async function togglePlay(item) {

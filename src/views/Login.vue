@@ -349,7 +349,13 @@ async function submitForgot() {
 .login-card { width: 100%; max-width: 420px; margin: 0 auto; padding: 32px 28px; box-shadow: var(--shadow); }
 .login-card.wide { max-width: 480px; }
 .login-brand { text-align: center; margin-bottom: 24px; }
-.login-logo { width: 56px; height: 56px; margin-bottom: 12px; }
+.login-logo {
+  width: 96px;
+  height: 96px;
+  margin-bottom: 16px;
+  border-radius: 22px;
+  object-fit: cover;
+}
 .login-brand h1 { margin: 0 0 8px; font-size: clamp(20px, 4.5vw, 24px); }
 .login-sub { margin: 0 auto; max-width: 40ch; color: var(--text-secondary); font-size: 14px; line-height: 1.55; }
 .setup-steps { display: flex; justify-content: center; align-items: center; gap: 8px; margin-top: 14px; font-size: 12px; color: var(--text-muted); }
