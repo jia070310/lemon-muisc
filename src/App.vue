@@ -1,81 +1,117 @@
 <template>
-  <div class="app">
+  <div class="app" :class="{ 'sidebar-collapsed': sidebarCollapsed }">
     <div v-if="showAuthSplash" class="auth-splash" aria-busy="true">
       <img :src="APP_ICON_URL" alt="" class="auth-splash-logo" />
       <p>柠檬音乐下载</p>
     </div>
     <router-view v-else-if="isPublicPage" class="public-page" />
     <template v-else-if="showAppShell">
-    <aside class="sidebar">
+    <aside class="sidebar" :data-collapsed="sidebarCollapsed">
       <div class="logo">
         <img :src="APP_ICON_URL" alt="柠檬音乐下载" class="logo-img" />
-        <div>
+        <div class="logo-text">
           <h1>柠檬音乐下载</h1>
           <span class="logo-sub">音乐下载工具</span>
         </div>
       </div>
 
-      <nav class="nav-section">
-        <div class="nav-label">功能</div>
-        <router-link to="/search" class="nav-item" active-class="active">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          <span>搜索</span>
-        </router-link>
-        <router-link to="/discover" class="nav-item" :class="{ active: isDiscoverNav }" >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
-          <span>发现</span>
-        </router-link>
-        <router-link to="/library" class="nav-item" :class="{ active: isLibraryNav }">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
-          <span>音乐库</span>
-        </router-link>
-        <router-link to="/library/mood" class="nav-item" active-class="active">
-          <svg class="mood-map-icon" viewBox="0 0 24 24" aria-hidden="true">
-            <path fill="#E53935" d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
-            <path fill="none" stroke="#fff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" d="M4.8 12h3.2l1.35-3.3 2.15 6.6 1.4-3.3h6.3"/>
-          </svg>
-          <span>情绪地图</span>
-        </router-link>
-        <router-link to="/download" class="nav-item" active-class="active">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-          <span>下载</span>
-        </router-link>
-        <router-link to="/file-manager" class="nav-item" :class="{ active: isFileManagerNav }">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><polyline points="9 14 12 17 15 14"/></svg>
-          <span>文件管理</span>
-        </router-link>
-      </nav>
-
-      <nav class="nav-section">
-        <div class="nav-label">系统</div>
-        <router-link to="/settings" class="nav-item" active-class="active">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-          <span>设置</span>
-        </router-link>
-        <router-link to="/about" class="nav-item" active-class="active">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
-          <span>关于</span>
-          <span v-if="hasUpdate" class="nav-update-dot" title="有新版本"></span>
-        </router-link>
+      <nav class="sidebar-nav">
+        <p class="nav-label">主导航</p>
+        <span class="nav-divider" aria-hidden="true"></span>
+        <div class="nav-group">
+          <router-link to="/discover" class="nav-item" :class="{ active: isDiscoverNav }">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+            <span class="nav-item-text">发现</span>
+            <span class="nav-tooltip">发现</span>
+          </router-link>
+          <router-link to="/library" class="nav-item" :class="{ active: isLibraryNav }">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+            <span class="nav-item-text">音乐库</span>
+            <span v-if="libraryTrackTotal > 0" class="nav-badge">{{ libraryTrackTotal }}</span>
+            <span class="nav-tooltip">音乐库</span>
+          </router-link>
+          <router-link to="/library/mood" class="nav-item" active-class="active">
+            <svg class="mood-map-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path fill="#E53935" d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
+              <path fill="none" stroke="#fff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" d="M4.8 12h3.2l1.35-3.3 2.15 6.6 1.4-3.3h6.3"/>
+            </svg>
+            <span class="nav-item-text">情绪地图</span>
+            <span class="nav-tooltip">情绪地图</span>
+          </router-link>
+        </div>
+        <p class="nav-label nav-label-gap">工具与设置</p>
+        <span class="nav-divider nav-divider-gap" aria-hidden="true"></span>
+        <div class="nav-group">
+          <router-link to="/search" class="nav-item" active-class="active">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <span class="nav-item-text">搜索</span>
+            <span class="nav-tooltip">搜索</span>
+          </router-link>
+          <router-link to="/download" class="nav-item" active-class="active">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            <span class="nav-item-text">下载</span>
+            <span class="nav-tooltip">下载</span>
+          </router-link>
+          <router-link to="/file-manager" class="nav-item" :class="{ active: isFileManagerNav }">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><polyline points="9 14 12 17 15 14"/></svg>
+            <span class="nav-item-text">文件管理</span>
+            <span class="nav-tooltip">文件管理</span>
+          </router-link>
+          <router-link to="/settings" class="nav-item" active-class="active">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0 1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            <span class="nav-item-text">设置</span>
+            <span class="nav-tooltip">设置</span>
+          </router-link>
+          <router-link to="/about" class="nav-item" active-class="active">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+            <span class="nav-item-text">关于</span>
+            <span v-if="hasUpdate" class="nav-update-dot" title="有新版本"></span>
+            <span class="nav-tooltip">关于</span>
+          </router-link>
+        </div>
       </nav>
 
       <div class="sidebar-footer">
         <div v-if="currentUser" class="user-bar">
           <router-link to="/settings?tab=account" class="user-info" :title="currentUser.username">
-            <span class="user-name">{{ currentUser.displayName || currentUser.username }}</span>
-            <span class="user-role">{{ currentUser.role === 'admin' ? '管理员' : '用户' }}</span>
+            <span class="user-avatar" aria-hidden="true">{{ userInitial }}</span>
+            <span class="user-meta">
+              <span class="user-name">{{ currentUser.displayName || currentUser.username }}</span>
+              <span class="user-role">{{ currentUser.role === 'admin' ? '管理员' : '用户' }}</span>
+            </span>
           </router-link>
-          <button class="btn-ghost btn-sm logout-btn" type="button" @click="handleLogout">退出</button>
+          <button class="logout-btn" type="button" title="退出" @click="handleLogout">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+              <polyline points="16 17 21 12 16 7"/>
+              <line x1="21" y1="12" x2="9" y2="12"/>
+            </svg>
+          </button>
         </div>
         <button class="theme-toggle" type="button" :title="theme === 'light' ? '切换深色模式' : '切换浅色模式'" @click="toggleTheme">
           <svg v-if="theme === 'dark'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
           <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 14.5A8.5 8.5 0 1 1 9.5 3 7 7 0 0 0 21 14.5z"/></svg>
           <span>{{ theme === 'light' ? '浅色模式' : '深色模式' }}</span>
         </button>
-        <div class="ws-status" :class="{ online: wsConnected }">
+        <div class="ws-status" :class="{ online: wsConnected }" :title="wsConnected ? '服务已连接' : '服务未连接'">
           <span class="dot"></span>
-          {{ wsConnected ? '服务已连接' : '服务未连接' }}
+          <span class="ws-status-text">{{ wsConnected ? '服务已连接' : '服务未连接' }}</span>
         </div>
+        <button
+          type="button"
+          class="sidebar-collapse-btn"
+          :title="sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'"
+          :aria-expanded="!sidebarCollapsed"
+          @click="toggleSidebar"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polyline v-if="sidebarCollapsed" points="13 17 18 12 13 7" />
+            <polyline v-else points="11 17 6 12 11 7" />
+            <polyline v-if="sidebarCollapsed" points="6 17 11 12 6 7" />
+            <polyline v-else points="18 17 13 12 18 7" />
+          </svg>
+          <span>{{ sidebarCollapsed ? '展开侧边栏' : '收起侧边栏' }}</span>
+        </button>
       </div>
     </aside>
 
@@ -470,7 +506,7 @@ import { formatUserError } from './utils/userError.js'
 import {
   playlistPickTarget, stopPlaylistPick,
   initLibraryHotReload, initLibraryUserData, resetLibraryUserData, libraryHotNotice, clearLibraryHotNotice,
-  loadLibrarySongColumns, loadLibraryHotUpdateSetting,
+  loadLibrarySongColumns, loadLibraryHotUpdateSetting, libraryTrackTotal,
 } from './stores/library.js'
 import {
   tagMatchRunning, tagMatchProgress, tagMatchResult, clearTagMatchResult,
@@ -510,6 +546,16 @@ import { APP_ICON_URL } from './utils/appIcon.js'
 
 const route = useRoute()
 const router = useRouter()
+const SIDEBAR_COLLAPSED_KEY = 'lemon-sidebar-collapsed'
+const sidebarCollapsed = ref(localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1')
+const userInitial = computed(() => {
+  const name = currentUser.value?.displayName || currentUser.value?.username || ''
+  return (name.trim().slice(0, 1) || '?').toUpperCase()
+})
+function toggleSidebar() {
+  sidebarCollapsed.value = !sidebarCollapsed.value
+  try { localStorage.setItem(SIDEBAR_COLLAPSED_KEY, sidebarCollapsed.value ? '1' : '0') } catch {}
+}
 const isPublicPage = computed(() => ['Login', 'ChangeDefaultAccount', 'AuthCallback'].includes(route.name))
 const showAppShell = computed(() => (
   isAuthReady.value
@@ -1204,6 +1250,67 @@ onUnmounted(() => {
   width: 100%;
   overflow-x: hidden;
 }
+.app.sidebar-collapsed {
+  --sidebar-width: 76px;
+}
+.app.sidebar-collapsed .logo {
+  justify-content: center;
+  padding-left: 0;
+  padding-right: 0;
+}
+.app.sidebar-collapsed .logo-text,
+.app.sidebar-collapsed .nav-label,
+.app.sidebar-collapsed .nav-item-text,
+.app.sidebar-collapsed .nav-badge,
+.app.sidebar-collapsed .user-meta,
+.app.sidebar-collapsed .theme-toggle span,
+.app.sidebar-collapsed .ws-status-text,
+.app.sidebar-collapsed .sidebar-collapse-btn span,
+.app.sidebar-collapsed .logout-btn {
+  display: none;
+}
+.app.sidebar-collapsed .nav-divider {
+  display: block;
+}
+.app.sidebar-collapsed .sidebar-nav {
+  overflow: visible;
+  padding-left: 10px;
+  padding-right: 10px;
+}
+.app.sidebar-collapsed .sidebar-footer {
+  padding-left: 10px;
+  padding-right: 10px;
+}
+.app.sidebar-collapsed .nav-item {
+  justify-content: center;
+  padding-left: 0;
+  padding-right: 0;
+  gap: 0;
+}
+.app.sidebar-collapsed .nav-item:hover .nav-tooltip {
+  display: block;
+}
+.app.sidebar-collapsed .nav-update-dot {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  margin-left: 0;
+}
+.app.sidebar-collapsed .user-bar {
+  justify-content: center;
+  padding: 4px 0;
+}
+.app.sidebar-collapsed .user-info {
+  justify-content: center;
+  flex: none;
+}
+.app.sidebar-collapsed .theme-toggle,
+.app.sidebar-collapsed .ws-status,
+.app.sidebar-collapsed .sidebar-collapse-btn {
+  justify-content: center;
+  padding-left: 0;
+  padding-right: 0;
+}
 
 .public-page {
   flex: 1;
@@ -1246,66 +1353,115 @@ onUnmounted(() => {
   height: 100vh;
   height: 100dvh;
   z-index: 100;
+  overflow: visible;
+  transition: width 0.3s ease;
 }
 
 .logo {
-  padding: 24px 20px 20px;
+  height: 64px;
+  padding: 0 16px;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
+  min-width: 0;
+  overflow: hidden;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border-light);
+}
+.logo-text {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  line-height: 1.25;
 }
 .logo-img {
   width: 36px;
   height: 36px;
-  border-radius: 10px;
+  border-radius: 12px;
   object-fit: cover;
   flex-shrink: 0;
 }
-.logo h1 { font-size: 16px; font-weight: 700; line-height: 1.2; }
-.logo-sub { font-size: 11px; color: var(--lemon); opacity: 0.85; }
+.logo h1 { font-size: 15px; font-weight: 600; letter-spacing: 0.02em; }
+.logo-sub { font-size: 11px; color: var(--text-muted); }
 
-.nav-section { padding: 0 12px; margin-bottom: 8px; }
-.nav-label {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  padding: 8px 10px 6px;
+.sidebar-nav {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: visible;
+  padding: 16px 12px;
+  scrollbar-width: none;
 }
+.sidebar-nav::-webkit-scrollbar { display: none; }
+.nav-group { display: flex; flex-direction: column; gap: 4px; }
+.nav-label {
+  margin: 0 0 8px;
+  padding: 0 12px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  color: var(--text-muted);
+  text-transform: none;
+}
+.nav-label-gap { margin-top: 24px; }
+.nav-divider {
+  display: none;
+  width: 24px;
+  height: 1px;
+  margin: 0 auto 8px;
+  background: var(--border);
+}
+.nav-divider-gap { margin-top: 24px; }
 
 .nav-item {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 9px 12px;
-  border-radius: var(--radius);
+  gap: 12px;
+  height: 44px;
+  padding: 0 12px;
+  border-radius: 12px;
   color: var(--text-secondary);
-  transition: all 0.15s;
-  margin-bottom: 2px;
+  transition: background 0.15s, color 0.15s, box-shadow 0.15s;
   position: relative;
-  font-size: 14px;
+  font-size: 13.5px;
+  white-space: nowrap;
 }
 .nav-item:hover { background: var(--bg-hover); color: var(--text); }
 .nav-item.active {
-  background: var(--accent-muted);
-  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--text);
   font-weight: 500;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent);
 }
-.nav-item.active::before {
-  content: '';
+.nav-item.active svg:not(.mood-map-icon) { color: var(--accent); }
+.nav-item svg { width: 19px; height: 19px; flex-shrink: 0; }
+.nav-item .mood-map-icon { opacity: 1; }
+.nav-item-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.nav-badge {
+  margin-left: auto;
+  border-radius: 6px;
+  padding: 2px 6px;
+  font-size: 10.5px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.nav-tooltip {
+  display: none;
   position: absolute;
-  left: 0;
+  left: calc(100% + 12px);
   top: 50%;
   transform: translateY(-50%);
-  width: 3px;
-  height: 18px;
-  background: var(--accent);
-  border-radius: 0 2px 2px 0;
+  z-index: 120;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 400;
+  box-shadow: var(--shadow);
+  pointer-events: none;
+  white-space: nowrap;
 }
-.nav-item svg { width: 18px; height: 18px; flex-shrink: 0; opacity: 0.85; }
-.nav-item .mood-map-icon { opacity: 1; }
-.nav-item.active svg { opacity: 1; }
 .nav-update-dot {
   width: 7px;
   height: 7px;
@@ -1313,41 +1469,40 @@ onUnmounted(() => {
   background: var(--lemon);
   margin-left: auto;
   flex-shrink: 0;
-  box-shadow: 0 0 0 2px var(--bg-sidebar);
 }
 
 .sidebar-footer {
-  margin-top: auto;
-  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px;
   border-top: 1px solid var(--border-light);
+  flex-shrink: 0;
 }
 .user-bar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
-  margin-bottom: 12px;
-  padding: 8px 10px;
-  border-radius: var(--radius);
-  background: var(--bg-elevated);
+  padding: 8px;
+  border-radius: 12px;
 }
 .user-info {
   min-width: 0;
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: center;
+  gap: 10px;
   text-decoration: none;
   flex: 1;
-  border-radius: calc(var(--radius) - 2px);
-  padding: 2px 4px;
-  margin: -2px -4px;
-  transition: background 0.15s;
+  border-radius: 10px;
 }
-.user-info:hover {
-  background: var(--bg-hover);
+.user-meta {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
 }
 .user-name {
-  font-size: 13px;
+  font-size: 12.5px;
   color: var(--text);
   white-space: nowrap;
   overflow: hidden;
@@ -1359,27 +1514,57 @@ onUnmounted(() => {
 }
 .logout-btn {
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.logout-btn:hover { background: var(--bg-hover); color: var(--text); }
+.logout-btn svg { width: 16px; height: 16px; }
+.user-avatar {
+  display: flex;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--lemon-gradient);
+  flex-shrink: 0;
 }
 .theme-toggle {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   width: 100%;
-  margin-bottom: 12px;
-  padding: 8px 10px;
-  border-radius: var(--radius);
+  height: 40px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 12px;
   background: var(--bg-elevated);
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12.5px;
+  cursor: pointer;
 }
 .theme-toggle:hover { background: var(--bg-hover); color: var(--text); }
-.theme-toggle svg { width: 16px; height: 16px; flex-shrink: 0; }
+.theme-toggle svg { width: 18px; height: 18px; flex-shrink: 0; }
 .ws-status {
   font-size: 12px;
   color: var(--text-muted);
   display: flex;
   align-items: center;
   gap: 8px;
+  height: 32px;
+  padding: 0 12px;
 }
 .dot {
   width: 7px;
@@ -1389,6 +1574,22 @@ onUnmounted(() => {
   flex-shrink: 0;
 }
 .ws-status.online .dot { background: var(--success); }
+.sidebar-collapse-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: 40px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.sidebar-collapse-btn:hover { background: var(--bg-hover); color: var(--text); }
+.sidebar-collapse-btn svg { width: 18px; height: 18px; flex-shrink: 0; }
 
 .content {
   flex: 1;
@@ -1402,6 +1603,7 @@ onUnmounted(() => {
   width: calc(100% - var(--sidebar-width));
   max-width: calc(100% - var(--sidebar-width));
   position: relative;
+  transition: margin-left 0.22s ease, width 0.22s ease, max-width 0.22s ease;
 }
 .route-loading-bar {
   position: absolute;
@@ -1434,9 +1636,11 @@ onUnmounted(() => {
   flex: 1;
   min-height: 0;
 }
-/* 情绪地图：收紧边距，地图尽量铺满主区域 */
-.content-fixed:has(.mood-page) {
-  padding: 16px 16px 88px;
+/* 情绪地图：桌面收紧边距，地图尽量铺满主区域 */
+@media (min-width: 769px) {
+  .content-fixed:has(.mood-page) {
+    padding: 16px 16px 88px;
+  }
 }
 
 .app-notice-stack {
@@ -1453,6 +1657,7 @@ onUnmounted(() => {
   justify-content: center;
   gap: 6px;
   pointer-events: none;
+  transition: left 0.22s ease;
 }
 .app-notice-stack > .app-notice {
   pointer-events: auto;

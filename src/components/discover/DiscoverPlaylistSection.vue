@@ -61,7 +61,7 @@ const props = defineProps({
   list: { type: Array, default: () => [] },
   loading: Boolean,
   error: { type: String, default: '' },
-  sort: { type: String, default: 'hot' },
+  sort: { type: String, default: 'new' },
   sortOptions: { type: Array, default: () => [] },
   hasMore: Boolean,
 })

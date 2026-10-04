@@ -235,7 +235,7 @@ export const api = {
       if (partial) qs.set('partial', '1')
       return request(`/playlist?${qs}`, { timeout: partial ? 30000 : 120000, ...options })
     },
-    recommend: (source, sort = 'hot', page = 1, limitOrOptions = 30, maybeOptions = {}) => {
+    recommend: (source, sort = 'new', page = 1, limitOrOptions = 30, maybeOptions = {}) => {
       const limit = typeof limitOrOptions === 'number' ? limitOrOptions : 30
       const options = typeof limitOrOptions === 'object' && limitOrOptions
         ? limitOrOptions

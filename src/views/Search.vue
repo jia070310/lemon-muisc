@@ -169,6 +169,17 @@
       <div v-else class="empty album-hint">输入歌单名或关键词后搜索</div>
     </div>
 
+    <div v-if="showSongHintCard" class="album-results card">
+      <div v-if="searchState.loading" class="album-loading">正在搜索歌曲...</div>
+      <div v-else-if="searchState.searched" class="empty">暂无搜索结果</div>
+      <div v-else class="empty album-hint">输入歌曲名或歌手后搜索</div>
+    </div>
+
+    <div v-else-if="showDetailTrackEmpty" class="album-results card">
+      <div v-if="searchState.loading || searchState.playlistLoading" class="album-loading">正在加载歌曲...</div>
+      <div v-else class="empty">暂无歌曲</div>
+    </div>
+
     <div class="results card" v-if="showSongResults">
       <div class="results-toolbar">
         <span class="results-count">
@@ -305,8 +316,6 @@
         <button class="btn-ghost btn-sm" :disabled="searchState.page >= searchState.totalPages" @click="searchState.page++; doSearch()">下一页</button>
       </div>
     </div>
-
-    <div v-else-if="showSongEmpty" class="empty">暂无搜索结果</div>
 
     <div v-if="toast" class="toast" :class="toast.type">{{ toast.text }}</div>
 
@@ -536,14 +545,15 @@ const showSongResults = computed(() =>
     || searchState.viewMode === 'playlist-detail'
   ),
 )
-const showSongEmpty = computed(() =>
-  searchState.searched
-  && !searchState.loading
-  && !searchState.albumLoading
-  && !searchState.playlistLoading
-  && !showSongResults.value
-  && !showAlbumGrid.value
-  && !showPlaylistGrid.value,
+const showSongHintCard = computed(() =>
+  searchState.searchMode === 'song'
+  && searchState.viewMode !== 'album-detail'
+  && searchState.viewMode !== 'playlist-detail'
+  && !showSongResults.value,
+)
+const showDetailTrackEmpty = computed(() =>
+  (searchState.viewMode === 'album-detail' || searchState.viewMode === 'playlist-detail')
+  && !showSongResults.value,
 )
 
 function getSelectedEntries() {

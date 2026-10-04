@@ -16,7 +16,7 @@ export const discoverState = reactive({
   recommendLoadingMore: false,
   recommendHasMore: false,
   recommendTotal: 0,
-  recommendSort: 'hot',
+  recommendSort: 'new',
   recommendPage: 1,
   // 首页多栏目
   songRegion: '',
@@ -100,8 +100,8 @@ export const sourcePlaceholders = {
 }
 
 export const recommendSortOptions = [
-  { id: 'hot', label: '最热' },
   { id: 'new', label: '最新' },
+  { id: 'hot', label: '最热' },
 ]
 
 /** 各平台默认地区（空表示无地区 Tab） */

@@ -31,6 +31,78 @@
       >{{ scanStatusHint }}</span>
     </div>
 
+    <section class="daily-mix">
+      <div class="daily-mix-copy">
+        <div class="daily-mix-kicker">Daily Mix</div>
+        <h2 class="daily-mix-title">
+          每日推荐
+          <span class="daily-mix-date">{{ dailyMix.dateLabel || '今天' }}</span>
+        </h2>
+        <p class="daily-mix-desc daily-mix-desc--full">{{ dailyMixDesc }}</p>
+        <p class="daily-mix-desc daily-mix-desc--short">{{ dailyMixShort }}</p>
+        <div class="daily-mix-actions">
+          <button type="button" class="daily-play-btn" :disabled="!dailyMix.count" @click="playDailyMix">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><polygon points="7,4 20,12 7,20"/></svg>
+            播放全部
+          </button>
+          <button
+            type="button"
+            class="daily-save-btn"
+            :class="{ saved: !!dailyMix.savedId }"
+            :disabled="!dailyMix.count"
+            :aria-label="dailyMix.savedId ? '已收藏' : '收藏歌单'"
+            @click="saveDailyMix"
+          >
+            <svg class="daily-save-icon" viewBox="0 0 24 24" width="16" height="16" :fill="dailyMix.savedId ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round">
+              <path d="M6 4h12v16l-6-3.4L6 20V4z"/>
+            </svg>
+            <span class="daily-save-label">{{ dailyMix.savedId ? '已收藏' : '收藏歌单' }}</span>
+          </button>
+        </div>
+      </div>
+      <div class="daily-mix-bars" aria-hidden="true">
+        <span v-for="n in 7" :key="n"></span>
+      </div>
+    </section>
+
+    <section class="reco-section">
+      <div class="section-head">
+        <h2>推荐歌单</h2>
+      </div>
+      <div class="reco-grid">
+        <button
+          v-for="card in recoPlaylists"
+          :key="card.id"
+          type="button"
+          class="reco-card"
+          :class="[`tone-${card.tone}`, { locked: card.locked }]"
+          @click="openRecoPlaylist(card)"
+        >
+          <span class="reco-icon" aria-hidden="true">
+            <svg v-if="card.locked" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8">
+              <rect x="5" y="11" width="14" height="10" rx="2"/>
+              <path d="M8 11V8a4 4 0 0 1 8 0v3"/>
+            </svg>
+            <svg v-else-if="card.icon === 'flame'" viewBox="0 0 24 24" width="22" height="22" fill="currentColor">
+              <path d="M12 2s4 4.2 4 8.2c0 2.2-1.2 4-3.1 5 .4-1.6.2-3.2-.7-4.5-1.4 2.1-3.2 3.6-3.2 6.3 0 2.5 2 4.5 4.5 4.5s4.5-2 4.5-5.2C18 10.2 12 2 12 2z"/>
+            </svg>
+            <svg v-else-if="card.icon === 'night'" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8">
+              <path d="M21 12.8A8.2 8.2 0 1 1 11.2 3 6.6 6.6 0 0 0 21 12.8z"/>
+            </svg>
+            <svg v-else viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8">
+              <rect x="3" y="11" width="18" height="8" rx="2"/>
+              <path d="M5 11 8 6h8l3 5"/>
+              <circle cx="7.5" cy="19" r="1.6"/><circle cx="16.5" cy="19" r="1.6"/>
+            </svg>
+          </span>
+          <span class="reco-meta">
+            <span class="reco-name">{{ card.name }}</span>
+            <span class="reco-sub">{{ card.subtitle }}</span>
+          </span>
+        </button>
+      </div>
+    </section>
+
     <section class="playlist-row-wrap">
       <div class="section-head">
         <h2>歌单</h2>
@@ -89,15 +161,17 @@
     <section class="genre-section" v-if="visibleGenres.length">
       <div class="section-head">
         <h2>音乐风格</h2>
-        <button
-          v-if="allGenres.length > visibleGenres.length"
-          type="button"
-          class="section-more-btn"
-          @click="openAllGenres"
-        >
-          <span>全部</span>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
-        </button>
+        <div class="section-head-actions">
+          <button
+            type="button"
+            class="section-more-btn"
+            title="查看全部风格"
+            @click="openAllGenres"
+          >
+            <span>所有风格</span>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+          </button>
+        </div>
       </div>
       <div class="horizontal-scroll genre-scroll">
         <div class="genre-pill-row">
@@ -121,15 +195,17 @@
     <section class="artist-section" v-if="visibleArtists.length">
       <div class="section-head">
         <h2>歌手</h2>
-        <button
-          v-if="allArtists.length > visibleArtists.length"
-          type="button"
-          class="section-more-btn"
-          @click="openAllArtists"
-        >
-          <span>全部</span>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
-        </button>
+        <div class="section-head-actions">
+          <button
+            type="button"
+            class="section-more-btn"
+            title="查看全部歌手"
+            @click="openAllArtists"
+          >
+            <span>所有歌手</span>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+          </button>
+        </div>
       </div>
       <div class="horizontal-scroll artist-scroll">
         <div class="artist-pill-row">
@@ -333,7 +409,7 @@ import { SEARCH_HISTORY_KEYS } from '../composables/useSearchHistory.js'
 import { formatTrackTags, formatAlbumTags } from '../utils/format.js'
 import { getTrackFilePath } from '../utils/trackPath.js'
 import { countAutoFillColumns } from '../utils/grid.js'
-import { playItem, addToQueue, isInQueue, isPlayingItem, isPaused } from '../stores/player.js'
+import { playItem, addToQueue, isInQueue, isPlayingItem, isPaused, startPlayTracks } from '../stores/player.js'
 import {
   libraryTracks, libraryTrackTotal, libraryLoading, libraryMetaLoading, libraryLoadProgress,
   libraryScanning, libraryScanPhase, libraryScanCurrent, libraryScanTotal, libraryScanPercent,
@@ -346,6 +422,16 @@ import {
   libraryBrowseRevision,
   loadPlaylistCardsFromServer,
 } from '../stores/library.js'
+import { dailyMix, dailyMixDesc, recoPlaylists, refreshLibraryMix, saveDailyMixPlaylist, loadNetworkPlaylistTracks } from '../stores/libraryMix.js'
+
+const dailyMixShort = computed(() => {
+  const mix = dailyMix.value
+  if (!mix.count) return '根据收藏与最近播放生成'
+  const bits = [`${mix.count} 首`]
+  if (mix.durationText) bits.push(mix.durationText.replace(/^约\s*/, ''))
+  if (mix.themeText) bits.push(mix.themeText.replace(/^今天/, ''))
+  return bits.join(' · ')
+})
 
 const PLAYLIST_SORT_KEY = 'lemon-library-playlist-sort'
 const ALBUM_SORT_KEY = 'lemon-library-album-sort'
@@ -520,6 +606,7 @@ watch(libraryBrowseRevision, () => {
   loadBrowsePreviews()
   loadSongPage()
   loadScanSummary()
+  refreshLibraryMix().catch(() => {})
 })
 
 watch(songSort, (value) => {
@@ -575,6 +662,7 @@ onMounted(() => {
   loadScanSummary()
   loadBrowsePreviews()
   loadSongPage()
+  refreshLibraryMix().catch(() => {})
   scanLibrary(api, {
     resync: true,
     onError: (msg) => showToast(msg, 'error'),
@@ -582,6 +670,7 @@ onMounted(() => {
       loadScanSummary()
       loadBrowsePreviews()
       loadSongPage()
+      refreshLibraryMix().catch(() => {})
       notifyScanComplete(result, meta)
     },
   }).catch(() => {})
@@ -601,6 +690,7 @@ async function refreshLibrary() {
       onComplete: (r, meta) => notifyScanComplete(r, meta),
     })
     await loadScanSummary()
+    refreshLibraryMix().catch(() => {})
     if (!result) showToast('正在扫描中，请稍候', 'info')
   } catch {}
 }
@@ -734,6 +824,61 @@ function onAddedToPlaylist({ playlist, duplicate }) {
   else showToast(`已加入歌单：${playlist?.name || ''}`, 'success')
 }
 
+async function playDailyMix() {
+  if (!dailyMix.value.tracks.length) {
+    showToast('暂无可播放的每日推荐', 'info')
+    return
+  }
+  try {
+    await startPlayTracks(dailyMix.value.tracks, 'local', { dynamic: false })
+    showToast(`正在播放每日推荐 ${dailyMix.value.count} 首`, 'success')
+  } catch (e) {
+    showToast(e?.message || '播放失败', 'error')
+  }
+}
+
+function saveDailyMix() {
+  const pl = saveDailyMixPlaylist()
+  if (!pl) {
+    showToast('暂无可收藏的每日推荐', 'info')
+    return
+  }
+  loadBrowsePreviews()
+  showToast(`已收藏到歌单「${pl.name}」`, 'success')
+}
+
+async function openRecoPlaylist(card) {
+  if (card?.locked) {
+    showToast('深夜电台将在晚间 22:00 后生成', 'info')
+    return
+  }
+  if (card?.network?.id) {
+    showToast('正在获取网络歌单…', 'info')
+    try {
+      const tracks = await loadNetworkPlaylistTracks(card)
+      if (!tracks.length) {
+        showToast('网络歌单暂无曲目', 'info')
+        return
+      }
+      await startPlayTracks(tracks, card.network.source, { dynamic: false })
+      showToast(`正在播放「${card.network.name}」${tracks.length} 首`, 'success')
+    } catch (e) {
+      showToast(e?.message || '获取网络歌单失败', 'error')
+    }
+    return
+  }
+  if (!card?.tracks?.length) {
+    showToast('曲库曲目不足，暂时无法生成该歌单', 'info')
+    return
+  }
+  try {
+    await startPlayTracks(card.tracks, 'local', { dynamic: false })
+    showToast(`正在播放「${card.name}」${card.tracks.length} 首`, 'success')
+  } catch (e) {
+    showToast(e?.message || '播放失败', 'error')
+  }
+}
+
 function openPlaylist(card) {
   // 漫游播放入口：进入歌单页后自动开播
   if (card?.id === 'random-start') {
@@ -818,6 +963,158 @@ function showToast(text, type = 'info') {
   text-decoration: none;
 }
 .library-scan-link:hover { text-decoration: underline; }
+
+.daily-mix {
+  --daily-play: #e6392f;
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: 24px;
+  margin: 0 0 22px;
+  padding: 24px;
+  min-height: 168px;
+  border-radius: 24px;
+  overflow: hidden;
+  isolation: isolate;
+  border: 1px solid #232329;
+  background: linear-gradient(90deg, #2c1113 0%, #1a1418 50%, #121218 100%);
+  color: #fff;
+}
+.daily-mix-copy,
+.daily-mix-bars {
+  position: relative;
+  z-index: 1;
+}
+.daily-mix-copy { min-width: 0; flex: 1; }
+.daily-mix-kicker {
+  font-size: 11px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: #f0453c;
+  font-weight: 600;
+}
+.daily-mix-title {
+  margin: 8px 0 6px;
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 10px;
+}
+.daily-mix-date {
+  font-size: 15px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.82);
+}
+.daily-mix-desc {
+  margin: 0 0 20px;
+  max-width: 520px;
+  font-size: 13px;
+  line-height: 1.65;
+  color: #9a9aa5;
+}
+.daily-mix-desc--short { display: none; }
+.daily-save-icon { display: none; }
+.daily-mix-actions { display: flex; flex-wrap: wrap; gap: 12px; }
+.daily-play-btn,
+.daily-save-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 20px;
+  border-radius: 999px;
+  font-size: 13.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.daily-play-btn {
+  border: 0;
+  color: #fff;
+  background: #e6392f;
+}
+.daily-play-btn:hover { background: #f0453c; }
+.daily-save-btn {
+  border: 1px solid #2f2f38;
+  color: #c8c8d2;
+  background: transparent;
+}
+.daily-save-btn:hover {
+  border-color: #3d3d48;
+  color: #fff;
+  background: transparent;
+}
+.daily-save-btn.saved { color: #f0453c; border-color: #3d3d48; }
+.daily-play-btn:disabled,
+.daily-save-btn:disabled { opacity: 0.45; cursor: default; }
+.daily-mix-bars {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 8px 4px 0;
+  flex-shrink: 0;
+  min-height: 112px;
+}
+.daily-mix-bars span {
+  display: block;
+  width: 8px;
+  border-radius: 99px;
+  transform-origin: center center;
+  animation: daily-bar 1.1s ease-in-out infinite alternate;
+}
+.daily-mix-bars span:nth-child(1) { height: 36px; background: #7a2428; animation-delay: 0.00s; }
+.daily-mix-bars span:nth-child(2) { height: 72px; background: #c43a32; animation-delay: 0.08s; }
+.daily-mix-bars span:nth-child(3) { height: 52px; background: #e24a3a; animation-delay: 0.16s; }
+.daily-mix-bars span:nth-child(4) { height: 88px; background: #f0453c; animation-delay: 0.24s; }
+.daily-mix-bars span:nth-child(5) { height: 64px; background: #ff6a52; animation-delay: 0.32s; }
+.daily-mix-bars span:nth-child(6) { height: 108px; background: #ff7a5c; animation-delay: 0.40s; }
+.daily-mix-bars span:nth-child(7) { height: 44px; background: #8a2c2c; animation-delay: 0.48s; }
+@keyframes daily-bar {
+  from { transform: scaleY(0.7); opacity: 0.85; }
+  to { transform: scaleY(1); opacity: 1; }
+}
+
+.reco-section { margin: 0 0 24px; }
+.reco-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+.reco-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 88px;
+  padding: 16px 18px;
+  text-align: left;
+  border-radius: 16px;
+  border: 1px solid var(--border-light);
+  background: var(--bg-card);
+  color: var(--text);
+  cursor: pointer;
+}
+.reco-card:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--border-light)); }
+.reco-card.locked { opacity: 0.78; }
+.reco-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 12px;
+  flex-shrink: 0;
+  color: #fff;
+}
+.reco-card.tone-orange .reco-icon { background: linear-gradient(135deg, #ff8a3d, #e6392f); }
+.reco-card.tone-purple .reco-icon { background: linear-gradient(135deg, #7b61ff, #33228f); }
+.reco-card.tone-green .reco-icon { background: linear-gradient(135deg, #25c26e, #0f7a46); }
+.reco-meta { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.reco-name { font-size: 15px; font-weight: 650; }
+.reco-sub { font-size: 12px; color: var(--text-muted); }
+
 .library-search-form {
   flex: 1 1 200px;
   min-width: 0;
@@ -1231,9 +1528,118 @@ function showToast(text, type = 'info') {
   .song-grid.song-cols-4 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+  .reco-card { min-height: 76px; padding: 12px 14px; gap: 10px; }
+  .reco-icon { width: 40px; height: 40px; }
 }
 
 @media (max-width: 768px) {
+  .daily-mix {
+    position: relative;
+    align-items: flex-start;
+    gap: 0;
+    margin: 4px 0 16px;
+    padding: 14px 14px 14px 16px;
+    min-height: 0;
+    border-radius: 16px;
+  }
+  .daily-mix-kicker { font-size: 10px; letter-spacing: 0.16em; }
+  .daily-mix-title {
+    margin: 4px 0 4px;
+    font-size: 20px;
+    line-height: 1.25;
+    padding-right: 56px;
+  }
+  .daily-mix-date { font-size: 13px; }
+  .daily-mix-desc--full { display: none; }
+  .daily-mix-desc--short {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    margin: 0 0 12px;
+    padding-right: 48px;
+    font-size: 12px;
+    line-height: 1.45;
+  }
+  .daily-mix-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: auto;
+  }
+  .daily-play-btn,
+  .daily-save-btn {
+    height: 28px;
+    justify-content: center;
+  }
+  .daily-play-btn {
+    width: auto;
+    padding: 0 12px;
+    font-size: 12px;
+    gap: 4px;
+  }
+  .daily-play-btn svg { width: 11px; height: 11px; }
+  .daily-save-btn { padding: 0; width: 28px; }
+  .daily-save-label { display: none; }
+  .daily-save-icon { display: block; }
+  .daily-mix-bars {
+    position: absolute;
+    right: 12px;
+    top: 14px;
+    height: 44px;
+    gap: 3px;
+    padding: 0;
+    pointer-events: none;
+  }
+  .daily-mix-bars span { width: 3px; }
+  .daily-mix-bars span:nth-child(1) { height: 12px; }
+  .daily-mix-bars span:nth-child(2) { height: 20px; }
+  .daily-mix-bars span:nth-child(3) { height: 28px; }
+  .daily-mix-bars span:nth-child(4) { height: 16px; }
+  .daily-mix-bars span:nth-child(5) { height: 24px; }
+  .daily-mix-bars span:nth-child(6) { height: 32px; }
+  .daily-mix-bars span:nth-child(7) { height: 14px; }
+
+  .reco-section { margin: 0 0 18px; }
+  .reco-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+  .reco-card {
+    flex-direction: column;
+    align-items: flex-start;
+    min-height: 0;
+    height: 100%;
+    padding: 10px 10px 12px;
+    gap: 8px;
+    border-radius: 14px;
+  }
+  .reco-icon {
+    width: 34px;
+    height: 34px;
+    border-radius: 10px;
+  }
+  .reco-icon svg { width: 16px; height: 16px; }
+  .reco-meta { width: 100%; gap: 2px; }
+  .reco-name {
+    font-size: 12px;
+    font-weight: 650;
+    line-height: 1.3;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .reco-sub {
+    font-size: 10px;
+    line-height: 1.35;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
   .library-topbar {
     gap: 8px;
   }
@@ -1296,6 +1702,8 @@ function showToast(text, type = 'info') {
     box-shadow: none;
   }
 
+  .genre-section,
+  .artist-section { margin-bottom: 16px; }
   .genre-scroll {
     margin: 0 -14px;
     padding: 0 14px 4px;
@@ -1308,10 +1716,18 @@ function showToast(text, type = 'info') {
   .genre-scroll::-webkit-scrollbar { display: none; }
   .genre-pill-row {
     flex-wrap: nowrap;
+    gap: 6px;
     width: max-content;
     min-width: 100%;
   }
-  .genre-pill-name { max-width: 120px; }
+  .genre-pill {
+    gap: 4px;
+    padding: 4px 10px;
+    font-size: 12px;
+    border-width: 1px;
+  }
+  .genre-pill-name { max-width: 96px; }
+  .genre-pill-play svg { width: 10px; height: 10px; }
 
   .artist-scroll {
     margin: 0 -14px;
@@ -1325,10 +1741,19 @@ function showToast(text, type = 'info') {
   .artist-scroll::-webkit-scrollbar { display: none; }
   .artist-pill-row {
     flex-wrap: nowrap;
+    gap: 6px;
     width: max-content;
     min-width: 100%;
   }
-  .artist-pill-name { max-width: 110px; }
+  .artist-pill {
+    gap: 5px;
+    padding: 4px 10px;
+    font-size: 12px;
+    border-width: 1px;
+  }
+  .artist-pill-name { max-width: 88px; }
+  .artist-pill-meta { font-size: 10px; }
+  .artist-pill-play svg { width: 10px; height: 10px; }
 
   .album-row {
     grid-template-columns: repeat(2, minmax(0, 1fr));

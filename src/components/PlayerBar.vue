@@ -1016,6 +1016,7 @@ async function onQueuePlayClick(index) {
   padding: 0 24px;
   gap: 20px;
   z-index: 50;
+  transition: left 0.22s ease;
 }
 
 .bar-spectrum {

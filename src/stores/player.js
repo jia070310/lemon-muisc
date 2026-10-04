@@ -2593,7 +2593,11 @@ export function setActiveDynamicList(listId) {
  * 用指定曲目列表替换播放队列并立即播放（漫游播放入口使用）。
  * 同时标记当前为漫游动态歌单（驱动自动续填/已播清理逻辑）。
  */
-export async function startPlayTracks(tracks, sourceOverride = '') {
+export async function startPlayTracks(tracks, sourceOverride = '', opts = {}) {
+  if (sourceOverride && typeof sourceOverride === 'object') {
+    opts = sourceOverride
+    sourceOverride = opts.source || ''
+  }
   // 与心情试听互斥：进入漫游前先退出心情模式
   if (queueSource.value === 'mood') {
     try {
@@ -2621,7 +2625,7 @@ export async function startPlayTracks(tracks, sourceOverride = '') {
   playQueue.value = dedup
   playHistory = []
 
-  activeDynamicList.value = ROAM_PLAYLIST_ID
+  activeDynamicList.value = opts.dynamic === false ? null : ROAM_PLAYLIST_ID
   if (currentQueueIndex.value >= playQueue.value.length) currentQueueIndex.value = -1
   await playTrackAt(0)
   saveQueueState()

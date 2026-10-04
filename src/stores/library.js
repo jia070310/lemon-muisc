@@ -1211,6 +1211,7 @@ export function findAlbumById(tracks, id) {
 }
 
 export function createPlaylist(name, {
+  id = '',
   coverUrl = '',
   coverMode = 'auto',
   playlistType = 'custom',
@@ -1221,8 +1222,12 @@ export function createPlaylist(name, {
 } = {}) {
   const title = String(name || '').trim()
   if (!title) return null
+  const existing = id ? customPlaylists.value.find(p => p.id === id) : null
+  if (existing) {
+    return updatePlaylist(existing.id, { name: title, coverUrl, coverMode })
+  }
   const item = normalizePlaylist({
-    id: `pl_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    id: id || `pl_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
     name: title,
     createdAt: Date.now(),
     trackKeys: [],

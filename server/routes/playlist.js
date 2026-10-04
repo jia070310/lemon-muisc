@@ -18,7 +18,7 @@ playlistRouter.get('/sources', (req, res) => {
 
 playlistRouter.get('/recommend', async (req, res) => {
   try {
-    const { source = 'kw', sort = 'hot', page = 1, limit } = req.query
+    const { source = 'kw', sort = 'new', page = 1, limit } = req.query
     if (!availableSources(req)[source]) {
       return res.status(400).json({ error: `不支持的平台: ${source}` })
     }

@@ -3,6 +3,22 @@
     <div class="page-header-row">
       <button class="btn-ghost btn-sm" type="button" @click="$router.back()">← 返回</button>
       <div class="page-title">情绪地图</div>
+      <div class="mood-view-toggle" role="tablist" aria-label="情绪视图">
+        <button
+          type="button"
+          role="tab"
+          :class="{ active: moodView === 'map' }"
+          :aria-selected="moodView === 'map'"
+          @click="setMoodView('map')"
+        >地图</button>
+        <button
+          type="button"
+          role="tab"
+          :class="{ active: moodView === 'overview' }"
+          :aria-selected="moodView === 'overview'"
+          @click="setMoodView('overview')"
+        >概览</button>
+      </div>
       <div class="mood-actions">
         <AppSelect
           v-model="analyzer"
@@ -42,7 +58,7 @@
       </div>
     </div>
 
-    <p class="mood-hint">
+    <p v-if="moodView === 'map'" class="mood-hint">
       横轴悲伤 ↔ 开心，纵轴平静 ↔ 激昂。点击封面可播放或加入列表；心情连播时在底部播放栏用心形 / 破碎心反馈。滚轮或两指缩放，Shift 拖动平移。偏好约 20 分钟衰减。
       新入库文件会自动后台分析，一般无需手动点分析。
       <template v-if="analyzer === 'essentia'">
@@ -85,6 +101,77 @@
         停止分析
       </button>
     </div>
+    <div v-else-if="moodView === 'overview'" class="mood-overview">
+      <p class="mood-overview-lead">按分析坐标自动归类，共 {{ stats.analyzed || points.length }} 首被标注情绪</p>
+      <div class="mood-cat-grid">
+        <button
+          v-for="cat in moodCategories"
+          :key="cat.id"
+          type="button"
+          class="mood-cat-card"
+          :style="{ '--cat': cat.color, '--cat-soft': cat.soft }"
+          @click="playMoodCategory(cat)"
+        >
+          <span class="mood-cat-icon" aria-hidden="true">
+            <!-- mdi:emoticon-happy-outline / leaf / weather-rainy / fire / weather-night / map-marker -->
+            <svg v-if="cat.icon === 'happy'" viewBox="0 0 24 24" width="24" height="24" fill="currentColor">
+              <path d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2m0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16m3.5-12c.83 0 1.5.67 1.5 1.5S16.33 11 15.5 11 14 10.33 14 9.5 14.67 8 15.5 8M8.5 8c.83 0 1.5.67 1.5 1.5S9.33 11 8.5 11 7 10.33 7 9.5 7.67 8 8.5 8M12 17.23c-1.75 0-3.29-.73-4.19-1.81L9.23 14c.45.72 1.52 1.23 2.77 1.23s2.32-.51 2.77-1.23l1.42 1.42c-.9 1.08-2.44 1.81-4.19 1.81Z"/>
+            </svg>
+            <svg v-else-if="cat.icon === 'leaf'" viewBox="0 0 24 24" width="24" height="24" fill="currentColor">
+              <path d="M17 8C8 10 5.9 16.17 3.82 21.34L5.71 22l.95-2.3c.48.17.98.3 1.34.3 11 0 14-17 14-17-.99 2-8 2.25-13 3.25S2 11.5 2 13.5s1.75 3.75 1.75 3.75C7 8 17 8 17 8Z"/>
+            </svg>
+            <svg v-else-if="cat.icon === 'rain'" viewBox="0 0 24 24" width="24" height="24" fill="currentColor">
+              <path d="M6 14.03A1 1 0 0 1 7 15.03a1 1 0 0 1-1 1C3.24 16.03 1 13.79 1 11.03S3.24 6.03 6 6.03C7 3.68 9.3 2.03 12 2.03c3.43 0 6.24 2.5 6.5 5.83C20.56 8.3 22 10.12 22 12.28c0 2.46-2 4.5-4.47 4.5H7v-2.75a1 1 0 0 1 1-1 1 1 0 0 1 1 1v1.75h8.53C19.43 14.78 21 13.21 21 11.28c0-1.93-1.57-3.5-3.5-3.5h-1C16.5 5.29 14.47 3.28 12 3.28S7.5 5.29 7.5 7.78H6.5C4.57 7.78 3 9.35 3 11.28s1.57 3.5 3.5 3.5c.17 0 .33-.02.5-.05M9 18.78v2.25H7v-2.25h2m4-.5v3.75h-2v-3.75h2m4 .5v2.25h-2v-2.25h2Z"/>
+            </svg>
+            <svg v-else-if="cat.icon === 'fire'" viewBox="0 0 24 24" width="24" height="24" fill="currentColor">
+              <path d="M17.66 11.2c-.23-.3-.51-.56-.77-.82-.67-.6-1.43-1.03-2.07-1.66C13.33 7.26 13 4.85 13.95 3c-.95.23-1.78.75-2.49 1.32C8.87 6.4 7.85 10.07 9.07 13.22c.04.1.08.2.08.33 0 .22-.15.42-.35.5-.23.1-.47.04-.66-.12l-.14-.17c-1.13-1.43-1.12-3.48 0-4.93C5.46 10.13 4 12.89 4 16a8 8 0 0 0 8 8 8 8 0 0 0 8-8c0-1.92-.69-3.69-1.84-5.08-.23.27-.35.58-.5.88M12 20a2 2 0 0 1-2-2c0-1.1 1.09-2.5 2-3.5.91 1 2 2.4 2 3.5a2 2 0 0 1-2 2Z"/>
+            </svg>
+            <svg v-else-if="cat.icon === 'night'" viewBox="0 0 24 24" width="24" height="24" fill="currentColor">
+              <path d="M17.75 4.09 15.22 6.03l.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94 3.19-.09L13.5 1l1.06 3 3.19.09M21.25 11l-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95 2.06.05m-2.28 4.95c.83-.08 1.72 1.1 1.15 2.02-.39.64-1.46.7-2.12.7-.61 0-1.4-.23-2.04-.56-2.46-1.28-2.99-4.45-1.71-6.91.51-.98 1.41-1.7 2.45-2.04.61-.2 1.05-.77 1.05-1.42 0-.9-.94-1.52-1.78-1.24-4.79 1.58-7.47 6.54-5.89 11.33 1.47 4.43 6.87 6.52 11.3 5.05.94-.32 1.68-1.13 2-2.07.3-.9-.19-1.9-1.1-2.19-1.04-.33-2.1-.78-2.96-1.4-.35-.25-.35-.78 0-1.03.86-.62 1.92-1.07 2.96-1.4.38-.12.71.08.71.51Z"/>
+            </svg>
+            <svg v-else viewBox="0 0 24 24" width="24" height="24" fill="currentColor">
+              <path d="M12 11.5A2.5 2.5 0 0 1 9.5 9 2.5 2.5 0 0 1 12 6.5 2.5 2.5 0 0 1 14.5 9a2.5 2.5 0 0 1-2.5 2.5M12 2a7 7 0 0 0-7 7c0 5.25 7 13 7 13s7-7.75 7-13a7 7 0 0 0-7-7Z"/>
+            </svg>
+          </span>
+          <span class="mood-cat-name">{{ cat.name }}</span>
+          <span class="mood-cat-meta">{{ cat.count }} 首 · {{ cat.percent }}%</span>
+        </button>
+      </div>
+
+      <section class="mood-week-card">
+        <div class="mood-week-head">
+          <h3>本周情绪曲线</h3>
+          <span>单位：播放次数</span>
+        </div>
+        <div class="mood-week-bars">
+          <div v-for="day in weekPlayBars" :key="day.label" class="mood-week-col">
+            <span class="mood-week-count">{{ day.count }}</span>
+            <span class="mood-week-bar" :class="{ peak: day.peak }" :style="{ height: day.height }"></span>
+            <span class="mood-week-label">{{ day.label }}</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="mood-tags-wrap">
+        <h3>情绪标签</h3>
+        <div class="mood-tags">
+          <button
+            v-for="tag in moodTags"
+            :key="tag.id"
+            type="button"
+            class="mood-tag"
+            :style="{
+              color: tag.text,
+              background: tag.bg,
+              fontSize: tag.size,
+              padding: tag.pad,
+            }"
+            @click="playMoodCategory(tag)"
+          >{{ tag.name }}</button>
+        </div>
+      </section>
+    </div>
+
     <div v-else class="mood-map-wrap mood-map-enter">
       <div class="mood-axis-label top">快</div>
       <div class="mood-axis-label bottom">慢</div>
@@ -173,7 +260,7 @@ defineOptions({ name: 'LibraryMood' })
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { api } from '../api.js'
 import { onWS } from '../ws.js'
-import { localCoverUrl } from '../stores/library.js'
+import { localCoverUrl, recentPlays } from '../stores/library.js'
 import AppSelect from '../components/AppSelect.vue'
 import {
   addMoodPointToQueue,
@@ -188,6 +275,53 @@ const analyzerOptions = [
   { value: 'essentia', label: 'AI（Essentia）' },
 ]
 
+const MOOD_VIEW_KEY = 'lemon-mood-view'
+const moodView = ref(loadMoodView())
+
+function loadMoodView() {
+  try {
+    return localStorage.getItem(MOOD_VIEW_KEY) === 'overview' ? 'overview' : 'map'
+  } catch {
+    return 'map'
+  }
+}
+
+function setMoodView(mode) {
+  moodView.value = mode === 'overview' ? 'overview' : 'map'
+  try { localStorage.setItem(MOOD_VIEW_KEY, moodView.value) } catch {}
+}
+
+const MOOD_CAT_DEFS = [
+  { id: 'happy', name: '开心', color: '#ff8a3d', soft: 'rgba(255,138,61,0.18)', text: '#ffab6d', icon: 'happy' },
+  { id: 'heal', name: '治愈', color: '#25c26e', soft: 'rgba(37,194,110,0.18)', text: '#5fd396', icon: 'leaf' },
+  { id: 'sad', name: '伤感', color: '#3aa0ff', soft: 'rgba(58,160,255,0.18)', text: '#84bfff', icon: 'rain' },
+  { id: 'fire', name: '热血', color: '#f0453c', soft: 'rgba(240,69,60,0.18)', text: '#ff8b83', icon: 'fire' },
+  { id: 'night', name: '深夜', color: '#7b61ff', soft: 'rgba(123,97,255,0.18)', text: '#a795ff', icon: 'night' },
+  { id: 'travel', name: '旅行', color: '#f7c948', soft: 'rgba(247,201,72,0.18)', text: '#f7d47a', icon: 'road' },
+]
+
+function classifyMoodPoint(p) {
+  const x = Number(p?.x) || 0
+  const y = Number(p?.y) || 0
+  const scores = {
+    happy: x * 1.15 + y * 0.35,
+    heal: x * 0.95 - y * 1.05,
+    sad: -x * 1.2 - y * 0.25,
+    fire: y * 1.28 + x * 0.38,
+    night: -y * 1.12 - x * 0.4,
+    travel: 0.22 - Math.abs(x) * 0.15 + y * 0.5,
+  }
+  let best = 'heal'
+  let bestScore = -Infinity
+  for (const [id, score] of Object.entries(scores)) {
+    if (score > bestScore) {
+      bestScore = score
+      best = id
+    }
+  }
+  return best
+}
+
 const canvasEl = ref(null)
 const points = ref([])
 const stats = ref({ total: 0, analyzed: 0, pending: 0, skipped: 0, error: 0 })
@@ -198,6 +332,115 @@ const progressText = ref('')
 const analyzer = ref('heuristic')
 const preparingAi = ref(false)
 const aiReady = ref(false)
+
+const moodCounts = computed(() => {
+  const counts = Object.fromEntries(MOOD_CAT_DEFS.map(c => [c.id, 0]))
+  for (const p of points.value) {
+    const id = classifyMoodPoint(p)
+    counts[id] = (counts[id] || 0) + 1
+  }
+  return counts
+})
+
+const moodCategories = computed(() => {
+  const total = Math.max(1, points.value.length)
+  return MOOD_CAT_DEFS.map((cat) => {
+    const count = moodCounts.value[cat.id] || 0
+    return {
+      ...cat,
+      count,
+      percent: Math.round((count / total) * 100),
+    }
+  })
+})
+
+const weekPlayBars = computed(() => {
+  const labels = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
+  const counts = [0, 0, 0, 0, 0, 0, 0]
+  const now = new Date()
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const mondayOffset = (start.getDay() + 6) % 7
+  start.setDate(start.getDate() - mondayOffset)
+  for (const row of recentPlays.value || []) {
+    const t = Number(row?.playedAt) || 0
+    if (!t) continue
+    const d = new Date(t)
+    if (d < start || d > now) continue
+    counts[(d.getDay() + 6) % 7] += 1
+  }
+  const max = Math.max(1, ...counts)
+  const peak = Math.max(...counts)
+  return labels.map((label, i) => ({
+    label,
+    count: counts[i],
+    peak: counts[i] === peak && peak > 0,
+    height: `${Math.max(8, Math.round((counts[i] / max) * 100))}%`,
+  }))
+})
+
+const moodTags = computed(() => {
+  const extra = [
+    { id: 'commute', name: '通勤', color: '#4f8cff', text: '#8fb0ff' },
+    { id: 'memory', name: '回忆', color: '#ff6b9a', text: '#ff9dba' },
+  ]
+  const list = moodCategories.value.map((cat) => ({
+    id: cat.id,
+    name: cat.name,
+    count: cat.count,
+    text: cat.text,
+    bg: cat.soft,
+  }))
+  let commute = 0
+  let memory = 0
+  for (const p of points.value) {
+    const x = Number(p.x) || 0
+    const y = Number(p.y) || 0
+    if (Math.abs(x) < 0.45 && y > -0.15 && y < 0.45) commute += 1
+    if (x < 0.25 && y < 0.2) memory += 1
+  }
+  list.push({ id: extra[0].id, name: extra[0].name, count: commute, text: extra[0].text, bg: 'rgba(79,140,255,0.15)' })
+  list.push({ id: extra[1].id, name: extra[1].name, count: memory, text: extra[1].text, bg: 'rgba(255,107,154,0.15)' })
+  const max = Math.max(1, ...list.map(t => t.count))
+  return list
+    .filter(t => t.count > 0)
+    .sort((a, b) => b.count - a.count)
+    .map((t) => {
+      const w = t.count / max
+      const px = 12 + Math.round(w * 5)
+      return {
+        ...t,
+        size: `${px}px`,
+        pad: `${6 + Math.round(w * 5)}px ${12 + Math.round(w * 6)}px`,
+      }
+    })
+})
+
+async function playMoodCategory(cat) {
+  const list = points.value.filter((p) => {
+    if (cat.id === 'commute') {
+      const x = Number(p.x) || 0
+      const y = Number(p.y) || 0
+      return Math.abs(x) < 0.45 && y > -0.15 && y < 0.45
+    }
+    if (cat.id === 'memory') {
+      const x = Number(p.x) || 0
+      const y = Number(p.y) || 0
+      return x < 0.25 && y < 0.2
+    }
+    return classifyMoodPoint(p) === cat.id
+  })
+  if (!list.length) {
+    progressText.value = `暂无「${cat.name}」曲目`
+    return
+  }
+  const seed = list[Math.floor(Math.random() * list.length)]
+  try {
+    await startMoodRadio(seed, points.value)
+    progressText.value = `已开始「${cat.name}」心情连播`
+  } catch (e) {
+    progressText.value = e?.message || '播放失败'
+  }
+}
 const aiStatusText = ref('')
 const hoverTip = ref(null)
 const hoverKey = ref('')
@@ -1233,7 +1476,19 @@ watch(canvasEl, (el, prev) => {
   if (el) {
     onWheelBound = onWheel
     el.addEventListener('wheel', onWheelBound, { passive: false })
+    resizeObs?.disconnect()
+    if (typeof ResizeObserver !== 'undefined' && el.parentElement) {
+      resizeObs = new ResizeObserver(() => draw())
+      resizeObs.observe(el.parentElement)
+    }
+    nextTick(() => draw())
   }
+})
+
+watch(moodView, async (mode) => {
+  if (mode !== 'map') return
+  await nextTick()
+  draw()
 })
 
 onMounted(async () => {
@@ -1332,6 +1587,126 @@ onUnmounted(() => {
   gap: 8px;
   align-items: center;
 }
+.mood-view-toggle {
+  display: inline-flex;
+  padding: 3px;
+  border-radius: 10px;
+  border: 1px solid var(--border-light);
+  background: var(--bg-elevated, var(--bg-card));
+  flex-shrink: 0;
+}
+.mood-view-toggle button {
+  height: 30px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.mood-view-toggle button.active {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 16%, var(--bg-card));
+}
+.mood-overview {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding-bottom: 12px;
+}
+.mood-overview-lead {
+  margin: 4px 0 16px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+.mood-cat-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 14px;
+}
+.mood-cat-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+  padding: 16px;
+  border-radius: 16px;
+  border: 1px solid var(--border-light);
+  background: linear-gradient(180deg, var(--cat-soft) 0%, transparent 100%);
+  color: var(--text);
+  cursor: pointer;
+}
+.mood-cat-card:hover { border-color: color-mix(in srgb, var(--cat) 45%, var(--border-light)); }
+.mood-cat-icon {
+  color: var(--cat);
+  line-height: 0;
+}
+.mood-cat-icon svg { display: block; }
+.mood-cat-name { margin-top: 12px; font-size: 14.5px; font-weight: 600; }
+.mood-cat-meta { margin-top: 2px; font-size: 12px; color: var(--text-muted); }
+.mood-week-card {
+  margin-top: 24px;
+  padding: 20px;
+  border-radius: 16px;
+  border: 1px solid var(--border-light);
+  background: var(--bg-card);
+}
+.mood-week-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.mood-week-head h3 { margin: 0; font-size: 16px; font-weight: 650; }
+.mood-week-head span { font-size: 11.5px; color: var(--text-muted); }
+.mood-week-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 16px;
+  height: 150px;
+}
+.mood-week-col {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.mood-week-count,
+.mood-week-label { font-size: 11.5px; color: var(--text-muted); }
+.mood-week-bar {
+  width: 100%;
+  border-radius: 8px 8px 0 0;
+  background: linear-gradient(180deg, #f0453c, rgb(240 69 60 / 0.25));
+}
+.mood-week-bar.peak {
+  background: linear-gradient(180deg, #ff7a5c, rgb(255 122 92 / 0.3));
+}
+.mood-tags-wrap { margin: 24px 0 8px; }
+.mood-tags-wrap h3 { margin: 0 0 12px; font-size: 16px; font-weight: 650; }
+.mood-tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 20px;
+  border-radius: 16px;
+  border: 1px solid var(--border-light);
+  background: var(--bg-card);
+}
+.mood-tag {
+  border: 0;
+  border-radius: 999px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.mood-tag:hover { filter: brightness(1.12); }
 .mood-hint {
   margin: 0 0 8px;
   color: var(--text-muted);
@@ -1601,13 +1976,27 @@ onUnmounted(() => {
   border-radius: 4px;
   background: color-mix(in srgb, var(--text) 8%, transparent);
 }
+@media (max-width: 1100px) {
+  .mood-cat-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
 @media (max-width: 720px) {
   .mood-page {
-    padding: 10px 10px 8px;
-    min-height: calc(100dvh - var(--player-height, 72px) - var(--mobile-nav-height, 56px) - 52px);
+    padding: 4px 2px 8px;
+    min-height: 0;
+    height: auto;
+  }
+  .page-header-row {
+    position: sticky;
+    top: 0;
+    z-index: 4;
+    background: var(--bg);
+    padding-bottom: 6px;
   }
   .mood-actions { width: 100%; }
+  .mood-overview { overflow: visible; flex: none; }
   .mood-map-wrap { min-height: 360px; }
+  .mood-cat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .mood-week-bars { gap: 8px; height: 120px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .mood-map-enter { animation: none; }
