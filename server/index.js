@@ -20,7 +20,6 @@ import {
 import { refreshStoredSourceMeta } from './routes/source.js'
 import { installSourceFaultHandlers, recordSourceFault, getSourceFault } from './sourceFault.js'
 import { startMemoryGuard } from './utils/memoryGuard.js'
-import { startTelemetry, stopTelemetry } from './utils/telemetry.js'
 import { startLibraryAutoWatch, stopLibraryAutoWatch } from './utils/libraryAutoWatch.js'
 
 installSourceFaultHandlers()
@@ -110,7 +109,6 @@ startMemoryGuard()
 function shutdown(signal) {
   console.log(`收到 ${signal}，正在关闭服务...`)
   stopLibraryAutoWatch()
-  stopTelemetry()
   wss.close(() => {
     server.close(() => process.exit(0))
   })
@@ -140,7 +138,6 @@ server.listen(PORT, '::', () => {
   console.log(`Lemon Music running at http://[::]:${PORT} (IPv4+IPv6)`)
   console.log(`Download path: ${DATA_PATH}`)
   console.log(`Config path: ${CONFIG_PATH}`)
-  startTelemetry()
   startLibraryAutoWatch()
   // 启动后补跑未分析情绪（仅新/未完成文件）
   setTimeout(() => {

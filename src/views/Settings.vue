@@ -819,6 +819,81 @@
             <p class="custom-color-hint">将自动根据主色生成按钮渐变与光晕效果</p>
           </div>
         </div>
+        <div class="setting-item setting-item-stack">
+          <div class="setting-item-info">
+            <div class="setting-item-label">歌词颜色</div>
+            <div class="setting-item-desc">全屏歌词的文字色与高亮色；逐字扫光使用高亮色</div>
+          </div>
+          <div class="color-scheme-grid">
+            <button
+              v-for="item in LYRIC_COLOR_PRESETS"
+              :key="item.id"
+              type="button"
+              class="color-scheme-btn"
+              :class="{ active: settings[LYRIC_PRESET_KEY] === item.id }"
+              @click="selectLyricColorPreset(item.id)"
+            >
+              <span class="lyric-swatch-pair">
+                <span
+                  class="lyric-swatch"
+                  :style="{ background: item.id === 'custom' ? lyricTextPreview : item.text }"
+                />
+                <span
+                  class="lyric-swatch lyric-swatch-hl"
+                  :style="{ background: item.id === 'custom' ? lyricHighlightPreview : item.highlight }"
+                />
+              </span>
+              <span class="color-label">{{ item.label }}</span>
+            </button>
+          </div>
+          <div
+            class="lyric-color-preview"
+            :style="{ '--lyric-text': lyricTextPreview, '--lyric-highlight': lyricHighlightPreview }"
+          >
+            <span class="lyric-preview-idle">未唱到的字</span>
+            <span class="lyric-preview-hl">正在唱的字</span>
+          </div>
+          <div v-if="settings[LYRIC_PRESET_KEY] === 'custom'" class="custom-color-panel lyric-custom-panel">
+            <label class="custom-color-label">
+              <span>文字颜色</span>
+              <input
+                type="color"
+                class="custom-color-input"
+                :value="lyricTextPreview"
+                @input="onLyricTextColorInput"
+              />
+            </label>
+            <input
+              type="text"
+              class="custom-color-hex"
+              :value="lyricTextPreview"
+              maxlength="7"
+              spellcheck="false"
+              placeholder="#ffffff"
+              @change="onLyricTextColorHex"
+              @keydown.enter="onLyricTextColorHex"
+            />
+            <label class="custom-color-label">
+              <span>高亮颜色</span>
+              <input
+                type="color"
+                class="custom-color-input"
+                :value="lyricHighlightPreview"
+                @input="onLyricHighlightColorInput"
+              />
+            </label>
+            <input
+              type="text"
+              class="custom-color-hex"
+              :value="lyricHighlightPreview"
+              maxlength="7"
+              spellcheck="false"
+              placeholder="#ffffff"
+              @change="onLyricHighlightColorHex"
+              @keydown.enter="onLyricHighlightColorHex"
+            />
+          </div>
+        </div>
         <div class="setting-item">
           <div class="setting-item-info">
             <div class="setting-item-label">音乐库歌曲列数</div>
@@ -970,8 +1045,8 @@
           </div>
           <div class="setting-item">
             <div class="setting-item-info">
-              <div class="setting-item-label">歌单循序下载：每批数量</div>
-              <div class="setting-item-desc">下载整个歌单时默认一次入队多少首；可在歌单页临时修改。一次过多可能触发音源风控</div>
+              <div class="setting-item-label">大批量下载：每批数量</div>
+              <div class="setting-item-desc">歌单、批量勾选、音质升级、专辑检测默认一次入队多少首；可在确认窗临时修改。一次过多可能触发音源风控</div>
             </div>
             <div class="setting-item-action">
               <AppSelect
@@ -984,8 +1059,8 @@
           </div>
           <div class="setting-item">
             <div class="setting-item-info">
-              <div class="setting-item-label">歌单循序下载：间隔</div>
-              <div class="setting-item-desc">下一批自动入队的等待时间；建议至少数小时，降低封号风险</div>
+              <div class="setting-item-label">大批量下载：间隔</div>
+              <div class="setting-item-desc">下一批自动入队的等待时间。等待期间可查看剩余、立即继续或取消后续批次</div>
             </div>
             <div class="setting-item-action">
               <AppSelect
@@ -1183,24 +1258,6 @@
             {{ mailTesting ? '发送中…' : '发送测试邮件' }}
           </button>
         </div>
-
-        <p class="source-tip" style="margin-top: 1.5rem">日活统计</p>
-        <div class="setting-item">
-          <div class="setting-item-info">
-            <div class="setting-item-label">日活统计</div>
-            <div class="setting-item-desc">
-              向作者上报匿名安装 ID、版本与当日在线时长，用于了解日活；不含歌单、路径、账号与歌曲信息。默认开启，可随时关闭。
-            </div>
-          </div>
-          <label class="toggle">
-            <input
-              type="checkbox"
-              :checked="settings['telemetry.enabled'] !== 'false'"
-              @change="toggleTelemetryEnabled"
-            />
-            <span class="slider"></span>
-          </label>
-        </div>
       </div>
     </main>
 
@@ -1258,6 +1315,16 @@ import { isAdmin as isAdminUser, currentUser as currentAuthUser, patchLocalUser 
 import { canPickFolder, pickFolder } from '../utils/fnos.js'
 import { appPrompt } from '../stores/appDialog.js'
 import { applyTheme, theme as currentTheme, THEME_KEY, COLOR_SCHEME_KEY, CUSTOM_COLOR_KEY, COLOR_SCHEME_OPTIONS, applyColorScheme, setCustomColor, normalizeHex, colorScheme as currentColorScheme, customColor as currentCustomColor } from '../utils/theme.js'
+import {
+  LYRIC_COLOR_PRESETS,
+  LYRIC_PRESET_KEY,
+  LYRIC_TEXT_KEY,
+  LYRIC_HIGHLIGHT_KEY,
+  applyLyricColors,
+  lyricColorPreset as currentLyricPreset,
+  lyricTextColor as currentLyricTextColor,
+  lyricHighlightColor as currentLyricHighlightColor,
+} from '../utils/lyricColors.js'
 import AppSelect from '../components/AppSelect.vue'
 import MailConfigGuide from '../components/MailConfigGuide.vue'
 import { applyDirToggle, isDirChecked, isDirPathUnder, normalizeDirPath } from '../utils/dirTreeExpand.js'
@@ -1691,6 +1758,18 @@ const lrcToggleItems = [
 
 const currentTab = computed(() => tabs.value.find(t => t.id === activeTab.value) || tabs.value[0])
 const customPreview = computed(() => normalizeHex(settings[CUSTOM_COLOR_KEY] || currentCustomColor.value))
+const lyricTextPreview = computed(() => {
+  const presetId = settings[LYRIC_PRESET_KEY]
+  const preset = LYRIC_COLOR_PRESETS.find((p) => p.id === presetId)
+  if (preset && preset.id !== 'custom' && preset.text) return preset.text
+  return normalizeHex(settings[LYRIC_TEXT_KEY] || currentLyricTextColor.value, '#ffffff')
+})
+const lyricHighlightPreview = computed(() => {
+  const presetId = settings[LYRIC_PRESET_KEY]
+  const preset = LYRIC_COLOR_PRESETS.find((p) => p.id === presetId)
+  if (preset && preset.id !== 'custom' && preset.highlight) return preset.highlight
+  return normalizeHex(settings[LYRIC_HIGHLIGHT_KEY] || currentLyricHighlightColor.value, '#ffffff')
+})
 
 watch(currentTheme, (v) => {
   settings[THEME_KEY] = v
@@ -1698,6 +1777,16 @@ watch(currentTheme, (v) => {
 
 watch(currentColorScheme, (v) => {
   settings[COLOR_SCHEME_KEY] = v
+})
+
+watch(currentLyricPreset, (v) => {
+  settings[LYRIC_PRESET_KEY] = v
+})
+watch(currentLyricTextColor, (v) => {
+  settings[LYRIC_TEXT_KEY] = v
+})
+watch(currentLyricHighlightColor, (v) => {
+  settings[LYRIC_HIGHLIGHT_KEY] = v
 })
 
 watch(tabs, (list) => {
@@ -2135,6 +2224,9 @@ onMounted(async () => {
     if (!settings[THEME_KEY]) settings[THEME_KEY] = currentTheme.value
     if (!settings[COLOR_SCHEME_KEY]) settings[COLOR_SCHEME_KEY] = currentColorScheme.value
     if (!settings[CUSTOM_COLOR_KEY]) settings[CUSTOM_COLOR_KEY] = currentCustomColor.value
+    if (!settings[LYRIC_PRESET_KEY]) settings[LYRIC_PRESET_KEY] = currentLyricPreset.value
+    if (!settings[LYRIC_TEXT_KEY]) settings[LYRIC_TEXT_KEY] = currentLyricTextColor.value
+    if (!settings[LYRIC_HIGHLIGHT_KEY]) settings[LYRIC_HIGHLIGHT_KEY] = currentLyricHighlightColor.value
     if (!settings[SOURCE_FALLBACK_MODE_KEY]) settings[SOURCE_FALLBACK_MODE_KEY] = 'auto'
     applySourceFallbackMode(settings[SOURCE_FALLBACK_MODE_KEY])
     setAutoMatchOnPlay(settings[AUTO_MATCH_ON_PLAY_KEY] === 'true')
@@ -2159,6 +2251,11 @@ onMounted(async () => {
       color: settings[COLOR_SCHEME_KEY],
       customHex: settings[CUSTOM_COLOR_KEY],
     })
+    applyLyricColors({
+      preset: settings[LYRIC_PRESET_KEY],
+      text: settings[LYRIC_TEXT_KEY],
+      highlight: settings[LYRIC_HIGHLIGHT_KEY],
+    })
   } catch {}
   try {
     sourceList.value = await api.source.list()
@@ -2171,6 +2268,8 @@ onMounted(async () => {
 
 onUnmounted(() => {
   stopFfmpegPoll()
+  clearTimeout(customColorSaveTimer)
+  clearTimeout(lyricColorSaveTimer)
 })
 
 async function applyFfmpegStatus(res) {
@@ -2748,12 +2847,6 @@ async function toggleMailEnabled(e) {
   await saveSetting('mail.enabled')
 }
 
-async function toggleTelemetryEnabled(e) {
-  settings['telemetry.enabled'] = e.target.checked ? 'true' : 'false'
-  await saveSetting('telemetry.enabled')
-  showToast(e.target.checked ? '已开启日活统计' : '已关闭日活统计', 'success')
-}
-
 async function saveMailPassword() {
   if (!mailPasswordInput.value) return
   try {
@@ -2852,6 +2945,70 @@ function onCustomColorInput(e) {
 
 function onCustomColorHex(e) {
   updateCustomColor(e.target.value)
+}
+
+let lyricColorSaveTimer = 0
+
+async function persistLyricColors(payload) {
+  settings[LYRIC_PRESET_KEY] = payload.preset
+  settings[LYRIC_TEXT_KEY] = payload.text
+  settings[LYRIC_HIGHLIGHT_KEY] = payload.highlight
+  try {
+    await api.settings.update({
+      [LYRIC_PRESET_KEY]: payload.preset,
+      [LYRIC_TEXT_KEY]: payload.text,
+      [LYRIC_HIGHLIGHT_KEY]: payload.highlight,
+    })
+  } catch (e) {
+    showToast(e.message, 'error')
+  }
+}
+
+async function selectLyricColorPreset(id) {
+  if (settings[LYRIC_PRESET_KEY] === id && id !== 'custom') return
+  const applied = applyLyricColors({
+    preset: id,
+    text: settings[LYRIC_TEXT_KEY],
+    highlight: settings[LYRIC_HIGHLIGHT_KEY],
+  })
+  await persistLyricColors(applied)
+}
+
+async function updateLyricCustomColor(which, hex, { debounceSave = false } = {}) {
+  const nextText = which === 'text' ? hex : settings[LYRIC_TEXT_KEY]
+  const nextHighlight = which === 'highlight' ? hex : settings[LYRIC_HIGHLIGHT_KEY]
+  const applied = applyLyricColors({
+    preset: 'custom',
+    text: nextText,
+    highlight: nextHighlight,
+  })
+  settings[LYRIC_PRESET_KEY] = applied.preset
+  settings[LYRIC_TEXT_KEY] = applied.text
+  settings[LYRIC_HIGHLIGHT_KEY] = applied.highlight
+  const save = () => persistLyricColors(applied)
+  if (debounceSave) {
+    clearTimeout(lyricColorSaveTimer)
+    lyricColorSaveTimer = setTimeout(save, 400)
+    return
+  }
+  clearTimeout(lyricColorSaveTimer)
+  await save()
+}
+
+function onLyricTextColorInput(e) {
+  updateLyricCustomColor('text', e.target.value, { debounceSave: true })
+}
+
+function onLyricTextColorHex(e) {
+  updateLyricCustomColor('text', e.target.value)
+}
+
+function onLyricHighlightColorInput(e) {
+  updateLyricCustomColor('highlight', e.target.value, { debounceSave: true })
+}
+
+function onLyricHighlightColorHex(e) {
+  updateLyricCustomColor('highlight', e.target.value)
 }
 
 function toggleSetting(key) {
@@ -3720,6 +3877,46 @@ function showToast(text, type = 'info') {
   width: 108px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   text-transform: uppercase;
+}
+.lyric-swatch-pair {
+  display: flex;
+  align-items: center;
+}
+.lyric-swatch {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.18);
+}
+.lyric-swatch-hl {
+  margin-left: -8px;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.18), 0 0 0 2px var(--bg-elevated);
+}
+.color-scheme-btn.active .lyric-swatch-hl {
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.18), 0 0 0 2px var(--accent-muted);
+}
+.lyric-color-preview {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 10px;
+  padding: 14px 12px;
+  border-radius: var(--radius);
+  background: #141414;
+  border: 1px solid var(--border);
+}
+.lyric-preview-idle {
+  font-size: 16px;
+  color: color-mix(in srgb, var(--lyric-text, #fff) 42%, transparent);
+}
+.lyric-preview-hl {
+  font-size: 18px;
+  font-weight: 650;
+  color: var(--lyric-highlight, #fff);
+  text-shadow: 0 0 14px color-mix(in srgb, var(--lyric-highlight, #fff) 40%, transparent);
+}
+.lyric-custom-panel {
+  align-items: center;
 }
 .custom-color-hint {
   width: 100%;

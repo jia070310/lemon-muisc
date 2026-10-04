@@ -53,10 +53,10 @@
 npm run fpk:build
 ```
 
-测试包（不注入可选上报配置）：
+本机打包并上传 GitHub Release：
 
 ```powershell
-npm run fpk:build:no-telemetry
+npm run fpk:publish
 ```
 
 输出：`fpk/lemon-music-<version>-x86.fpk` 与 `…-arm.fpk`（不要提交到 git）。

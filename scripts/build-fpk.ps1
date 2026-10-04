@@ -1,12 +1,9 @@
 # Feiniu FPK build — native app (store Node.js v22)
 # Default: small package (dist + server + package.json), ~1MB.
 # Optional -BundleNodeModules for offline/large packs.
-# Telemetry: inject from local file / TELEMETRY_* env (never commit real secrets).
-# Use -AllowNoTelemetry only for test packs without DAU endpoint.
 
 param(
   [switch]$BundleNodeModules,
-  [switch]$AllowNoTelemetry,
   [switch]$SkipFrontendBuild,
   [switch]$SkipClean
 )
@@ -37,62 +34,6 @@ function Clear-AppRuntimeDirs {
     $p = Join-Path $FpkDir "app\$f"
     if (Test-Path $p) { Remove-Item -Force $p }
   }
-}
-
-function Get-TelemetryConfigObject {
-  $localCandidates = @(
-    (Join-Path $Root "server\telemetry.local.json"),
-    (Join-Path $Root "config\telemetry.local.json")
-  )
-  foreach ($file in $localCandidates) {
-    if (-not (Test-Path $file)) { continue }
-    try {
-      $raw = Get-Content -Raw -Path $file | ConvertFrom-Json
-      if ($null -eq $raw) { continue }
-      $url = [string]$raw.url
-      $secret = [string]$raw.secret
-      if (-not $url -and $raw.urlB64) {
-        $url = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([string]$raw.urlB64))
-      }
-      if (-not $secret -and $raw.secretB64) {
-        $secret = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([string]$raw.secretB64))
-      }
-      $url = $url.Trim()
-      $secret = $secret.Trim()
-      if ($url -and $secret) {
-        return @{ url = $url; secret = $secret; source = $file }
-      }
-    } catch {
-      Write-Host ">>> telemetry: ignore bad file $file ($($_.Exception.Message))" -ForegroundColor Yellow
-    }
-  }
-
-  $envUrl = [string]$env:TELEMETRY_URL
-  $envSecret = [string]$env:TELEMETRY_SECRET
-  if ($envUrl.Trim() -and $envSecret.Trim()) {
-    return @{ url = $envUrl.Trim(); secret = $envSecret.Trim(); source = "TELEMETRY_URL/TELEMETRY_SECRET" }
-  }
-  return $null
-}
-
-function Install-TelemetryIntoServerDir {
-  param([Parameter(Mandatory = $true)][string]$ServerDir)
-
-  $dest = Join-Path $ServerDir "telemetry.local.json"
-  $cfg = Get-TelemetryConfigObject
-  if (-not $cfg) {
-    if (Test-Path $dest) { Remove-Item -Force $dest }
-    $msg = "telemetry endpoint missing. Create server/telemetry.local.json or set TELEMETRY_URL + TELEMETRY_SECRET before fpk:build (Releases packs need it). Use -AllowNoTelemetry for a test pack without DAU."
-    if ($AllowNoTelemetry) {
-      Write-Host ">>> telemetry: SKIPPED ($msg)" -ForegroundColor Yellow
-      return
-    }
-    throw $msg
-  }
-
-  $payload = @{ url = $cfg.url; secret = $cfg.secret } | ConvertTo-Json -Compress
-  [IO.File]::WriteAllText($dest, $payload + "`n", [Text.UTF8Encoding]::new($false))
-  Write-Host ">>> telemetry: injected into FPK from $($cfg.source)" -ForegroundColor Cyan
 }
 
 function Install-LinuxNodeModules {
@@ -151,10 +92,6 @@ Clear-AppRuntimeDirs
 New-Item -ItemType Directory -Path $AppBundle | Out-Null
 Copy-Item -Recurse (Join-Path $Root "dist") (Join-Path $AppBundle "dist")
 Copy-Item -Recurse (Join-Path $Root "server") (Join-Path $AppBundle "server")
-# Never ship the example as a real config; inject release endpoint separately
-$exampleInBundle = Join-Path $AppBundle "server\telemetry.local.json.example"
-if (Test-Path $exampleInBundle) { Remove-Item -Force $exampleInBundle }
-Install-TelemetryIntoServerDir -ServerDir (Join-Path $AppBundle "server")
 Copy-Item (Join-Path $Root "package.json") (Join-Path $AppBundle "package.json")
 if (Test-Path (Join-Path $Root "package-lock.json")) {
   Copy-Item (Join-Path $Root "package-lock.json") (Join-Path $AppBundle "package-lock.json")

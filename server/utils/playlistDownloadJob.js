@@ -37,17 +37,35 @@ function parseTasksJson(raw) {
   }
 }
 
-function rowToJob(row) {
-  if (!row) return null
+function summarizeTask(t) {
   return {
+    name: String(t?.name || '').trim(),
+    singer: String(t?.singer || t?.artist || '').trim(),
+    album: String(t?.album || '').trim(),
+    source: String(t?.source || '').trim(),
+  }
+}
+
+function pendingTracksFromRow(row) {
+  const tasks = parseTasksJson(row.tasks_json)
+  const cursor = Number(row.cursor) || 0
+  return tasks.slice(cursor).map(summarizeTask)
+}
+
+function rowToJob(row, { includePending = false } = {}) {
+  if (!row) return null
+  const cursor = Number(row.cursor) || 0
+  const total = Number(row.total) || 0
+  const job = {
     id: row.id,
     userId: row.user_id,
     playlistId: row.playlist_id || '',
     playlistName: row.playlist_name || '',
     batchSize: row.batch_size,
     intervalHours: row.interval_hours,
-    cursor: row.cursor,
-    total: row.total,
+    cursor,
+    total,
+    pendingCount: Math.max(0, total - cursor),
     status: row.status,
     nextRunAt: row.next_run_at,
     saveListFolder: Boolean(row.save_list_folder),
@@ -57,6 +75,8 @@ function rowToJob(row) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
+  if (includePending) job.pendingTracks = pendingTracksFromRow(row)
+  return job
 }
 
 function emitJob(userId, type, job) {
@@ -108,7 +128,13 @@ export function listPlaylistDownloadJobs(userId, { status } = {}) {
   ensurePlaylistDownloadJobsTable()
   if (!userId) return []
   let rows
-  if (status) {
+  if (status === 'active' || status === 'open') {
+    rows = getDB().prepare(`
+      SELECT * FROM playlist_download_jobs
+      WHERE user_id = ? AND status IN ('active', 'paused')
+      ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END, created_at DESC
+    `).all(userId)
+  } else if (status) {
     rows = getDB().prepare(`
       SELECT * FROM playlist_download_jobs
       WHERE user_id = ? AND status = ?
@@ -125,11 +151,11 @@ export function listPlaylistDownloadJobs(userId, { status } = {}) {
   return rows.map(rowToJob)
 }
 
-export function getPlaylistDownloadJob(userId, jobId) {
+export function getPlaylistDownloadJob(userId, jobId, opts = {}) {
   ensurePlaylistDownloadJobsTable()
   const row = getDB().prepare('SELECT * FROM playlist_download_jobs WHERE id = ?').get(jobId)
   if (!row || row.user_id !== userId) return null
-  return rowToJob(row)
+  return rowToJob(row, { includePending: Boolean(opts.includePending) })
 }
 
 export function findActiveJobForPlaylist(userId, playlistId) {
@@ -137,8 +163,9 @@ export function findActiveJobForPlaylist(userId, playlistId) {
   ensurePlaylistDownloadJobsTable()
   const row = getDB().prepare(`
     SELECT * FROM playlist_download_jobs
-    WHERE user_id = ? AND playlist_id = ? AND status = 'active'
-    ORDER BY created_at DESC LIMIT 1
+    WHERE user_id = ? AND playlist_id = ? AND status IN ('active', 'paused')
+    ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END, created_at DESC
+    LIMIT 1
   `).get(userId, playlistId)
   return rowToJob(row)
 }
@@ -230,6 +257,58 @@ export function cancelPlaylistDownloadJob(userId, jobId) {
   const job = getPlaylistDownloadJob(userId, jobId)
   emitJob(userId, 'playlist-download:cancelled', job)
   return job
+}
+
+export function pausePlaylistDownloadJob(userId, jobId) {
+  ensurePlaylistDownloadJobsTable()
+  const row = getDB().prepare('SELECT * FROM playlist_download_jobs WHERE id = ?').get(jobId)
+  if (!row || row.user_id !== userId) return null
+  if (row.status === 'paused') return rowToJob(row)
+  if (row.status !== 'active') {
+    const err = new Error(row.status === 'done' ? '任务已全部入队' : '任务已结束，无法暂停')
+    err.code = 'JOB_NOT_ACTIVE'
+    err.job = rowToJob(row)
+    throw err
+  }
+  const ts = nowSec()
+  getDB().prepare(`
+    UPDATE playlist_download_jobs
+    SET status = 'paused', updated_at = ?
+    WHERE id = ?
+  `).run(ts, jobId)
+  const job = getPlaylistDownloadJob(userId, jobId)
+  emitJob(userId, 'playlist-download:progress', job)
+  return job
+}
+
+/** 从暂停恢复，并立即入队下一批 */
+export function continuePlaylistDownloadJob(userId, jobId) {
+  ensurePlaylistDownloadJobsTable()
+  const row = getDB().prepare('SELECT * FROM playlist_download_jobs WHERE id = ?').get(jobId)
+  if (!row || row.user_id !== userId) return null
+  if (row.status !== 'active' && row.status !== 'paused') {
+    const err = new Error(row.status === 'done' ? '任务已全部入队' : '任务已结束，无法继续')
+    err.code = 'JOB_NOT_ACTIVE'
+    err.job = rowToJob(row)
+    throw err
+  }
+  const cursor = Number(row.cursor) || 0
+  const total = Number(row.total) || 0
+  if (cursor >= total) {
+    const err = new Error('没有待入队的歌曲')
+    err.code = 'JOB_EMPTY'
+    err.job = rowToJob(row)
+    throw err
+  }
+  if (row.status === 'paused') {
+    const ts = nowSec()
+    getDB().prepare(`
+      UPDATE playlist_download_jobs
+      SET status = 'active', updated_at = ?
+      WHERE id = ?
+    `).run(ts, jobId)
+  }
+  return runJobBatch(jobId)
 }
 
 function runJobBatch(jobId) {

@@ -30,19 +30,23 @@
       <button class="btn-primary btn-sm" @click="playAllPlayable" :disabled="!playableTasks.length">试听全部</button>
     </div>
 
-    <div v-if="upgradeJob" class="upgrade-job card">
-      <div class="upgrade-job-text">
-        音质升级循序下载中：已入队 {{ upgradeJob.cursor }}/{{ upgradeJob.total }} 首
-        <span v-if="upgradeJob.nextRunAt" class="upgrade-job-next">
-          · 下一批约 {{ formatJobNext(upgradeJob.nextRunAt) }}
-        </span>
-      </div>
-      <button
-        type="button"
-        class="btn-ghost btn-sm"
-        :disabled="cancellingUpgrade"
-        @click="cancelUpgradeJob"
-      >{{ cancellingUpgrade ? '取消中…' : '取消升级' }}</button>
+    <div v-if="upgradeJob || playlistJobs.length" class="paced-jobs">
+      <PlaylistPacedJobPanel
+        v-if="upgradeJob"
+        kind="upgrade"
+        :job="upgradeJob"
+        @updated="onPacedJobUpdated"
+        @cancelled="upgradeJob = null"
+        @toast="onPacedToast"
+      />
+      <PlaylistPacedJobPanel
+        v-for="job in playlistJobs"
+        :key="job.id"
+        :job="job"
+        @updated="onPacedJobUpdated"
+        @cancelled="onPacedJobCancelled"
+        @toast="onPacedToast"
+      />
     </div>
 
     <div v-if="batchMode && tasks.length" class="batch-bar card">
@@ -266,6 +270,7 @@ import MobileRowActions from '../components/MobileRowActions.vue'
 import CoverArt from '../components/CoverArt.vue'
 import PickPlaylistModal from '../components/PickPlaylistModal.vue'
 import QualityUpgradeDialog from '../components/QualityUpgradeDialog.vue'
+import PlaylistPacedJobPanel from '../components/PlaylistPacedJobPanel.vue'
 
 const tasks = ref([])
 const toast = ref(null)
@@ -279,7 +284,7 @@ const tappingTaskId = ref('')
 const coverPendingPauseId = ref('')
 const upgradeDialogOpen = ref(false)
 const upgradeJob = ref(null)
-const cancellingUpgrade = ref(false)
+const playlistJobs = ref([])
 const upgradeDefaults = ref({ batchSize: 50, intervalHours: 24 })
 
 /** 解析任务本地文件路径（兼容 file_path / filePath / meta 残留） */
@@ -340,11 +345,13 @@ function onAddedToPlaylist({ playlist, duplicate }) {
 onMounted(() => {
   loadList()
   refreshUpgradeJob()
+  refreshPlaylistJobs()
   loadUpgradeDefaults()
 })
 onActivated(() => {
   loadList()
   refreshUpgradeJob()
+  refreshPlaylistJobs()
 })
 
 const unsubs = []
@@ -434,16 +441,18 @@ unsubs.push(onWS('download:cleared', (d) => {
   tasks.value = tasks.value.filter(x => x.status !== 'completed')
 }))
 unsubs.push(onWS('playlist-download:progress', (job) => {
-  if (job?.playlistId === 'quality-upgrade') upgradeJob.value = job
+  onPacedJobUpdated(job)
 }))
 unsubs.push(onWS('playlist-download:done', (job) => {
+  onPacedJobUpdated(job)
   if (job?.playlistId === 'quality-upgrade') {
-    upgradeJob.value = null
     showToast('音质升级循序任务已全部入队', 'success')
+  } else if (job?.playlistName) {
+    showToast(`歌单「${job.playlistName}」循序下载已全部入队`, 'success')
   }
 }))
 unsubs.push(onWS('playlist-download:cancelled', (job) => {
-  if (job?.playlistId === 'quality-upgrade') upgradeJob.value = null
+  onPacedJobCancelled(job)
 }))
 onUnmounted(() => {
   if (progressFlushTimer) {
@@ -1190,6 +1199,45 @@ async function loadUpgradeDefaults() {
   } catch {}
 }
 
+async function refreshPlaylistJobs() {
+  try {
+    const res = await api.download.listPlaylistJobs('active')
+    playlistJobs.value = (res?.jobs || []).filter((j) => j?.playlistId !== 'quality-upgrade')
+  } catch {
+    playlistJobs.value = []
+  }
+}
+
+function onPacedToast({ text, type } = {}) {
+  if (text) showToast(text, type || 'info')
+}
+
+function onPacedJobUpdated(job) {
+  if (!job?.id) return
+  if (job.playlistId === 'quality-upgrade') {
+    upgradeJob.value = (job.status === 'active' || job.status === 'paused') ? job : null
+    return
+  }
+  if (job.status !== 'active' && job.status !== 'paused') {
+    playlistJobs.value = playlistJobs.value.filter((j) => j.id !== job.id)
+    return
+  }
+  const i = playlistJobs.value.findIndex((j) => j.id === job.id)
+  if (i >= 0) {
+    const next = playlistJobs.value.slice()
+    next[i] = job
+    playlistJobs.value = next
+  } else {
+    playlistJobs.value = [job, ...playlistJobs.value]
+  }
+}
+
+function onPacedJobCancelled(job) {
+  if (!job?.id) return
+  if (job.playlistId === 'quality-upgrade') upgradeJob.value = null
+  else playlistJobs.value = playlistJobs.value.filter((j) => j.id !== job.id)
+}
+
 async function refreshUpgradeJob() {
   try {
     const res = await api.library.qualityUpgradeActiveJob()
@@ -1197,15 +1245,6 @@ async function refreshUpgradeJob() {
   } catch {
     upgradeJob.value = null
   }
-}
-
-function formatJobNext(ts) {
-  const n = Number(ts) || 0
-  if (!n) return ''
-  const d = new Date(n * 1000)
-  if (Number.isNaN(d.getTime())) return ''
-  const pad = (x) => String(x).padStart(2, '0')
-  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
 async function onUpgradeDone(payload) {
@@ -1231,20 +1270,6 @@ async function onUpgradeDone(payload) {
   } catch {}
   loadList().catch(() => {})
 }
-
-async function cancelUpgradeJob() {
-  if (!upgradeJob.value?.id) return
-  cancellingUpgrade.value = true
-  try {
-    await api.library.qualityUpgradeCancel()
-    upgradeJob.value = null
-    showToast('已取消音质升级循序任务', 'success')
-  } catch (e) {
-    showToast(e.message || '取消失败', 'error')
-  } finally {
-    cancellingUpgrade.value = false
-  }
-}
 </script>
 
 <style scoped>
@@ -1265,21 +1290,11 @@ async function cancelUpgradeJob() {
   background: var(--accent-muted);
 }
 
-.upgrade-job {
+.paced-jobs {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
   gap: 12px;
-  flex-wrap: wrap;
-  padding: 12px 16px;
   margin-bottom: 16px;
-}
-.upgrade-job-text {
-  font-size: 13px;
-  color: var(--text-secondary);
-}
-.upgrade-job-next {
-  color: var(--text-muted);
 }
 
 .batch-bar {

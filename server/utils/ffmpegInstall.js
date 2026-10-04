@@ -17,7 +17,8 @@ import {
   isManagedFfmpegPath,
 } from './apePlay.js'
 
-const FFMPEG_STATIC_TAG = 'b6.1'
+/** 与 npm 包 ffmpeg-static@5.3.0 的 binary-release-tag 对齐；旧 tag b6.1 已从镜像/GitHub 下线（404） */
+const FFMPEG_STATIC_TAG = 'b6.1.1'
 const INSTALL_TIMEOUT_MS = 10 * 60 * 1000
 
 /** @type {{
@@ -65,10 +66,12 @@ function platformAsset() {
 }
 
 function downloadUrls(asset) {
+  const github = `https://github.com/eugeneware/ffmpeg-static/releases/download/${FFMPEG_STATIC_TAG}/${asset}`
   return [
     `https://cdn.npmmirror.com/binaries/ffmpeg-static/${FFMPEG_STATIC_TAG}/${asset}`,
     `https://registry.npmmirror.com/-/binary/ffmpeg-static/${FFMPEG_STATIC_TAG}/${asset}`,
-    `https://github.com/eugeneware/ffmpeg-static/releases/download/${FFMPEG_STATIC_TAG}/${asset}`,
+    `https://ghfast.top/${github}`,
+    github,
   ]
 }
 
@@ -151,7 +154,7 @@ async function downloadManagedFfmpeg() {
   fs.mkdirSync(dir, { recursive: true })
   const gzPath = path.join(dir, asset)
   const urls = downloadUrls(asset)
-  let lastErr = null
+  const errors = []
   for (let i = 0; i < urls.length; i++) {
     const url = urls[i]
     setPhase('download', `正在下载便携 ffmpeg（源 ${i + 1}/${urls.length}）…`, 15 + i * 5)
@@ -163,13 +166,13 @@ async function downloadManagedFfmpeg() {
       await gunzipFile(gzPath, bin)
       return bin
     } catch (e) {
-      lastErr = e
-      pushLog(`下载失败：${e.message || e}`)
+      errors.push(`${e.message || e}`)
+      pushLog(`源 ${i + 1} 失败：${e.message || e}`)
       try { fs.unlinkSync(gzPath) } catch {}
       try { fs.unlinkSync(`${gzPath}.part`) } catch {}
     }
   }
-  throw new Error(lastErr?.message || '下载 ffmpeg 失败，请检查网络后重试')
+  throw new Error(errors[errors.length - 1] || '下载 ffmpeg 失败，请检查网络后重试')
 }
 
 /**

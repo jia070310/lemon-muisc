@@ -1152,7 +1152,7 @@ async function onQueuePlayClick(index) {
 .player-lyric {
   display: block;
   font-size: 12px;
-  color: var(--text-muted);
+  color: color-mix(in srgb, var(--lyric-highlight, var(--text-muted)) 72%, var(--text-muted));
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

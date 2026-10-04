@@ -6,8 +6,10 @@ import {
   buildBatchDownloadTasks,
   getBatchQualities,
 } from '../utils/musicPayload.js'
+import { formatPacedStartToast } from './usePacedJobUi.js'
 
 export function formatBatchDownloadToast(count, summary) {
+  if (summary?.job) return formatPacedStartToast(summary.job, { skippedCount: summary.skippedCount || 0 })
   const skipped = summary?.skippedCount || 0
   if (skipped > 0) {
     return `已添加 ${count} 首到下载队列（跳过 ${skipped} 首：无要求音质）`
@@ -15,20 +17,44 @@ export function formatBatchDownloadToast(count, summary) {
   return `已添加 ${count} 首到下载队列`
 }
 
-export function useBatchDownload({ getSource, getPlaylistName, getAlbumMeta, onCompleted, onError } = {}) {
+const BATCH_OPTIONS = [50, 100, 200, 300, 500, 1000]
+const INTERVAL_OPTIONS = [1, 3, 6, 12, 24, 48]
+
+export function useBatchDownload({
+  getSource,
+  getPlaylistName,
+  getPlaylistId,
+  getAlbumMeta,
+  onCompleted,
+  onError,
+} = {}) {
   const batchDialog = ref(null)
   const batchDownloading = ref(false)
+  const pacedDefaults = ref({ batchSize: 50, intervalHours: 24 })
 
   function closeBatchDialog() {
     batchDialog.value = null
   }
 
-  const BATCH_CHUNK_SIZE = 20
+  async function loadPacedDefaults() {
+    try {
+      const s = await api.settings.get()
+      const batch = Number(s?.['download.playlistBatchSize']) || 50
+      const hours = Number(s?.['download.playlistIntervalHours']) || 24
+      pacedDefaults.value = {
+        batchSize: BATCH_OPTIONS.includes(batch) ? batch : 50,
+        intervalHours: INTERVAL_OPTIONS.includes(hours) ? hours : 24,
+      }
+    } catch {}
+    return pacedDefaults.value
+  }
 
   async function executeBatchDownload(plan, {
     strategy = 'cascade',
     floorQuality = '',
     saveListFolder = false,
+    batchSize,
+    intervalHours,
   } = {}) {
     if (!(await assertActiveSourceForDownload())) return null
     batchDownloading.value = true
@@ -48,18 +74,41 @@ export function useBatchDownload({ getSource, getPlaylistName, getAlbumMeta, onC
         onError?.(new Error(skippedCount ? '所选歌曲均无要求音质，未添加下载' : '没有可下载的歌曲'))
         return null
       }
-      for (let i = 0; i < tasks.length; i += BATCH_CHUNK_SIZE) {
-        await api.download.add(tasks.slice(i, i + BATCH_CHUNK_SIZE))
-      }
+      const defaults = pacedDefaults.value
+      const jobBatch = BATCH_OPTIONS.includes(Number(batchSize)) ? Number(batchSize) : defaults.batchSize
+      const jobInterval = INTERVAL_OPTIONS.includes(Number(intervalHours)) ? Number(intervalHours) : defaults.intervalHours
+      const playlistName = String(getPlaylistName?.() || plan?.playlistName || '批量下载').trim() || '批量下载'
+      const playlistId = String(getPlaylistId?.() || '').trim() || `batch:${Date.now()}`
+      const res = await api.download.createPlaylistJob({
+        playlistId,
+        playlistName,
+        batchSize: jobBatch,
+        intervalHours: jobInterval,
+        saveListFolder,
+        preferredQuality: plan.preferred,
+        strategy,
+        floorQuality,
+        tasks,
+      })
+      try {
+        await api.settings.update({
+          'download.playlistBatchSize': String(jobBatch),
+          'download.playlistIntervalHours': String(jobInterval),
+        })
+        pacedDefaults.value = { batchSize: jobBatch, intervalHours: jobInterval }
+      } catch {}
       const summary = {
         total: tasks.length,
         skippedCount,
         strategy,
         floorQuality,
         listName,
+        job: res?.job || null,
+        batchSize: jobBatch,
+        intervalHours: jobInterval,
       }
       onCompleted?.(tasks.length, summary)
-      return tasks
+      return { tasks, job: res?.job || null, summary }
     } catch (e) {
       onError?.(e)
       throw e
@@ -72,7 +121,7 @@ export function useBatchDownload({ getSource, getPlaylistName, getAlbumMeta, onC
     if (!(await assertActiveSourceForDownload())) return null
     const plan = prepareBatchDownload(entries, preferredQuality)
     if (!plan.entries.length) return null
-    // 批量下载固定只弹一次策略确认窗
+    await loadPacedDefaults()
     batchDialog.value = {
       ...plan,
       playlistName: String(getPlaylistName?.() || '').trim(),
@@ -84,16 +133,20 @@ export function useBatchDownload({ getSource, getPlaylistName, getAlbumMeta, onC
     strategy = 'cascade',
     floorQuality = '',
     saveListFolder = false,
+    batchSize,
+    intervalHours,
   } = {}) {
     const plan = batchDialog.value
     if (!plan) return null
     closeBatchDialog()
-    return executeBatchDownload(plan, { strategy, floorQuality, saveListFolder })
+    return executeBatchDownload(plan, { strategy, floorQuality, saveListFolder, batchSize, intervalHours })
   }
 
   return {
     batchDialog,
     batchDownloading,
+    pacedDefaults,
+    loadPacedDefaults,
     startBatchDownload,
     confirmBatchDialog,
     closeBatchDialog,

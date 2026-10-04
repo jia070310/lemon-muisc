@@ -91,7 +91,7 @@
                 :disabled="!selectedDownloadCount || batchDownloading"
                 @click.stop="toggleBatchQualityMenu($event)"
               >
-                {{ batchDownloading ? '添加中…' : `批量下载${selectedDownloadCount ? ` (${selectedDownloadCount})` : ''}` }}
+                {{ batchDownloading ? '创建中…' : `批量下载${selectedDownloadCount ? ` (${selectedDownloadCount})` : ''}` }}
               </button>
               <div class="quality-menu" v-if="showBatchQualityMenu" :style="batchMenuStyle" @click.stop>
                 <div class="quality-menu-title">批量音质：仅下载已勾选的歌曲</div>
@@ -142,14 +142,13 @@
         <button v-if="canEditSelected" class="btn-primary btn-sm" @click="showAddModal = true">添加歌曲</button>
       </div>
       <template v-else>
-        <div v-if="activePlaylistJob && activePlaylistJob.status === 'active'" class="paced-job-bar">
-          <div class="paced-job-text">
-            循序下载进行中：已入队 {{ activePlaylistJob.cursor }}/{{ activePlaylistJob.total }} 首
-            <span v-if="activePlaylistJob.nextRunAt"> · 下一批约 {{ formatJobTime(activePlaylistJob.nextRunAt) }}</span>
-          </div>
-          <button type="button" class="btn-ghost btn-sm" :disabled="cancellingJob" @click="cancelActiveJob">
-            {{ cancellingJob ? '取消中…' : '取消任务' }}
-          </button>
+        <div v-if="activePlaylistJob && (activePlaylistJob.status === 'active' || activePlaylistJob.status === 'paused')" class="paced-job-wrap">
+          <PlaylistPacedJobPanel
+            :job="activePlaylistJob"
+            @updated="onPacedJobUpdated"
+            @cancelled="activePlaylistJob = null"
+            @toast="onPacedToast"
+          />
         </div>
         <div v-if="onlineTrackCount" class="track-list-toolbar">
           <label class="batch-select-all">
@@ -344,6 +343,8 @@
       :preferred-label="batchPreferredLabel"
       :playlist-name="selectedCard?.name || ''"
       :busy="batchDownloading"
+      :default-batch-size="pacedDefaults.batchSize"
+      :default-interval-hours="pacedDefaults.intervalHours"
       @cancel="closeBatchDialog"
       @confirm="handleBatchConfirm"
     />
@@ -376,7 +377,9 @@ import AddToPlaylistModal from '../components/AddToPlaylistModal.vue'
 import PickPlaylistModal from '../components/PickPlaylistModal.vue'
 import BatchQualityDialog from '../components/BatchQualityDialog.vue'
 import PlaylistPacedDownloadDialog from '../components/PlaylistPacedDownloadDialog.vue'
+import PlaylistPacedJobPanel from '../components/PlaylistPacedJobPanel.vue'
 import { useBatchDownload, formatBatchDownloadToast } from '../composables/useBatchDownload.js'
+import { formatPacedStartToast } from '../composables/usePacedJobUi.js'
 import { buildBatchDownloadTasks } from '../utils/musicPayload.js'
 import { onWS } from '../ws.js'
 import { platformLabel } from '../utils/platforms.js'
@@ -453,7 +456,6 @@ const pacedDialog = ref(null)
 const pacedBusy = ref(false)
 const pacedDefaults = ref({ batchSize: 50, intervalHours: 24 })
 const activePlaylistJob = ref(null)
-const cancellingJob = ref(false)
 const randomPlaying = ref(false)
 const { menuStyle, positionMenu, clearMenuPosition } = useQualityMenuPosition()
 const { menuStyle: batchMenuStyle, positionMenu: positionBatchMenu, clearMenuPosition: clearBatchMenuPosition } = useQualityMenuPosition()
@@ -479,7 +481,10 @@ const {
 } = useBatchDownload({
   getSource: () => playlistSource.value,
   getPlaylistName: () => selectedCard.value?.name || '',
+  getPlaylistId: () => selectedId.value || '',
   onCompleted: (count, summary) => {
+    if (summary?.job?.status === 'active' || summary?.job?.status === 'paused') activePlaylistJob.value = summary.job
+    else if (summary?.job) activePlaylistJob.value = null
     showToast(formatBatchDownloadToast(count, summary), 'success')
     selectedDownloadKeys.value = new Set()
   },
@@ -615,7 +620,7 @@ onMounted(async () => {
   }))
   wsUnsubs.push(onWS('playlist-download:done', (job) => {
     if (job?.playlistId && job.playlistId === selectedId.value) {
-      activePlaylistJob.value = job
+      activePlaylistJob.value = null
       showToast(`歌单「${job.playlistName || ''}」循序下载已全部入队`, 'success')
     }
   }))
@@ -780,12 +785,13 @@ function getBatchEntries() {
   return selectedOnlineTracks.value.map(song => ({ item: trackPayload(song), key: song.key }))
 }
 
-function formatJobTime(ts) {
-  const n = Number(ts) || 0
-  if (!n) return ''
-  const d = new Date(n * 1000)
-  if (Number.isNaN(d.getTime())) return ''
-  return d.toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+function onPacedToast({ text, type } = {}) {
+  if (text) showToast(text, type || 'info')
+}
+
+function onPacedJobUpdated(job) {
+  if (!job) return
+  activePlaylistJob.value = (job.status === 'active' || job.status === 'paused') ? job : null
 }
 
 async function loadPacedDefaults() {
@@ -848,12 +854,7 @@ async function handlePacedConfirm(payload) {
     })
     pacedDialog.value = null
     activePlaylistJob.value = res?.job || null
-    const first = Math.min(payload.batchSize, tasks.length)
-    const skippedHint = skippedCount ? `（策略跳过 ${skippedCount} 首）` : ''
-    showToast(
-      `已开始循序下载：首批 ${first} 首已入队，共 ${tasks.length} 首，每 ${payload.intervalHours} 小时一批${skippedHint}`,
-      'success',
-    )
+    showToast(formatPacedStartToast(res?.job, { skippedCount }), 'success')
     try {
       await api.settings.update({
         'download.playlistBatchSize': String(payload.batchSize),
@@ -873,21 +874,6 @@ async function handlePacedConfirm(payload) {
     }
   } finally {
     pacedBusy.value = false
-  }
-}
-
-async function cancelActiveJob() {
-  const id = activePlaylistJob.value?.id
-  if (!id) return
-  cancellingJob.value = true
-  try {
-    await api.download.cancelPlaylistJob(id)
-    activePlaylistJob.value = null
-    showToast('已取消循序下载任务', 'success')
-  } catch (e) {
-    showToast(e.message || '取消失败', 'error')
-  } finally {
-    cancellingJob.value = false
   }
 }
 
@@ -1364,21 +1350,7 @@ function showToast(text, type = 'info') {
 .quality-option:hover { background: var(--bg-hover); color: var(--accent); }
 .quality-empty { padding: 10px 12px; font-size: 13px; color: var(--text-muted); }
 .batch-dl-wrap { display: inline-block; }
-.paced-job-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin-bottom: 12px;
-  padding: 10px 12px;
-  border-radius: 10px;
-  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border-light));
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
-  font-size: 13px;
-  color: var(--text-secondary);
-}
-.paced-job-text { min-width: 0; flex: 1; line-height: 1.5; }
+.paced-job-wrap { margin-bottom: 12px; }
 .pager {
   display: flex;
   align-items: center;

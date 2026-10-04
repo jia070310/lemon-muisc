@@ -1,7 +1,7 @@
 <template>
   <div class="discover-page">
     <div class="page-title">发现</div>
-    <div class="page-subtitle">输入各平台歌单链接，浏览并试听、下载；批量下载会一次确认降档策略，多音源时先同音质轮询再降档</div>
+    <div class="page-subtitle">输入各平台歌单链接，浏览并试听、下载；大批量下载按批次与间隔入队，可查看剩余、立即继续或取消</div>
 
     <div v-if="playlistPickTarget" class="pick-hint card">
       点击歌曲右侧「加入歌单」添加到「{{ playlistPickTarget.name }}」
@@ -142,7 +142,7 @@
               :disabled="!selectedCount || batchDownloading"
               @click.stop="toggleBatchQualityMenu($event)"
             >
-              {{ batchDownloading ? '添加中...' : `批量下载${selectedCount ? ` (${selectedCount})` : ''}` }}
+              {{ batchDownloading ? '创建中...' : `批量下载${selectedCount ? ` (${selectedCount})` : ''}` }}
             </button>
             <Teleport to="body">
               <div
@@ -203,6 +203,14 @@
           <button class="btn-ghost btn-sm" @click="addAllToQueue">全部加入列表</button>
           <button class="btn-primary btn-sm" @click="playAll">播放全部</button>
         </div>
+      </div>
+      <div v-if="pacedJob && (pacedJob.status === 'active' || pacedJob.status === 'paused')" class="paced-job-wrap">
+        <PlaylistPacedJobPanel
+          :job="pacedJob"
+          @updated="onPacedJobUpdated"
+          @cancelled="onPacedJobCancelled"
+          @toast="({ text, type }) => showToast(text, type)"
+        />
       </div>
       <div class="result-header song-list-header">
         <label class="header-select-all">
@@ -286,6 +294,8 @@
       :preferred-label="batchPreferredLabel"
       :playlist-name="cleanText(discoverState.playlistInfo?.name) || ''"
       :busy="batchDownloading"
+      :default-batch-size="pacedDefaults.batchSize"
+      :default-interval-hours="pacedDefaults.intervalHours"
       @cancel="closeBatchDialog"
       @confirm="handleBatchConfirm"
     />
@@ -322,6 +332,8 @@ import DiscoverNewSongsSection from '../components/discover/DiscoverNewSongsSect
 import DiscoverNewAlbumsSection from '../components/discover/DiscoverNewAlbumsSection.vue'
 import DiscoverRanksSection from '../components/discover/DiscoverRanksSection.vue'
 import { useBatchDownload, formatBatchDownloadToast } from '../composables/useBatchDownload.js'
+import { usePacedJobUi, formatPacedStartToast } from '../composables/usePacedJobUi.js'
+import PlaylistPacedJobPanel from '../components/PlaylistPacedJobPanel.vue'
 import { buildBatchDownloadTasks, trackSelectKey } from '../utils/musicPayload.js'
 import { useTrackListView } from '../composables/useTrackListView.js'
 import { useProgressiveTrackCovers } from '../composables/useProgressiveTrackCovers.js'
@@ -355,13 +367,22 @@ const showPacedQualityMenu = ref(false)
 const selectedKeys = ref(new Set())
 const pacedDialog = ref(null)
 const pacedBusy = ref(false)
-const pacedDefaults = ref({ batchSize: 50, intervalHours: 24 })
 const { menuStyle: batchMenuStyle, positionMenu: positionBatchMenu, clearMenuPosition: clearBatchMenuPosition } = useQualityMenuPosition()
 const { menuStyle: pacedMenuStyle, positionMenu: positionPacedMenu, clearMenuPosition: clearPacedMenuPosition } = useQualityMenuPosition()
 
 const {
+  pacedJob,
+  setPacedJob,
+  refreshPacedJob,
+  onPacedJobUpdated,
+  onPacedJobCancelled,
+} = usePacedJobUi({ getPlaylistId: () => discoverPlaylistJobId.value })
+
+const {
   batchDialog,
   batchDownloading,
+  pacedDefaults,
+  loadPacedDefaults,
   startBatchDownload,
   confirmBatchDialog,
   closeBatchDialog,
@@ -369,7 +390,9 @@ const {
 } = useBatchDownload({
   getSource: () => activeSource.value,
   getPlaylistName: () => cleanText(discoverState.playlistInfo?.name) || '',
+  getPlaylistId: () => discoverPlaylistJobId.value,
   onCompleted: (count, summary) => {
+    if (summary?.job) setPacedJob(summary.job)
     showToast(formatBatchDownloadToast(count, summary), 'success')
     clearSelection()
   },
@@ -430,6 +453,10 @@ const discoverPlaylistJobId = computed(() => {
   const src = activeSource.value || ''
   const id = info.id || info.listId || info.sourceListId || info.url || info.name || ''
   return `discover:${src}:${id}`
+})
+
+watch(discoverPlaylistJobId, () => {
+  refreshPacedJob()
 })
 
 const MAX_PLAYLIST_QUEUE = 100
@@ -511,6 +538,7 @@ onMounted(() => {
     }
   })()
   loadPacedDefaults()
+  refreshPacedJob()
   document.addEventListener('click', closeMenus)
 })
 
@@ -991,18 +1019,6 @@ function closeMenus() {
   clearPacedMenuPosition()
 }
 
-async function loadPacedDefaults() {
-  try {
-    const s = await api.settings.get()
-    const batchSize = Number(s?.['download.playlistBatchSize']) || 50
-    const intervalHours = Number(s?.['download.playlistIntervalHours']) || 24
-    pacedDefaults.value = {
-      batchSize: [50, 100, 200, 300, 500, 1000].includes(batchSize) ? batchSize : 50,
-      intervalHours: [1, 3, 6, 12, 24, 48].includes(intervalHours) ? intervalHours : 24,
-    }
-  } catch {}
-}
-
 function openPacedDialog(quality) {
   closeMenus()
   pacedDialog.value = { preferred: quality }
@@ -1028,7 +1044,7 @@ async function handlePacedConfirm(payload) {
       showToast(skippedCount ? '所选歌曲均无要求音质，未创建任务' : '没有可下载的歌曲', 'error')
       return
     }
-    await api.download.createPlaylistJob({
+    const res = await api.download.createPlaylistJob({
       playlistId: discoverPlaylistJobId.value,
       playlistName: cleanText(discoverState.playlistInfo?.name) || '歌单',
       batchSize: payload.batchSize,
@@ -1040,12 +1056,8 @@ async function handlePacedConfirm(payload) {
       tasks,
     })
     pacedDialog.value = null
-    const first = Math.min(payload.batchSize, tasks.length)
-    const skippedHint = skippedCount ? `（策略跳过 ${skippedCount} 首）` : ''
-    showToast(
-      `已开始循序下载：首批 ${first} 首已入队，共 ${tasks.length} 首，每 ${payload.intervalHours} 小时一批${skippedHint}`,
-      'success',
-    )
+    if (res?.job) setPacedJob(res.job)
+    showToast(formatPacedStartToast(res?.job, { skippedCount }), 'success')
     try {
       await api.settings.update({
         'download.playlistBatchSize': String(payload.batchSize),
@@ -1534,6 +1546,7 @@ function showToast(text, type = 'info') {
 }
 
 .results { overflow: visible; }
+.paced-job-wrap { margin: 12px 16px; }
 
 .results-toolbar {
   display: flex;

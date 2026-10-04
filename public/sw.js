@@ -1,5 +1,5 @@
 /* 柠檬音乐：仅缓存前端壳，不缓存 /api、/ws 与音频流 */
-const CACHE = 'lemon-shell-v1.2.16.13-orange-hp-2'
+const CACHE = 'lemon-shell-v1.2.16.13-orange-round-3'
 
 const PRECACHE = [
   '/',
@@ -7,6 +7,7 @@ const PRECACHE = [
   '/manifest.webmanifest',
   '/icon.png',
   '/favicon.png',
+  '/favicon.ico',
   '/apple-touch-icon.png',
   '/pwa/icon-192.png',
   '/pwa/icon-512.png',

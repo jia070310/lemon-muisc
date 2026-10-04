@@ -435,7 +435,7 @@
   <p data-page-node-id="3CydcsXjGIlT89JKADx0uU">定时/手动扫描 → 写入 <code data-page-node-id="2ZwSgXgI7lZAgH9a96LMOu">library_index</code>（mtime 增量）→ 内存缓存（libraryCache）→ 智能歌单（最新添加/最近播放/收藏）。查重按「标题+歌手」聚合，同组至少保留一份，可复制路径或删除磁盘文件。</p>
 
   <h3 data-page-node-id="v8s0KOrGiy9A798TKd1NvT">8.6 内存守卫与遥测</h3>
-  <p data-page-node-id="DgJBa3JmN6lhontjsUWAi3"><code data-page-node-id="BCZPGuaLlAnaxyLSihqbFT">memoryGuard.js</code> 定时监控进程内存；<code data-page-node-id="hOAgjH3xIvj2DNskB3dIKp">telemetry.js</code> 匿名用量统计（可关闭，fpk 提供 no-telemetry 构建）。</p>
+  <p data-page-node-id="DgJBa3JmN6lhontjsUWAi3"><code data-page-node-id="BCZPGuaLlAnaxyLSihqbFT">memoryGuard.js</code> 定时监控进程内存；FPK 打包 manifest 声明依赖 <code>nodejs_v22</code>、端口 7983。</p>
 
   <h3 data-page-node-id="sBaR4sVRrEudwS5ckX2XwD">8.7 飞牛 FPK 打包</h3>
   <p data-page-node-id="r8JLTc65tg82qHSSAmNEYC"><code data-page-node-id="x8iAzkjA9cpRWw61tHR0dM">scripts/build-fpk.ps1</code> 生成 <code data-page-node-id="eEPWUW0P1zw1C0vRav0Eth">fpk/lemon-music-&lt;ver&gt;-&lt;arch&gt;.fpk</code>；<code data-page-node-id="JzSH29cYmS9XHE9UPAaA3o">fpk/manifest</code> 声明依赖 <code data-page-node-id="WUiXxTS16vLR4qVD4CgQvo">nodejs_v22</code>、端口 7983、服务脚本（cmd/ 下的 install/upgrade/uninstall 回调）。</p>
@@ -546,8 +546,7 @@ npm run auth:reset-users -- --list                   # 预览
 npm run auth:reset-users -- --yes                    # 清空所有用户（重新初始化向导）</code></pre>
 
   <h3 data-page-node-id="F8feR9sQqQVJSfGSD9ipMc">飞牛 NAS 部署</h3>
-  <pre data-page-node-id="LTjXHDHBuWiN9JNk5io5rW"><code data-page-node-id="sCncAHtTBlXGTUEyvAx3bj">npm run fpk:build                 # → fpk/lemon-music-1.2.13-{x86,arm}.fpk
-npm run fpk:build:no-telemetry    # 无上报测试包</code></pre>
+  <pre data-page-node-id="LTjXHDHBuWiN9JNk5io5rW"><code data-page-node-id="sCncAHtTBlXGTUEyvAx3bj">npm run fpk:build                 # → fpk/lemon-music-1.2.13-{x86,arm}.fpk</code></pre>
   <div class="warn" data-page-node-id="62LVwi8bJl5imiCRt9830f">
     安装向导填写<strong data-page-node-id="baFG0W4fj7W2mHdrmECzCy">本机绝对路径</strong>（音乐库/下载目录）；依赖应用中心 Node.js v22；卸载默认保留应用配置，不删除音乐文件。详见 <code data-page-node-id="Zp7R8aQZyJJF62bAv70nkQ">docs/fpk-install.md</code>。
   </div>
@@ -562,7 +561,7 @@ npm run fpk:build:no-telemetry    # 无上报测试包</code></pre>
     <tr data-page-node-id="5wY6QdWCY2aN9rxKmPhFOY"><td data-page-node-id="2V6cLvsvBiHD2DVrRwgg2D"><code data-page-node-id="dW3CS3yjLUMpf1xsH9e2K2">npm run build / start</code></td><td data-page-node-id="TxsMgLT2dk2tWESDK2OZic">构建前端 / 启动后端</td></tr>
     <tr data-page-node-id="YqyF6iQFxRcvRznIIzBzHa"><td data-page-node-id="BKJSW33tkTQsT49CHEIX1H"><code data-page-node-id="BT34sMQAcPAZuWPULsLnY9">npm run auth:reset-password</code></td><td data-page-node-id="PvD15wUy63P5qIo2ukFKkn">重置用户密码（--list 列出）</td></tr>
     <tr data-page-node-id="Jrt6tKz9umW4ah5GSnHYdF"><td data-page-node-id="mda3RlYC6EUIBfQ2V9Vv3T"><code data-page-node-id="ffrp1VXDDrwbaGuAOzl9gL">npm run auth:reset-users</code></td><td data-page-node-id="H6trrqhMzHpioDEG5wpTZD">清空所有用户重新初始化（必须 --yes）</td></tr>
-    <tr data-page-node-id="hZo8hQVm1XL4ZgeAsABavj"><td data-page-node-id="1bhDVecqff0dZhbkB6BCq0"><code data-page-node-id="EP3GliujGdkuqLDyBDYYyn">npm run fpk:build[:no-telemetry]</code></td><td data-page-node-id="PdUABo6ynhAKU2MptybG2O">打包飞牛 FPK（可选无遥测）</td></tr>
+    <tr data-page-node-id="hZo8hQVm1XL4ZgeAsABavj"><td data-page-node-id="1bhDVecqff0dZhbkB6BCq0"><code data-page-node-id="EP3GliujGdkuqLDyBDYYyn">npm run fpk:build</code></td><td data-page-node-id="PdUABo6ynhAKU2MptybG2O">打包飞牛 FPK</td></tr>
   </table>
   <p class="muted" style="margin-top:10px" data-page-node-id="r1p1q8G013JE0XakKgUKZO">CI：<code data-page-node-id="maV9ToxvnW3xD2YBXV4wsr">.github/workflows/fpk.yml</code> 自动构建双架构 FPK。</p>
 </div>

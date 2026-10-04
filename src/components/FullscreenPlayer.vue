@@ -92,6 +92,55 @@
                   @click.stop="onSelectLyricMode('word')"
                 >{{ lyricModeBusy ? '获取中' : '逐字' }}</button>
               </div>
+              <div class="fs-lyric-color" data-fs-lyric-color>
+                <button
+                  type="button"
+                  class="fs-lyric-mode-btn fs-lyric-color-btn"
+                  :class="{ active: lyricColorMenuOpen }"
+                  title="歌词颜色"
+                  @click.stop="toggleLyricColorMenu"
+                >颜色</button>
+                <div v-if="lyricColorMenuOpen" class="fs-lyric-color-menu" @click.stop>
+                  <button
+                    v-for="item in LYRIC_COLOR_PRESETS"
+                    :key="item.id"
+                    type="button"
+                    class="fs-lyric-color-option"
+                    :class="{ active: lyricColorPreset === item.id }"
+                    @click.stop="onPickLyricPreset(item.id)"
+                  >
+                    <span class="fs-lyric-swatch-pair">
+                      <span
+                        class="fs-lyric-swatch"
+                        :style="{ background: item.id === 'custom' ? lyricTextColor : item.text }"
+                      />
+                      <span
+                        class="fs-lyric-swatch fs-lyric-swatch-hl"
+                        :style="{ background: item.id === 'custom' ? lyricHighlightColor : item.highlight }"
+                      />
+                    </span>
+                    <span>{{ item.label }}</span>
+                  </button>
+                  <div v-if="lyricColorPreset === 'custom'" class="fs-lyric-custom-colors">
+                    <label class="fs-lyric-custom-row">
+                      <span>文字</span>
+                      <input
+                        type="color"
+                        :value="lyricTextColor"
+                        @input="onFsLyricTextInput"
+                      />
+                    </label>
+                    <label class="fs-lyric-custom-row">
+                      <span>高亮</span>
+                      <input
+                        type="color"
+                        :value="lyricHighlightColor"
+                        @input="onFsLyricHighlightInput"
+                      />
+                    </label>
+                  </div>
+                </div>
+              </div>
             </div>
             <div
               class="fs-lyric-col"
@@ -111,8 +160,8 @@
                   :key="`${line.time}-${i}`"
                   class="fs-lyric-line"
                   :class="{
-                    active: i === activeLyricIdx,
-                    near: Math.abs(i - activeLyricIdx) === 1,
+                    active: i === displayActiveLyricIdx,
+                    near: Math.abs(i - displayActiveLyricIdx) === 1,
                     'is-word-mode': showWordLyrics && line.words?.length,
                   }"
                   :ref="(el) => setLyricLineRef(el, i)"
@@ -123,10 +172,17 @@
                       :key="wi"
                       class="fs-lyric-word"
                       :class="{
-                        sung: i === activeLyricIdx && wi <= liveWordIdx,
-                        current: i === activeLyricIdx && wi === liveWordIdx,
+                        sung: i === displayActiveLyricIdx && wi < liveWordIdx,
+                        current: i === displayActiveLyricIdx && wi === liveWordIdx,
                       }"
-                    >{{ w.text || ' ' }}</span>
+                      :style="i === displayActiveLyricIdx && wi === liveWordIdx ? { '--fill': liveWordFill } : undefined"
+                    >
+                      <template v-if="i === displayActiveLyricIdx && wi === liveWordIdx">
+                        <span class="fs-lyric-word-base">{{ w.text || ' ' }}</span>
+                        <span class="fs-lyric-word-fill" aria-hidden="true">{{ w.text || ' ' }}</span>
+                      </template>
+                      <template v-else>{{ w.text || ' ' }}</template>
+                    </span>
                   </template>
                   <template v-else>{{ line.text || ' ' }}</template>
                 </p>
@@ -391,9 +447,20 @@ import {
   closeFullscreenPlayer, showQueuePanel, playTrackAt, removeFromQueue, clearQueue,
   resumeOrTogglePause, unlockAudioFromGesture, currentLocalTrackPath, tryFillCoverFromNetwork,
   showPlayerNotice,
+  peekPlaybackTime,
 } from '../stores/player.js'
 import { cleanText, formatArtists } from '../utils/text.js'
-import { resolveActiveWordIndex, getLyricLineEndTime } from '../utils/lrc.js'
+import { resolveActiveWordIndex, getLyricLineEndTime, getWordFillProgress } from '../utils/lrc.js'
+import {
+  LYRIC_COLOR_PRESETS,
+  LYRIC_PRESET_KEY,
+  LYRIC_TEXT_KEY,
+  LYRIC_HIGHLIGHT_KEY,
+  applyLyricColors,
+  lyricColorPreset,
+  lyricTextColor,
+  lyricHighlightColor,
+} from '../utils/lyricColors.js'
 import { openTagEditTrack } from '../utils/tagEdit.js'
 import { showTagEditModal } from '../stores/tagEditModal.js'
 import { isMobileUiContext } from '../utils/device.js'
@@ -425,20 +492,121 @@ let lastPointerStamp = 0
 
 const showWordLyrics = computed(() => effectiveLyricDisplayMode.value === 'word')
 const lyricModeBusy = ref(false)
+const lyricColorMenuOpen = ref(false)
+let lyricColorSaveTimer = 0
 
-/** 用 currentTime 在组件内重算字下标，避免 store 侧漏更新导致卡在首字 */
+function closeLyricColorMenu() {
+  lyricColorMenuOpen.value = false
+}
+
+function toggleLyricColorMenu() {
+  lyricColorMenuOpen.value = !lyricColorMenuOpen.value
+}
+
+async function persistFsLyricColors(payload) {
+  try {
+    await api.settings.update({
+      [LYRIC_PRESET_KEY]: payload.preset,
+      [LYRIC_TEXT_KEY]: payload.text,
+      [LYRIC_HIGHLIGHT_KEY]: payload.highlight,
+    })
+  } catch {}
+}
+
+async function onPickLyricPreset(id) {
+  const applied = applyLyricColors({
+    preset: id,
+    text: lyricTextColor.value,
+    highlight: lyricHighlightColor.value,
+  })
+  await persistFsLyricColors(applied)
+  if (id !== 'custom') closeLyricColorMenu()
+}
+
+function updateFsLyricCustom(which, hex) {
+  const applied = applyLyricColors({
+    preset: 'custom',
+    text: which === 'text' ? hex : lyricTextColor.value,
+    highlight: which === 'highlight' ? hex : lyricHighlightColor.value,
+  })
+  clearTimeout(lyricColorSaveTimer)
+  lyricColorSaveTimer = setTimeout(() => persistFsLyricColors(applied), 400)
+}
+
+function onFsLyricTextInput(e) {
+  updateFsLyricCustom('text', e.target.value)
+}
+
+function onFsLyricHighlightInput(e) {
+  updateFsLyricCustom('highlight', e.target.value)
+}
+
+/** 逐字扫光时钟：rAF 读 audio.currentTime，避免 timeupdate 一格一跳 */
+const lyricClock = ref(0)
+let wordAnimRaf = 0
+
+function stopWordAnim() {
+  if (wordAnimRaf) cancelAnimationFrame(wordAnimRaf)
+  wordAnimRaf = 0
+}
+
+function tickWordAnim() {
+  lyricClock.value = peekPlaybackTime()
+  if (!showFullscreenPlayer.value || !showWordLyrics.value) {
+    wordAnimRaf = 0
+    return
+  }
+  wordAnimRaf = requestAnimationFrame(tickWordAnim)
+}
+
+const liveLyricIdx = computed(() => {
+  const lines = displayLyricLines.value
+  if (!lines.length) return -1
+  const t = Number(lyricClock.value)
+  if (!Number.isFinite(t)) return activeLyricIdx.value
+  if (lines.every((line) => line.time === 0)) return -1
+  let idx = -1
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (t >= lines[i].time) {
+      idx = i
+      break
+    }
+  }
+  return idx
+})
+
+const displayActiveLyricIdx = computed(() => (
+  showWordLyrics.value ? liveLyricIdx.value : activeLyricIdx.value
+))
+
+/** 用实时时钟重算字下标，避免 store 侧漏更新导致卡在首字 */
 const liveWordIdx = computed(() => {
   if (!showWordLyrics.value) return -1
   const lines = displayLyricLines.value
-  const idx = activeLyricIdx.value
+  const idx = displayActiveLyricIdx.value
   if (idx < 0 || !lines[idx]?.words?.length) return -1
-  const t = Number(currentTime.value)
+  const t = Number(lyricClock.value)
   if (!Number.isFinite(t)) return -1
   return resolveActiveWordIndex(
     lines[idx],
     lines[idx].words,
     t,
     getLyricLineEndTime(lines, idx),
+  )
+})
+
+const liveWordFill = computed(() => {
+  if (!showWordLyrics.value) return 0
+  const lines = displayLyricLines.value
+  const idx = displayActiveLyricIdx.value
+  const wi = liveWordIdx.value
+  if (idx < 0 || wi < 0 || !lines[idx]?.words?.length) return 0
+  return getWordFillProgress(
+    lines[idx],
+    lines[idx].words,
+    Number(lyricClock.value),
+    getLyricLineEndTime(lines, idx),
+    wi,
   )
 })
 
@@ -692,6 +860,7 @@ function onOpenQueue() {
 function onFsDocClick(e) {
   if (moreMenuOpen.value && !e.target?.closest?.('[data-fs-more]')) closeMoreMenu()
   if (downloadMenuOpen.value && !e.target?.closest?.('[data-fs-dl]')) closeDownloadMenu()
+  if (lyricColorMenuOpen.value && !e.target?.closest?.('[data-fs-lyric-color]')) closeLyricColorMenu()
 }
 
 function onOpenTagEdit() {
@@ -774,7 +943,7 @@ function scrollActiveLyric(force = false) {
   if (lyricScrollRaf) cancelAnimationFrame(lyricScrollRaf)
   lyricScrollRaf = requestAnimationFrame(() => {
     lyricScrollRaf = 0
-    const idx = activeLyricIdx.value
+    const idx = displayActiveLyricIdx.value
     if (idx < 0) return
     const el = lyricLineEls.value[idx]
     const panel = lyricPanelRef.value
@@ -881,7 +1050,7 @@ function onKeydown(e) {
   }
 }
 
-watch(activeLyricIdx, async () => {
+watch(displayActiveLyricIdx, async () => {
   if (!showFullscreenPlayer.value) return
   if (lyricUserBrowsing.value) return
   await nextTick()
@@ -907,6 +1076,7 @@ watch(showFullscreenPlayer, async (open) => {
     resetChromeIdleState()
     return
   }
+  stopWordAnim()
   resetLyricBrowseState()
   resetChromeIdleState()
   clearChromeIdleTimer()
@@ -914,8 +1084,26 @@ watch(showFullscreenPlayer, async (open) => {
   mobileScreenExpanded.value = false
   closeMoreMenu()
   closeDownloadMenu()
+  closeLyricColorMenu()
   document.documentElement.classList.remove('player-fs-open')
   await exitNativeFullscreen()
+})
+
+watch(
+  [showFullscreenPlayer, showWordLyrics, isPaused],
+  ([open, word, paused]) => {
+    stopWordAnim()
+    if (!open || !word) return
+    lyricClock.value = peekPlaybackTime()
+    if (!paused) tickWordAnim()
+  },
+  { immediate: true },
+)
+
+watch(currentTime, () => {
+  if (!showFullscreenPlayer.value || !showWordLyrics.value) return
+  if (!isPaused.value && wordAnimRaf) return
+  lyricClock.value = peekPlaybackTime()
 })
 
 watch(
@@ -938,10 +1126,13 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  stopWordAnim()
+  clearTimeout(lyricColorSaveTimer)
   if (lyricScrollRaf) cancelAnimationFrame(lyricScrollRaf)
   lyricScrollRaf = 0
   clearChromeIdleTimer()
   resetLyricBrowseState()
+  closeLyricColorMenu()
   mobileViewportMq?.removeEventListener('change', updateMobileViewport)
   window.removeEventListener('resize', bumpMobileLayout)
   document.removeEventListener('fullscreenchange', syncNativeFullscreenState)
@@ -1165,20 +1356,104 @@ watch(currentPlaying, () => closeDownloadMenu())
   flex: 0 0 auto;
   display: flex;
   justify-content: center;
+  align-items: center;
+  gap: 8px;
   padding: 0 8px;
   margin: 0;
   pointer-events: none;
   isolation: isolate;
 }
-.fs-lyric-mode {
+.fs-lyric-mode,
+.fs-lyric-color {
   pointer-events: auto;
   display: inline-flex;
+  align-items: center;
   padding: 3px;
   border-radius: 999px;
   background: rgba(0, 0, 0, 0.55);
   border: 1px solid rgba(255, 255, 255, 0.18);
   backdrop-filter: blur(8px);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+.fs-lyric-color {
+  position: relative;
+}
+.fs-lyric-color-btn {
+  padding: 7px 12px;
+}
+.fs-lyric-color-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 168px;
+  padding: 8px;
+  border-radius: 14px;
+  background: rgba(12, 12, 12, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  z-index: 30;
+}
+.fs-lyric-color-option {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.78);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 12px;
+  text-align: left;
+}
+.fs-lyric-color-option:hover,
+.fs-lyric-color-option.active {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+.fs-lyric-swatch-pair {
+  display: inline-flex;
+  align-items: center;
+}
+.fs-lyric-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.25);
+}
+.fs-lyric-swatch-hl {
+  margin-left: -5px;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.25), 0 0 0 2px rgba(12, 12, 12, 0.92);
+}
+.fs-lyric-custom-colors {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 6px 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  margin-top: 4px;
+}
+.fs-lyric-custom-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 12px;
+}
+.fs-lyric-custom-row input[type="color"] {
+  width: 36px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
 }
 .fs-lyric-mode-btn {
   appearance: none;
@@ -1222,37 +1497,60 @@ watch(currentPlaying, () => closeDownloadMenu())
   padding: 12px 10px;
   font-size: 22px;
   line-height: 1.55;
-  color: rgba(255, 255, 255, 0.35);
-  transition: color 0.25s, font-size 0.25s;
+  color: color-mix(in srgb, var(--lyric-text, #fff) 35%, transparent);
+  transition: color 0.5s cubic-bezier(0.22, 1, 0.36, 1), font-size 0.5s cubic-bezier(0.22, 1, 0.36, 1);
   max-width: 100%;
   box-sizing: border-box;
   overflow-wrap: anywhere;
   word-break: break-word;
 }
-.fs-lyric-line.near { color: rgba(255, 255, 255, 0.55); }
+.fs-lyric-line.near {
+  color: color-mix(in srgb, var(--lyric-text, #fff) 58%, transparent);
+}
 .fs-lyric-line.active {
-  color: #fff;
+  color: var(--lyric-highlight, #fff);
   font-size: 32px;
   font-weight: 600;
+  text-shadow: 0 0 18px color-mix(in srgb, var(--lyric-highlight, #fff) 28%, transparent);
 }
 .fs-lyric-line.is-word-mode {
   letter-spacing: 0.02em;
 }
 .fs-lyric-word {
-  display: inline;
+  display: inline-block;
+  position: relative;
   color: inherit;
-  transition: color 0.12s ease, text-shadow 0.12s ease;
+  white-space: pre-wrap;
 }
-/* 未唱到：略淡；已唱/当前：保持与逐行相同的亮白，避免整行发暗 */
+.fs-lyric-word-base {
+  color: color-mix(in srgb, var(--lyric-text, #fff) 42%, transparent);
+}
+.fs-lyric-word-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  color: var(--lyric-highlight, #fff);
+  pointer-events: none;
+  text-shadow: 0 0 18px color-mix(in srgb, var(--lyric-highlight, #fff) 28%, transparent);
+  -webkit-mask-image: linear-gradient(
+    90deg,
+    #000 calc(var(--fill, 0) * 100% - 6px),
+    transparent calc(var(--fill, 0) * 100% + 5px)
+  );
+  mask-image: linear-gradient(
+    90deg,
+    #000 calc(var(--fill, 0) * 100% - 6px),
+    transparent calc(var(--fill, 0) * 100% + 5px)
+  );
+}
+/* 未唱到：略淡；已唱：高亮色；当前字从左向右扫过 */
 .fs-lyric-line.active.is-word-mode .fs-lyric-word {
-  color: rgba(255, 255, 255, 0.48);
+  color: color-mix(in srgb, var(--lyric-text, #fff) 42%, transparent);
+  text-shadow: none;
 }
 .fs-lyric-line.active.is-word-mode .fs-lyric-word.sung {
-  color: #fff;
-}
-.fs-lyric-line.active.is-word-mode .fs-lyric-word.current {
-  color: #fff;
-  text-shadow: 0 0 16px rgba(255, 255, 255, 0.45);
+  color: var(--lyric-highlight, #fff);
+  text-shadow: 0 0 14px color-mix(in srgb, var(--lyric-highlight, #fff) 24%, transparent);
 }
 .fs-lyric-empty {
   height: 100%;

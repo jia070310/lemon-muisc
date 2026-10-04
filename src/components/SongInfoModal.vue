@@ -3,6 +3,7 @@
   <Teleport to="body">
     <div
       v-if="open && sheet"
+      ref="hostRef"
       class="song-info-sheet-host"
       @click.self="emit('close')"
     >
@@ -100,7 +101,7 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import CoverArt from './CoverArt.vue'
 import TrackMetaLinks from './TrackMetaLinks.vue'
 import { api } from '../api.js'
@@ -129,6 +130,7 @@ const props = defineProps({
 const emit = defineEmits(['close'])
 
 const panelRef = ref(null)
+const hostRef = ref(null)
 const loading = ref(false)
 const fileMeta = ref(null)
 let loadToken = 0
@@ -235,6 +237,60 @@ function onOpenTagEdit() {
   emit('close')
   openTagEditTrack(filePath.value)
 }
+
+function trapPanelScroll(e) {
+  const panel = panelRef.value
+  const host = hostRef.value
+  if (!panel && !host) return
+  const path = typeof e.composedPath === 'function' ? e.composedPath() : []
+  const overPanel = panel && (path.includes(panel) || panel.contains(e.target))
+  const overHost = host && (path.includes(host) || host.contains(e.target))
+  if (!overPanel && !overHost) return
+
+  e.preventDefault()
+  e.stopPropagation()
+
+  if (!overPanel || !panel) return
+  const list = panel.querySelector('.song-info-list')
+  if (!list) return
+
+  const dy = e.deltaY || 0
+  if (!dy) return
+  const maxScroll = Math.max(0, list.scrollHeight - list.clientHeight)
+  list.scrollTop = Math.min(maxScroll, Math.max(0, list.scrollTop + dy))
+}
+
+function onPanelTouchMove(e) {
+  const panel = panelRef.value
+  if (!panel) return
+  const path = typeof e.composedPath === 'function' ? e.composedPath() : []
+  if (!path.includes(panel) && !panel.contains(e.target)) return
+  const list = panel.querySelector('.song-info-list')
+  if (!list) {
+    e.preventDefault()
+    return
+  }
+  const overList = list === e.target || list.contains(e.target)
+  if (!overList) e.preventDefault()
+}
+
+watch(
+  () => props.open,
+  (open) => {
+    if (open) {
+      window.addEventListener('wheel', trapPanelScroll, { passive: false, capture: true })
+      window.addEventListener('touchmove', onPanelTouchMove, { passive: false, capture: true })
+      return
+    }
+    window.removeEventListener('wheel', trapPanelScroll, { capture: true })
+    window.removeEventListener('touchmove', onPanelTouchMove, { capture: true })
+  },
+)
+
+onUnmounted(() => {
+  window.removeEventListener('wheel', trapPanelScroll, { capture: true })
+  window.removeEventListener('touchmove', onPanelTouchMove, { capture: true })
+})
 </script>
 
 <style scoped>
@@ -273,6 +329,7 @@ function onOpenTagEdit() {
   border: 1px solid var(--border-light);
   border-radius: var(--radius-lg);
   overflow: hidden;
+  overscroll-behavior: contain;
   padding: 0;
 }
 
@@ -295,6 +352,7 @@ function onOpenTagEdit() {
   background: var(--bg-card);
   box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.35);
   overflow: hidden;
+  overscroll-behavior: contain;
   transform: translateY(0);
   animation: song-info-sheet-in 0.28s cubic-bezier(0.22, 0.9, 0.28, 1);
 }
@@ -410,6 +468,7 @@ function onOpenTagEdit() {
   flex: 1;
   min-height: 0;
   -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
 .song-info-row {
   display: flex;

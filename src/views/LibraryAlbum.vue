@@ -35,6 +35,15 @@
         </div>
       </div>
 
+      <PlaylistPacedJobPanel
+        v-if="pacedJob && (pacedJob.status === 'active' || pacedJob.status === 'paused')"
+        :job="pacedJob"
+        kind="playlist"
+        @updated="onPacedJobUpdated"
+        @cancelled="onPacedJobCancelled"
+        @toast="({ text, type }) => showToast(text, type)"
+      />
+
       <div v-if="!album.tracks.length" class="detail-empty">暂无歌曲</div>
       <template v-else>
         <div class="track-list">
@@ -143,6 +152,8 @@ import { getTrackFilePath } from '../utils/trackPath.js'
 import { parseAlbumId } from '../utils/albumId.js'
 import PickPlaylistModal from '../components/PickPlaylistModal.vue'
 import AlbumSyncDialog from '../components/AlbumSyncDialog.vue'
+import PlaylistPacedJobPanel from '../components/PlaylistPacedJobPanel.vue'
+import { usePacedJobUi, formatPacedStartToast } from '../composables/usePacedJobUi.js'
 import CoverArt from '../components/CoverArt.vue'
 import MobileRowActions from '../components/MobileRowActions.vue'
 import TrackMetaLinks from '../components/TrackMetaLinks.vue'
@@ -180,6 +191,12 @@ const pickPlaylistTrack = ref(null)
 const albumSyncOpen = ref(false)
 const albumSyncBusy = ref(false)
 const albumSyncTracks = ref([])
+const {
+  pacedJob,
+  setPacedJob,
+  onPacedJobUpdated,
+  onPacedJobCancelled,
+} = usePacedJobUi()
 let narrowMq = null
 
 function updateNarrow() {
@@ -431,16 +448,18 @@ function closeAlbumSync() {
   albumSyncTracks.value = []
 }
 
-function onAlbumSyncDone({ added = 0, missing = 0, upgradable = 0 } = {}) {
+function onAlbumSyncDone({ added = 0, missing = 0, upgradable = 0, job = null } = {}) {
   closeAlbumSync()
+  if (job) setPacedJob(job)
   const parts = []
   if (missing) parts.push(`补全 ${missing}`)
   if (upgradable) parts.push(`升级 ${upgradable}`)
+  const extra = parts.length ? `（${parts.join(' · ')}）` : ''
   showToast(
-    added
-      ? `已加入下载队列 ${added} 首${parts.length ? `（${parts.join(' · ')}）` : ''}`
-      : '没有任务入队',
-    added ? 'success' : 'info',
+    job
+      ? formatPacedStartToast(job, { extra })
+      : (added ? `已加入下载队列 ${added} 首${extra}` : '没有任务入队'),
+    job || added ? 'success' : 'info',
   )
 }
 
@@ -479,6 +498,7 @@ function showToast(text, type = 'info') {
   color: var(--text-muted);
 }
 .detail { padding: 18px; }
+.paced-job-wrap { margin: 0 0 14px; }
 .detail-hero {
   display: flex;
   gap: 22px;

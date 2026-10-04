@@ -1,7 +1,7 @@
 <template>
   <div class="search-page">
     <div class="page-title">搜索</div>
-    <div class="page-subtitle">搜索歌曲、专辑或歌单，试听、下载；批量下载会一次确认降档策略，多音源时先同音质轮询再降档</div>
+    <div class="page-subtitle">搜索歌曲、专辑或歌单，试听、下载；大批量下载按批次与间隔入队，可查看剩余、立即继续或取消</div>
 
     <div v-if="playlistPickTarget" class="pick-hint card">
       点击歌曲右侧「加入歌单」添加到「{{ playlistPickTarget.name }}」
@@ -188,7 +188,7 @@
               :disabled="!selectedCount || batchDownloading"
               @click.stop="toggleBatchQualityMenu($event)"
             >
-              {{ batchDownloading ? '添加中...' : `批量下载${selectedCount ? ` (${selectedCount})` : ''}` }}
+              {{ batchDownloading ? '创建中...' : `批量下载${selectedCount ? ` (${selectedCount})` : ''}` }}
             </button>
             <div class="quality-menu" v-if="showBatchQualityMenu" :style="batchMenuStyle" @click.stop>
               <div class="quality-menu-title">批量音质：仅列出所选歌曲实际支持的音质</div>
@@ -239,6 +239,14 @@
           <button class="btn-ghost btn-sm" @click="addAllToQueue">全部加入列表</button>
           <button class="btn-primary btn-sm" @click="playAll">播放全部</button>
         </div>
+      </div>
+      <div v-if="pacedJob && (pacedJob.status === 'active' || pacedJob.status === 'paused')" class="paced-job-wrap">
+        <PlaylistPacedJobPanel
+          :job="pacedJob"
+          @updated="onPacedJobUpdated"
+          @cancelled="onPacedJobCancelled"
+          @toast="({ text, type }) => showToast(text, type)"
+        />
       </div>
       <div class="result-header">
         <span class="col-check">
@@ -320,6 +328,8 @@
       :preferred-label="batchPreferredLabel"
       :playlist-name="searchState.viewMode === 'playlist-detail' ? (cleanText(searchState.playlistInfo?.name) || '') : ''"
       :busy="batchDownloading"
+      :default-batch-size="pacedDefaults.batchSize"
+      :default-interval-hours="pacedDefaults.intervalHours"
       @cancel="closeBatchDialog"
       @confirm="handleBatchConfirm"
     />
@@ -351,6 +361,8 @@ import SearchInput from '../components/SearchInput.vue'
 import { SEARCH_HISTORY_KEYS } from '../composables/useSearchHistory.js'
 import TrackResultRow from '../components/TrackResultRow.vue'
 import { useBatchDownload, formatBatchDownloadToast } from '../composables/useBatchDownload.js'
+import { usePacedJobUi, formatPacedStartToast } from '../composables/usePacedJobUi.js'
+import PlaylistPacedJobPanel from '../components/PlaylistPacedJobPanel.vue'
 import { useTrackListView } from '../composables/useTrackListView.js'
 import { api } from '../api.js'
 import { assertActiveSourceForDownload } from '../stores/downloadGuard.js'
@@ -379,24 +391,58 @@ const showPacedQualityMenu = ref(false)
 const selectedKeys = ref(new Set())
 const pacedDialog = ref(null)
 const pacedBusy = ref(false)
-const pacedDefaults = ref({ batchSize: 50, intervalHours: 24 })
 const { menuStyle, positionMenu, clearMenuPosition } = useQualityMenuPosition()
 const { menuStyle: batchMenuStyle, positionMenu: positionBatchMenu, clearMenuPosition: clearBatchMenuPosition } = useQualityMenuPosition()
 const { menuStyle: pacedMenuStyle, positionMenu: positionPacedMenu, clearMenuPosition: clearPacedMenuPosition } = useQualityMenuPosition()
+
+function resolveSearchPacedJobId() {
+  const src = searchState.activeSource || ''
+  if (searchState.viewMode === 'playlist-detail') {
+    const info = searchState.playlistInfo || {}
+    const id = info.id || info.listId || info.sourceListId || info.url || info.name || ''
+    return `search:${src}:${id}`
+  }
+  if (searchState.viewMode === 'album-detail') {
+    const info = searchState.albumInfo || {}
+    const id = info.id || info.albumId || info.name || ''
+    return `album:${src}:${id}`
+  }
+  return ''
+}
+
+function searchPacedJobName() {
+  if (searchState.viewMode === 'playlist-detail') return cleanText(searchState.playlistInfo?.name) || '歌单'
+  if (searchState.viewMode === 'album-detail') return cleanText(searchState.albumInfo?.name) || '专辑'
+  return '批量下载'
+}
+
+const {
+  pacedJob,
+  setPacedJob,
+  refreshPacedJob,
+  onPacedJobUpdated,
+  onPacedJobCancelled,
+} = usePacedJobUi({ getPlaylistId: resolveSearchPacedJobId })
+
 const {
   batchDialog,
   batchDownloading,
+  pacedDefaults,
+  loadPacedDefaults,
   startBatchDownload,
   confirmBatchDialog,
   closeBatchDialog,
   getBatchQualities,
 } = useBatchDownload({
   getSource: () => searchState.activeSource,
+  getPlaylistName: searchPacedJobName,
+  getPlaylistId: resolveSearchPacedJobId,
   getAlbumMeta: () => {
     if (searchState.viewMode !== 'album-detail' || !searchState.albumInfo) return null
     return searchState.albumInfo
   },
   onCompleted: (count, summary) => {
+    if (summary?.job) setPacedJob(summary.job)
     showToast(formatBatchDownloadToast(count, summary), 'success')
     clearSelection()
   },
@@ -421,12 +467,7 @@ const pacedPreferredLabel = computed(() => {
   const q = pacedDialog.value?.preferred
   return q ? getQualityLabel(q) : ''
 })
-const searchPlaylistJobId = computed(() => {
-  const info = searchState.playlistInfo || {}
-  const src = searchState.activeSource || ''
-  const id = info.id || info.listId || info.sourceListId || info.url || info.name || ''
-  return `search:${src}:${id}`
-})
+const searchPlaylistJobId = computed(() => resolveSearchPacedJobId())
 
 const {
   page: albumTrackPage,
@@ -514,7 +555,12 @@ function getSelectedEntries() {
 onMounted(async () => {
   await loadSearchSources(api)
   loadPacedDefaults()
+  refreshPacedJob()
   document.addEventListener('click', closeMenus)
+})
+
+watch(() => [searchState.viewMode, searchPlaylistJobId.value], () => {
+  refreshPacedJob()
 })
 
 watch(() => searchState.results.length, () => {
@@ -606,18 +652,6 @@ function closeMenus() {
   clearPacedMenuPosition()
 }
 
-async function loadPacedDefaults() {
-  try {
-    const s = await api.settings.get()
-    const batchSize = Number(s?.['download.playlistBatchSize']) || 50
-    const intervalHours = Number(s?.['download.playlistIntervalHours']) || 24
-    pacedDefaults.value = {
-      batchSize: [50, 100, 200, 300, 500, 1000].includes(batchSize) ? batchSize : 50,
-      intervalHours: [1, 3, 6, 12, 24, 48].includes(intervalHours) ? intervalHours : 24,
-    }
-  } catch {}
-}
-
 function openPacedDialog(quality) {
   closeMenus()
   pacedDialog.value = { preferred: quality }
@@ -643,7 +677,7 @@ async function handlePacedConfirm(payload) {
       showToast(skippedCount ? '所选歌曲均无要求音质，未创建任务' : '没有可下载的歌曲', 'error')
       return
     }
-    await api.download.createPlaylistJob({
+    const res = await api.download.createPlaylistJob({
       playlistId: searchPlaylistJobId.value,
       playlistName: cleanText(searchState.playlistInfo?.name) || '歌单',
       batchSize: payload.batchSize,
@@ -655,12 +689,8 @@ async function handlePacedConfirm(payload) {
       tasks,
     })
     pacedDialog.value = null
-    const first = Math.min(payload.batchSize, tasks.length)
-    const skippedHint = skippedCount ? `（策略跳过 ${skippedCount} 首）` : ''
-    showToast(
-      `已开始循序下载：首批 ${first} 首已入队，共 ${tasks.length} 首，每 ${payload.intervalHours} 小时一批${skippedHint}`,
-      'success',
-    )
+    if (res?.job) setPacedJob(res.job)
+    showToast(formatPacedStartToast(res?.job, { skippedCount }), 'success')
     try {
       await api.settings.update({
         'download.playlistBatchSize': String(payload.batchSize),
@@ -1369,6 +1399,7 @@ function showToast(text, type = 'info') {
 .tab.active { color: #fff; }
 
 .results { overflow: visible; }
+.paced-job-wrap { margin: 12px 16px; }
 
 .result-list-body.is-virtual {
   max-height: min(70vh, 720px);

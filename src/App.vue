@@ -460,6 +460,12 @@ import {
 } from './utils/auth.js'
 import { useRouter } from 'vue-router'
 import { applyTheme, theme, THEME_KEY, COLOR_SCHEME_KEY, CUSTOM_COLOR_KEY } from './utils/theme.js'
+import {
+  applyLyricColors,
+  LYRIC_PRESET_KEY,
+  LYRIC_TEXT_KEY,
+  LYRIC_HIGHLIGHT_KEY,
+} from './utils/lyricColors.js'
 import { formatUserError } from './utils/userError.js'
 import {
   playlistPickTarget, stopPlaylistPick,
@@ -1164,6 +1170,13 @@ onMounted(() => {
       applyTheme(s?.[THEME_KEY] || theme.value, {
         color: s?.[COLOR_SCHEME_KEY],
         customHex: s?.[CUSTOM_COLOR_KEY],
+      })
+    }
+    if (s?.[LYRIC_PRESET_KEY] || s?.[LYRIC_TEXT_KEY] || s?.[LYRIC_HIGHLIGHT_KEY]) {
+      applyLyricColors({
+        preset: s?.[LYRIC_PRESET_KEY],
+        text: s?.[LYRIC_TEXT_KEY],
+        highlight: s?.[LYRIC_HIGHLIGHT_KEY],
       })
     }
     applySourceFallbackMode(s?.[SOURCE_FALLBACK_MODE_KEY])

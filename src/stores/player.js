@@ -319,6 +319,14 @@ export function setSleepTimer(minutes) {
 }
 
 let audio = null
+
+/** 音频元素实时进度（逐字扫光用，比 timeupdate 更密） */
+export function peekPlaybackTime() {
+  const live = audio?.currentTime
+  if (Number.isFinite(live)) return live
+  const fallback = Number(currentTime.value)
+  return Number.isFinite(fallback) ? fallback : 0
+}
 let inited = false
 /** 是否已加载可播放的媒体地址（避免 audio.src='' 被解析成页面 URL 误判） */
 let hasMediaSrc = false
@@ -395,6 +403,8 @@ let localMetaFetchToken = 0
 const coverNetworkTried = new Set()
 /** 当前 lyricLines 对应的曲目 key，用于避免切歌/重试后残留上一首歌词 */
 let lyricTrackKey = ''
+/** 正在请求歌词的曲目 key，避免并行重复请求互相取消 */
+let lyricFetchingKey = ''
 let analyserBoundSrc = ''
 const PLAYBACK_GRAPH_RETRY_DELAYS = [0, 120, 300]
 const MEDIA_AUDIO_CACHE_MAX = 5
@@ -664,6 +674,7 @@ function resetLyricState() {
   activeLyricIdx.value = -1
   activeWordIdx.value = -1
   lyricTrackKey = ''
+  lyricFetchingKey = ''
   coverNetworkTried.clear()
 }
 
@@ -678,18 +689,18 @@ function applyLyricStateFromTagMeta(data, { announce = false } = {}) {
   if (!currentPlaying.value) return
   const key = getTrackKey(currentPlaying.value, currentPlaying.value.source)
   if (data.lyric !== undefined) {
-    bindLyricsToTrack(key, data.lyric, data.ylyric || '')
-    if (audio && !audio.paused && lyricLines.value.some((line) => line.time > 0)) {
-      updateActiveLyric(audio.currentTime)
+    const hasEmbedded = Boolean(String(data.lyric || '').trim() || String(data.ylyric || '').trim())
+    if (hasEmbedded) {
+      bindLyricsToTrack(key, data.lyric, data.ylyric || '')
+      if (audio && !audio.paused && lyricLines.value.some((line) => line.time > 0)) {
+        updateActiveLyric(audio.currentTime)
+      }
+      if (announce) showPlayerNotice('歌词已同步到播放器', 2500)
     }
-    if (announce && String(data.lyric || '').trim()) {
-      showPlayerNotice('歌词已同步到播放器', 2500)
-    }
+    // 文件无内嵌歌词时不要清空已显示的网络歌词
     return
   }
-  if (data.hasLyrics === false) {
-    bindLyricsToTrack(key, '')
-  }
+  // hasLyrics === false：保留当前行，交由 fillLocalGapsFromNetwork / ensureLyricsForTrack 补网
 }
 
 function applyLocalMetaToPlaying(data, filePath, { announceLyric = false } = {}) {
@@ -2741,6 +2752,9 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 }
     setCoverUrl(localCoverUrl(filePath))
   }
 
+  // 切歌后立刻拉歌词，不等待播放链解析；避免长时间「暂无歌词」
+  ensureLyricsForTrack(enrichedItem, source, trackKey)
+
   beginPlaybackBuffer()
   saveQueueState()
 
@@ -2862,7 +2876,7 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 }
           isPaused.value = false
           recordRecentPlay({ ...currentPlaying.value, source })
           setCoverUrl(item.picUrl || item.img || '')
-          if (item.lyric || item.ylyric) bindLyricsToTrack(trackKey, item.lyric || '', item.ylyric || '')
+          ensureLyricsForTrack(enrichedItem, source, trackKey)
           if (!coverUrl.value && filePath && item.hasPicture !== false) {
             setCoverUrl(item.picUrl || item.img || localCoverUrl(filePath))
           }
@@ -3421,17 +3435,22 @@ export function toggleQueuePanel() {
 function ensureLyricsForTrack(item, source, trackKey) {
   if (lyricTrackKey === trackKey && lyricLines.value.length) {
     if (lyricDisplayMode.value === 'word' && !lyricHasWords(lyricLines.value)) {
-      fetchLyric(item, source, { preferWords: true })
+      if (lyricFetchingKey !== trackKey) {
+        fetchLyric(item, source, { preferWords: true })
+      }
     }
     return
   }
   if (item.lyric || item.ylyric) {
     bindLyricsToTrack(trackKey, item.lyric || '', item.ylyric || '')
     if (lyricDisplayMode.value === 'word' && !lyricHasWords(lyricLines.value)) {
-      fetchLyric(item, source, { preferWords: true })
+      if (lyricFetchingKey !== trackKey) {
+        fetchLyric(item, source, { preferWords: true })
+      }
     }
     return
   }
+  if (lyricFetchingKey === trackKey) return
   fetchLyric(item, source, { preferWords: lyricDisplayMode.value === 'word' })
 }
 
@@ -3439,16 +3458,24 @@ async function fetchLyric(item, activeSource, { preferWords = false } = {}) {
   const source = item.source || activeSource
   const trackKey = getTrackKey(item, source)
   const token = ++lyricFetchToken
+  lyricFetchingKey = trackKey
+
+  const clearFetching = () => {
+    if (lyricFetchingKey === trackKey && token === lyricFetchToken) {
+      lyricFetchingKey = ''
+    }
+  }
 
   const applyLyric = (lyric, ylyric = '') => {
-    if ((!lyric && !ylyric) || token !== lyricFetchToken) return
-    if (!currentPlaying.value) return
-    if (getTrackKey(currentPlaying.value, currentPlaying.value.source) !== trackKey) return
+    if ((!lyric && !ylyric) || token !== lyricFetchToken) return false
+    if (!currentPlaying.value) return false
+    if (getTrackKey(currentPlaying.value, currentPlaying.value.source) !== trackKey) return false
     bindLyricsToTrack(trackKey, lyric, ylyric)
     currentPlaying.value = { ...currentPlaying.value, lyric, ylyric }
     patchQueueItem(trackKey, { lyric, ylyric })
     saveQueueState()
     if (audio && !audio.paused) updateActiveLyric(audio.currentTime)
+    return true
   }
 
   const payload = buildPlayPayload(item, source, '128k')
@@ -3458,21 +3485,29 @@ async function fetchLyric(item, activeSource, { preferWords = false } = {}) {
   if (preferWords) payload.preferWords = true
 
   const nameForSearch = normalizeLyricSearchName(item.name)
-  for (let attempt = 0; attempt < 2; attempt++) {
-    if (token !== lyricFetchToken) return
-    try {
-      const res = await api.play.getLyric({
-        ...payload,
-        name: attempt > 0 && nameForSearch ? nameForSearch : payload.name,
-      })
-      if (res.lyric || res.ylyric) {
-        applyLyric(res.lyric || '', res.ylyric || '')
-        return
+  const artistForSearch = normalizeLyricSearchName(
+    Array.isArray(item.singer) ? item.singer.map((s) => s?.name || s).filter(Boolean).join(' ') : (item.singer || item.artist || ''),
+  )
+
+  try {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (token !== lyricFetchToken) return
+      try {
+        const res = await api.play.getLyric({
+          ...payload,
+          name: attempt === 0 ? payload.name : (nameForSearch || payload.name),
+          ...(attempt > 1 && artistForSearch ? { singer: artistForSearch, artist: artistForSearch } : {}),
+        })
+        if (res.lyric || res.ylyric) {
+          if (applyLyric(res.lyric || '', res.ylyric || '')) return
+        }
+      } catch {}
+      if (attempt < 2) {
+        await new Promise(resolve => setTimeout(resolve, 400 * (attempt + 1)))
       }
-    } catch {}
-    if (attempt < 1) {
-      await new Promise(resolve => setTimeout(resolve, 500))
     }
+  } finally {
+    clearFetching()
   }
 }
 

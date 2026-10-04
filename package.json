@@ -16,7 +16,7 @@
     "auth:reset-users": "node scripts/reset-users.js",
     "fpk:build": "powershell -ExecutionPolicy Bypass -File scripts/build-fpk.ps1",
     "fpk:build:bundle": "powershell -ExecutionPolicy Bypass -File scripts/build-fpk.ps1 -BundleNodeModules",
-    "fpk:build:no-telemetry": "powershell -ExecutionPolicy Bypass -File scripts/build-fpk.ps1 -AllowNoTelemetry"
+    "fpk:publish": "powershell -ExecutionPolicy Bypass -File scripts/publish-fpk-release.ps1"
   },
   "engines": {
     "node": ">=20"

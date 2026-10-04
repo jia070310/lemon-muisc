@@ -8,6 +8,9 @@ export const backupRouter = Router()
 const EXPORTABLE_USER_KEYS = [
   'ui.theme',
   'ui.librarySongColumns',
+  'ui.lyricColorPreset',
+  'ui.lyricTextColor',
+  'ui.lyricHighlightColor',
   'player.coverStyle',
   'player.visualizer',
   'playlist.remoteSyncDays',

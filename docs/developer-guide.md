@@ -198,7 +198,7 @@ lemon-muisc/
 
 ### 8.8 其它
 
-`memoryGuard.js` 内存监控；`telemetry.js` 匿名统计（可关）；FPK 打包 manifest 声明依赖 `nodejs_v22`、端口 7983。
+`memoryGuard.js` 内存监控；FPK 打包 manifest 声明依赖 `nodejs_v22`、端口 7983。
 
 ## 9. API 参考（/api 前缀）
 
@@ -286,7 +286,6 @@ npm run auth:reset-users -- --yes    # 清空所有用户重新初始化
 
 ```bash
 npm run fpk:build                # → fpk/lemon-music-1.2.13.9-{x86,arm}.fpk
-npm run fpk:build:no-telemetry   # 无上报测试包
 ```
 
 > 安装向导填本机绝对路径；依赖 Node.js v22；卸载默认保留配置，不删音乐文件。
@@ -299,6 +298,6 @@ npm run fpk:build:no-telemetry   # 无上报测试包
 | `npm run build` / `npm start` | 构建 / 启动 |
 | `npm run auth:reset-password` | 重置用户密码（--list 列出） |
 | `npm run auth:reset-users` | 清空用户重新初始化（须 --yes） |
-| `npm run fpk:build[:no-telemetry]` | 打包飞牛 FPK |
+| `npm run fpk:build` | 打包飞牛 FPK |
 
 CI：`.github/workflows/fpk.yml` 自动构建双架构 FPK。

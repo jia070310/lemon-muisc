@@ -57,6 +57,8 @@ import {
   listPlaylistDownloadJobs,
   getPlaylistDownloadJob,
   cancelPlaylistDownloadJob,
+  continuePlaylistDownloadJob,
+  pausePlaylistDownloadJob,
   findActiveJobForPlaylist,
 } from '../utils/playlistDownloadJob.js'
 
@@ -300,9 +302,43 @@ downloadRouter.post('/playlist-job/:id/cancel', (req, res) => {
   }
 })
 
+downloadRouter.post('/playlist-job/:id/pause', (req, res) => {
+  try {
+    const job = pausePlaylistDownloadJob(req.user.id, req.params.id)
+    if (!job) return res.status(404).json({ error: '任务不存在' })
+    res.json({ ok: true, job })
+  } catch (e) {
+    if (e?.code === 'JOB_NOT_ACTIVE') {
+      return res.status(400).json({ error: e.message, code: e.code, job: e.job })
+    }
+    res.status(500).json({ error: e.message })
+  }
+})
+
+downloadRouter.post('/playlist-job/:id/continue', (req, res) => {
+  try {
+    const result = continuePlaylistDownloadJob(req.user.id, req.params.id)
+    if (!result?.job) return res.status(404).json({ error: '任务不存在' })
+    res.json({
+      ok: true,
+      job: result.job,
+      added: result.added,
+      skipped: result.skipped,
+      done: result.done,
+    })
+  } catch (e) {
+    if (e?.code === 'JOB_NOT_ACTIVE' || e?.code === 'JOB_EMPTY') {
+      return res.status(400).json({ error: e.message, code: e.code, job: e.job })
+    }
+    res.status(500).json({ error: e.message })
+  }
+})
+
 downloadRouter.get('/playlist-job/:id', (req, res) => {
   try {
-    const job = getPlaylistDownloadJob(req.user.id, req.params.id)
+    const includePending = String(req.query.includePending || '') === '1'
+      || String(req.query.includePending || '') === 'true'
+    const job = getPlaylistDownloadJob(req.user.id, req.params.id, { includePending })
     if (!job) return res.status(404).json({ error: '任务不存在' })
     res.json({ job })
   } catch (e) {

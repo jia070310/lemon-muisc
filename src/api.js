@@ -285,8 +285,13 @@ export const api = {
     },
     activePlaylistJob: (playlistId) =>
       request(`/download/playlist-jobs/active?playlistId=${encodeURIComponent(playlistId || '')}`),
-    getPlaylistJob: (id) => request(`/download/playlist-job/${encodeURIComponent(id)}`),
+    getPlaylistJob: (id, { includePending } = {}) => {
+      const qs = includePending ? '?includePending=1' : ''
+      return request(`/download/playlist-job/${encodeURIComponent(id)}${qs}`)
+    },
     cancelPlaylistJob: (id) => request(`/download/playlist-job/${encodeURIComponent(id)}/cancel`, { method: 'POST' }),
+    continuePlaylistJob: (id) => request(`/download/playlist-job/${encodeURIComponent(id)}/continue`, { method: 'POST' }),
+    pausePlaylistJob: (id) => request(`/download/playlist-job/${encodeURIComponent(id)}/pause`, { method: 'POST' }),
     pause: (id) => request(`/download/pause/${id}`, { method: 'POST' }),
     resume: (id) => request(`/download/resume/${id}`, { method: 'POST' }),
     pauseAll: (ids) => request('/download/pause-all', { method: 'POST', body: ids?.length ? { ids } : {} }),

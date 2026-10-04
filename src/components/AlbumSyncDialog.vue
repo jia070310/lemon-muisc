@@ -127,6 +127,24 @@
           <p v-if="!missing.length && !upgradable.length" class="album-sync-status">
             本地已齐全且音质不低于目标，无需下载。
           </p>
+
+          <template v-if="selectedMissing.size + selectedUpgrade.size">
+            <div class="paced-field">
+              <label class="paced-label">每次下载</label>
+              <select v-model.number="batchSize">
+                <option v-for="n in batchOptions" :key="n" :value="n">{{ n }} 首</option>
+              </select>
+            </div>
+            <div class="paced-field">
+              <label class="paced-label">间隔时间</label>
+              <select v-model.number="intervalHours">
+                <option v-for="opt in intervalOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+              </select>
+            </div>
+            <p class="album-sync-hint">
+              超过每批数量会按间隔入队；等待期间可在本页或「下载」页查看剩余、立即继续或取消。预计约 {{ estimatedBatches }} 批。
+            </p>
+          </template>
         </template>
 
         <div class="album-sync-actions">
@@ -138,7 +156,7 @@
             :disabled="busy || (!selectedMissing.size && !selectedUpgrade.size)"
             @click="onConfirm"
           >
-            {{ busy ? '入队中…' : `确认并下载 ${selectedMissing.size + selectedUpgrade.size} 首` }}
+            {{ busy ? '创建中…' : confirmLabel }}
           </button>
         </div>
       </template>
@@ -176,10 +194,31 @@ const preferredQuality = ref('flac')
 const strategy = ref('none')
 const selectedMissing = ref(new Set())
 const selectedUpgrade = ref(new Set())
+const batchOptions = [50, 100, 200, 300, 500, 1000]
+const intervalOptions = [
+  { value: 1, label: '1 小时' },
+  { value: 3, label: '3 小时' },
+  { value: 6, label: '6 小时' },
+  { value: 12, label: '12 小时' },
+  { value: 24, label: '1 天' },
+  { value: 48, label: '2 天' },
+]
+const batchSize = ref(50)
+const intervalHours = ref(24)
 
 const qualityOptions = QUALITY_ORDER
 const missing = computed(() => diffResult.value?.missing || [])
 const upgradable = computed(() => diffResult.value?.upgradable || [])
+const selectedTotal = computed(() => selectedMissing.value.size + selectedUpgrade.value.size)
+const estimatedBatches = computed(() => {
+  const n = Math.max(1, Number(batchSize.value) || 50)
+  return Math.max(1, Math.ceil((selectedTotal.value || 0) / n))
+})
+const confirmLabel = computed(() => {
+  const n = selectedTotal.value
+  if (n > Number(batchSize.value || 50)) return '确认并循序下载'
+  return `确认并下载 ${n} 首`
+})
 
 const selectedCandidate = computed(() => {
   const key = selectedKey.value
@@ -365,22 +404,53 @@ async function onConfirm() {
       }))
     }
 
-    const CHUNK = 20
-    let added = 0
-    for (let i = 0; i < tasks.length; i += CHUNK) {
-      const res = await api.download.add(tasks.slice(i, i + CHUNK))
-      added += (res.ids || []).length
-    }
+    const jobBatch = batchOptions.includes(Number(batchSize.value)) ? Number(batchSize.value) : 50
+    const jobInterval = intervalOptions.some((o) => o.value === Number(intervalHours.value))
+      ? Number(intervalHours.value)
+      : 24
+
+    const online = diffResult.value?.onlineAlbum || {}
+    const playlistId = `album-sync:${online.source || ''}:${online.id || albumName}`
+    const res = await api.download.createPlaylistJob({
+      playlistId,
+      playlistName: albumName || '专辑检测',
+      batchSize: jobBatch,
+      intervalHours: jobInterval,
+      saveListFolder: false,
+      preferredQuality: preferred,
+      strategy: policy,
+      floorQuality: '',
+      tasks,
+    })
+    try {
+      await api.settings.update({
+        'download.playlistBatchSize': String(jobBatch),
+        'download.playlistIntervalHours': String(jobInterval),
+      })
+      batchSize.value = jobBatch
+      intervalHours.value = jobInterval
+    } catch {}
     emit('done', {
-      added,
+      added: res?.job?.cursor || tasks.length,
       missing: missRows.length,
       upgradable: upRows.length,
+      job: res?.job || null,
     })
   } catch (e) {
     diffError.value = e.message || '加入下载队列失败'
   } finally {
     busy.value = false
   }
+}
+
+async function loadPacedDefaults() {
+  try {
+    const s = await api.settings.get()
+    const batch = Number(s?.['download.playlistBatchSize']) || 50
+    const hours = Number(s?.['download.playlistIntervalHours']) || 24
+    batchSize.value = batchOptions.includes(batch) ? batch : 50
+    intervalHours.value = intervalOptions.some((o) => o.value === hours) ? hours : 24
+  } catch {}
 }
 
 watch(() => props.open, (open) => {
@@ -395,6 +465,7 @@ watch(() => props.open, (open) => {
   strategy.value = isLosslessQuality(preferredQuality.value) ? 'none' : 'cascade'
   selectedMissing.value = new Set()
   selectedUpgrade.value = new Set()
+  loadPacedDefaults()
   runSearch()
 })
 </script>
@@ -503,6 +574,33 @@ watch(() => props.open, (open) => {
   border: 1px solid var(--border-light);
   background: var(--bg-input, var(--bg));
   color: var(--text);
+}
+.paced-field {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.paced-label {
+  width: 72px;
+  flex-shrink: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.paced-field select {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border-light);
+  background: var(--bg-input, var(--bg));
+  color: var(--text);
+}
+.album-sync-hint {
+  margin: 0 0 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
 }
 .batch-strategy-list {
   display: flex;

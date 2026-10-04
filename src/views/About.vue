@@ -127,9 +127,6 @@
         <ul class="feature-list compact">
           <li v-for="(line, i) in APP_FEATURES" :key="i">{{ line }}</li>
         </ul>
-        <p class="privacy-one-liner">
-          默认可选上报匿名日活（不含歌单/路径/账号）；可在「设置 → 日活统计」关闭。
-        </p>
       </section>
 
       <section class="about-card card pwa-card">
@@ -1042,12 +1039,6 @@ function formatDate(iso) {
   font-size: 13px;
   line-height: 1.5;
   color: var(--text-secondary);
-}
-.privacy-one-liner {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--text-muted, var(--text-secondary));
 }
 
 /* ── 双列内容区（旧样式保留兼容） ── */

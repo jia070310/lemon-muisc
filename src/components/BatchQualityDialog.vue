@@ -62,10 +62,26 @@
         </p>
       </template>
 
+      <div class="paced-field">
+        <label class="paced-label">每次下载</label>
+        <select v-model.number="batchSize">
+          <option v-for="n in batchOptions" :key="n" :value="n">{{ n }} 首</option>
+        </select>
+      </div>
+      <div class="paced-field">
+        <label class="paced-label">间隔时间</label>
+        <select v-model.number="intervalHours">
+          <option v-for="opt in intervalOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+        </select>
+      </div>
+      <p class="batch-quality-hint">
+        超过每批数量的歌曲会按间隔入队。等待期间可查看剩余、立即继续或取消后续批次。预计约 {{ estimatedBatches }} 批。
+      </p>
+
       <div class="batch-quality-actions">
         <button type="button" class="btn-ghost" :disabled="busy" @click="$emit('cancel')">取消</button>
         <button type="button" class="btn-primary" :disabled="busy" @click="onConfirm">
-          {{ busy ? '添加中...' : `确认并下载 ${totalCount} 首` }}
+          {{ busy ? '创建中…' : confirmLabel }}
         </button>
       </div>
     </div>
@@ -82,13 +98,27 @@ const props = defineProps({
   preferredLabel: { type: String, default: '' },
   playlistName: { type: String, default: '' },
   busy: { type: Boolean, default: false },
+  defaultBatchSize: { type: Number, default: 50 },
+  defaultIntervalHours: { type: Number, default: 24 },
 })
 
 const emit = defineEmits(['cancel', 'confirm'])
 
+const batchOptions = [50, 100, 200, 300, 500, 1000]
+const intervalOptions = [
+  { value: 1, label: '1 小时' },
+  { value: 3, label: '3 小时' },
+  { value: 6, label: '6 小时' },
+  { value: 12, label: '12 小时' },
+  { value: 24, label: '1 天' },
+  { value: 48, label: '2 天' },
+]
+
 const strategy = ref('cascade')
 const floorQuality = ref('320k')
 const saveListFolder = ref(false)
+const batchSize = ref(50)
+const intervalHours = ref(24)
 
 const totalCount = computed(() => props.plan?.entries?.length || 0)
 const unsupportedCount = computed(() => props.plan?.unsupportedCount || 0)
@@ -101,11 +131,26 @@ const floorOptions = computed(() => {
   return QUALITY_ORDER.slice(start)
 })
 
+const estimatedBatches = computed(() => {
+  const n = Math.max(1, Number(batchSize.value) || 50)
+  return Math.max(1, Math.ceil((totalCount.value || 0) / n))
+})
+
+const confirmLabel = computed(() => {
+  const n = totalCount.value
+  if (n > Number(batchSize.value || 50)) return '确认并循序下载'
+  return `确认并下载 ${n} 首`
+})
+
 watch(() => props.plan, () => {
   strategy.value = isLosslessQuality(props.plan?.preferred) ? 'none' : 'cascade'
   const opts = floorOptions.value
   floorQuality.value = opts.includes('320k') ? '320k' : (opts[0] || preferred.value)
   saveListFolder.value = false
+  batchSize.value = batchOptions.includes(props.defaultBatchSize) ? props.defaultBatchSize : 50
+  intervalHours.value = intervalOptions.some((o) => o.value === props.defaultIntervalHours)
+    ? props.defaultIntervalHours
+    : 24
 })
 
 watch(preferred, () => {
@@ -124,6 +169,8 @@ function onConfirm() {
     strategy: strategy.value,
     floorQuality: strategy.value === 'floor' ? floorQuality.value : '',
     saveListFolder: Boolean(props.playlistName && saveListFolder.value),
+    batchSize: batchSize.value,
+    intervalHours: intervalHours.value,
   })
 }
 </script>
@@ -269,6 +316,28 @@ function onConfirm() {
   flex: 1;
   min-width: 0;
   padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border-light);
+  background: var(--bg-input, var(--bg));
+  color: var(--text);
+}
+
+.paced-field {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.paced-label {
+  width: 72px;
+  flex-shrink: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.paced-field select {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
   border-radius: 8px;
   border: 1px solid var(--border-light);
   background: var(--bg-input, var(--bg));

@@ -351,7 +351,7 @@
 | **风格样式** | 主题、配色、封面样式、音频可视化、音乐库歌曲列数 |
 | **下载设置** | 路径、文件名、并发、分组、同名文件处理 |
 | **我的账号** | 资料与邮箱；**备份导出 / 导入**（歌单、收藏、设置） |
-| **用户 / 邮件** | 多用户管理（管理员）、SMTP 验证与找回密码；可选匿名用量统计开关 |
+| **用户 / 邮件** | 多用户管理（管理员）、SMTP 验证与找回密码 |
 | **内嵌数据 / 歌词文件** | 封面与歌词写入音频或 `.lrc` |
 
 ### 飞牛 NAS
@@ -471,7 +471,11 @@ npm run fpk:build
 
 生成 `fpk/lemon-music-1.2.14.3-x86.fpk` 与 `fpk/lemon-music-1.2.14.3-arm.fpk`（版本以 `fpk/manifest` 为准）。说明见 [docs/fpk-install.md](docs/fpk-install.md)。
 
-可选：`npm run fpk:build:no-telemetry` 打无上报测试包。
+本机打包并上传 GitHub Release：
+
+```powershell
+npm run fpk:publish
+```
 
 ---
 
@@ -487,8 +491,8 @@ npm run fpk:build
 | `npm run auth:reset-password -- <用户> <新密码>` | 重置用户密码 |
 | `npm run auth:reset-users -- --list` | 查看用户（清空前预览） |
 | `npm run auth:reset-users -- --yes` | 清空所有用户并重新初始化 |
-| `npm run fpk:build` | 打包原生 FPK |
-| `npm run fpk:build:no-telemetry` | 打包测试 FPK（不注入上报配置） |
+| `npm run fpk:build` | 本机打包原生 FPK |
+| `npm run fpk:publish` | 本机打包并上传 GitHub Release |
 
 ---
 

@@ -256,6 +256,24 @@ export function isProgressiveWordTiming(words) {
   return advanced
 }
 
+function resolveLineEndTime(line, words, endTime) {
+  const start = Number(line?.time) || 0
+  if (Number.isFinite(Number(endTime)) && Number(endTime) > start) return Number(endTime)
+  return start + Math.max(2.2, (words?.length || 1) * 0.32)
+}
+
+function resolveWordDuration(words, wordIndex, endTime) {
+  const word = words[wordIndex]
+  const t0 = Number(word?.time)
+  const explicit = Number(word?.duration)
+  if (explicit > 0.03) return explicit
+  const t1 = wordIndex + 1 < words.length
+    ? Number(words[wordIndex + 1]?.time)
+    : Number(endTime)
+  if (Number.isFinite(t0) && Number.isFinite(t1) && t1 > t0) return t1 - t0
+  return 0.28
+}
+
 /**
  * 根据播放时间解析当前字下标。
  * @param endTime 本行逐字结束时间（应用 getLyricLineEndTime）
@@ -277,14 +295,35 @@ export function resolveActiveWordIndex(line, words, time, endTime) {
     return wi < 0 ? 0 : wi
   }
 
-  const end = Number.isFinite(Number(endTime)) && Number(endTime) > start
-    ? Number(endTime)
-    : start + Math.max(2.2, words.length * 0.32)
+  const end = resolveLineEndTime(line, words, endTime)
   const span = Math.max(0.05, end - start)
   const p = (time - start) / span
   if (p <= 0) return 0
   if (p >= 1) return words.length - 1
   return Math.min(words.length - 1, Math.floor(p * words.length))
+}
+
+/** 当前字从左到右的填充进度 0–1，用于扫光而不是整字跳变 */
+export function getWordFillProgress(line, words, time, endTime, wordIndex) {
+  if (!Array.isArray(words) || !words.length) return 0
+  const wi = Number(wordIndex)
+  if (!Number.isInteger(wi) || wi < 0 || wi >= words.length) return 0
+  const start = Number(line?.time) || 0
+  if (!(time >= start)) return 0
+
+  if (!isProgressiveWordTiming(words)) {
+    const end = resolveLineEndTime(line, words, endTime)
+    const span = Math.max(0.05, end - start)
+    const exact = ((time - start) / span) * words.length
+    if (exact <= wi) return 0
+    if (exact >= wi + 1) return 1
+    return exact - wi
+  }
+
+  const t0 = Number(words[wi].time)
+  if (!Number.isFinite(t0) || time < t0) return 0
+  const dur = Math.max(0.05, resolveWordDuration(words, wi, resolveLineEndTime(line, words, endTime)))
+  return Math.min(1, Math.max(0, (time - t0) / dur))
 }
 
 /** 自动识别 LRC 或纯文本歌词（逐行） */

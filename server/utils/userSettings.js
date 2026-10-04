@@ -32,7 +32,6 @@ export const GLOBAL_SETTING_KEYS = new Set([
   'mail.smtp.pass',
   'mail.from',
   'mail.appUrl',
-  'telemetry.enabled',
   'ffmpeg.enabled',
 ])
 
@@ -44,6 +43,9 @@ export const USER_SETTING_KEYS = new Set([
   'library.userDataRevision',
   'ui.theme',
   'ui.librarySongColumns',
+  'ui.lyricColorPreset',
+  'ui.lyricTextColor',
+  'ui.lyricHighlightColor',
   'player.coverStyle',
   'player.visualizer',
   'player.playQuality',
