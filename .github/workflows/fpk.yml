@@ -32,12 +32,18 @@ jobs:
           npm ci
           npm run build
           test -d dist
-          rm -rf fpk/app/server fpk/app/dist fpk/app/bundle fpk/app/node_modules
+          rm -rf fpk/app/server fpk/app/dist fpk/app/bundle fpk/app/node_modules fpk/app/scripts fpk/app/docs
           mkdir -p fpk/app
           cp -a dist fpk/app/dist
           cp -a server fpk/app/server
           cp package.json fpk/app/package.json
           if [ -f package-lock.json ]; then cp package-lock.json fpk/app/package-lock.json; fi
+          mkdir -p fpk/app/scripts
+          cp scripts/reset-password.js fpk/app/scripts/reset-password.js
+          test -f docs/openapi.json
+          mkdir -p fpk/app/docs
+          cp docs/openapi.json fpk/app/docs/openapi.json
+          if [ -f docs/openapi.yaml ]; then cp docs/openapi.yaml fpk/app/docs/openapi.yaml; fi
 
       - name: Build FPK
         id: build
