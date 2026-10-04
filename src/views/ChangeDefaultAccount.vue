@@ -78,7 +78,7 @@ async function submit() {
     })
     if (res.user) patchLocalUser(res.user)
     const redirect = String(route.query.redirect || '').trim()
-    router.replace(redirect && redirect.startsWith('/') ? redirect : '/search')
+    router.replace(redirect && redirect.startsWith('/') ? redirect : '/library')
   } catch (e) {
     error.value = e.message || '保存失败'
     if (String(e.message || '').includes('未登录')) {

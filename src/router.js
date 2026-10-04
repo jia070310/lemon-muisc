@@ -11,7 +11,7 @@ import Login from './views/Login.vue'
 const routes = [
   { path: '/login', name: 'Login', component: Login, meta: { public: true } },
   { path: '/change-account', name: 'ChangeDefaultAccount', component: () => import('./views/ChangeDefaultAccount.vue') },
-  { path: '/', redirect: '/search' },
+  { path: '/', redirect: '/library' },
   { path: '/search', name: 'Search', component: () => import('./views/Search.vue') },
   { path: '/discover', name: 'Discover', component: () => import('./views/Discover.vue') },
   { path: '/discover/playlists', name: 'DiscoverPlaylists', component: () => import('./views/DiscoverPlaylists.vue') },
@@ -58,7 +58,7 @@ router.beforeEach(async (to, from) => {
       if (currentUser.value?.mustChangePassword) {
         return { name: 'ChangeDefaultAccount', query: to.query }
       }
-      return '/search'
+      return '/library'
     }
     return true
   }
@@ -75,7 +75,7 @@ router.beforeEach(async (to, from) => {
 
   if (to.name === 'ChangeDefaultAccount' && !currentUser.value?.mustChangePassword) {
     finishRouteLoading()
-    return '/search'
+    return '/library'
   }
 
   if (to.path !== from.path) startRouteLoading(to)

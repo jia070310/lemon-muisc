@@ -71,7 +71,7 @@ async function submitLogin() {
       router.replace({ name: 'ChangeDefaultAccount', query: redirect ? { redirect } : {} })
       return
     }
-    router.replace(redirect && redirect.startsWith('/') ? redirect : '/search')
+    router.replace(redirect && redirect.startsWith('/') ? redirect : '/library')
   } catch (e) {
     error.value = e.message || '登录失败'
   } finally {
