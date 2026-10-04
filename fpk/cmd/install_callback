@@ -55,10 +55,11 @@ fi
 mkdir -p "${config_path}" "${music_path}" "${downloads_path}" 2>/dev/null || true
 save_paths "${music_path}" "${downloads_path}" "${config_path}"
 
-# 写入运行环境
+# 写入运行环境（安装不填端口，默认 7983；占用时提示到应用设置修改）
 mkdir -p "${TRIM_PKGETC}" 2>/dev/null || true
+listen_port="$(resolve_service_port)"
 cat > "${TRIM_PKGETC}/app.env" <<EOF
-PORT=7983
+PORT=${listen_port}
 LEMON_NATIVE=1
 DOWNLOAD_PATH=${music_path}
 CONFIG_PATH=${config_path}
@@ -73,7 +74,7 @@ case "${music_path}" in
     ;;
 esac
 
-log_line "paths music=${music_path} downloads=${downloads_path} config=${config_path}"
+log_line "paths music=${music_path} downloads=${downloads_path} config=${config_path} port=${listen_port}"
 
 # 确保 FPK 内业务代码就位（构建脚本应拷到 TRIM_APPDEST）
 APP_ROOT="$(app_root)"
@@ -100,5 +101,10 @@ ensure_better_sqlite3_native || fail_install "better-sqlite3 原生库缺失。�
 
 ensure_desktop_entry || true
 mark_install_complete
-update_install_ui "【安装完成】请点「启用」。若一直「启用中」，SSH：tail -n 80 ${TRIM_PKGVAR}/log/app.log"
+if port_blocked_by_others "${listen_port}"; then
+  update_install_ui "【安装完成】默认端口 ${listen_port} 已被占用。请到「应用设置」改为 1024–65535 内的空闲端口，再点「启用」。"
+  log_line "port ${listen_port} occupied, ask user to change in app settings"
+else
+  update_install_ui "【安装完成】请点「启用」。若一直「启用中」，SSH：tail -n 80 ${TRIM_PKGVAR}/log/app.log"
+fi
 exit 0

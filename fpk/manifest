@@ -1,7 +1,7 @@
 appname        = lemon-music
-version        = 1.2.16.13
+version        = 1.2.16.14
 display_name   = 柠檬音乐
-desc           = <b>音乐搜索、试听、下载与标签管理</b><br><br><b>功能</b>：多音源搜索；发现页歌单 / 排行榜 / 新歌 / 新碟；在线试听、批量下载与本地标签编辑（支持 <b>MP3 / FLAC / WAV / APE</b>）；<b>情绪地图</b>（本地曲情绪分析、心情连播与喜欢/不喜欢反馈）；音乐库歌手浏览、文件管理（标签 / 去重 / 整理）；播放栏一键下载；APE / 情绪分析优先用系统 <b>ffmpeg</b>（装包不下载；按需在设置中准备）；无损真 FLAC 校验与不降档；试听时长检测与自动换源、音源健康度；支持<strong>同时激活多个音源</strong>（按用户独立）、落雪 / 澜音原生音源。<br><b>依赖</b>：应用中心 <b>Node.js v22</b>（manifest install_dep_apps，未安装时由系统安装）。<br><b>安装说明</b>：脚本按飞牛文档使用 <code>/var/apps/nodejs_v22/target/bin</code>，只检查不二次安装商店 Node。已有业务依赖时升级会跳过 npm。<br><b>目录</b>：安装向导填写本机绝对路径即可使用；也可稍后在访问权限中补充。<br><b>卸载</b>：可选择保留或删除应用配置；不会删除你指定的音乐库 / 下载目录中的音频。<br><br><b>免责声明</b>：本应用仅供个人合法使用。请确保你对所管理的音乐拥有相应权利，并遵守当地法律与各平台条款。违规使用后果由用户自行承担。
+desc           = <b>下载音乐、播放音乐库、标签批量整理</b>。也支持多音源搜索与试听、发现歌单 / 榜单、文件去重与整理。<br><br><b>开放 API（音乐服务器）</b>：播放器 APP / 脚本可接入本机服务（默认端口 <b>7983</b>）。交互文档：<code>http://NAS:7983/api/docs</code>。常用接口（前缀 <code>/api/v1</code>）：<code>POST /auth/login</code> 登录；<code>GET /library/tracks</code> 曲库分页；<code>GET /library/tracks/{trackId}</code> 曲目详情；<code>POST /play/url</code> 取播放地址；<code>GET /play/lyric</code> 歌词；<code>GET /search</code> 搜索；歌单 / 下载见 <code>/library/playlists</code>、<code>/download/*</code>；进度推送 <code>ws://NAS:7983/ws</code>。<br><br><b>重置管理员密码</b>（只改登录密码，<b>不会</b>清空歌单、收藏或音乐文件）：SSH 执行<br><code>PATH=/var/apps/nodejs_v22/target/bin:$PATH CONFIG_PATH=/vol1/@appconf/lemon-music/config node /var/apps/lemon-music/target/scripts/reset-password.js 用户名 新密码</code><br>列出账号加 <code>--list</code>。配置卷不是 vol1 时请改 CONFIG_PATH。<br><br><b>依赖</b>：应用中心 <b>Node.js v22</b>。目录可在安装向导或「访问权限」中指定。卸载可选保留配置，不会删除音乐库 / 下载目录中的音频。<br><br><b>免责声明</b>：仅供个人合法使用。请确保对所管理音乐拥有相应权利，并遵守当地法律与平台条款。违规后果由用户自行承担。
 platform       = x86
 os_min_version = 1.1.8
 source         = thirdparty

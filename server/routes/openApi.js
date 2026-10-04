@@ -6,11 +6,30 @@ import { createRequire } from 'module'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(__dirname, '../..')
-const OPENAPI_JSON = path.join(ROOT, 'docs', 'openapi.json')
-const OPENAPI_YAML = path.join(ROOT, 'docs', 'openapi.yaml')
+
+function firstExisting(...paths) {
+  return paths.find((p) => p && fs.existsSync(p)) || null
+}
+
+function openApiJsonPath() {
+  return firstExisting(
+    path.join(ROOT, 'docs', 'openapi.json'),
+    path.join(__dirname, '..', 'openapi.json'),
+    path.join(process.cwd(), 'docs', 'openapi.json'),
+  )
+}
+
+function openApiYamlPath() {
+  return firstExisting(
+    path.join(ROOT, 'docs', 'openapi.yaml'),
+    path.join(__dirname, '..', 'openapi.yaml'),
+    path.join(process.cwd(), 'docs', 'openapi.yaml'),
+  )
+}
 
 let cachedSpec = null
 let cachedMtime = 0
+let cachedPath = ''
 
 function readAppVersion() {
   try {
@@ -24,11 +43,13 @@ function readAppVersion() {
 
 function loadOpenApiSpec() {
   try {
-    if (fs.existsSync(OPENAPI_JSON)) {
-      const st = fs.statSync(OPENAPI_JSON)
-      if (cachedSpec && st.mtimeMs === cachedMtime) return cachedSpec
-      cachedSpec = JSON.parse(fs.readFileSync(OPENAPI_JSON, 'utf8'))
+    const file = openApiJsonPath()
+    if (file) {
+      const st = fs.statSync(file)
+      if (cachedSpec && cachedPath === file && st.mtimeMs === cachedMtime) return cachedSpec
+      cachedSpec = JSON.parse(fs.readFileSync(file, 'utf8'))
       cachedMtime = st.mtimeMs
+      cachedPath = file
       return cachedSpec
     }
   } catch (e) {
@@ -77,8 +98,9 @@ openApiPublicRouter.get('/openapi.json', (_req, res) => {
 })
 
 openApiPublicRouter.get('/openapi.yaml', (_req, res) => {
-  if (fs.existsSync(OPENAPI_YAML)) {
-    res.type('text/yaml').send(fs.readFileSync(OPENAPI_YAML, 'utf8'))
+  const file = openApiYamlPath()
+  if (file) {
+    res.type('text/yaml').send(fs.readFileSync(file, 'utf8'))
     return
   }
   res.status(404).json({ error: 'openapi.yaml 不存在' })

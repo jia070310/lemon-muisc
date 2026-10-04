@@ -7,6 +7,7 @@ import {
   syncLibraryIndex,
   scanBatchAndCache,
   getAllCachedTracks,
+  countCachedTracks,
 } from './libraryCache.js'
 import {
   notifyLibraryRemoved,
@@ -33,7 +34,7 @@ let jobPromise = null
 let abortRequested = false
 
 export function getLibraryScanStatus() {
-  return { ...scanState }
+  return { ...scanState, trackCount: countCachedTracks() }
 }
 
 function emitProgress(extra = {}) {
@@ -42,6 +43,7 @@ function emitProgress(extra = {}) {
     current: scanState.current,
     total: scanState.total,
     scanned: scanState.scanned,
+    trackCount: countCachedTracks(),
     running: scanState.running,
     error: scanState.error || '',
     ...extra,
@@ -56,7 +58,7 @@ async function runScanJob(precomputed, scanDirs) {
       scanState.running = false
       scanState.finishedAt = Date.now()
       emitProgress()
-      notifyLibraryScanComplete({ totalTracks: 0, scannedTags: 0, hadPending: false })
+      notifyLibraryScanComplete({ totalTracks: 0, scannedTags: 0, hadPending: false, trackCount: 0 })
       return
     }
 
@@ -88,6 +90,7 @@ async function runScanJob(precomputed, scanDirs) {
         totalTracks: getAllCachedTracks().length,
         scannedTags: 0,
         hadPending: false,
+        trackCount: countCachedTracks(),
       })
       try {
         const { scheduleMoodAutoAnalyze } = await import('./moodAnalyzeJob.js')
@@ -119,6 +122,7 @@ async function runScanJob(precomputed, scanDirs) {
       totalTracks: getAllCachedTracks().length,
       scannedTags: scanState.scanned,
       hadPending: pending.length > 0,
+      trackCount: countCachedTracks(),
     })
     if (pending.length > 0) {
       try {

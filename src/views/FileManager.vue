@@ -109,7 +109,10 @@
                   @change="toggleSelect(f.filePath)"
                 />
               </label>
-              <code :title="f.filePath" class="dup-path">{{ f.fileName || f.filePath }}</code>
+              <span class="dup-file-label">
+                <code :title="f.filePath" class="dup-path">{{ f.fileName || f.filePath }}</code>
+                <span v-if="f.size" class="dup-size">{{ formatFakeSize(f.size) }}</span>
+              </span>
               <span v-if="f.bitrate" class="dup-meta">{{ Math.round(f.bitrate / 1000) }}kbps</span>
               <span class="dup-file-actions">
                 <button
@@ -1297,14 +1300,27 @@ async function startOrganize() {
   accent-color: var(--accent);
   cursor: pointer;
 }
-.dup-path {
+.dup-file-label {
   flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.dup-path {
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 12px;
   color: var(--text);
+}
+.dup-size {
+  flex: 0 0 auto;
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
 }
 .dup-meta {
   font-size: 12px;

@@ -1,6 +1,7 @@
 import vm from 'vm'
 import needle from 'needle'
 import { getDB } from './db.js'
+import { abortTrackedSourceRequests, runWithSourceAborts, trackSourceAbort } from './utils/sourceRequestScope.js'
 import { parseScriptMeta } from './utils/parseScriptMeta.js'
 import { createLxUtils, createSandboxRequire } from './utils/lxSourceRuntime.js'
 import {
@@ -196,18 +197,25 @@ export async function loadSource(id, script) {
   })
 }
 
+function lxRequestTimeoutMs(options = {}) {
+  const raw = Number(options.timeout)
+  if (Number.isFinite(raw) && raw > 0) return Math.min(raw, 60000)
+  return 20000
+}
+
 function lxRequest(url, options = {}, callback) {
   const method = (options.method || 'get').toLowerCase()
+  const timeoutMs = lxRequestTimeoutMs(options)
   const opts = {
     follow_max: 5,
     parse_response: false,
+    open_timeout: Math.min(timeoutMs, 15000),
+    response_timeout: timeoutMs,
+    read_timeout: timeoutMs,
     headers: {
       connection: 'close',
       ...(options.headers || {}),
     },
-  }
-  if (options.timeout) {
-    opts.response_timeout = Math.min(Number(options.timeout) || 60000, 60000)
   }
 
   let body = null
@@ -240,11 +248,13 @@ function lxRequest(url, options = {}, callback) {
     }, parsedBody)
   })
 
-  return () => {
+  const abort = () => {
     try {
       if (!req?.request?.aborted) req?.request?.abort()
     } catch {}
   }
+  trackSourceAbort(abort)
+  return abort
 }
 
 /** 卸载指定音源；不传 id 则卸载全部 */
@@ -355,25 +365,59 @@ function releaseSourceSlot() {
   if (next) next()
 }
 
+function handlerCallbackError(err) {
+  if (err == null || err === 0 || err === false) return null
+  if (err instanceof Error) return err
+  if (typeof err === 'number') return new Error(`音源请求失败(${err})`)
+  if (typeof err === 'string' && err.trim()) return new Error(err)
+  return new Error(String(err))
+}
+
+function isImmediateHandlerValue(result) {
+  if (result == null) return false
+  if (typeof result.then === 'function') return false
+  return typeof result === 'string' || typeof result === 'object'
+}
+
 function invokeHandler(entry, payload) {
-  return acquireSourceSlot().then(() => new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error('请求超时(30s)')), 30000)
-    try {
-      const result = entry.handler(payload)
-      if (result && typeof result.then === 'function') {
-        result.then((data) => { clearTimeout(timeout); resolve(data) })
-          .catch((err) => { clearTimeout(timeout); reject(err) })
-      } else {
-        clearTimeout(timeout)
-        resolve(result)
+  const aborts = []
+  return acquireSourceSlot()
+    .then(() => runWithSourceAborts(aborts, () => new Promise((resolve, reject) => {
+      let settled = false
+      const finish = (err, data) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        if (err) {
+          abortTrackedSourceRequests()
+          reject(err instanceof Error ? err : new Error(String(err)))
+        } else {
+          resolve(data)
+        }
       }
-    } catch (e) {
-      clearTimeout(timeout)
-      reject(e)
-    }
-  }).finally(() => {
-    releaseSourceSlot()
-  }))
+      const timer = setTimeout(() => finish(new Error('请求超时(30s)')), 30000)
+      const callback = (err, data) => {
+        const normalized = handlerCallbackError(err)
+        if (normalized) finish(normalized)
+        else finish(null, data)
+      }
+      try {
+        const result = entry.handler(payload, callback)
+        if (result && typeof result.then === 'function') {
+          result.then((data) => {
+            if (data === undefined || data === null) return
+            finish(null, data)
+          }).catch((e) => finish(e))
+        } else if (isImmediateHandlerValue(result)) {
+          finish(null, result)
+        }
+      } catch (e) {
+        finish(e)
+      }
+    })))
+    .finally(() => {
+      releaseSourceSlot()
+    })
 }
 
 const sourceNameCache = new Map()

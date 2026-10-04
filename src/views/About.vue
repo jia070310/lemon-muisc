@@ -304,29 +304,26 @@
     <section v-if="isAdminUser" class="about-admin">
       <h2 class="section-title about-admin-heading">账号恢复</h2>
       <p class="account-info-text account-intro">
-        账号存在配置目录的 <code>lx-music.db</code>（飞牛默认 <code>/vol1/@appconf/lemon-music/config/</code>）。没有邮件找回，用下面命令或「设置 → 账号管理」重置。
+        忘记管理员密码时，用下面命令<b>只重置登录密码</b>，不会清空歌单、收藏、下载任务或音乐文件。账号在 <code>lx-music.db</code>（飞牛默认 <code>/vol1/@appconf/lemon-music/config/</code>）。仍记得密码时，也可在「设置 → 账号管理」改密或给其他用户重置。
       </p>
       <div class="account-actions">
         <div class="account-action card">
-          <h3 class="action-title">忘记密码</h3>
-          <p class="action-desc">管理员可在设置里为其他用户重置密码；也可在服务器项目目录执行：</p>
+          <h3 class="action-title">重置管理员密码</h3>
+          <p class="action-desc">飞牛 SSH（把 <code>admin</code> 和 <code>新密码</code> 换成实际账号；配置不在 vol1 时改 CONFIG_PATH）：</p>
+          <div class="cmd-wrap">
+            <span class="cmd-label">飞牛 NAS</span>
+            <pre class="cmd-block">PATH=/var/apps/nodejs_v22/target/bin:$PATH CONFIG_PATH=/vol1/@appconf/lemon-music/config node /var/apps/lemon-music/target/scripts/reset-password.js admin 新密码</pre>
+          </div>
+          <p class="action-desc">自托管项目目录：</p>
           <div class="cmd-wrap">
             <span class="cmd-label">终端命令</span>
             <pre class="cmd-block">npm run auth:reset-password -- 用户名 新密码</pre>
           </div>
         </div>
-        <div class="account-action card">
-          <h3 class="action-title">清空所有用户</h3>
-          <p class="action-desc">删除全部账号后会重新生成默认管理员 <code>admin123</code> / <code>admin123</code>，登录后须立即改用户名和密码。音源、路径等设置会保留。</p>
-          <div class="cmd-wrap">
-            <span class="cmd-label">终端命令</span>
-            <pre class="cmd-block">npm run auth:reset-users -- --yes</pre>
-          </div>
-        </div>
       </div>
       <p class="account-tip">
         <span class="account-tip-icon" aria-hidden="true">ℹ</span>
-        执行命令后请刷新页面。若仍自动登录，请清除浏览器中本站的登录缓存。
+        加 <code>--list</code> 可查看用户名。执行后请刷新页面；若仍自动登录，请清除本站登录缓存。不要用清空用户数据的方式来找回密码。
       </p>
     </section>
 
@@ -1512,7 +1509,7 @@ function formatDate(iso) {
 
 .account-actions {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: 1fr;
   gap: 14px;
   align-items: stretch;
 }

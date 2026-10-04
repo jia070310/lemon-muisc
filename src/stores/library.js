@@ -124,7 +124,14 @@ function setScanProgress(phase, { current = 0, total = 0, text = '' } = {}) {
   libraryLoadProgress.value = text
 }
 
+function applyLibraryTrackCount(count) {
+  const n = Number(count)
+  if (!Number.isFinite(n) || n < 0) return
+  libraryTrackTotal.value = n
+}
+
 function applyServerScanProgress(scan = {}) {
+  if (scan?.trackCount != null) applyLibraryTrackCount(scan.trackCount)
   if (!scan?.phase) return
   const phase = scan.phase === 'tags' || scan.phase === 'sync' ? scan.phase : (scan.running ? 'tags' : '')
   if (!phase) return
@@ -1835,6 +1842,7 @@ export function removeLibraryTracks(filePaths) {
   })
   const n = before - libraryTracks.value.length
   if (n > 0) saveSessionTracks(libraryTracks.value)
+  libraryTrackTotal.value = Math.max(0, libraryTrackTotal.value - raw.length)
   // 即使工作集没命中路径，服务端已删索引 → 仍刷新首页专辑/歌手预览
   bumpLibraryBrowseRevision()
   return n
@@ -2390,6 +2398,9 @@ export async function ingestLibraryTracks(api, filePaths) {
 
   libraryTracks.value = sortTracksByMtime(next)
   libraryScanned.value = true
+  if (added > 0 && !libraryMetaLoading.value) {
+    libraryTrackTotal.value += added
+  }
   if (added > 0 || updated > 0) saveSessionTracks(libraryTracks.value)
   return { added, updated }
 }
@@ -2500,6 +2511,8 @@ export function initLibraryHotReload(api, { onWS } = {}) {
   })
   offScanComplete = onWS('library:scan-complete', async (payload) => {
     if (!hotReloadApi) return
+    if (payload?.trackCount != null) applyLibraryTrackCount(payload.trackCount)
+    else if (payload?.totalTracks != null) applyLibraryTrackCount(payload.totalTracks)
     await finishBackgroundScan(hotReloadApi)
     const hadPending = Boolean(payload?.hadPending)
     const scanned = Number(payload?.scannedTags) || 0

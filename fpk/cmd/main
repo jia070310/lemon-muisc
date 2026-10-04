@@ -27,8 +27,10 @@ write_app_env() {
   fi
 
   mkdir -p "${music}" "${downloads}" "${config}" "${TRIM_PKGETC}" 2>/dev/null || true
+  local listen_port
+  listen_port="$(resolve_service_port)"
   cat > "${ENV_FILE}" <<EOF
-PORT=7983
+PORT=${listen_port}
 LEMON_NATIVE=1
 DOWNLOAD_PATH=${music}
 CONFIG_PATH=${config}
@@ -64,21 +66,13 @@ is_pid_running() {
 }
 
 is_port_up() {
-  local port="${1:-7983}"
-  if command -v ss >/dev/null 2>&1; then
-    ss -ltn 2>/dev/null | grep -qE "[:.]${port}\\s"
-    return $?
-  fi
-  if command -v curl >/dev/null 2>&1; then
-    curl -sf --max-time 1 "http://127.0.0.1:${port}/" >/dev/null 2>&1
-    return $?
-  fi
-  (echo >/dev/tcp/127.0.0.1/"${port}") >/dev/null 2>&1
+  local port="${1:-$(read_saved_service_port)}"
+  is_tcp_port_in_use "${port}"
 }
 
 is_service_running() {
   is_pid_running && return 0
-  is_port_up 7983
+  is_port_up "$(read_saved_service_port)"
 }
 
 stop_service() {
@@ -93,8 +87,10 @@ stop_service() {
     rm -f "${PID_FILE}" 2>/dev/null || true
   fi
   # 兜底：按端口杀残留
+  local port
+  port="$(read_saved_service_port)"
   if command -v fuser >/dev/null 2>&1; then
-    fuser -k 7983/tcp >/dev/null 2>&1 || true
+    fuser -k "${port}/tcp" >/dev/null 2>&1 || true
   fi
 }
 
@@ -142,7 +138,7 @@ start_service() {
     return 1
   fi
 
-  open_service_port 7983 || true
+  open_service_port "${PORT:-$(read_saved_service_port)}" || true
 
   if is_service_running; then
     ensure_desktop_entry || true
@@ -151,6 +147,12 @@ start_service() {
 
   mkdir -p "${TRIM_PKGVAR}/log" 2>/dev/null || true
   stop_service
+  load_app_env
+  local listen_port="${PORT:-$(read_saved_service_port)}"
+  if port_blocked_by_others "${listen_port}"; then
+    echo "端口 ${listen_port} 已被占用。请到「应用设置」改为 1024–65535 内的空闲端口后再启用。" > "${TRIM_TEMP_LOGFILE}"
+    return 1
+  fi
 
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] start root=${root} node=${node_bin}" >> "${APP_LOG}" 2>/dev/null || true
 
@@ -160,7 +162,7 @@ start_service() {
     set -a
     [ -f "${ENV_FILE}" ] && . "${ENV_FILE}"
     set +a
-    export PORT="${PORT:-7983}"
+    export PORT="${PORT:-$(read_saved_service_port)}"
     export LEMON_NATIVE=1
     export DOWNLOAD_PATH="${DOWNLOAD_PATH}"
     export CONFIG_PATH="${CONFIG_PATH}"
@@ -173,7 +175,7 @@ start_service() {
   # 短暂等待端口
   local i=0
   while [ "${i}" -lt 20 ]; do
-    if is_port_up 7983; then
+    if is_port_up "${listen_port}"; then
       ensure_desktop_entry || true
       return 0
     fi
@@ -194,7 +196,7 @@ start_service() {
     i=$((i + 1))
   done
 
-  tip="端口 7983 未就绪。请 SSH 查看：tail -n 50 ${APP_LOG}"
+  tip="端口 ${listen_port} 未就绪。请 SSH 查看：tail -n 50 ${APP_LOG}"
   if [ -f "${APP_LOG}" ]; then
     tip="${tip} | $(tail -n 5 "${APP_LOG}" 2>/dev/null | tr '\n' ' ')"
   fi

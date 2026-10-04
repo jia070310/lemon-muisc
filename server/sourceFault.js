@@ -18,6 +18,10 @@ export function isTransientNetworkError(error) {
   if (/timeout|timed out|请求超时/i.test(text) && !/音源初始化超时/i.test(text)) {
     return true
   }
+  // 单曲取链失败（空链接 / 风控 / 版权）不应停用整个音源
+  if (/未获取到URL|获取URL失败|获取播放链接失败|获取.*音质.*失败/i.test(text)) return true
+  if (/HTTP\s*40[1349]|statusCode[:\s]*40[1349]|拒绝访问|请求过于频繁|链接已失效/i.test(text)) return true
+  if (/HTTP\s*5\d{2}|statusCode[:\s]*5\d{2}/i.test(text)) return true
   return false
 }
 

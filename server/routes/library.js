@@ -521,6 +521,15 @@ function resolveDupIdentity(track) {
   }
 }
 
+function fileSizeOrZero(filePath) {
+  try {
+    if (!filePath) return 0
+    return fs.statSync(filePath).size || 0
+  } catch {
+    return 0
+  }
+}
+
 /** 检测重复曲目（同基名歌名+歌手；含 Live 等版本变体；优先文件名解析） */
 libraryRouter.get('/duplicates', (req, res) => {
   try {
@@ -540,6 +549,7 @@ libraryRouter.get('/duplicates', (req, res) => {
         album: t.album || '',
         duration: t.duration || 0,
         bitrate: t.bitrate || 0,
+        size: Number(t.size) || fileSizeOrZero(t.filePath),
       })
     }
     const duplicates = [...groups.values()]

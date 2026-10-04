@@ -5,6 +5,7 @@
 import crypto from 'crypto'
 import zlib from 'zlib'
 import needle from 'needle'
+import { trackSourceAbort } from './sourceRequestScope.js'
 
 function toBuffer(data, encoding) {
   if (Buffer.isBuffer(data)) return data
@@ -89,10 +90,13 @@ function createCeruBuffer() {
 function createCeruRequest() {
   return (url, options = {}, callback) => {
     const method = String(options.method || 'get').toLowerCase()
+    const timeoutMs = Math.min(Number(options.timeout) > 0 ? Number(options.timeout) : 15000, 60000)
     const opts = {
       headers: options.headers || {},
       follow_max: 5,
-      timeout: options.timeout || 15000,
+      open_timeout: Math.min(timeoutMs, 15000),
+      response_timeout: timeoutMs,
+      read_timeout: timeoutMs,
       json: options.json !== false,
     }
     if (options.body != null) opts.body = options.body
@@ -102,13 +106,18 @@ function createCeruRequest() {
     }
 
     const run = () => new Promise((resolve, reject) => {
-      needle.request(method, url, opts.body ?? opts.form ?? null, opts, (err, resp) => {
+      const req = needle.request(method, url, opts.body ?? opts.form ?? null, opts, (err, resp) => {
         if (err) return reject(err)
         resolve({
           body: resp.body,
           statusCode: resp.statusCode,
           headers: resp.headers || {},
         })
+      })
+      trackSourceAbort(() => {
+        try {
+          if (!req?.request?.aborted) req?.request?.abort()
+        } catch {}
       })
     })
 

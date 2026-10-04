@@ -20,7 +20,7 @@ if [ -f "${PID_FILE}" ]; then
   rm -f "${PID_FILE}" 2>/dev/null || true
 fi
 if command -v fuser >/dev/null 2>&1; then
-  fuser -k 7983/tcp >/dev/null 2>&1 || true
+  fuser -k "$(read_saved_service_port)/tcp" >/dev/null 2>&1 || true
 fi
 
 load_paths

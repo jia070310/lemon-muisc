@@ -26,7 +26,7 @@ if (-not $fnpackPath) {
 }
 
 function Clear-AppRuntimeDirs {
-  foreach ($name in @("server", "dist", "node_modules", "bundle")) {
+  foreach ($name in @("server", "dist", "node_modules", "bundle", "scripts", "docs")) {
     $p = Join-Path $FpkDir "app\$name"
     if (Test-Path $p) { Remove-Item -Recurse -Force $p }
   }
@@ -87,7 +87,8 @@ if ($SkipFrontendBuild) {
 }
 
 # 2) Stage sources (no node_modules by default)
-Write-Host ">>> stage app sources (small package=$(-not $BundleNodeModules))" -ForegroundColor Cyan
+$smallPackage = -not $BundleNodeModules
+Write-Host ">>> stage app sources (small package=$smallPackage)" -ForegroundColor Cyan
 Clear-AppRuntimeDirs
 New-Item -ItemType Directory -Path $AppBundle | Out-Null
 Copy-Item -Recurse (Join-Path $Root "dist") (Join-Path $AppBundle "dist")
@@ -96,12 +97,11 @@ Copy-Item (Join-Path $Root "package.json") (Join-Path $AppBundle "package.json")
 if (Test-Path (Join-Path $Root "package-lock.json")) {
   Copy-Item (Join-Path $Root "package-lock.json") (Join-Path $AppBundle "package-lock.json")
 }
-# deps.rev：升级是否增量装 npm 的开关（发版改版本号不必改它）
 if (Test-Path (Join-Path $Root "deps.rev")) {
   Copy-Item (Join-Path $Root "deps.rev") (Join-Path $AppBundle "deps.rev")
 }
 
-# Flatten into fpk/app for fnpack
+# Flatten into fpk/app for fnpack, then drop staging bundle (avoid packing twice)
 Copy-Item -Recurse (Join-Path $AppBundle "server") (Join-Path $FpkDir "app\server")
 Copy-Item -Recurse (Join-Path $AppBundle "dist") (Join-Path $FpkDir "app\dist")
 Copy-Item -Force (Join-Path $AppBundle "package.json") (Join-Path $FpkDir "app\package.json")
@@ -111,6 +111,22 @@ if (Test-Path (Join-Path $AppBundle "package-lock.json")) {
 if (Test-Path (Join-Path $AppBundle "deps.rev")) {
   Copy-Item -Force (Join-Path $AppBundle "deps.rev") (Join-Path $FpkDir "app\deps.rev")
 }
+$resetScript = Join-Path $Root "scripts\reset-password.js"
+if (Test-Path $resetScript) {
+  $scriptsDir = Join-Path $FpkDir "app\scripts"
+  New-Item -ItemType Directory -Force -Path $scriptsDir | Out-Null
+  Copy-Item -Force $resetScript (Join-Path $scriptsDir "reset-password.js")
+}
+$openapiJson = Join-Path $Root "docs\openapi.json"
+if (-not (Test-Path $openapiJson)) { throw "docs/openapi.json missing, run npm run openapi:build" }
+$docsDir = Join-Path $FpkDir "app\docs"
+New-Item -ItemType Directory -Force -Path $docsDir | Out-Null
+Copy-Item -Force $openapiJson (Join-Path $docsDir "openapi.json")
+$openapiYaml = Join-Path $Root "docs\openapi.yaml"
+if (Test-Path $openapiYaml) {
+  Copy-Item -Force $openapiYaml (Join-Path $docsDir "openapi.yaml")
+}
+Remove-Item -Recurse -Force $AppBundle -ErrorAction SilentlyContinue
 
 Write-Host ">>> normalize cmd scripts to LF" -ForegroundColor Cyan
 Get-ChildItem -Path (Join-Path $FpkDir "cmd") -File | ForEach-Object {
@@ -159,11 +175,13 @@ try {
     if (-not (Test-Path $fpk)) { throw "lemon-music.fpk was not created for platform $platform" }
 
     $versioned = Join-Path $FpkDir "lemon-music-$version-$platform.fpk"
-    Copy-Item -Force $fpk $versioned
+    Move-Item -Force $fpk $versioned
     $sizeMb = [math]::Round((Get-Item $versioned).Length / 1MB, 2)
     Write-Host "Done: $versioned ($sizeMb MB)" -ForegroundColor Green
   }
 }
 finally {
   [IO.File]::WriteAllText($ManifestPath, $originalManifest)
+  $rawFpk = Join-Path $FpkDir "lemon-music.fpk"
+  if (Test-Path $rawFpk) { Remove-Item -Force $rawFpk }
 }

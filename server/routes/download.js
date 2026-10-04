@@ -17,6 +17,7 @@ import {
   getNextLowerQuality,
   isNoActiveSourceError,
   isRetryableDownloadError,
+  downloadRetryDelayMs,
   qualityLabel,
   formatMissingQualityError,
   sleep,
@@ -1767,7 +1768,7 @@ async function downloadTask(task, settings, abortSignal = null) {
                 retryAttempt: attempt,
                 retryTotal: SAME_QUALITY_ATTEMPTS,
               })
-              if (attempt > 1) await sleep(RETRY_DELAY_MS * (attempt - 1))
+              if (attempt > 1) await sleep(downloadRetryDelayMs(attempt - 1, lastError, RETRY_DELAY_MS))
             }
 
             const { url, sourceInfo } = await resolveDownloadUrl(source, quality, musicInfo, settings, meta, task.user_id)

@@ -303,6 +303,102 @@ open_service_port() {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] open_service_port ${port} attempted" >> "${log_file}" 2>/dev/null || true
 }
 
+DEFAULT_LEMON_PORT=7983
+LEMON_PORT_MIN=1024
+LEMON_PORT_MAX=65535
+
+is_valid_service_port() {
+  local port="${1:-}"
+  case "${port}" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  [ "${port}" -ge "${LEMON_PORT_MIN}" ] && [ "${port}" -le "${LEMON_PORT_MAX}" ]
+}
+
+read_saved_service_port() {
+  local p=""
+  if [ -f "${TRIM_PKGETC}/app.env" ]; then
+    p="$(awk -F= '/^PORT=/{print $2}' "${TRIM_PKGETC}/app.env" 2>/dev/null | tail -n 1 | tr -d ' \r')"
+  fi
+  if is_valid_service_port "${p}"; then
+    echo "${p}"
+    return 0
+  fi
+  echo "${DEFAULT_LEMON_PORT}"
+}
+
+resolve_service_port() {
+  local p="${wizard_port:-}"
+  p="$(echo "${p}" | tr -d ' \r')"
+  if is_valid_service_port "${p}"; then
+    echo "${p}"
+    return 0
+  fi
+  read_saved_service_port
+}
+
+is_tcp_port_in_use() {
+  local port="${1:-}"
+  [ -n "${port}" ] || return 1
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltn 2>/dev/null | grep -qE "[:.]${port}[[:space:]]"
+    return $?
+  fi
+  if command -v netstat >/dev/null 2>&1; then
+    netstat -ltn 2>/dev/null | grep -qE "[:.]${port}[[:space:]]"
+    return $?
+  fi
+  (echo >/dev/tcp/127.0.0.1/"${port}") >/dev/null 2>&1
+}
+
+port_held_by_our_pid() {
+  local port="${1:-}"
+  local pid=""
+  local pid_file="${TRIM_PKGVAR}/lemon-music.pid"
+  [ -f "${pid_file}" ] || return 1
+  pid="$(tr -d ' \n\r' < "${pid_file}" 2>/dev/null)"
+  [ -n "${pid}" ] || return 1
+  kill -0 "${pid}" 2>/dev/null || return 1
+  is_tcp_port_in_use "${port}"
+}
+
+# 被其他进程占用时返回 0；空闲或仅本应用占用时返回 1
+port_blocked_by_others() {
+  local port="${1:-}"
+  is_tcp_port_in_use "${port}" || return 1
+  if port_held_by_our_pid "${port}"; then
+    return 1
+  fi
+  return 0
+}
+
+port_check_message() {
+  local port="${1:-}"
+  if ! is_valid_service_port "${port}"; then
+    echo "端口须为 ${LEMON_PORT_MIN}–${LEMON_PORT_MAX} 的整数（默认 ${DEFAULT_LEMON_PORT}），当前：${port:-空}"
+    return 0
+  fi
+  if port_blocked_by_others "${port}"; then
+    echo "端口 ${port} 已被占用，请改用 ${LEMON_PORT_MIN}–${LEMON_PORT_MAX} 内的空闲端口后再继续。"
+    return 0
+  fi
+  echo ""
+}
+
+require_service_port_available() {
+  local port="${1:-}"
+  local msg
+  msg="$(port_check_message "${port}")"
+  if [ -n "${msg}" ]; then
+    if [ -n "${TRIM_TEMP_LOGFILE:-}" ]; then
+      echo "${msg}" > "${TRIM_TEMP_LOGFILE}"
+    fi
+    echo "${msg}"
+    return 1
+  fi
+  return 0
+}
+
 # 兼容旧名
 install_node_runtime() {
   ensure_store_node

@@ -89,6 +89,17 @@ export function formatMissingQualityError(preferred, floor = '', reason = '') {
   return `无要求的音质：无法获取 ${want}${detail}`
 }
 
+export function isRateLimitedError(error) {
+  const text = `${error?.message || ''} ${error?.code || ''} ${error || ''}`
+  return /HTTP\s*429|statusCode[:\s]*429|\b429\b|请求过于频繁/i.test(text)
+}
+
+export function downloadRetryDelayMs(attempt, error, baseMs = 1200) {
+  const n = Math.max(1, Number(attempt) || 1)
+  if (isRateLimitedError(error)) return Math.min(5000 * n, 20000)
+  return baseMs * n
+}
+
 export function isRetryableDownloadError(error) {
   const message = error?.message || String(error || '')
   const code = error?.code || ''

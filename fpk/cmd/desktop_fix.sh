@@ -130,6 +130,7 @@ ensure_ui_symlink() {
 
 fix_desktop_db() {
   local appname="${TRIM_APPNAME:-lemon-music}"
+  local port="${1:-}"
   command -v psql >/dev/null 2>&1 || return 0
 
   run_sql() {
@@ -141,11 +142,62 @@ fix_desktop_db() {
   # 只修正入口可见性/打开方式，不要改 is_admin：
   # 飞牛「谁可以访问」对应 app_service.is_admin（true=仅管理员）。
   # 以前每次启用都写 is_admin=true，会覆盖用户在设置里选的「设备内所有用户」。
-  run_sql "UPDATE app_service SET no_display = false, type = 'url', updated_at = NOW() WHERE app_id IN (SELECT id FROM app WHERE app_name = '${appname}');" || true
+  if [ -n "${port}" ] && [ "${port}" -eq "${port}" ] 2>/dev/null; then
+    run_sql "UPDATE app_service SET no_display = false, type = 'url', port = ${port}, updated_at = NOW() WHERE app_id IN (SELECT id FROM app WHERE app_name = '${appname}');" || true
+  else
+    run_sql "UPDATE app_service SET no_display = false, type = 'url', updated_at = NOW() WHERE app_id IN (SELECT id FROM app WHERE app_name = '${appname}');" || true
+  fi
+}
+
+patch_ui_config_port() {
+  local file="$1" port="$2"
+  [ -f "${file}" ] || return 0
+  [ -n "${port}" ] || return 0
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "${file}" "${port}" <<'PY' 2>/dev/null || true
+import json, sys
+from pathlib import Path
+path, port = Path(sys.argv[1]), str(sys.argv[2])
+try:
+    data = json.loads(path.read_text(encoding="utf-8"))
+except Exception:
+    sys.exit(0)
+root = data.get(".url") if isinstance(data, dict) else None
+if isinstance(root, dict):
+    for item in root.values():
+        if isinstance(item, dict) and "port" in item:
+            item["port"] = port
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+PY
+    return 0
+  fi
+  sed -i -E "s/\"port\"[[:space:]]*:[[:space:]]*\"[^\"]*\"/\"port\": \"${port}\"/" "${file}" 2>/dev/null || true
+}
+
+sync_desktop_port() {
+  local port="${1:-}"
+  local appname="${TRIM_APPNAME:-lemon-music}"
+  local file
+  if [ -z "${port}" ] && declare -F read_saved_service_port >/dev/null 2>&1; then
+    port="$(read_saved_service_port)"
+  fi
+  [ -n "${port}" ] || port=7983
+
+  for file in \
+    "${TRIM_APPDEST}/ui/config" \
+    "/var/apps_ui/${appname}/config" \
+    "/var/apps/${appname}/target/ui/config"
+  do
+    patch_ui_config_port "${file}" "${port}"
+  done
+  echo "${port}"
 }
 
 ensure_desktop_entry() {
+  local port
   refresh_app_icons || true
+  port="$(sync_desktop_port)"
   ensure_ui_symlink
-  fix_desktop_db
+  sync_desktop_port "${port}" >/dev/null
+  fix_desktop_db "${port}"
 }
