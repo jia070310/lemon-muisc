@@ -21,6 +21,20 @@
         </button>
         <a :href="REPO_URL" target="_blank" rel="noopener" class="btn-ghost btn-sm">GitHub</a>
       </div>
+      <div class="hero-foot">
+        <ul class="feature-chips">
+          <li v-for="(line, i) in APP_FEATURES" :key="i">{{ line }}</li>
+        </ul>
+        <p v-if="!info?.updateAvailable" class="hero-meta">
+          仓库最新
+          <template v-if="loading">检测中…</template>
+          <template v-else-if="info?.latestVersion"><code>v{{ info.latestVersion }}</code></template>
+          <template v-else-if="info?.checkError">获取失败</template>
+          <template v-else>暂无发布</template>
+          <span v-if="info?.checkedAt" class="text-muted"> · {{ formatDate(info.checkedAt) }}</span>
+        </p>
+        <p v-if="info?.checkError && !info?.updateAvailable" class="text-muted meta-error">{{ info.checkError }}</p>
+      </div>
     </header>
 
     <!-- 更新：版本 + 说明 + 加速，一块说完 -->
@@ -109,30 +123,40 @@
       </div>
     </section>
 
-    <section v-else class="about-meta card">
-      <div class="meta-compact">
-        <span>仓库最新
-          <template v-if="loading">检测中…</template>
-          <template v-else-if="info?.latestVersion"><code>v{{ info.latestVersion }}</code></template>
-          <template v-else-if="info?.checkError">获取失败</template>
-          <template v-else>暂无发布</template>
-        </span>
-        <span v-if="info?.checkedAt" class="text-muted">检测于 {{ formatDate(info.checkedAt) }}</span>
-      </div>
-      <p v-if="info?.checkError" class="text-muted meta-error">{{ info.checkError }}</p>
-    </section>
-
     <div class="about-row">
-      <section class="about-card card about-brief">
-        <ul class="feature-list compact">
-          <li v-for="(line, i) in APP_FEATURES" :key="i">{{ line }}</li>
-        </ul>
+      <section class="about-card card community-card">
+        <h2 class="section-title">交流反馈</h2>
+        <div class="community-body">
+          <div class="community-info">
+            <p class="community-name">飞牛柠檬🍋muisc</p>
+            <p class="community-desc">加群反馈问题、交流用法，或获取安装与更新帮助。</p>
+            <div class="community-id-row">
+              <span class="community-id-label">群号</span>
+              <code class="community-id">{{ QQ_GROUP_ID }}</code>
+              <button type="button" class="btn-ghost btn-sm" @click="copyGroupId">
+                {{ groupIdCopied ? '已复制' : '复制' }}
+              </button>
+            </div>
+            <a
+              class="btn-primary btn-sm community-join"
+              :href="qqGroupJoinUrl"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              打开 QQ 加群
+            </a>
+          </div>
+          <figure class="community-qr">
+            <img :src="QQ_GROUP_QR_URL" alt="飞牛柠檬 QQ 群二维码" class="community-qr-img" />
+            <figcaption>扫码加入</figcaption>
+          </figure>
+        </div>
       </section>
 
       <section class="about-card card pwa-card">
-        <h2 class="section-title">添加到桌面</h2>
+        <h2 class="section-title">安装到桌面</h2>
         <p class="pwa-desc">
-          支持 PWA 安装到主屏幕。请用 <strong>HTTPS</strong> 访问；Chrome / Edge 可一键安装，鸿蒙 / Safari 请用浏览器菜单添加。
+          请用 <strong>HTTPS</strong> 访问。Chrome / Edge 可一键安装；鸿蒙 / Safari 用浏览器菜单添加到主屏幕。
         </p>
         <div v-if="pwa.standalone" class="pwa-status ok">当前已在桌面应用模式</div>
         <template v-else>
@@ -171,62 +195,69 @@
       </section>
     </div>
 
-    <section class="about-card card community-card">
-      <h2 class="section-title">互动群聊</h2>
-      <div class="community-body">
-        <div class="community-info">
-          <p class="community-name">飞牛柠檬🍋muisc</p>
-          <p class="community-desc">加入 QQ 群反馈问题、交流使用心得，或获取安装与更新帮助。</p>
-          <div class="community-id-row">
-            <span class="community-id-label">群号</span>
-            <code class="community-id">{{ QQ_GROUP_ID }}</code>
-            <button type="button" class="btn-ghost btn-sm" @click="copyGroupId">
-              {{ groupIdCopied ? '已复制' : '复制' }}
-            </button>
-          </div>
-          <a
-            class="btn-primary btn-sm community-join"
-            :href="qqGroupJoinUrl"
-            target="_blank"
-            rel="noopener"
-          >
-            打开 QQ 加群
-          </a>
-        </div>
-        <figure class="community-qr">
-          <img :src="QQ_GROUP_QR_URL" alt="飞牛柠檬 QQ 群二维码" class="community-qr-img" />
-          <figcaption>扫码加入</figcaption>
-        </figure>
+    <section class="about-card card ops-card">
+      <div class="ops-head">
+        <h2 class="section-title">排查与日志</h2>
+        <button
+          v-if="isAdminUser"
+          class="btn-ghost btn-sm"
+          type="button"
+          @click="loadServerHealth"
+          :disabled="healthLoading"
+        >
+          {{ healthLoading ? '刷新中…' : '刷新状态' }}
+        </button>
       </div>
-    </section>
+      <p class="log-path-desc">
+        主日志一般为 <code>app.log</code>，依赖安装看 <code>npm-install.log</code>。
+      </p>
+      <div class="log-path-row">
+        <span class="log-path-label">日志目录</span>
+        <code class="log-path-value" :title="info?.logDir || ''">{{ info?.logDir || (loading ? '检测中…' : '暂不可用') }}</code>
+        <button
+          type="button"
+          class="btn-ghost btn-sm"
+          :disabled="!info?.logDir"
+          @click="copyLogPath('dir')"
+        >
+          {{ logDirCopied ? '已复制' : '复制' }}
+        </button>
+      </div>
+      <div class="log-path-row">
+        <span class="log-path-label">主日志</span>
+        <code class="log-path-value" :title="info?.appLogPath || ''">{{ info?.appLogPath || (loading ? '检测中…' : '暂不可用') }}</code>
+        <button
+          type="button"
+          class="btn-ghost btn-sm"
+          :disabled="!info?.appLogPath"
+          @click="copyLogPath('app')"
+        >
+          {{ appLogCopied ? '已复制' : '复制' }}
+        </button>
+      </div>
+      <p v-if="info && info.logDirExists === false" class="log-path-hint">
+        当前目录尚未创建（本地开发或未写入过日志时常见）。飞牛上启用后一般会出现在 <code>/vol*/@appdata/lemon-music/log</code>。
+      </p>
 
-    <section v-if="isAdminUser" class="about-admin">
-      <h2 class="section-title about-admin-heading">服务状态</h2>
-
-      <div v-if="serverHealth" class="account-info card server-health-card">
-        <div class="health-head">
-          <span class="account-info-label">运行概览</span>
-          <button class="btn-ghost btn-sm" type="button" @click="loadServerHealth" :disabled="healthLoading">
-            {{ healthLoading ? '刷新中...' : '刷新' }}
-          </button>
-        </div>
-        <p class="account-info-text">
+      <template v-if="isAdminUser">
+        <div class="ops-divider" />
+        <p v-if="serverHealth" class="ops-health-line">
           已运行 {{ formatUptime(serverHealth.uptime) }} ·
-          内存占用约 {{ serverHealth.memory.rssMB }} MB（堆 {{ serverHealth.memory.heapUsedMB }}/{{ serverHealth.memory.heapTotalMB }} MB） ·
-          音乐库扫描 {{ serverHealth.scan.running ? '进行中' : '空闲' }} ·
-          下载任务 {{ serverHealth.downloads?.running || 0 }} 进行中 / {{ serverHealth.downloads?.pending || 0 }} 排队
+          内存约 {{ serverHealth.memory.rssMB }} MB ·
+          扫描 {{ serverHealth.scan.running ? '进行中' : '空闲' }} ·
+          下载 {{ serverHealth.downloads?.running || 0 }} 进行中 / {{ serverHealth.downloads?.pending || 0 }} 排队
         </p>
-
-        <div v-if="serverHealth.memoryGuard" class="memory-guard-panel">
-          <div class="memory-guard-title-row">
-            <span class="memory-guard-title">内存缓存守护</span>
+        <p v-else class="log-path-hint">无法获取服务状态，请确认服务已启动后点击刷新。</p>
+        <details v-if="serverHealth?.memoryGuard" class="memory-details">
+          <summary>
+            内存缓存守护
             <span
               class="memory-guard-badge"
               :class="serverHealth.memoryGuard.nearLimit ? 'warn' : 'ok'"
             >
               {{ serverHealth.memoryGuard.nearLimit ? '接近清理阈值' : '正常' }}
             </span>
-          </div>
+          </summary>
           <dl class="health-meta-list">
             <div class="health-meta-row">
               <dt>RSS / 软限制 / 硬限制</dt>
@@ -264,94 +295,38 @@
             </div>
           </dl>
           <p class="memory-guard-tip">
-            当 RSS 超过 {{ serverHealth.memoryGuard.rssSoftLimitMB }} MB 时，服务会自动裁剪试听/专辑/歌单缓存；超过 {{ serverHealth.memoryGuard.rssHardLimitMB }} MB 时清空相关缓存。
+            RSS 超过 {{ serverHealth.memoryGuard.rssSoftLimitMB }} MB 时会自动裁剪试听/专辑/歌单缓存；超过 {{ serverHealth.memoryGuard.rssHardLimitMB }} MB 时清空相关缓存。
           </p>
-        </div>
-      </div>
-      <div v-else class="account-info card server-health-card">
-        <p class="account-info-text text-muted">无法获取服务状态，请确认服务已启动后点击刷新。</p>
-        <button class="btn-ghost btn-sm" type="button" @click="loadServerHealth" :disabled="healthLoading">
-          {{ healthLoading ? '刷新中...' : '刷新' }}
-        </button>
-      </div>
+        </details>
+      </template>
+    </section>
 
-      <h2 class="section-title about-admin-heading">账号与恢复</h2>
-
-      <div class="account-info card">
-        <p class="account-info-text">
-          用户账号保存在配置目录内的数据库文件 <code>lx-music.db</code> 中。
-        </p>
-        <div class="account-path">
-          <span class="account-path-label">飞牛 NAS 默认路径</span>
-          <code class="account-path-value">/vol1/@appconf/lemon-music/config/</code>
-        </div>
-      </div>
-
+    <section v-if="isAdminUser" class="about-admin">
+      <h2 class="section-title about-admin-heading">账号恢复</h2>
+      <p class="account-info-text account-intro">
+        账号存在配置目录的 <code>lx-music.db</code>（飞牛默认 <code>/vol1/@appconf/lemon-music/config/</code>）。没有邮件找回，用下面命令或「设置 → 账号管理」重置。
+      </p>
       <div class="account-actions">
         <div class="account-action card">
           <h3 class="action-title">忘记密码</h3>
-          <p class="action-desc">没有邮件找回。请用管理员在「设置 → 账号管理」重置，或在服务器执行命令：</p>
-          <ol class="action-steps">
-            <li>管理员可在设置里为其他用户重置密码。</li>
-            <li>在服务器项目目录执行下方命令（将 <code>用户名</code>、<code>新密码</code> 替换为实际值）：</li>
-          </ol>
+          <p class="action-desc">管理员可在设置里为其他用户重置密码；也可在服务器项目目录执行：</p>
           <div class="cmd-wrap">
             <span class="cmd-label">终端命令</span>
             <pre class="cmd-block">npm run auth:reset-password -- 用户名 新密码</pre>
           </div>
         </div>
-
         <div class="account-action card">
           <h3 class="action-title">清空所有用户</h3>
-          <p class="action-desc">删除全部账号后，会重新生成默认管理员 <code>admin123</code> / <code>admin123</code>，登录后需立即改用户名和密码。</p>
-          <ul class="action-notes">
-            <li>音源、路径等应用设置会保留。</li>
-            <li>执行后用默认账号重新登录。</li>
-          </ul>
+          <p class="action-desc">删除全部账号后会重新生成默认管理员 <code>admin123</code> / <code>admin123</code>，登录后须立即改用户名和密码。音源、路径等设置会保留。</p>
           <div class="cmd-wrap">
             <span class="cmd-label">终端命令</span>
             <pre class="cmd-block">npm run auth:reset-users -- --yes</pre>
           </div>
         </div>
       </div>
-
       <p class="account-tip">
         <span class="account-tip-icon" aria-hidden="true">ℹ</span>
         执行命令后请刷新页面。若仍自动登录，请清除浏览器中本站的登录缓存。
-      </p>
-    </section>
-
-    <section class="about-card card log-path-card">
-      <h2 class="section-title">设备日志路径</h2>
-      <p class="log-path-desc">
-        排查安装 / 启用 / 运行问题时，可到本机查看日志。主日志一般为 <code>app.log</code>，依赖安装看 <code>npm-install.log</code>。
-      </p>
-      <div class="log-path-row">
-        <span class="log-path-label">日志目录</span>
-        <code class="log-path-value" :title="info?.logDir || ''">{{ info?.logDir || (loading ? '检测中…' : '暂不可用') }}</code>
-        <button
-          type="button"
-          class="btn-ghost btn-sm"
-          :disabled="!info?.logDir"
-          @click="copyLogPath('dir')"
-        >
-          {{ logDirCopied ? '已复制' : '复制' }}
-        </button>
-      </div>
-      <div class="log-path-row">
-        <span class="log-path-label">主日志</span>
-        <code class="log-path-value" :title="info?.appLogPath || ''">{{ info?.appLogPath || (loading ? '检测中…' : '暂不可用') }}</code>
-        <button
-          type="button"
-          class="btn-ghost btn-sm"
-          :disabled="!info?.appLogPath"
-          @click="copyLogPath('app')"
-        >
-          {{ appLogCopied ? '已复制' : '复制' }}
-        </button>
-      </div>
-      <p v-if="info && info.logDirExists === false" class="log-path-hint">
-        当前目录尚未创建（本地开发或未写入过日志时常见）。飞牛上启用后一般会出现在 <code>/vol*/@appdata/lemon-music/log</code>。
       </p>
     </section>
 
@@ -374,8 +349,7 @@ import { onWS } from '../ws.js'
 
 const QQ_GROUP_ID = '1126326017'
 const QQ_GROUP_QR_URL = '/qq-group-qr.png'
-/** 已安装 QQ 时尝试唤起加群页；否则请扫码或复制群号 */
-const qqGroupJoinUrl = `mqqapi://card/show_psw?src_type=internal&version=1&uin=${QQ_GROUP_ID}&card_type=group&source=qrcode`
+const qqGroupJoinUrl = `https://qm.qq.com/cgi-bin/qm/qr?_wv=1027&jump_from=webapi&noverify=0&group_code=${QQ_GROUP_ID}`
 
 const info = ref(null)
 const loading = ref(false)
@@ -697,10 +671,10 @@ function formatDate(iso) {
 
 /* ── 顶部横条品牌区 ── */
 .about-hero {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
+  gap: 12px 16px;
   padding: 16px 18px;
 }
 
@@ -787,9 +761,45 @@ function formatDate(iso) {
 
 .hero-actions {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  flex-wrap: wrap;
   gap: 8px;
   flex-shrink: 0;
+}
+
+.hero-foot {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-light);
+}
+
+.feature-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.feature-chips li {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+  background: var(--bg-input);
+  border: 1px solid var(--border-light);
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+}
+
+.hero-meta {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
 }
 
 /* ── 更新卡片 ── */
@@ -1056,6 +1066,7 @@ function formatDate(iso) {
 
 .pwa-card {
   padding: 14px 18px;
+  gap: 4px;
 }
 
 .pwa-install-btn {
@@ -1098,11 +1109,54 @@ function formatDate(iso) {
   margin-top: 4px;
 }
 
-.log-path-card {
+.log-path-card,
+.ops-card {
   padding: 16px 18px;
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+.ops-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.ops-head .section-title { margin: 0; }
+.ops-divider {
+  height: 1px;
+  background: var(--border-light);
+  margin: 4px 0;
+}
+.ops-health-line {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+.memory-details {
+  border-radius: 10px;
+  border: 1px solid var(--border-light);
+  background: var(--bg-input);
+  padding: 0 12px 10px;
+}
+.memory-details summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  user-select: none;
+}
+.memory-details summary::-webkit-details-marker { display: none; }
+.account-intro {
+  margin: 0 0 4px;
+  padding: 0 2px;
 }
 .log-path-desc {
   margin: 0;
@@ -1213,8 +1267,8 @@ function formatDate(iso) {
 }
 
 .community-qr-img {
-  width: 148px;
-  height: 148px;
+  width: 124px;
+  height: 124px;
   object-fit: contain;
   border-radius: 12px;
   background: #fff;
@@ -1605,8 +1659,11 @@ function formatDate(iso) {
   }
 
   .about-hero {
-    flex-direction: column;
-    align-items: stretch;
+    grid-template-columns: 1fr;
+  }
+
+  .hero-foot {
+    grid-column: auto;
   }
 
   .hero-actions {

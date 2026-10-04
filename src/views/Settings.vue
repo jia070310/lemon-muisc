@@ -15,166 +15,271 @@
 
       <!-- 账号管理 -->
       <div v-if="activeTab === 'account'" class="panel-body account-panel-body">
-        <div class="account-layout">
-          <section class="account-section card-inner">
-            <div class="block-label">我的资料</div>
-            <label class="field-inline account-field">
-              <span>用户名</span>
-              <input v-model="accountForm.username" placeholder="登录用的账号名" />
-            </label>
-            <div class="account-info-row">
-              <span class="account-info-key">角色</span>
-              <span class="account-info-val">{{ currentAuthUser?.role === 'admin' ? '管理员' : '普通用户' }}</span>
+        <section class="account-zone">
+          <header class="account-zone-head">
+            <div>
+              <h4 class="account-zone-title">本账号</h4>
+              <p class="account-zone-desc">资料、改密和备份都只作用于当前登录用户。</p>
             </div>
-            <label class="field-inline account-field">
-              <span>显示名称</span>
-              <input v-model="accountForm.displayName" placeholder="在界面中显示的名称" />
-            </label>
-            <div class="account-actions">
-              <button class="btn-primary btn-sm" type="button" :disabled="accountSaving" @click="saveAccountProfile">
-                {{ accountSaving ? '保存中…' : '保存资料' }}
-              </button>
-            </div>
-          </section>
-
-          <section class="account-section card-inner">
-            <div class="block-label">备份与迁移</div>
-            <p class="account-tip">导出当前账号的歌单、收藏、最近播放与个人界面设置；可在其他设备导入恢复。</p>
-            <div class="account-actions">
-              <button class="btn-primary btn-sm" type="button" :disabled="backupBusy" @click="exportBackup">
-                {{ backupBusy ? '处理中…' : '导出备份' }}
-              </button>
-              <button class="btn-ghost btn-sm" type="button" :disabled="backupBusy" @click="triggerImportBackup">导入备份</button>
-              <input ref="backupFileInput" type="file" accept="application/json,.json" style="display:none" @change="onImportBackupFile" />
-            </div>
-            <p class="account-tip">导入默认覆盖同账号对应数据；可改为合并歌单。</p>
-            <div class="setting-item account-backup-merge">
-              <div class="setting-item-info">
-                <div class="setting-item-label">合并导入歌单</div>
-                <div class="setting-item-desc">开启后按歌单 ID 合并，不整表覆盖</div>
-              </div>
-              <label class="toggle">
-                <input v-model="backupMerge" type="checkbox" />
-                <span class="slider"></span>
+            <span class="account-role-pill" :class="currentAuthUser?.role === 'admin' ? 'admin' : 'user'">
+              {{ currentAuthUser?.role === 'admin' ? '管理员' : '普通用户' }}
+            </span>
+          </header>
+          <div class="account-zone-grid">
+            <div class="account-block">
+              <div class="account-block-title">资料</div>
+              <label class="field-inline account-field">
+                <span>用户名</span>
+                <input v-model="accountForm.username" placeholder="登录用的账号名" />
               </label>
+              <label class="field-inline account-field">
+                <span>显示名称</span>
+                <input v-model="accountForm.displayName" placeholder="在界面中显示的名称" />
+              </label>
+              <div class="account-actions">
+                <button class="btn-primary btn-sm" type="button" :disabled="accountSaving" @click="saveAccountProfile">
+                  {{ accountSaving ? '保存中…' : '保存资料' }}
+                </button>
+              </div>
             </div>
-          </section>
+            <div class="account-block">
+              <div class="account-block-title">修改密码</div>
+              <label class="field-inline account-field">
+                <span>当前密码</span>
+                <input v-model="accountForm.oldPassword" type="password" autocomplete="current-password" />
+              </label>
+              <label class="field-inline account-field">
+                <span>新密码</span>
+                <input v-model="accountForm.newPassword" type="password" autocomplete="new-password" placeholder="至少 6 位" />
+              </label>
+              <label class="field-inline account-field">
+                <span>确认新密码</span>
+                <input v-model="accountForm.confirmPassword" type="password" autocomplete="new-password" />
+              </label>
+              <div class="account-actions">
+                <button class="btn-primary btn-sm" type="button" :disabled="passwordChanging" @click="changeAccountPassword">
+                  {{ passwordChanging ? '修改中…' : '修改密码' }}
+                </button>
+              </div>
+            </div>
+            <div class="account-block">
+              <div class="account-block-title">备份与迁移</div>
+              <p class="account-block-desc">导出或导入本账号的歌单、收藏、最近播放与个人界面设置。</p>
+              <div class="account-actions">
+                <button class="btn-primary btn-sm" type="button" :disabled="backupBusy" @click="exportBackup">
+                  {{ backupBusy ? '处理中…' : '导出备份' }}
+                </button>
+                <button class="btn-ghost btn-sm" type="button" :disabled="backupBusy" @click="triggerImportBackup">导入备份</button>
+                <input ref="backupFileInput" type="file" accept="application/json,.json" style="display:none" @change="onImportBackupFile" />
+              </div>
+              <div class="setting-item account-backup-merge">
+                <div class="setting-item-info">
+                  <div class="setting-item-label">合并导入歌单</div>
+                  <div class="setting-item-desc">默认覆盖同账号数据；开启后按歌单 ID 合并，不整表覆盖</div>
+                </div>
+                <label class="toggle">
+                  <input v-model="backupMerge" type="checkbox" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+            </div>
+          </div>
+        </section>
 
-          <section class="account-section card-inner">
-            <div class="block-label">修改密码</div>
-            <label class="field-inline account-field">
-              <span>当前密码</span>
-              <input v-model="accountForm.oldPassword" type="password" autocomplete="current-password" />
-            </label>
-            <label class="field-inline account-field">
-              <span>新密码</span>
-              <input v-model="accountForm.newPassword" type="password" autocomplete="new-password" placeholder="至少 6 位" />
-            </label>
-            <label class="field-inline account-field">
-              <span>确认新密码</span>
-              <input v-model="accountForm.confirmPassword" type="password" autocomplete="new-password" />
-            </label>
-            <div class="account-actions">
-              <button class="btn-primary btn-sm" type="button" :disabled="passwordChanging" @click="changeAccountPassword">
-                {{ passwordChanging ? '修改中…' : '修改密码' }}
-              </button>
+        <section v-if="isAdminUser" class="account-zone account-zone-admin">
+          <header class="account-zone-head">
+            <div>
+              <h4 class="account-zone-title">用户管理</h4>
+              <p class="account-zone-desc">创建普通账号或管理员，并指定路径权限：共用管理员路径、专属路径，或允许用户自行选择。</p>
             </div>
-          </section>
-        </div>
+          </header>
+          <div class="account-block">
+            <div class="account-block-title">新建用户</div>
+            <form class="user-create-form" @submit.prevent="createManagedUser">
+              <label class="field-inline">
+                <span>用户名</span>
+                <input v-model="newUser.username" required placeholder="新用户名" />
+              </label>
+              <label class="field-inline">
+                <span>显示名称</span>
+                <input v-model="newUser.displayName" placeholder="可选" />
+              </label>
+              <label class="field-inline">
+                <span>密码</span>
+                <input v-model="newUser.password" type="password" required placeholder="至少 6 位" />
+              </label>
+              <label class="field-inline">
+                <span>角色</span>
+                <AppSelect v-model="newUser.role" :options="userRoleOptions" min-width="120px" />
+              </label>
+              <label class="field-inline">
+                <span>路径权限</span>
+                <AppSelect v-model="newUser.downloadPathPolicy" :options="downloadPathPolicyOptions" min-width="200px" />
+              </label>
+              <button class="btn-primary btn-sm" type="submit" :disabled="creatingUser">
+                {{ creatingUser ? '创建中…' : '创建用户' }}
+              </button>
+            </form>
+          </div>
+          <div class="account-block">
+            <div class="account-block-title">用户列表</div>
+            <div v-if="managedUsers.length" class="user-table user-table-with-path">
+              <div class="user-table-head">
+                <span>用户</span>
+                <span>角色</span>
+                <span>路径权限</span>
+                <span>操作</span>
+              </div>
+              <div v-for="u in managedUsers" :key="u.id" class="user-table-row">
+                <template v-if="editingUserId === u.id">
+                  <div class="user-edit-fields">
+                    <label class="field-inline">
+                      <span>显示名称</span>
+                      <input v-model="editUserForm.displayName" />
+                    </label>
+                    <label class="field-inline">
+                      <span>角色</span>
+                      <AppSelect v-model="editUserForm.role" :options="userRoleOptions" min-width="120px" @change="onEditUserRoleChange" />
+                    </label>
+                    <label class="field-inline">
+                      <span>下载目录</span>
+                      <AppSelect v-model="editUserForm.downloadPathPolicy" :options="downloadPathPolicyOptions" min-width="180px" />
+                    </label>
+                  </div>
+                  <div class="user-row-actions">
+                    <button class="btn-sm btn-primary" type="button" :disabled="userUpdating" @click="saveManagedUserEdit">保存</button>
+                    <button class="btn-sm btn-ghost" type="button" @click="cancelManagedUserEdit">取消</button>
+                  </div>
+                </template>
+                <template v-else>
+                  <div class="user-cell-name">
+                    <div class="user-row-name">{{ u.displayName || u.username }}</div>
+                    <div class="user-row-meta">@{{ u.username }}</div>
+                  </div>
+                  <div class="user-cell-role">{{ u.role === 'admin' ? '管理员' : '普通用户' }}</div>
+                  <div class="user-cell-path-policy">{{ downloadPathPolicyLabel(u.downloadPathPolicy) }}</div>
+                  <div class="user-row-actions">
+                    <button class="btn-sm btn-ghost" type="button" @click="startManagedUserEdit(u)">编辑</button>
+                    <button class="btn-sm btn-ghost" type="button" @click="openResetPasswordModal(u)">重置密码</button>
+                    <button class="btn-sm btn-danger" type="button" :disabled="u.id === currentAuthUser?.id" @click="confirmDeleteUser(u)">删除</button>
+                  </div>
+                </template>
+              </div>
+            </div>
+            <div v-else class="empty-hint">暂无用户</div>
+          </div>
+        </section>
       </div>
       <div v-if="activeTab === 'paths'" class="panel-body paths-panel-body">
-        <div v-if="isAdminUser && needsPathSetup" class="setup-alert">
-          <strong>尚未配置数据目录</strong>
-          <p>请到飞牛「应用设置 → <b>访问权限</b>」用文件夹选择器添加音乐库与下载目录（会自动授权），保存后停用再启用应用。也可在「运行设置」填写绝对路径。</p>
-        </div>
-        <div v-else-if="isAdminUser" class="config-summary card-inner">
-          <div class="block-label">已配置的数据目录</div>
-          <div class="summary-row">
-            <span class="summary-key">音乐库</span>
-            <code class="summary-val">{{ mountInfo?.music?.host || '未设置' }}</code>
-          </div>
-          <div class="summary-row">
-            <span class="summary-key">下载</span>
-            <code class="summary-val">{{ mountInfo?.downloads?.host || '未设置' }}</code>
-          </div>
-          <div class="summary-row" v-if="mountProbeText">
-            <span class="summary-key">探测</span>
-            <span class="summary-val">{{ mountProbeText }}</span>
-          </div>
-          <p class="summary-tip">修改路径：飞牛应用设置 → 运行设置（或访问权限授权两个文件夹）→ 保存后停用再启用。</p>
-        </div>
-
-        <div v-if="isAdminUser" class="config-summary card-inner ffmpeg-panel">
-          <div class="block-label">ffmpeg（APE 试听 / 情绪分析，按需）</div>
-          <ol class="ffmpeg-steps">
-            <li class="done">应用安装时不下载 ffmpeg</li>
-            <li :class="{ done: ffmpegStatus.source === 'system' || (ffmpegStatus.enabled && ffmpegStatus.source === 'system') }">
-              优先用系统自带（有则相关功能直接可用）
-            </li>
-            <li :class="{ done: ffmpegStatus.source === 'managed', active: ffmpegInstall.running && ffmpegInstall.phase === 'download' }">
-              系统没有、又要用到相关功能时，再点下方准备便携版
-            </li>
-          </ol>
-          <div class="summary-row">
-            <span class="summary-key">状态</span>
-            <span class="summary-val" :class="ffmpegStatusClass">{{ ffmpegStatusLabel }}</span>
-          </div>
-          <div v-if="ffmpegStatus.path" class="summary-row">
-            <span class="summary-key">路径</span>
-            <code class="summary-val">{{ ffmpegStatus.path }}</code>
-          </div>
-          <div v-if="ffmpegStatus.source && ffmpegStatus.source !== 'none'" class="summary-row">
-            <span class="summary-key">来源</span>
-            <span class="summary-val">{{ ffmpegStatus.source === 'system' ? '系统自带（优先）' : '应用便携版（回退）' }}</span>
-          </div>
-          <div v-if="ffmpegInstall.running || ffmpegInstall.phase === 'error'" class="ffmpeg-progress-block">
-            <div class="ffmpeg-progress-bar">
-              <div class="ffmpeg-progress-fill" :style="{ width: `${ffmpegInstall.progress || 0}%` }" />
+        <div v-if="isAdminUser" class="paths-top-row">
+          <section class="paths-section paths-section-block">
+            <header class="paths-zone-head">
+              <div>
+                <h4 class="paths-section-title">数据目录</h4>
+                <p class="paths-zone-desc">应用实际读写的 NAS 挂载点。改路径请到飞牛应用设置保存后，停用再启用。</p>
+              </div>
+            </header>
+            <div v-if="needsPathSetup" class="setup-alert">
+              <strong>尚未配置数据目录</strong>
+              <p>请到飞牛「应用设置 → <b>访问权限</b>」用文件夹选择器添加音乐库与下载目录（会自动授权）。也可在「运行设置」填写绝对路径。</p>
             </div>
-            <p class="ffmpeg-progress-text">{{ ffmpegInstall.message || '处理中…' }}</p>
-          </div>
-          <div class="ffmpeg-actions">
-            <button
-              type="button"
-              class="btn-primary btn-sm"
-              :disabled="ffmpegBusy || ffmpegInstall.running"
-              @click="installFfmpeg"
-            >
-              {{
-                ffmpegInstall.running || ffmpegBusy === 'install'
-                  ? '准备中…'
-                  : ffmpegStatus.enabled
-                    ? '重新检测 / 准备'
-                    : '检测并准备 ffmpeg'
-              }}
-            </button>
-            <button
-              type="button"
-              class="btn-ghost btn-sm"
-              :disabled="ffmpegBusy || ffmpegInstall.running"
-              @click="detectFfmpeg"
-            >
-              {{ ffmpegBusy === 'detect' ? '检测中…' : '仅检测' }}
-            </button>
-            <button
-              v-if="ffmpegStatus.enabled && !ffmpegStatus.settingDisabled"
-              type="button"
-              class="btn-ghost btn-sm"
-              :disabled="ffmpegBusy || ffmpegInstall.running"
-              @click="disableFfmpeg"
-            >
-              {{ ffmpegBusy === 'disable' ? '停用中…' : '停用相关功能' }}
-            </button>
-          </div>
-          <p class="summary-tip">
-            不用 APE / 情绪分析可忽略本项。装包不会下载 ffmpeg；有系统自带时一般无需操作。
-          </p>
+            <div v-else class="paths-inner">
+              <div class="summary-row">
+                <span class="summary-key">音乐库</span>
+                <code class="summary-val">{{ mountInfo?.music?.host || '未设置' }}</code>
+              </div>
+              <div class="summary-row">
+                <span class="summary-key">下载</span>
+                <code class="summary-val">{{ mountInfo?.downloads?.host || '未设置' }}</code>
+              </div>
+              <div class="summary-row" v-if="mountProbeText">
+                <span class="summary-key">探测</span>
+                <span class="summary-val">{{ mountProbeText }}</span>
+              </div>
+              <p class="summary-tip">飞牛应用设置 → 运行设置（或访问权限授权两个文件夹）→ 保存后停用再启用。</p>
+            </div>
+          </section>
+
+          <section class="paths-section paths-section-block">
+            <header class="paths-zone-head">
+              <div>
+                <h4 class="paths-section-title">ffmpeg</h4>
+                <p class="paths-zone-desc">APE 试听 / 情绪分析按需使用。装包不会下载；有系统自带时一般无需操作。</p>
+              </div>
+            </header>
+            <div class="paths-inner">
+              <ol class="ffmpeg-steps">
+                <li class="done">应用安装时不下载 ffmpeg</li>
+                <li :class="{ done: ffmpegStatus.source === 'system' || (ffmpegStatus.enabled && ffmpegStatus.source === 'system') }">
+                  优先用系统自带（有则相关功能直接可用）
+                </li>
+                <li :class="{ done: ffmpegStatus.source === 'managed', active: ffmpegInstall.running && ffmpegInstall.phase === 'download' }">
+                  系统没有、又要用到相关功能时，再点下方准备便携版
+                </li>
+              </ol>
+              <div class="summary-row">
+                <span class="summary-key">状态</span>
+                <span class="summary-val" :class="ffmpegStatusClass">{{ ffmpegStatusLabel }}</span>
+              </div>
+              <div v-if="ffmpegStatus.path" class="summary-row">
+                <span class="summary-key">路径</span>
+                <code class="summary-val">{{ ffmpegStatus.path }}</code>
+              </div>
+              <div v-if="ffmpegStatus.source && ffmpegStatus.source !== 'none'" class="summary-row">
+                <span class="summary-key">来源</span>
+                <span class="summary-val">{{ ffmpegStatus.source === 'system' ? '系统自带（优先）' : '应用便携版（回退）' }}</span>
+              </div>
+              <div v-if="ffmpegInstall.running || ffmpegInstall.phase === 'error'" class="ffmpeg-progress-block">
+                <div class="ffmpeg-progress-bar">
+                  <div class="ffmpeg-progress-fill" :style="{ width: `${ffmpegInstall.progress || 0}%` }" />
+                </div>
+                <p class="ffmpeg-progress-text">{{ ffmpegInstall.message || '处理中…' }}</p>
+              </div>
+              <div class="ffmpeg-actions">
+                <button
+                  type="button"
+                  class="btn-primary btn-sm"
+                  :disabled="ffmpegBusy || ffmpegInstall.running"
+                  @click="installFfmpeg"
+                >
+                  {{
+                    ffmpegInstall.running || ffmpegBusy === 'install'
+                      ? '准备中…'
+                      : ffmpegStatus.enabled
+                        ? '重新检测 / 准备'
+                        : '检测并准备 ffmpeg'
+                  }}
+                </button>
+                <button
+                  type="button"
+                  class="btn-ghost btn-sm"
+                  :disabled="ffmpegBusy || ffmpegInstall.running"
+                  @click="detectFfmpeg"
+                >
+                  {{ ffmpegBusy === 'detect' ? '检测中…' : '仅检测' }}
+                </button>
+                <button
+                  v-if="ffmpegStatus.enabled && !ffmpegStatus.settingDisabled"
+                  type="button"
+                  class="btn-ghost btn-sm"
+                  :disabled="ffmpegBusy || ffmpegInstall.running"
+                  @click="disableFfmpeg"
+                >
+                  {{ ffmpegBusy === 'disable' ? '停用中…' : '停用相关功能' }}
+                </button>
+              </div>
+            </div>
+          </section>
         </div>
 
         <div class="paths-layout">
           <section class="paths-section paths-section-block">
-            <h4 class="paths-section-title">路径权限</h4>
-            <p class="source-tip download-path-tip">{{ downloadPathPolicyTip }}</p>
+            <header class="paths-zone-head">
+              <div>
+                <h4 class="paths-section-title">路径权限</h4>
+                <p class="paths-zone-desc">{{ downloadPathPolicyTip }}</p>
+              </div>
+            </header>
 
             <div v-if="canChooseDownloadPath" class="setting-item setting-item-flat">
               <div class="setting-item-info">
@@ -202,12 +307,16 @@
           </section>
 
           <section v-if="isAdminUser" class="paths-section paths-section-block">
-            <h4 class="paths-section-title">音乐库（管理员共用）</h4>
+            <header class="paths-zone-head">
+              <div>
+                <h4 class="paths-section-title">音乐库（管理员共用）</h4>
+                <p class="paths-zone-desc">供选择「管理员路径」的用户使用。请填 NAS 绝对路径（如 <code>/vol1/1000/Music</code>）。</p>
+              </div>
+            </header>
             <div class="setting-item setting-item-flat">
               <div class="setting-item-info">
                 <div class="setting-item-label">共用音乐库路径</div>
                 <div class="setting-item-desc">
-                  供选择「管理员路径」的用户使用。请使用 NAS 绝对路径（如 <code>/vol1/1000/Music</code>）。
                   {{ fnosAvailable ? '点击「选择文件夹」会调用系统文件管理器。' : '点击「添加路径」输入目录。' }}
                 </div>
               </div>
@@ -219,7 +328,8 @@
               </div>
             </div>
 
-            <div v-if="musicPaths.length" class="paths-library-panel card-inner">
+            <div v-if="musicPaths.length" class="paths-library-panel paths-inner">
+              <div class="paths-inner-title">扫描与热更新</div>
               <div class="setting-item setting-item-path-row">
                 <div class="setting-item-info">
                   <div class="setting-item-label">音乐库扫描概况</div>
@@ -329,8 +439,8 @@
               </div>
             </div>
 
-            <div v-if="musicPaths.length" class="path-block scan-dir-block" :class="{ 'has-auto-col': scanAutoMode === 'selected' }">
-              <div class="block-label">扫描目录</div>
+            <div v-if="musicPaths.length" class="paths-inner path-block scan-dir-block" :class="{ 'has-auto-col': scanAutoMode === 'selected' }">
+              <div class="paths-inner-title">扫描目录</div>
               <p v-if="scanAutoMode === 'selected'" class="path-block-hint">
                 展开目录树后勾选要扫描的文件夹。「手动」勾选后立即扫描；「自动」勾选后，进入音乐库与后台监测会刷新该文件夹。
               </p>
@@ -418,8 +528,12 @@
             v-if="showPersonalMusicSection"
             class="paths-section paths-section-block"
           >
-            <h4 class="paths-section-title">{{ isAdminUser ? '我的专属音乐库' : '音乐库（专属）' }}</h4>
-            <p class="source-tip">当前账号使用专属路径：在此配置仅自己可见的音乐库目录。</p>
+            <header class="paths-zone-head">
+              <div>
+                <h4 class="paths-section-title">{{ isAdminUser ? '我的专属音乐库' : '音乐库（专属）' }}</h4>
+                <p class="paths-zone-desc">当前账号使用专属路径：在此配置仅自己可见的音乐库目录。</p>
+              </div>
+            </header>
             <div class="setting-item setting-item-flat">
               <div class="setting-item-info">
                 <div class="setting-item-label">专属音乐库路径</div>
@@ -434,7 +548,7 @@
                 <button v-else class="btn-primary btn-sm" @click="promptAddPersonalPath">添加路径</button>
               </div>
             </div>
-            <div v-if="personalMusicPaths.length" class="path-list card-inner">
+            <div v-if="personalMusicPaths.length" class="path-list paths-inner">
               <div v-for="p in personalMusicPaths" :key="p" class="path-row">
                 <code class="path-code" :title="p">{{ p }}</code>
                 <div class="path-col-actions">
@@ -450,9 +564,13 @@
             v-if="!isAdminUser && downloadPathMode === 'shared'"
             class="paths-section paths-section-block"
           >
-            <h4 class="paths-section-title">音乐库（管理员）</h4>
-            <p class="source-tip">当前使用管理员配置的共用音乐库（只读）。</p>
-            <div v-if="sharedMusicPaths.length" class="path-list card-inner">
+            <header class="paths-zone-head">
+              <div>
+                <h4 class="paths-section-title">音乐库（管理员）</h4>
+                <p class="paths-zone-desc">当前使用管理员配置的共用音乐库（只读）。</p>
+              </div>
+            </header>
+            <div v-if="sharedMusicPaths.length" class="path-list paths-inner">
               <div v-for="p in sharedMusicPaths" :key="p" class="path-row">
                 <code class="path-code" :title="p">{{ p }}</code>
               </div>
@@ -461,7 +579,12 @@
           </section>
 
           <section class="paths-section paths-section-block">
-            <h4 class="paths-section-title">下载保存</h4>
+            <header class="paths-zone-head">
+              <div>
+                <h4 class="paths-section-title">下载保存</h4>
+                <p class="paths-zone-desc">下载文件写入的目录。当前生效路径由上方路径权限决定。</p>
+              </div>
+            </header>
 
             <div class="setting-item setting-item-flat">
               <div class="setting-item-info">
@@ -1061,82 +1184,6 @@
             </div>
           </div>
         </template>
-      </div>
-
-      <!-- 用户管理（账号管理内） -->
-      <div v-if="activeTab === 'account' && isAdminUser" class="panel-body users-panel-body">
-        <div class="settings-group-title">用户管理</div>
-        <p class="source-tip">创建普通账号或管理员。可为每个用户指定路径权限：共用管理员路径、专属路径，或允许用户自行选择。</p>
-        <form class="user-create-form" @submit.prevent="createManagedUser">
-          <label class="field-inline">
-            <span>用户名</span>
-            <input v-model="newUser.username" required placeholder="新用户名" />
-          </label>
-          <label class="field-inline">
-            <span>显示名称</span>
-            <input v-model="newUser.displayName" placeholder="可选" />
-          </label>
-          <label class="field-inline">
-            <span>密码</span>
-            <input v-model="newUser.password" type="password" required placeholder="至少 6 位" />
-          </label>
-          <label class="field-inline">
-            <span>角色</span>
-            <AppSelect v-model="newUser.role" :options="userRoleOptions" min-width="120px" />
-          </label>
-          <label class="field-inline">
-            <span>路径权限</span>
-            <AppSelect v-model="newUser.downloadPathPolicy" :options="downloadPathPolicyOptions" min-width="200px" />
-          </label>
-          <button class="btn-primary btn-sm" type="submit" :disabled="creatingUser">
-            {{ creatingUser ? '创建中…' : '创建用户' }}
-          </button>
-        </form>
-
-        <div v-if="managedUsers.length" class="user-table user-table-with-path">
-          <div class="user-table-head">
-            <span>用户</span>
-            <span>角色</span>
-            <span>路径权限</span>
-            <span>操作</span>
-          </div>
-          <div v-for="u in managedUsers" :key="u.id" class="user-table-row">
-            <template v-if="editingUserId === u.id">
-              <div class="user-edit-fields">
-                <label class="field-inline">
-                  <span>显示名称</span>
-                  <input v-model="editUserForm.displayName" />
-                </label>
-                <label class="field-inline">
-                  <span>角色</span>
-                  <AppSelect v-model="editUserForm.role" :options="userRoleOptions" min-width="120px" />
-                </label>
-                <label class="field-inline">
-                  <span>下载目录</span>
-                  <AppSelect v-model="editUserForm.downloadPathPolicy" :options="downloadPathPolicyOptions" min-width="180px" />
-                </label>
-              </div>
-              <div class="user-row-actions">
-                <button class="btn-sm btn-primary" type="button" :disabled="userUpdating" @click="saveManagedUserEdit">保存</button>
-                <button class="btn-sm btn-ghost" type="button" @click="cancelManagedUserEdit">取消</button>
-              </div>
-            </template>
-            <template v-else>
-              <div class="user-cell-name">
-                <div class="user-row-name">{{ u.displayName || u.username }}</div>
-                <div class="user-row-meta">@{{ u.username }}</div>
-              </div>
-              <div class="user-cell-role">{{ u.role === 'admin' ? '管理员' : '普通用户' }}</div>
-              <div class="user-cell-path-policy">{{ downloadPathPolicyLabel(u.downloadPathPolicy) }}</div>
-              <div class="user-row-actions">
-                <button class="btn-sm btn-ghost" type="button" @click="startManagedUserEdit(u)">编辑</button>
-                <button class="btn-sm btn-ghost" type="button" @click="openResetPasswordModal(u)">重置密码</button>
-                <button class="btn-sm btn-danger" type="button" :disabled="u.id === currentAuthUser?.id" @click="confirmDeleteUser(u)">删除</button>
-              </div>
-            </template>
-          </div>
-        </div>
-        <div v-else class="empty-hint">暂无用户</div>
       </div>
     </main>
 
@@ -1888,8 +1935,31 @@ function cancelManagedUserEdit() {
   editingUserId.value = null
 }
 
+const LAST_ADMIN_ROLE_TIP = '不能修改为普通用户，已经没有其他管理员账号'
+
+function adminUserCount() {
+  return managedUsers.value.filter(u => u.role === 'admin').length
+}
+
+function wouldLeaveNoAdmin(userId, nextRole) {
+  const user = managedUsers.value.find(u => u.id === userId)
+  if (!user) return false
+  return user.role === 'admin' && nextRole !== 'admin' && adminUserCount() <= 1
+}
+
+function onEditUserRoleChange(role) {
+  if (!wouldLeaveNoAdmin(editingUserId.value, role)) return
+  editUserForm.role = 'admin'
+  showToast(LAST_ADMIN_ROLE_TIP, 'error')
+}
+
 async function saveManagedUserEdit() {
   if (!editingUserId.value) return
+  if (wouldLeaveNoAdmin(editingUserId.value, editUserForm.role)) {
+    editUserForm.role = 'admin'
+    showToast(LAST_ADMIN_ROLE_TIP, 'error')
+    return
+  }
   userUpdating.value = true
   try {
     const res = await api.auth.updateUser(editingUserId.value, {
@@ -1913,6 +1983,10 @@ async function saveManagedUserEdit() {
 }
 
 function confirmDeleteUser(user) {
+  if (user?.role === 'admin' && adminUserCount() <= 1) {
+    showToast('不能删除，已经没有其他管理员账号', 'error')
+    return
+  }
   deleteConfirmUser.value = user
 }
 
@@ -3043,11 +3117,17 @@ function showToast(text, type = 'info') {
 .panel-title { font-size: 18px; font-weight: 600; margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--border-light); }
 .panel-body { display: flex; flex-direction: column; gap: 16px; }
 
-.paths-panel-body { gap: 20px; }
+.paths-panel-body { gap: 18px; }
+.paths-top-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  align-items: stretch;
+}
 .paths-layout {
   display: flex;
   flex-direction: column;
-  gap: 28px;
+  gap: 18px;
 }
 .paths-section {
   min-width: 0;
@@ -3061,20 +3141,48 @@ function showToast(text, type = 'info') {
   background: var(--bg-elevated);
   border: 1px solid var(--border-light);
 }
+.paths-zone-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
 .paths-section-title {
   margin: 0;
   font-size: 15px;
   font-weight: 600;
   color: var(--text);
 }
+.paths-zone-desc {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+.paths-zone-desc code {
+  font-size: 11px;
+}
+.paths-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-width: 0;
+  padding: 14px;
+  border-radius: 10px;
+  background: var(--bg-card, var(--bg));
+  border: 1px solid var(--border-light);
+}
+.paths-inner-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 4px;
+}
 .paths-library-panel {
   display: flex;
   flex-direction: column;
   gap: 0;
-  padding: 4px 14px;
-  border-radius: 10px;
-  background: var(--bg-card, var(--bg));
-  border: 1px solid var(--border-light);
+  padding: 10px 14px 4px;
 }
 .setting-item-path-row {
   align-items: flex-start;
@@ -3123,7 +3231,7 @@ function showToast(text, type = 'info') {
 }
 
 .setup-alert {
-  margin-bottom: 16px;
+  margin: 0;
   padding: 12px 14px;
   border-radius: 10px;
   background: rgba(255, 193, 7, 0.1);
@@ -3149,6 +3257,19 @@ function showToast(text, type = 'info') {
   align-items: baseline;
   margin-top: 6px;
   flex-wrap: wrap;
+}
+.paths-inner > .summary-row:first-child {
+  margin-top: 0;
+}
+.paths-inner .ffmpeg-steps {
+  margin-top: 0;
+}
+.path-list.paths-inner {
+  gap: 6px;
+  padding: 10px;
+}
+.path-list.paths-inner .path-row {
+  margin-bottom: 0;
 }
 .summary-key {
   color: var(--text-muted);
@@ -3750,6 +3871,9 @@ function showToast(text, type = 'info') {
 @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 
 @media (max-width: 1100px) {
+  .paths-top-row {
+    grid-template-columns: 1fr;
+  }
   .setting-item-path-row {
     flex-direction: column;
     align-items: stretch;
@@ -3833,7 +3957,7 @@ function showToast(text, type = 'info') {
   flex-wrap: wrap;
   gap: 10px;
   align-items: flex-end;
-  margin-bottom: 20px;
+  margin: 0;
 }
 .field-inline {
   display: flex;
@@ -3876,26 +4000,92 @@ function showToast(text, type = 'info') {
   font-size: 16px;
 }
 
-.account-panel-body { padding-bottom: 8px; }
-.account-layout {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 16px;
-  align-items: start;
-}
-.account-section { display: flex; flex-direction: column; gap: 12px; }
-.account-info-row {
+.account-panel-body {
   display: flex;
-  align-items: center;
-  gap: 12px;
-  font-size: 13px;
+  flex-direction: column;
+  gap: 18px;
+  padding-bottom: 8px;
 }
-.account-info-key { color: var(--text-muted); min-width: 64px; }
-.account-info-val { color: var(--text); }
+.account-zone {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  padding: 16px 18px;
+  border-radius: 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+}
+.account-zone-admin {
+  border-color: color-mix(in srgb, var(--accent, #3d7eff) 28%, var(--border-light));
+}
+.account-zone-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.account-zone-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+.account-zone-desc {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+.account-role-pill {
+  flex-shrink: 0;
+  font-size: 12px;
+  line-height: 1;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-light);
+  color: var(--text-secondary);
+  background: var(--bg-card, var(--bg));
+}
+.account-role-pill.admin {
+  color: var(--accent, #3d7eff);
+  border-color: color-mix(in srgb, var(--accent, #3d7eff) 35%, var(--border-light));
+  background: color-mix(in srgb, var(--accent, #3d7eff) 10%, transparent);
+}
+.account-zone-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.account-block {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+  border-radius: 10px;
+  background: var(--bg-card, var(--bg));
+  border: 1px solid var(--border-light);
+}
+.account-block-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.account-block-desc {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+.account-backup-merge {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+}
 .account-field input { width: 100%; min-width: 0; }
 .account-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.account-tip { font-size: 12px; color: var(--text-muted); margin: 0; line-height: 1.5; }
-.users-panel-body { padding-bottom: 8px; }
 .user-table { display: flex; flex-direction: column; gap: 8px; }
 .user-table-head,
 .user-table-row {
@@ -3959,7 +4149,19 @@ function showToast(text, type = 'info') {
   gap: 8px;
   margin-top: 16px;
 }
+@media (max-width: 1100px) {
+  .account-zone-grid {
+    grid-template-columns: 1fr;
+  }
+}
 @media (max-width: 768px) {
+  .account-zone-grid {
+    grid-template-columns: 1fr;
+  }
+  .account-zone-head {
+    flex-direction: column;
+    align-items: flex-start;
+  }
   .user-table-head { display: none; }
   .user-table-row {
     grid-template-columns: 1fr;

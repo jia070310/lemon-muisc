@@ -318,7 +318,7 @@ export function updateUserByAdmin(userId, { displayName, email, role } = {}) {
     const nextRole = role === 'admin' ? 'admin' : 'user'
     if (user.role === 'admin' && nextRole !== 'admin') {
       const adminCount = db.prepare("SELECT COUNT(*) AS c FROM users WHERE role = 'admin'").get()?.c || 0
-      if (adminCount <= 1) throw new Error('不能取消最后一个管理员')
+      if (adminCount <= 1) throw new Error('不能修改为普通用户，已经没有其他管理员账号')
     }
     db.prepare('UPDATE users SET role = ?, updated_at = ? WHERE id = ?')
       .run(nextRole, Math.floor(Date.now() / 1000), userId)
