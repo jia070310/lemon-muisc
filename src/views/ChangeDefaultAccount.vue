@@ -3,27 +3,31 @@
     <div class="login-card card">
       <div class="login-brand">
         <img :src="APP_ICON_URL" alt="柠檬音乐" class="login-logo" />
-        <h1>登录柠檬音乐</h1>
-        <p class="login-sub">{{ defaultHint }}</p>
+        <h1>修改默认管理员</h1>
+        <p class="login-sub">当前仍是安装默认账号，请立即修改用户名和密码后再使用。</p>
       </div>
 
-      <form class="login-form" @submit.prevent="submitLogin">
+      <form class="login-form" @submit.prevent="submit">
         <label class="field">
-          <span>用户名</span>
-          <input v-model="username" type="text" autocomplete="username" :placeholder="defaultAdminPending ? 'admin123' : '用户名'" required />
+          <span>新用户名</span>
+          <input v-model="username" type="text" autocomplete="username" required />
         </label>
         <label class="field">
-          <span>密码</span>
-          <input v-model="password" type="password" autocomplete="current-password" placeholder="请输入密码" required />
+          <span>显示名称</span>
+          <input v-model="displayName" type="text" autocomplete="name" placeholder="管理员" />
         </label>
-        <label class="remember">
-          <input v-model="remember" type="checkbox" />
-          <span>保持登录（30 天）</span>
+        <label class="field">
+          <span>新密码</span>
+          <input v-model="password" type="password" autocomplete="new-password" placeholder="至少 6 位，勿用默认密码" required />
         </label>
-        <p class="field-hint remember-hint">勾选后会写入浏览器 Cookie，飞牛手机端关闭应用后再打开也可保持登录。</p>
+        <label class="field">
+          <span>确认新密码</span>
+          <input v-model="confirmPassword" type="password" autocomplete="new-password" required />
+        </label>
+        <p class="field-hint">用户名支持字母、数字、下划线和中文。修改后请用新账号登录。</p>
         <p v-if="error" class="login-error">{{ error }}</p>
         <button class="btn-primary login-btn" type="submit" :disabled="loading">
-          {{ loading ? '登录中…' : '登录' }}
+          {{ loading ? '保存中…' : '保存并进入应用' }}
         </button>
       </form>
     </div>
@@ -31,49 +35,56 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { login } from '../utils/auth.js'
 import { api } from '../api.js'
+import { currentUser, patchLocalUser, logout } from '../utils/auth.js'
 import { APP_ICON_URL } from '../utils/appIcon.js'
 
 const route = useRoute()
 const router = useRouter()
 
-const username = ref('')
+const username = ref(currentUser.value?.username || 'admin123')
+const displayName = ref(currentUser.value?.displayName || '管理员')
 const password = ref('')
-const remember = ref(true)
+const confirmPassword = ref('')
 const loading = ref(false)
 const error = ref('')
-const defaultAdminPending = ref(false)
 
-const defaultHint = computed(() => (
-  defaultAdminPending.value
-    ? '首次安装默认账号密码均为 admin123，登录后请立即修改。'
-    : '请输入用户名和密码。'
-))
-
-onMounted(async () => {
-  try {
-    const data = await api.auth.status()
-    defaultAdminPending.value = Boolean(data?.defaultAdminPending)
-    if (defaultAdminPending.value && !username.value) username.value = 'admin123'
-  } catch {}
-})
-
-async function submitLogin() {
+async function submit() {
   error.value = ''
+  if (username.value.trim() === 'admin123') {
+    error.value = '请修改默认用户名'
+    return
+  }
+  if (password.value.length < 6) {
+    error.value = '新密码至少 6 位'
+    return
+  }
+  if (password.value === 'admin123') {
+    error.value = '请设置新密码，不要继续使用默认密码'
+    return
+  }
+  if (password.value !== confirmPassword.value) {
+    error.value = '两次输入的密码不一致'
+    return
+  }
   loading.value = true
   try {
-    const data = await login(username.value, password.value, remember.value)
+    const res = await api.auth.completeDefaultAccount({
+      username: username.value.trim(),
+      displayName: displayName.value.trim() || username.value.trim(),
+      password: password.value,
+    })
+    if (res.user) patchLocalUser(res.user)
     const redirect = String(route.query.redirect || '').trim()
-    if (data?.user?.mustChangePassword) {
-      router.replace({ name: 'ChangeDefaultAccount', query: redirect ? { redirect } : {} })
-      return
-    }
     router.replace(redirect && redirect.startsWith('/') ? redirect : '/search')
   } catch (e) {
-    error.value = e.message || '登录失败'
+    error.value = e.message || '保存失败'
+    if (String(e.message || '').includes('未登录')) {
+      await logout()
+      router.replace({ name: 'Login' })
+    }
   } finally {
     loading.value = false
   }
@@ -97,13 +108,11 @@ async function submitLogin() {
   object-fit: cover;
 }
 .login-brand h1 { margin: 0 0 8px; font-size: clamp(20px, 4.5vw, 24px); }
-.login-sub { margin: 0 auto; max-width: 40ch; color: var(--text-secondary); font-size: 14px; line-height: 1.55; }
+.login-sub { margin: 0 auto; max-width: 42ch; color: var(--text-secondary); font-size: 14px; line-height: 1.55; }
 .login-form { display: flex; flex-direction: column; gap: 14px; }
 .field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--text-secondary); }
 .field input { width: 100%; box-sizing: border-box; padding: 11px 12px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--bg-input); color: var(--text); font-size: 15px; }
 .field-hint { margin: -4px 0 0; font-size: 12px; line-height: 1.45; color: var(--text-muted); }
-.remember-hint { margin-top: 2px; }
-.remember { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-secondary); }
 .login-error { margin: 0; color: var(--error); font-size: 13px; white-space: pre-line; }
 .login-btn { width: 100%; min-height: 44px; font-size: 15px; }
 @media (max-width: 768px) {

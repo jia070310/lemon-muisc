@@ -163,6 +163,9 @@ function migrateSchema(db) {
   if (!userCols.some(c => c.name === 'email_verified')) {
     db.exec('ALTER TABLE users ADD COLUMN email_verified INTEGER DEFAULT 0')
   }
+  if (!userCols.some(c => c.name === 'must_change_password')) {
+    db.exec('ALTER TABLE users ADD COLUMN must_change_password INTEGER DEFAULT 0')
+  }
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS auth_tokens (

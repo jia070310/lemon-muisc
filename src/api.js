@@ -16,10 +16,10 @@ async function redirectAfterUnauthorized() {
   try {
     const res = await fetch(`${BASE}/auth/status`)
     const data = await res.json().catch(() => ({}))
-    if (data.setupRequired) target = '/setup'
+    if (data.setupRequired) target = '/login'
   } catch {}
   const path = location.pathname
-  if (!path.startsWith('/login') && !path.startsWith('/setup')) {
+  if (!path.startsWith('/login') && !path.startsWith('/change-account')) {
     location.href = `${target}?redirect=${encodeURIComponent(path + location.search)}`
   }
 }
@@ -578,7 +578,12 @@ export const api = {
   auth: {
     status: () => fetch('/api/auth/status').then(r => r.json()),
     me: () => request('/auth/me'),
-    updateProfile: (displayName) => request('/auth/profile', { method: 'PATCH', body: { displayName } }),
+    updateProfile: (payload) => request('/auth/profile', {
+      method: 'PATCH',
+      body: typeof payload === 'string' ? { displayName: payload } : payload,
+    }),
+    completeDefaultAccount: (body) =>
+      request('/auth/complete-default-account', { method: 'POST', body }),
     login: (username, password, remember = true) =>
       request('/auth/login', { method: 'POST', body: { username, password, remember } }),
     setup: (username, password, displayName, email, mail) =>

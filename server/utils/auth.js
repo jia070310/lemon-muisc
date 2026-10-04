@@ -1,8 +1,10 @@
 import { randomBytes, scryptSync, timingSafeEqual } from 'crypto'
 import { getDB } from '../db.js'
 
-const SESSION_TTL_REMEMBER = 30 * 24 * 60 * 60
+export const DEFAULT_ADMIN_USERNAME = 'admin123'
+export const DEFAULT_ADMIN_PASSWORD = 'admin123'
 const SESSION_TTL_DEFAULT = 24 * 60 * 60
+const SESSION_TTL_REMEMBER = 30 * 24 * 60 * 60
 
 export function hashPassword(password) {
   const salt = randomBytes(16).toString('hex')
@@ -30,6 +32,12 @@ export function getUserCount() {
   return row?.c || 0
 }
 
+export function hasPendingDefaultAdmin() {
+  const db = getDB()
+  if (!db) return false
+  return Boolean(db.prepare('SELECT 1 FROM users WHERE must_change_password = 1 LIMIT 1').get())
+}
+
 export function findUserByUsername(username) {
   const db = getDB()
   if (!db || !username) return null
@@ -53,6 +61,7 @@ export function toPublicUser(user) {
     emailVerified: Boolean(user.email_verified),
     fnosUid: user.fnos_uid ?? null,
     createdAt: user.created_at,
+    mustChangePassword: Boolean(Number(user.must_change_password)),
   }
 }
 
@@ -71,7 +80,7 @@ export function findUserByEmail(email) {
   return db.prepare('SELECT * FROM users WHERE lower(email) = ?').get(normalized)
 }
 
-export function createUser({ username, password, displayName = '', role = 'user', fnosUid = null, email = '' }) {
+export function createUser({ username, password, displayName = '', role = 'user', fnosUid = null, email = '', mustChangePassword = false }) {
   const db = getDB()
   const name = String(username || '').trim()
   if (!name || name.length < 2) throw new Error('用户名至少 2 个字符')
@@ -87,8 +96,8 @@ export function createUser({ username, password, displayName = '', role = 'user'
   const id = `user_${randomBytes(12).toString('hex')}`
   const now = Math.floor(Date.now() / 1000)
   db.prepare(`
-    INSERT INTO users (id, username, password_hash, display_name, role, fnos_uid, email, email_verified, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+    INSERT INTO users (id, username, password_hash, display_name, role, fnos_uid, email, email_verified, must_change_password, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
   `).run(
     id,
     name,
@@ -97,6 +106,7 @@ export function createUser({ username, password, displayName = '', role = 'user'
     role === 'admin' ? 'admin' : 'user',
     fnosUid,
     normalizedEmail,
+    mustChangePassword ? 1 : 0,
     now,
     now,
   )
@@ -163,7 +173,7 @@ export function getSession(token) {
   if (!token) return null
   const row = db.prepare(`
     SELECT s.id, s.user_id, s.expires_at, s.created_at, s.remember,
-           u.username, u.display_name, u.role, u.email, u.email_verified, u.fnos_uid, u.created_at AS user_created_at
+           u.username, u.display_name, u.role, u.email, u.email_verified, u.fnos_uid, u.created_at AS user_created_at, u.must_change_password
     FROM sessions s
     JOIN users u ON u.id = s.user_id
     WHERE s.id = ?
@@ -188,6 +198,7 @@ export function getSession(token) {
       email_verified: row.email_verified,
       fnos_uid: row.fnos_uid,
       created_at: row.user_created_at,
+      must_change_password: row.must_change_password,
     }),
   }
 }
@@ -219,14 +230,66 @@ export function updateUserPassword(userId, newPassword) {
     .run(hashPassword(newPassword), Math.floor(Date.now() / 1000), userId)
 }
 
-export function updateUserProfile(userId, { displayName } = {}) {
+function normalizeUsername(username) {
+  const name = String(username || '').trim()
+  if (!name || name.length < 2) throw new Error('用户名至少 2 个字符')
+  if (name.length > 32) throw new Error('用户名最多 32 个字符')
+  if (!/^[a-zA-Z0-9_\u4e00-\u9fa5-]+$/.test(name)) throw new Error('用户名仅支持字母、数字、下划线和中文')
+  return name
+}
+
+export function updateUserProfile(userId, { displayName, username } = {}) {
   const db = getDB()
   if (!db || !userId) throw new Error('用户不存在')
-  const name = String(displayName ?? '').trim()
-  if (!name) throw new Error('显示名称不能为空')
-  db.prepare('UPDATE users SET display_name = ?, updated_at = ? WHERE id = ?')
-    .run(name, Math.floor(Date.now() / 1000), userId)
+  const user = findUserById(userId)
+  if (!user) throw new Error('用户不存在')
+
+  if (username !== undefined) {
+    const name = normalizeUsername(username)
+    const taken = findUserByUsername(name)
+    if (taken && taken.id !== userId) throw new Error('用户名已存在')
+    db.prepare('UPDATE users SET username = ?, updated_at = ? WHERE id = ?')
+      .run(name, Math.floor(Date.now() / 1000), userId)
+  }
+
+  if (displayName !== undefined) {
+    const name = String(displayName ?? '').trim()
+    if (!name) throw new Error('显示名称不能为空')
+    db.prepare('UPDATE users SET display_name = ?, updated_at = ? WHERE id = ?')
+      .run(name, Math.floor(Date.now() / 1000), userId)
+  }
   return findUserById(userId)
+}
+
+export function completeDefaultAdminCredentials(userId, { username, password, displayName } = {}) {
+  const user = findUserById(userId)
+  if (!user) throw new Error('用户不存在')
+  if (!Number(user.must_change_password)) throw new Error('当前账号无需此操作')
+  if (!password || password.length < 6) throw new Error('密码至少 6 个字符')
+  if (password === DEFAULT_ADMIN_PASSWORD) throw new Error('请设置新密码，不要继续使用默认密码')
+
+  const name = normalizeUsername(username || user.username)
+  if (name === DEFAULT_ADMIN_USERNAME) throw new Error('请修改默认用户名')
+  const shown = String(displayName || name).trim()
+  updateUserProfile(userId, { username: name, displayName: shown })
+  updateUserPassword(userId, password)
+  const db = getDB()
+  db.prepare('UPDATE users SET must_change_password = 0, updated_at = ? WHERE id = ?')
+    .run(Math.floor(Date.now() / 1000), userId)
+  return findUserById(userId)
+}
+
+export function ensureDefaultAdmin() {
+  if (getUserCount() > 0) return null
+  const user = createUser({
+    username: DEFAULT_ADMIN_USERNAME,
+    password: DEFAULT_ADMIN_PASSWORD,
+    displayName: '管理员',
+    role: 'admin',
+    mustChangePassword: true,
+  })
+  console.log(`[auth] 已创建默认管理员 ${DEFAULT_ADMIN_USERNAME}，请登录后立即修改账号和密码`)
+  return user
 }
 
 export function updateUserByAdmin(userId, { displayName, email, role } = {}) {

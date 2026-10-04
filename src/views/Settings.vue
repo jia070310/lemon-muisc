@@ -2,7 +2,7 @@
   <div class="settings-page">
     <aside class="settings-nav">
       <h2 class="nav-title">设置</h2>
-      <p class="nav-sub">个性化您的音乐体验</p>
+      <p class="nav-sub">按使用场景整理的偏好设置</p>
       <button
         v-for="tab in tabs" :key="tab.id"
         :class="['nav-tab', { active: activeTab === tab.id }]"
@@ -13,15 +13,15 @@
     <main class="settings-panel card">
       <h3 class="panel-title">{{ currentTab.label }}</h3>
 
-      <!-- 我的账号 -->
+      <!-- 账号管理 -->
       <div v-if="activeTab === 'account'" class="panel-body account-panel-body">
         <div class="account-layout">
           <section class="account-section card-inner">
-            <div class="block-label">基本信息</div>
-            <div class="account-info-row">
-              <span class="account-info-key">用户名</span>
-              <code class="account-info-val">{{ currentAuthUser?.username }}</code>
-            </div>
+            <div class="block-label">我的资料</div>
+            <label class="field-inline account-field">
+              <span>用户名</span>
+              <input v-model="accountForm.username" placeholder="登录用的账号名" />
+            </label>
             <div class="account-info-row">
               <span class="account-info-key">角色</span>
               <span class="account-info-val">{{ currentAuthUser?.role === 'admin' ? '管理员' : '普通用户' }}</span>
@@ -32,7 +32,7 @@
             </label>
             <div class="account-actions">
               <button class="btn-primary btn-sm" type="button" :disabled="accountSaving" @click="saveAccountProfile">
-                {{ accountSaving ? '保存中…' : '保存名称' }}
+                {{ accountSaving ? '保存中…' : '保存资料' }}
               </button>
             </div>
           </section>
@@ -61,47 +61,6 @@
           </section>
 
           <section class="account-section card-inner">
-            <div class="block-label">邮箱</div>
-            <p class="account-tip">绑定邮箱后可接收验证邮件，并使用「忘记密码」找回账号。</p>
-            <div v-if="currentAuthUser?.email" class="account-email-status">
-              <span>{{ currentAuthUser.email }}</span>
-              <span :class="['email-badge', currentAuthUser.emailVerified ? 'verified' : 'pending']">
-                {{ currentAuthUser.emailVerified ? '已验证' : '未验证' }}
-              </span>
-            </div>
-            <label class="field-inline account-field">
-              <span>{{ currentAuthUser?.email ? '更换邮箱' : '绑定邮箱' }}</span>
-              <input
-                v-model="accountForm.email"
-                type="email"
-                name="account-email"
-                class="account-email-input"
-                autocomplete="email"
-                inputmode="email"
-                autocapitalize="off"
-                spellcheck="false"
-                :readonly="emailInputReadonly"
-                placeholder="请输入邮箱，如 name@example.com"
-                @focus="onAccountEmailFocus"
-              />
-            </label>
-            <div class="account-actions">
-              <button class="btn-primary btn-sm" type="button" :disabled="emailBinding" @click="bindAccountEmail">
-                {{ emailBinding ? '提交中…' : (currentAuthUser?.email ? '更新邮箱' : '绑定邮箱') }}
-              </button>
-              <button
-                v-if="currentAuthUser?.email && !currentAuthUser?.emailVerified"
-                class="btn-ghost btn-sm"
-                type="button"
-                :disabled="resendingVerify"
-                @click="resendAccountVerification"
-              >
-                {{ resendingVerify ? '发送中…' : '重发验证邮件' }}
-              </button>
-            </div>
-          </section>
-
-          <section class="account-section card-inner">
             <div class="block-label">修改密码</div>
             <label class="field-inline account-field">
               <span>当前密码</span>
@@ -123,8 +82,6 @@
           </section>
         </div>
       </div>
-
-      <!-- 文件路径 -->
       <div v-if="activeTab === 'paths'" class="panel-body paths-panel-body">
         <div v-if="isAdminUser && needsPathSetup" class="setup-alert">
           <strong>尚未配置数据目录</strong>
@@ -932,24 +889,11 @@
             <span class="slider"></span>
           </label>
         </div>
-        <div class="setting-item">
-          <div class="setting-item-info">
-            <div class="setting-item-label">车机 / 弱网流畅播放</div>
-            <div class="setting-item-desc">
-              本地 FLAC 等无损先在 NAS 转成约 128kbps AAC 再播，并预热下一首；在线试听也会压到 128k。
-              减轻无线 CarPlay 与拉歌抢同一路 WiFi 时的断续。开启后会自动关闭音频可视化，并降低锁屏/车机 Now Playing 进度推送频率（避免跨进程刷新过频卡顿）。
-              有线 CarPlay 一般不需要。首次播放某首可能稍慢（转码缓存），之后可秒开。需要可用的 ffmpeg。iPhone/iPad 默认开启。
-            </div>
-          </div>
-          <label class="toggle">
-            <input type="checkbox" :checked="settings['player.smoothStream'] !== 'false'" @change="toggleSmoothStreamSetting" />
-            <span class="slider"></span>
-          </label>
-        </div>
       </div>
 
       <!-- 试听 / 下载 -->
       <div v-if="activeTab === 'download'" class="panel-body">
+        <div class="settings-group-title">试听</div>
         <div class="setting-item">
           <div class="setting-item-info">
             <div class="setting-item-label">试听音质</div>
@@ -974,7 +918,22 @@
             <span class="slider"></span>
           </label>
         </div>
+        <div class="setting-item">
+          <div class="setting-item-info">
+            <div class="setting-item-label">车机 / 弱网流畅播放</div>
+            <div class="setting-item-desc">
+              本地 FLAC 等无损先在 NAS 转成约 128kbps AAC 再播，并预热下一首；在线试听也会压到 128k。
+              减轻无线 CarPlay 与拉歌抢同一路 WiFi 时的断续。开启后会自动关闭音频可视化，并降低锁屏/车机 Now Playing 进度推送频率。
+              有线 CarPlay 一般不需要。首次播放可能稍慢，之后可秒开。需要可用的 ffmpeg。iPhone/iPad 默认开启。
+            </div>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" :checked="settings['player.smoothStream'] !== 'false'" @change="toggleSmoothStreamSetting" />
+            <span class="slider"></span>
+          </label>
+        </div>
         <template v-if="isAdminUser">
+          <div class="settings-group-title">下载</div>
           <div class="setting-item">
             <div class="setting-item-info">
               <div class="setting-item-label">保存路径</div>
@@ -1071,48 +1030,43 @@
               />
             </div>
           </div>
+          <div class="settings-group-title">写入文件</div>
+          <div class="setting-item" v-for="item in embedItems" :key="item.key">
+            <div class="setting-item-info">
+              <div class="setting-item-label">{{ item.label }}</div>
+              <div class="setting-item-desc">{{ item.desc }}</div>
+            </div>
+            <label class="toggle"><input type="checkbox" :checked="settings[item.key] === 'true'" @change="toggleSetting(item.key)" /><span class="slider"></span></label>
+          </div>
+          <div class="settings-group-title">歌词文件</div>
+          <div class="setting-item" v-for="item in lrcToggleItems" :key="item.key">
+            <div class="setting-item-info">
+              <div class="setting-item-label">{{ item.label }}</div>
+              <div class="setting-item-desc">{{ item.desc }}</div>
+            </div>
+            <label class="toggle"><input type="checkbox" :checked="settings[item.key] === 'true'" @change="toggleSetting(item.key)" /><span class="slider"></span></label>
+          </div>
+          <div class="setting-item">
+            <div class="setting-item-info">
+              <div class="setting-item-label">歌词编码</div>
+              <div class="setting-item-desc">独立歌词文件的字符编码</div>
+            </div>
+            <div class="setting-item-action">
+              <AppSelect
+                v-model="settings['download.lrcFormat']"
+                :options="lrcFormatOptions"
+                min-width="120px"
+                @change="saveSetting('download.lrcFormat')"
+              />
+            </div>
+          </div>
         </template>
       </div>
 
-      <!-- 内嵌数据 -->
-      <div v-if="activeTab === 'embed'" class="panel-body">
-        <div class="setting-item" v-for="item in embedItems" :key="item.key">
-          <div class="setting-item-info">
-            <div class="setting-item-label">{{ item.label }}</div>
-            <div class="setting-item-desc">{{ item.desc }}</div>
-          </div>
-          <label class="toggle"><input type="checkbox" :checked="settings[item.key] === 'true'" @change="toggleSetting(item.key)" /><span class="slider"></span></label>
-        </div>
-      </div>
-
-      <!-- 歌词文件 -->
-      <div v-if="activeTab === 'lrc'" class="panel-body">
-        <div class="setting-item" v-for="item in lrcToggleItems" :key="item.key">
-          <div class="setting-item-info">
-            <div class="setting-item-label">{{ item.label }}</div>
-            <div class="setting-item-desc">{{ item.desc }}</div>
-          </div>
-          <label class="toggle"><input type="checkbox" :checked="settings[item.key] === 'true'" @change="toggleSetting(item.key)" /><span class="slider"></span></label>
-        </div>
-        <div class="setting-item">
-          <div class="setting-item-info">
-            <div class="setting-item-label">歌词编码</div>
-            <div class="setting-item-desc">独立歌词文件的字符编码</div>
-          </div>
-          <div class="setting-item-action">
-            <AppSelect
-              v-model="settings['download.lrcFormat']"
-              :options="lrcFormatOptions"
-              min-width="120px"
-              @change="saveSetting('download.lrcFormat')"
-            />
-          </div>
-        </div>
-      </div>
-
-      <!-- 用户管理 -->
-      <div v-if="activeTab === 'users'" class="panel-body users-panel-body">
-        <p class="source-tip">仅管理员可创建与管理账号。可为每个用户指定路径权限：使用管理员路径（共用音乐库与下载）、使用专属路径，或允许用户自行选择。</p>
+      <!-- 用户管理（账号管理内） -->
+      <div v-if="activeTab === 'account' && isAdminUser" class="panel-body users-panel-body">
+        <div class="settings-group-title">用户管理</div>
+        <p class="source-tip">创建普通账号或管理员。可为每个用户指定路径权限：共用管理员路径、专属路径，或允许用户自行选择。</p>
         <form class="user-create-form" @submit.prevent="createManagedUser">
           <label class="field-inline">
             <span>用户名</span>
@@ -1125,10 +1079,6 @@
           <label class="field-inline">
             <span>密码</span>
             <input v-model="newUser.password" type="password" required placeholder="至少 6 位" />
-          </label>
-          <label class="field-inline">
-            <span>邮箱</span>
-            <input v-model="newUser.email" type="email" placeholder="可选，用于找回密码" />
           </label>
           <label class="field-inline">
             <span>角色</span>
@@ -1146,7 +1096,6 @@
         <div v-if="managedUsers.length" class="user-table user-table-with-path">
           <div class="user-table-head">
             <span>用户</span>
-            <span>邮箱</span>
             <span>角色</span>
             <span>路径权限</span>
             <span>操作</span>
@@ -1157,10 +1106,6 @@
                 <label class="field-inline">
                   <span>显示名称</span>
                   <input v-model="editUserForm.displayName" />
-                </label>
-                <label class="field-inline">
-                  <span>邮箱</span>
-                  <input v-model="editUserForm.email" type="email" placeholder="留空表示清除" />
                 </label>
                 <label class="field-inline">
                   <span>角色</span>
@@ -1181,13 +1126,6 @@
                 <div class="user-row-name">{{ u.displayName || u.username }}</div>
                 <div class="user-row-meta">@{{ u.username }}</div>
               </div>
-              <div class="user-cell-email">
-                <span v-if="u.email">{{ u.email }}</span>
-                <span v-else class="text-muted">未绑定</span>
-                <span v-if="u.email" :class="['email-badge', u.emailVerified ? 'verified' : 'pending']">
-                  {{ u.emailVerified ? '已验证' : '未验证' }}
-                </span>
-              </div>
               <div class="user-cell-role">{{ u.role === 'admin' ? '管理员' : '普通用户' }}</div>
               <div class="user-cell-path-policy">{{ downloadPathPolicyLabel(u.downloadPathPolicy) }}</div>
               <div class="user-row-actions">
@@ -1199,65 +1137,6 @@
           </div>
         </div>
         <div v-else class="empty-hint">暂无用户</div>
-      </div>
-
-      <!-- 邮件服务 -->
-      <div v-if="activeTab === 'mail'" class="panel-body">
-        <p class="source-tip">配置 SMTP 后，用户可通过邮箱验证与「忘记密码」找回账号。QQ/163 邮箱需使用授权码而非登录密码。</p>
-        <MailConfigGuide />
-        <div class="setting-item">
-          <div class="setting-item-info">
-            <div class="setting-item-label">启用邮件</div>
-          </div>
-          <label class="toggle">
-            <input type="checkbox" :checked="settings['mail.enabled'] === 'true'" @change="toggleMailEnabled" />
-            <span class="slider"></span>
-          </label>
-        </div>
-        <div class="setting-item">
-          <div class="setting-item-info">
-            <div class="setting-item-label">SMTP 服务器</div>
-          </div>
-          <input v-model="settings['mail.smtp.host']" class="path-input" placeholder="smtp.qq.com" @change="saveSetting('mail.smtp.host')" />
-        </div>
-        <div class="setting-item">
-          <div class="setting-item-info">
-            <div class="setting-item-label">端口</div>
-          </div>
-          <input v-model="settings['mail.smtp.port']" class="path-input" type="number" placeholder="465" @change="saveSetting('mail.smtp.port')" />
-        </div>
-        <div class="setting-item">
-          <div class="setting-item-info">
-            <div class="setting-item-label">发件人地址</div>
-            <div class="setting-item-desc">需与 SMTP 账号一致或已授权</div>
-          </div>
-          <input v-model="settings['mail.from']" class="path-input" placeholder="柠檬音乐 &lt;music@example.com&gt;" @change="saveSetting('mail.from')" />
-        </div>
-        <div class="setting-item">
-          <div class="setting-item-info">
-            <div class="setting-item-label">SMTP 用户名</div>
-          </div>
-          <input v-model="settings['mail.smtp.user']" class="path-input" @change="saveSetting('mail.smtp.user')" />
-        </div>
-        <div class="setting-item">
-          <div class="setting-item-info">
-            <div class="setting-item-label">SMTP 密码 / 授权码</div>
-          </div>
-          <input v-model="mailPasswordInput" type="password" class="path-input" placeholder="留空则不修改" @change="saveMailPassword" />
-        </div>
-        <div class="setting-item">
-          <div class="setting-item-info">
-            <div class="setting-item-label">应用访问地址</div>
-            <div class="setting-item-desc">邮件中重置/验证链接的前缀，如 https://nas.example.com:7983</div>
-          </div>
-          <input v-model="settings['mail.appUrl']" class="path-input" placeholder="留空则自动识别" @change="saveSetting('mail.appUrl')" />
-        </div>
-        <div class="mail-test-row">
-          <input v-model="mailTestTo" class="path-input" placeholder="测试收件邮箱" />
-          <button class="btn-primary btn-sm" type="button" :disabled="mailTesting" @click="sendTestMail">
-            {{ mailTesting ? '发送中…' : '发送测试邮件' }}
-          </button>
-        </div>
       </div>
     </main>
 
@@ -1326,7 +1205,6 @@ import {
   lyricHighlightColor as currentLyricHighlightColor,
 } from '../utils/lyricColors.js'
 import AppSelect from '../components/AppSelect.vue'
-import MailConfigGuide from '../components/MailConfigGuide.vue'
 import { applyDirToggle, isDirChecked, isDirPathUnder, normalizeDirPath } from '../utils/dirTreeExpand.js'
 
 const route = useRoute()
@@ -1400,7 +1278,7 @@ const managedUsers = ref([])
 const creatingUser = ref(false)
 const editingUserId = ref(null)
 const userUpdating = ref(false)
-const editUserForm = reactive({ displayName: '', email: '', role: 'user', downloadPathPolicy: 'choose' })
+const editUserForm = reactive({ displayName: '', role: 'user', downloadPathPolicy: 'choose' })
 const resetPasswordUser = ref(null)
 const resetPasswordForm = reactive({ password: '', confirm: '' })
 const resetPasswordSaving = ref(false)
@@ -1410,13 +1288,10 @@ const accountSaving = ref(false)
 const backupBusy = ref(false)
 const backupMerge = ref(false)
 const backupFileInput = ref(null)
-const emailBinding = ref(false)
-const resendingVerify = ref(false)
 const passwordChanging = ref(false)
-const emailInputReadonly = ref(true)
 const accountForm = reactive({
+  username: '',
   displayName: '',
-  email: '',
   oldPassword: '',
   newPassword: '',
   confirmPassword: '',
@@ -1424,14 +1299,10 @@ const accountForm = reactive({
 const newUser = reactive({
   username: '',
   displayName: '',
-  email: '',
   password: '',
   role: 'user',
   downloadPathPolicy: 'choose',
 })
-const mailPasswordInput = ref('')
-const mailTestTo = ref('')
-const mailTesting = ref(false)
 
 const settings = reactive({})
 const sourceList = ref([])
@@ -1728,19 +1599,14 @@ function isSourceActive(id) {
 
 const tabs = computed(() => {
   const all = [
-    { id: 'account', label: '我的账号' },
+    { id: 'account', label: '账号管理' },
     { id: 'paths', label: '文件路径' },
     { id: 'source', label: '音源管理' },
     { id: 'tag', label: '标签管理' },
     { id: 'appearance', label: '风格样式' },
     { id: 'download', label: '试听下载' },
-    { id: 'embed', label: '内嵌数据' },
-    { id: 'lrc', label: '歌词文件' },
-    { id: 'users', label: '用户管理' },
-    { id: 'mail', label: '邮件服务' },
   ]
-  if (isAdminUser.value) return all
-  return all.filter(t => ['account', 'paths', 'source', 'tag', 'appearance', 'download'].includes(t.id))
+  return all
 })
 
 const embedItems = [
@@ -1757,6 +1623,13 @@ const lrcToggleItems = [
 ]
 
 const currentTab = computed(() => tabs.value.find(t => t.id === activeTab.value) || tabs.value[0])
+
+function resolveSettingsTab(id) {
+  const aliases = { users: 'account', mail: 'account', embed: 'download', lrc: 'download' }
+  const mapped = aliases[id] || id
+  if (mapped && tabs.value.some(t => t.id === mapped)) return mapped
+  return ''
+}
 const customPreview = computed(() => normalizeHex(settings[CUSTOM_COLOR_KEY] || currentCustomColor.value))
 const lyricTextPreview = computed(() => {
   const presetId = settings[LYRIC_PRESET_KEY]
@@ -1802,8 +1675,10 @@ watch(activeTab, async (tab) => {
     initScanTreeExpansion()
   }
   if (tab === 'paths' && isAdminUser.value) loadFfmpegStatus()
-  if (tab === 'users') loadManagedUsers()
-  if (tab === 'account') loadAccountInfo()
+  if (tab === 'account') {
+    loadAccountInfo()
+    if (isAdminUser.value) loadManagedUsers()
+  }
 })
 
 watch(musicPaths, () => {
@@ -1816,24 +1691,14 @@ watch(musicPaths, () => {
 }, { deep: true })
 
 function syncAccountFormFromUser() {
+  accountForm.username = currentAuthUser.value?.username || ''
   accountForm.displayName = currentAuthUser.value?.displayName || currentAuthUser.value?.username || ''
-  accountForm.email = ''
   accountForm.oldPassword = ''
   accountForm.newPassword = ''
   accountForm.confirmPassword = ''
 }
 
-function onAccountEmailFocus() {
-  emailInputReadonly.value = false
-  if (currentAuthUser.value?.email) return
-  const username = String(currentAuthUser.value?.username || '').trim()
-  if (username && accountForm.email.trim() === username) {
-    accountForm.email = ''
-  }
-}
-
 async function loadAccountInfo() {
-  emailInputReadonly.value = true
   syncAccountFormFromUser()
   try {
     const res = await api.auth.me()
@@ -1843,14 +1708,19 @@ async function loadAccountInfo() {
 }
 
 async function saveAccountProfile() {
+  const username = accountForm.username.trim()
   const name = accountForm.displayName.trim()
+  if (!username) {
+    showToast('用户名不能为空', 'error')
+    return
+  }
   if (!name) {
     showToast('显示名称不能为空', 'error')
     return
   }
   accountSaving.value = true
   try {
-    const res = await api.auth.updateProfile(name)
+    const res = await api.auth.updateProfile({ username, displayName: name })
     if (res.user) patchLocalUser(res.user)
     showToast('已保存', 'success')
   } catch (e) {
@@ -1908,37 +1778,6 @@ async function onImportBackupFile(ev) {
   }
 }
 
-async function bindAccountEmail() {
-  const email = accountForm.email.trim()
-  if (!email) {
-    showToast('请输入邮箱地址', 'error')
-    return
-  }
-  emailBinding.value = true
-  try {
-    const res = await api.auth.bindEmail(email)
-    if (res.user) patchLocalUser(res.user)
-    accountForm.email = ''
-    showToast(res.verificationSent ? '验证邮件已发送，请查收' : '邮箱已绑定', 'success')
-  } catch (e) {
-    showToast(e.message || '绑定失败', 'error')
-  } finally {
-    emailBinding.value = false
-  }
-}
-
-async function resendAccountVerification() {
-  resendingVerify.value = true
-  try {
-    await api.auth.resendVerification()
-    showToast('验证邮件已发送', 'success')
-  } catch (e) {
-    showToast(e.message || '发送失败', 'error')
-  } finally {
-    resendingVerify.value = false
-  }
-}
-
 async function changeAccountPassword() {
   if (!accountForm.oldPassword || !accountForm.newPassword) {
     showToast('请填写当前密码和新密码', 'error')
@@ -1983,13 +1822,11 @@ async function createManagedUser() {
       username: newUser.username,
       password: newUser.password,
       displayName: newUser.displayName || newUser.username,
-      email: newUser.email,
       role: newUser.role,
       downloadPathPolicy: newUser.downloadPathPolicy || 'choose',
     })
     newUser.username = ''
     newUser.displayName = ''
-    newUser.email = ''
     newUser.password = ''
     newUser.role = 'user'
     newUser.downloadPathPolicy = 'choose'
@@ -2041,7 +1878,6 @@ async function submitResetPassword() {
 function startManagedUserEdit(user) {
   editingUserId.value = user.id
   editUserForm.displayName = user.displayName || user.username
-  editUserForm.email = user.email || ''
   editUserForm.role = user.role || 'user'
   editUserForm.downloadPathPolicy = ['shared', 'personal', 'choose'].includes(user.downloadPathPolicy)
     ? user.downloadPathPolicy
@@ -2058,7 +1894,6 @@ async function saveManagedUserEdit() {
   try {
     const res = await api.auth.updateUser(editingUserId.value, {
       displayName: editUserForm.displayName.trim(),
-      email: editUserForm.email.trim(),
       role: editUserForm.role,
       downloadPathPolicy: editUserForm.downloadPathPolicy,
     })
@@ -2184,13 +2019,13 @@ async function loadLibraryStats() {
 }
 
 watch(() => route.query.tab, (tab) => {
-  const id = String(tab || '').trim()
-  if (id && tabs.value.some(t => t.id === id)) activeTab.value = id
+  const id = resolveSettingsTab(String(tab || '').trim())
+  if (id) activeTab.value = id
 })
 
 onMounted(async () => {
-  const tabFromQuery = String(route.query.tab || '').trim()
-  if (tabFromQuery && tabs.value.some(t => t.id === tabFromQuery)) {
+  const tabFromQuery = resolveSettingsTab(String(route.query.tab || '').trim())
+  if (tabFromQuery) {
     activeTab.value = tabFromQuery
   }
   try {
@@ -2840,47 +2675,6 @@ async function savePlayQuality() {
 async function toggleCrossPlatformSupplement(e) {
   settings['download.isUseOtherSource'] = e.target.checked ? 'true' : 'false'
   await saveSetting('download.isUseOtherSource')
-}
-
-async function toggleMailEnabled(e) {
-  settings['mail.enabled'] = e.target.checked ? 'true' : 'false'
-  await saveSetting('mail.enabled')
-}
-
-async function saveMailPassword() {
-  if (!mailPasswordInput.value) return
-  try {
-    await api.settings.update({ 'mail.smtp.pass': mailPasswordInput.value })
-    mailPasswordInput.value = ''
-    showToast('SMTP 密码已保存', 'success')
-  } catch (e) {
-    showToast(e.message, 'error')
-  }
-}
-
-async function sendTestMail() {
-  if (!mailTestTo.value) {
-    showToast('请填写测试收件邮箱', 'error')
-    return
-  }
-  mailTesting.value = true
-  try {
-    await api.settings.update({
-      'mail.enabled': settings['mail.enabled'],
-      'mail.smtp.host': settings['mail.smtp.host'],
-      'mail.smtp.port': settings['mail.smtp.port'],
-      'mail.smtp.user': settings['mail.smtp.user'],
-      'mail.from': settings['mail.from'],
-      'mail.appUrl': settings['mail.appUrl'],
-      ...(mailPasswordInput.value ? { 'mail.smtp.pass': mailPasswordInput.value } : {}),
-    })
-    const res = await api.auth.testMail(mailTestTo.value)
-    showToast(res.message || '测试邮件已发送', 'success')
-  } catch (e) {
-    showToast(e.message, 'error')
-  } finally {
-    mailTesting.value = false
-  }
 }
 
 async function saveTheme() {
@@ -3651,6 +3445,19 @@ function showToast(text, type = 'info') {
   max-width: 360px;
 }
 .block-label { font-size: 12px; color: var(--text-muted); margin-bottom: 8px; }
+.settings-group-title {
+  margin: 20px 0 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-light);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.panel-body > .settings-group-title:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
 .path-row {
   display: flex;
   align-items: center;
@@ -4057,13 +3864,6 @@ function showToast(text, type = 'info') {
 .user-row-name { font-size: 14px; color: var(--text); }
 .user-row-meta { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
 .user-row-actions { display: flex; gap: 8px; flex-shrink: 0; }
-.mail-test-row {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  flex-wrap: wrap;
-  margin-top: 16px;
-}
 .playlist-sync-settings {
   margin-top: 20px;
   padding: 14px 16px;
@@ -4093,41 +3893,14 @@ function showToast(text, type = 'info') {
 .account-info-key { color: var(--text-muted); min-width: 64px; }
 .account-info-val { color: var(--text); }
 .account-field input { width: 100%; min-width: 0; }
-.account-email-input::placeholder {
-  color: var(--text-muted);
-  opacity: 0.85;
-}
 .account-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .account-tip { font-size: 12px; color: var(--text-muted); margin: 0; line-height: 1.5; }
-.account-email-status {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  font-size: 13px;
-  color: var(--text);
-}
-.email-badge {
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-}
-.email-badge.verified {
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-}
-.email-badge.pending {
-  color: var(--text-muted);
-  background: var(--bg-input);
-}
 .users-panel-body { padding-bottom: 8px; }
 .user-table { display: flex; flex-direction: column; gap: 8px; }
 .user-table-head,
 .user-table-row {
   display: grid;
-  grid-template-columns: minmax(120px, 1.1fr) minmax(140px, 1.2fr) 88px minmax(140px, 1.2fr) auto;
+  grid-template-columns: minmax(140px, 1.2fr) 88px minmax(160px, 1.2fr) auto;
   gap: 12px;
   align-items: center;
   padding: 12px 14px;
@@ -4141,14 +3914,6 @@ function showToast(text, type = 'info') {
 .user-table-row {
   background: var(--bg-elevated);
   border: 1px solid var(--border-light);
-}
-.user-cell-email {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 4px;
-  font-size: 13px;
-  word-break: break-all;
 }
 .user-cell-role,
 .user-cell-path-policy { font-size: 13px; color: var(--text-secondary); }

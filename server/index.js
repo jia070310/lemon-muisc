@@ -21,6 +21,7 @@ import { refreshStoredSourceMeta } from './routes/source.js'
 import { installSourceFaultHandlers, recordSourceFault, getSourceFault } from './sourceFault.js'
 import { startMemoryGuard } from './utils/memoryGuard.js'
 import { startLibraryAutoWatch, stopLibraryAutoWatch } from './utils/libraryAutoWatch.js'
+import { ensureDefaultAdmin } from './utils/auth.js'
 
 installSourceFaultHandlers()
 
@@ -42,6 +43,11 @@ app.locals.configPath = CONFIG_PATH
 initDB(CONFIG_PATH)
 migrateFilePaths(DATA_PATH)
 refreshStoredSourceMeta()
+try {
+  ensureDefaultAdmin()
+} catch (e) {
+  console.warn('[auth] 初始化默认管理员失败:', e?.message || e)
+}
 
 // 兼容 Web：/api；开放客户端优先：/api/v1（同一路由器）
 app.use('/api/v1', apiRouter)

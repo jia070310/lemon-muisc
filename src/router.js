@@ -3,16 +3,14 @@ import {
   getToken,
   initAuth,
   isSessionValid,
-  needsSetup,
+  currentUser,
 } from './utils/auth.js'
 import { finishRouteLoading, startRouteLoading } from './stores/navigation.js'
 import Login from './views/Login.vue'
 
 const routes = [
   { path: '/login', name: 'Login', component: Login, meta: { public: true } },
-  { path: '/setup', name: 'Setup', component: Login, meta: { public: true } },
-  { path: '/reset-password', name: 'ResetPassword', component: () => import('./views/ResetPassword.vue'), meta: { public: true } },
-  { path: '/verify-email', name: 'VerifyEmail', component: () => import('./views/VerifyEmail.vue'), meta: { public: true } },
+  { path: '/change-account', name: 'ChangeDefaultAccount', component: () => import('./views/ChangeDefaultAccount.vue') },
   { path: '/', redirect: '/search' },
   { path: '/search', name: 'Search', component: () => import('./views/Search.vue') },
   { path: '/discover', name: 'Discover', component: () => import('./views/Discover.vue') },
@@ -56,28 +54,28 @@ router.beforeEach(async (to, from) => {
 
   if (to.meta.public) {
     finishRouteLoading()
-    if (needsSetup.value) {
-      if (to.name === 'Login') {
-        return { name: 'Setup', query: to.query }
+    if (isSessionValid.value && to.name === 'Login') {
+      if (currentUser.value?.mustChangePassword) {
+        return { name: 'ChangeDefaultAccount', query: to.query }
       }
-      if (to.name !== 'Setup') {
-        return { name: 'Setup' }
-      }
-    }
-    if (!needsSetup.value && isSessionValid.value && (to.name === 'Login' || to.name === 'Setup')) {
       return '/search'
     }
     return true
   }
 
-  if (needsSetup.value) {
-    finishRouteLoading()
-    return { name: 'Setup', query: { redirect: to.fullPath } }
-  }
-
   if (!getToken() && !isSessionValid.value) {
     finishRouteLoading()
     return { name: 'Login', query: { redirect: to.fullPath } }
+  }
+
+  if (currentUser.value?.mustChangePassword && to.name !== 'ChangeDefaultAccount') {
+    finishRouteLoading()
+    return { name: 'ChangeDefaultAccount', query: { redirect: to.fullPath } }
+  }
+
+  if (to.name === 'ChangeDefaultAccount' && !currentUser.value?.mustChangePassword) {
+    finishRouteLoading()
+    return '/search'
   }
 
   if (to.path !== from.path) startRouteLoading(to)

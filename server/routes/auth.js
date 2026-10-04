@@ -19,6 +19,9 @@ import {
   markEmailVerified,
   findUserById,
   deleteUserSessions,
+  completeDefaultAdminCredentials,
+  ensureDefaultAdmin,
+  hasPendingDefaultAdmin,
 } from '../utils/auth.js'
 import {
   getDownloadPathPolicy,
@@ -127,10 +130,15 @@ async function trySendVerification(req, user) {
 }
 
 authRouter.get('/status', (_req, res) => {
+  try {
+    ensureDefaultAdmin()
+  } catch (e) {
+    console.warn('[auth] 初始化默认管理员失败:', e?.message || e)
+  }
   res.json({
     setupRequired: getUserCount() === 0,
+    defaultAdminPending: hasPendingDefaultAdmin(),
     authenticated: false,
-    mailConfigured: isMailConfigured(),
   })
 })
 
@@ -255,10 +263,26 @@ authRouter.get('/me', requireAuth, (req, res) => {
 
 authRouter.patch('/profile', requireAuth, (req, res) => {
   try {
-    const user = updateUserProfile(req.user.id, { displayName: req.body?.displayName })
+    const user = updateUserProfile(req.user.id, {
+      displayName: req.body?.displayName,
+      username: req.body?.username,
+    })
     res.json({ ok: true, user: toPublicUser(user) })
   } catch (e) {
     res.status(400).json({ error: e.message })
+  }
+})
+
+authRouter.post('/complete-default-account', requireAuth, (req, res) => {
+  try {
+    const user = completeDefaultAdminCredentials(req.user.id, {
+      username: req.body?.username,
+      password: req.body?.password,
+      displayName: req.body?.displayName,
+    })
+    res.json({ ok: true, user: toPublicUser(user) })
+  } catch (e) {
+    res.status(e.status || 400).json({ error: e.message })
   }
 })
 
@@ -305,20 +329,11 @@ authRouter.post('/users', requireAuth, requireAdmin, async (req, res) => {
       username,
       password,
       displayName,
-      email,
       role: role === 'admin' ? 'admin' : 'user',
     })
     const policy = normalizePathsAccessPolicy(pathsAccessPolicy || downloadPathPolicy)
     setPathsAccessPolicy(user.id, policy)
-    let verificationSent = false
-    if (email) {
-      try {
-        verificationSent = await trySendVerification(req, user)
-      } catch (e) {
-        console.warn('[邮件] 用户验证邮件发送失败:', e.message)
-      }
-    }
-    res.json({ ok: true, user: withDownloadPathPolicy(user), verificationSent })
+    res.json({ ok: true, user: withDownloadPathPolicy(user), verificationSent: false })
   } catch (e) {
     res.status(400).json({ error: e.message })
   }

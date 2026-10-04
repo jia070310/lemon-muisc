@@ -290,10 +290,9 @@
       <div class="account-actions">
         <div class="account-action card">
           <h3 class="action-title">忘记密码</h3>
-          <p class="action-desc">按优先级尝试以下方式：</p>
+          <p class="action-desc">没有邮件找回。请用管理员在「设置 → 账号管理」重置，或在服务器执行命令：</p>
           <ol class="action-steps">
-            <li>若初始化时勾选了「本地保存账号」，打开配置目录中的 <code>ADMIN_CREDENTIALS.txt</code> 查看。</li>
-            <li>若已配置邮件，在登录页点击「忘记密码」通过邮箱重置。</li>
+            <li>管理员可在设置里为其他用户重置密码。</li>
             <li>在服务器项目目录执行下方命令（将 <code>用户名</code>、<code>新密码</code> 替换为实际值）：</li>
           </ol>
           <div class="cmd-wrap">
@@ -304,10 +303,10 @@
 
         <div class="account-action card">
           <h3 class="action-title">清空所有用户</h3>
-          <p class="action-desc">删除全部账号并重新进入初始化向导。</p>
+          <p class="action-desc">删除全部账号后，会重新生成默认管理员 <code>admin123</code> / <code>admin123</code>，登录后需立即改用户名和密码。</p>
           <ul class="action-notes">
             <li>音源、路径等应用设置会保留。</li>
-            <li>执行后需重新创建管理员账号。</li>
+            <li>执行后用默认账号重新登录。</li>
           </ul>
           <div class="cmd-wrap">
             <span class="cmd-label">终端命令</span>

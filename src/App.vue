@@ -510,7 +510,7 @@ import { APP_ICON_URL } from './utils/appIcon.js'
 
 const route = useRoute()
 const router = useRouter()
-const isPublicPage = computed(() => ['Login', 'Setup', 'AuthCallback', 'ResetPassword', 'VerifyEmail'].includes(route.name))
+const isPublicPage = computed(() => ['Login', 'ChangeDefaultAccount', 'AuthCallback'].includes(route.name))
 const showAppShell = computed(() => (
   isAuthReady.value
   && !isPublicPage.value

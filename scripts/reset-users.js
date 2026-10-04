@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * 清空所有用户账号，恢复到「首次初始化」状态。
+ * 清空所有用户账号，然后重新生成默认管理员 admin123。
  * 不会删除音源、路径、下载记录等全局设置。
  *
  * 用法：
@@ -12,7 +12,7 @@ import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { initDB, getDB } from '../server/db.js'
-import { listUsers } from '../server/utils/auth.js'
+import { listUsers, ensureDefaultAdmin } from '../server/utils/auth.js'
 import { getSetupHintPath, getCredentialsFilePath } from '../server/utils/setupHint.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -36,7 +36,7 @@ function printHelp() {
 说明:
   · 仅删除 users / sessions / auth_tokens / user_settings
   · 保留音源、路径、下载任务、音乐库索引等数据
-  · 执行后刷新浏览器，将重新进入「初始化管理员」向导
+  · 执行后刷新浏览器，使用默认账号 admin123 / admin123 登录，并立即修改
   · 浏览器若仍自动登录，请清除本站 localStorage 或退出登录
 
 飞牛 NAS 配置目录示例:
@@ -75,7 +75,7 @@ function main() {
     console.log(`数据库: ${dbPath}`)
     console.log('用户列表:')
     for (const u of users) {
-      const mail = u.email ? ` · ${u.email}${u.emailVerified ? '（已验证）' : '（未验证）'}` : ''
+      const mail = u.email ? ` · ${u.email}` : ''
       console.log(`  - ${u.username} (${u.displayName}) [${u.role}]${mail}`)
     }
     return
@@ -93,7 +93,7 @@ function main() {
     for (const u of users) {
       console.log(`  - ${u.username} [${u.role}]`)
     }
-    console.log('\n同时清除：登录会话、邮箱验证/重置令牌、用户个人歌单与收藏。')
+    console.log('\n同时清除：登录会话、令牌、用户个人歌单与收藏。')
     console.log('不会删除：音源脚本、路径设置、下载任务、音乐库索引。')
     console.log('\n请添加 --yes 确认执行，例如:')
     console.log('  npm run auth:reset-users -- --yes')
@@ -115,14 +115,18 @@ function main() {
     if (fs.existsSync(filePath)) fs.unlinkSync(filePath)
   }
 
-  const after = listUsers().length
+  const afterDelete = listUsers().length
   console.log(`配置目录: ${configPath}`)
   console.log(`数据库: ${dbPath}`)
-  console.log(`已删除 ${before.length} 个用户，当前用户数: ${after}`)
+  console.log(`已删除 ${before.length} 个用户，当前用户数: ${afterDelete}`)
   if (before.length) {
     console.log('已删除用户:', before.map(u => u.username).join(', '))
   }
-  console.log('\n下一步: 刷新浏览器，重新完成「初始化管理员」向导。')
+  const created = ensureDefaultAdmin()
+  if (created) {
+    console.log('\n已重新生成默认管理员: admin123 / admin123')
+    console.log('下一步: 刷新浏览器并登录，立即修改用户名和密码。')
+  }
   console.log('若仍自动登录，请硬刷新页面（Ctrl+Shift+R），或清除浏览器中本站的 lemon-auth-token / lemon-auth-user。')
 }
 
