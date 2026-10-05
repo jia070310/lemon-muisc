@@ -2,7 +2,7 @@
 openapi: 3.1.0
 info:
   title: Lemon Music Open API
-  version: 1.2.16.14
+  version: 1.2.16.15
   description: "柠檬音乐自托管开放 API。路径同时挂载在 `/api` 与 `/api/v1`（推荐客户端使用 `/api/v1`）。\n\n鉴权：`Authorization: Bearer <sessionToken>`；音频流可用 `?ticket=` 短时效媒体票（也可兼容 `?token=` 会话 JWT）。\n\n曲目稳定 ID：`id` / `trackId`（UUID），路径变更后保持不变；仍返回 `filePath` 以兼容 Web。\n\n人读文档见 docs/open-api.md；交互文档 `GET /api/docs`。"
   license:
     name: MIT

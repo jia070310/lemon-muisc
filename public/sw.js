@@ -1,5 +1,5 @@
 /* 柠檬音乐：仅缓存前端壳，不缓存 /api、/ws 与音频流 */
-const CACHE = 'lemon-shell-v1.2.16.14-orange-round-3'
+const CACHE = 'lemon-shell-v1.2.16.15-orange-round-3'
 
 const PRECACHE = [
   '/',

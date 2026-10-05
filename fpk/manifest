@@ -1,5 +1,5 @@
 appname        = lemon-music
-version        = 1.2.16.14
+version        = 1.2.16.15
 display_name   = 柠檬音乐
 desc           = <b>下载音乐、播放音乐库、标签批量整理</b>。也支持多音源搜索与试听、发现歌单 / 榜单、文件去重与整理。<br><br><b>重置管理员密码</b>（只改登录密码，<b>不会</b>清空歌单、收藏或音乐文件）：SSH 执行<br><code>PATH=/var/apps/nodejs_v22/target/bin:$PATH CONFIG_PATH=/vol1/@appconf/lemon-music/config node /var/apps/lemon-music/target/scripts/reset-password.js 用户名 新密码</code><br>列出账号加 <code>--list</code>。配置卷不是 vol1 时请改 CONFIG_PATH。<br><br><b>依赖</b>：应用中心 <b>Node.js v22</b>。目录可在安装向导或「访问权限」中指定。卸载可选保留配置，不会删除音乐库 / 下载目录中的音频。<br><br><b>免责声明</b>：仅供个人合法使用。请确保对所管理音乐拥有相应权利，并遵守当地法律与平台条款。违规后果由用户自行承担。
 platform       = x86
