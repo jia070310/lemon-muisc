@@ -632,18 +632,40 @@ function pathIsUnderRoot(resolved, root) {
   return filePath.startsWith(prefix)
 }
 
+function tryRealpath(p) {
+  try {
+    if (p && fs.existsSync(p)) return fs.realpathSync(p)
+  } catch {}
+  try {
+    return path.resolve(p)
+  } catch {
+    return ''
+  }
+}
+
 export function isAllowedMediaPath(filePath, { allowMissing = false, userId = null } = {}) {
   if (!filePath || typeof filePath !== 'string') return false
+  const mapped = mapToContainerPath(filePath) || filePath
   let resolved
   try {
-    resolved = path.resolve(filePath)
+    resolved = path.resolve(mapped)
   } catch {
     return false
   }
-  // 存在性校验只在需要真实文件时进行；allowMissing 用于清理缓存中的幽灵记录（文件已被移走/删除）
   if (!allowMissing) {
-    if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) return false
+    const okMapped = fs.existsSync(resolved) && fs.statSync(resolved).isFile()
+    if (!okMapped) {
+      try {
+        const alt = path.resolve(filePath)
+        if (!fs.existsSync(alt) || !fs.statSync(alt).isFile()) return false
+        resolved = alt
+      } catch {
+        return false
+      }
+    }
   }
+
+  const fileKeys = [...new Set([resolved, tryRealpath(resolved)].filter(Boolean))]
 
   const rootList = userId
     ? getUserAccessibleRoots(userId)
@@ -673,6 +695,7 @@ export function isAllowedMediaPath(filePath, { allowMissing = false, userId = nu
         getSharedDownloadSavePath(),
         ...personalPaths,
         ...personalMusic,
+        ...getAuthorizedPathsFromEnv(),
         process.env.DOWNLOAD_PATH,
         process.env.MUSIC_HOST_PATH,
         process.env.DOWNLOADS_HOST_PATH,
@@ -686,7 +709,12 @@ export function isAllowedMediaPath(filePath, { allowMissing = false, userId = nu
   }).filter(Boolean))
 
   for (const root of roots) {
-    if (pathIsUnderRoot(resolved, root)) return true
+    const rootKeys = [...new Set([root, tryRealpath(root)].filter(Boolean))]
+    for (const rk of rootKeys) {
+      for (const fk of fileKeys) {
+        if (pathIsUnderRoot(fk, rk)) return true
+      }
+    }
   }
   return false
 }
@@ -845,13 +873,16 @@ export function removeFilePath(dirPath) {
   return removeMusicPath(dirPath)
 }
 
-/** 当前用户可访问的目录根：生效音乐库 + 生效下载目录 */
+/** 当前用户可访问的目录根：生效音乐库 + 生效下载目录 + 飞牛授权目录 */
 export function getUserAccessibleRoots(userId) {
   if (!userId) return getAllMusicScanRoots()
   const roots = [...getMusicPathsForUser(userId)]
   try {
     const dl = getDownloadSavePath(userId)
     if (dl) roots.push(dl)
+  } catch {}
+  try {
+    roots.push(...getAuthorizedPathsFromEnv())
   } catch {}
   return dedupePaths(roots.map((p) => mapToContainerPath(p) || p).filter(Boolean))
 }

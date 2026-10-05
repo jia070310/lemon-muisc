@@ -13,6 +13,8 @@ import { getDownloadSavePath, isAllowedMediaPath } from '../utils/filePaths.js'
 import { getMergedSettings } from '../utils/userSettings.js'
 import { fetchTrackLyric, fetchTrackCover } from '../utils/trackMeta.js'
 import { resolveDownloadEmbedMeta } from '../utils/downloadEmbedMeta.js'
+import { isPlatformEnabled } from '../utils/enabledPlatforms.js'
+import { AVAILABLE_SOURCES } from '../musicSdk.js'
 import {
   getNextLowerQuality,
   isNoActiveSourceError,
@@ -1059,6 +1061,10 @@ function processQueue() {
 }
 
 async function resolveDownloadUrl(source, quality, musicInfo, settings, meta = {}, userId = null) {
+  if (!isPlatformEnabled(userId, source)) {
+    const name = AVAILABLE_SOURCES[source]?.name || source
+    throw new Error(`平台「${name}」已关闭，请在设置 → 音源管理中开启`)
+  }
   // 锁定音源时：只打当前插件（换平台后再换其它插件）
   // 未锁定时：同平台按激活音源顺序全量尝试
   const lockedId = String(meta.lockedSourceApiId || '').trim() || null
@@ -1071,6 +1077,7 @@ async function resolveDownloadUrl(source, quality, musicInfo, settings, meta = {
     preferredSourceId: lockedId || undefined,
     skipSourceIds: lockedId ? [] : (meta.skipSourceIds || []),
     allowedSourceIds: getStoredActiveSourceIds(userId),
+    userId,
   })
   const url = extractMusicUrl(result.data)
   if (!url) throw new Error(`获取 ${qualityLabel(quality)} 音质下载链接失败，请尝试其他音质`)

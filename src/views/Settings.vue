@@ -656,8 +656,8 @@
 
       <!-- 音源管理 -->
       <div v-if="activeTab === 'source'" class="panel-body">
-        <p v-if="isAdminUser" class="source-tip">支持同时激活多个音源（落雪兼容 / 澜音原生 .js）。每个账号的激活状态相互独立；试听 / 下载时按平台匹配，同一平台有多个音源时优先使用最近激活的。系统会根据近期播放/下载是否为「试听片段」评估音源健康度；聚合音源若部分平台完整、部分多为试听，会单独标注。试听检测到短片段时会自动换音源/其它平台，并累计学习各平台是否可用。</p>
-        <p v-else class="source-tip">音源脚本由管理员导入。你可以自行激活或停用音源，状态仅对自己生效。列表旁的健康标注来自本机近期播放/下载是否多为试听片段（含「部分平台试听」）；试听遇短片段会自动尝试其它音源或平台。</p>
+        <p v-if="isAdminUser" class="source-tip">支持同时激活多个音源（落雪兼容 / 澜音原生 .js）。每个账号的激活状态相互独立；点「平台」可单独开关该音源支持的平台。试听 / 下载时按平台匹配，同一平台有多个音源时优先使用最近激活的。系统会根据近期播放/下载是否为「试听片段」评估音源健康度；试听检测到短片段时会自动换音源/其它平台。</p>
+        <p v-else class="source-tip">音源脚本由管理员导入。你可以自行激活或停用音源，并点「平台」单独开关各平台（仅对自己生效）。列表旁的健康标注来自本机近期播放/下载是否多为试听片段；试听遇短片段会自动尝试其它音源或平台。</p>
         <div v-if="isAdminUser" class="setting-item">
           <div class="setting-item-info">
             <div class="setting-item-label">音源切换方式</div>
@@ -672,6 +672,7 @@
             />
           </div>
         </div>
+
         <div class="source-list" v-if="sourceList.length">
           <div
             v-for="s in sourceList"
@@ -682,35 +683,82 @@
               unhealthy: s.health?.unhealthy,
               'health-mixed': s.health?.unhealthy && s.health?.level === 'mixed',
               'health-preview': s.health?.unhealthy && s.health?.level === 'preview',
+              expanded: expandedSourceId === s.id,
             }"
           >
-            <div class="source-info">
-              <div class="source-name-row">
-                <span class="source-name">{{ s.name }}</span>
-                <span
-                  v-if="s.health?.unhealthy && s.health?.badge"
-                  class="source-health-badge"
-                  :class="s.health.level === 'mixed' ? 'mixed' : 'preview'"
-                  :title="s.health.tip"
-                >{{ s.health.badge }}</span>
+            <div class="source-item-main">
+              <div class="source-info">
+                <div class="source-name-row">
+                  <span class="source-name">{{ s.name }}</span>
+                  <span
+                    v-if="s.health?.unhealthy && s.health?.badge"
+                    class="source-health-badge"
+                    :class="s.health.level === 'mixed' ? 'mixed' : 'preview'"
+                    :title="s.health.tip"
+                  >{{ s.health.badge }}</span>
+                </div>
+                <span class="source-meta">{{ s.author || '未知作者' }} · v{{ s.version || '?' }}{{ isSourceActive(s.id) ? ' · 已激活' : '' }} · {{ sourcePlatformSummary(s) }}</span>
+                <span v-if="s.health?.unhealthy && s.health?.tip" class="source-health-tip">{{ s.health.tip }}</span>
+                <div v-if="s.health?.unhealthy && healthPlatformChips(s).length" class="source-health-platforms">
+                  <span
+                    v-for="p in healthPlatformChips(s)"
+                    :key="p.id"
+                    class="source-plat-chip"
+                    :class="p.level"
+                    :title="platformHealthTitle(p)"
+                  >{{ p.label }}{{ platformHealthSuffix(p) }}</span>
+                </div>
               </div>
-              <span class="source-meta">{{ s.author || '未知作者' }} · v{{ s.version || '?' }}{{ isSourceActive(s.id) ? ' · 已激活' : '' }}</span>
-              <span v-if="s.health?.unhealthy && s.health?.tip" class="source-health-tip">{{ s.health.tip }}</span>
-              <div v-if="s.health?.unhealthy && healthPlatformChips(s).length" class="source-health-platforms">
-                <span
-                  v-for="p in healthPlatformChips(s)"
-                  :key="p.id"
-                  class="source-plat-chip"
-                  :class="p.level"
-                  :title="platformHealthTitle(p)"
-                >{{ p.label }}{{ platformHealthSuffix(p) }}</span>
+              <div class="source-actions">
+                <button
+                  type="button"
+                  class="source-expand-btn"
+                  :class="{ expanded: expandedSourceId === s.id }"
+                  :aria-expanded="expandedSourceId === s.id"
+                  :title="expandedSourceId === s.id ? '收起平台开关' : '展开平台开关'"
+                  @click="toggleSourcePlatformPanel(s.id)"
+                >
+                  <span>平台</span>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                </button>
+                <button v-if="s.health?.unhealthy" class="btn-sm btn-ghost" @click="dismissSourceHealth(s)">知道了</button>
+                <button v-if="!isSourceActive(s.id)" class="btn-sm btn-primary" @click="activateSource(s.id)">激活</button>
+                <button v-else class="btn-sm btn-ghost" @click="deactivateSource(s.id)">停用</button>
+                <button v-if="isAdminUser" class="btn-sm btn-danger" @click="removeSource(s.id)">删除</button>
               </div>
             </div>
-            <div class="source-actions">
-              <button v-if="s.health?.unhealthy" class="btn-sm btn-ghost" @click="dismissSourceHealth(s)">知道了</button>
-              <button v-if="!isSourceActive(s.id)" class="btn-sm btn-primary" @click="activateSource(s.id)">激活</button>
-              <button v-else class="btn-sm btn-ghost" @click="deactivateSource(s.id)">停用</button>
-              <button v-if="isAdminUser" class="btn-sm btn-danger" @click="removeSource(s.id)">删除</button>
+            <div v-if="expandedSourceId === s.id" class="source-platform-panel">
+              <div class="platform-switch-head">
+                <p class="platform-switch-tip">关闭后，该音源不再解析对应平台歌曲（仅对本账号生效）。</p>
+                <div class="platform-switch-actions">
+                  <button type="button" class="plat-link plat-link-on" @click="setSourcePlatformsAll(s, true)">全启用</button>
+                  <button type="button" class="plat-link plat-link-off" @click="setSourcePlatformsAll(s, false)">全关闭</button>
+                </div>
+              </div>
+              <div class="platform-switch-list">
+                <div v-for="p in platformOptionsForSource(s)" :key="p.id" class="platform-switch-item">
+                  <div class="platform-switch-left">
+                    <span class="platform-badge" :class="`plat-${p.id}`">{{ p.short }}</span>
+                    <div class="platform-switch-meta">
+                      <div class="platform-switch-name">
+                        {{ p.label }}
+                        <span class="platform-code">{{ p.id }}</span>
+                      </div>
+                      <div class="platform-switch-status" :class="{ on: isSourcePlatformOn(s.id, p.id) }">
+                        {{ isSourcePlatformOn(s.id, p.id) ? '允许解析' : '已关闭' }}
+                      </div>
+                    </div>
+                  </div>
+                  <label class="toggle">
+                    <input
+                      type="checkbox"
+                      :checked="isSourcePlatformOn(s.id, p.id)"
+                      @change="toggleSourcePlatform(s, p.id, $event.target.checked)"
+                    />
+                    <span class="slider"></span>
+                  </label>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -726,10 +774,11 @@
           <span class="hint">支持落雪兼容与澜音（CeruMusic）原生 .js 音源</span>
         </div>
         <div class="import-area" v-else-if="isAdminUser">
-          <input v-model="importUrl" placeholder="输入音源脚本链接" class="url-input" />
+          <input v-model="importUrl" placeholder="输入 .js 直链（GitHub / Gitee / gist）" class="url-input" />
           <button class="btn-primary btn-sm" @click="importFromUrl" :disabled="importingUrl">
             {{ importingUrl ? '导入中...' : '导入' }}
           </button>
+          <span class="hint">GitHub 直连失败会自动换镜像；也可用「本地导入」</span>
         </div>
 
         <div class="playlist-sync-settings card-inner">
@@ -1253,6 +1302,14 @@ import {
 } from '../utils/lyricColors.js'
 import AppSelect from '../components/AppSelect.vue'
 import { applyDirToggle, isDirChecked, isDirPathUnder, normalizeDirPath } from '../utils/dirTreeExpand.js'
+import {
+  PLATFORM_ORDER,
+  PLATFORM_LABELS,
+  ENABLED_PLATFORMS_KEY,
+  parseSourcePlatformMap,
+  serializeSourcePlatformMap,
+  platformsOfSource,
+} from '../utils/platforms.js'
 
 const route = useRoute()
 
@@ -1359,6 +1416,11 @@ const toast = ref(null)
 const importMode = ref('file')
 const importUrl = ref('')
 const importingUrl = ref(false)
+const PLATFORM_SHORT = { tx: 'QQ', wy: '云', kw: '酷', kg: '狗', mg: '咪' }
+/** @type {import('vue').Ref<Record<string, string[]>>} */
+const sourcePlatformMap = ref({})
+const expandedSourceId = ref('')
+let platformSaveTimer = 0
 const musicPaths = ref([])
 const sharedMusicPaths = ref([])
 const personalMusicPaths = ref([])
@@ -2138,6 +2200,7 @@ onMounted(async () => {
     if (!settings[LYRIC_HIGHLIGHT_KEY]) settings[LYRIC_HIGHLIGHT_KEY] = currentLyricHighlightColor.value
     if (!settings[SOURCE_FALLBACK_MODE_KEY]) settings[SOURCE_FALLBACK_MODE_KEY] = 'auto'
     applySourceFallbackMode(settings[SOURCE_FALLBACK_MODE_KEY])
+    syncEnabledPlatformsFromSettings()
     setAutoMatchOnPlay(settings[AUTO_MATCH_ON_PLAY_KEY] === 'true')
     if (!settings[DOWNLOAD_GROUP_BY_KEY]) {
       settings[DOWNLOAD_GROUP_BY_KEY] = settings['download.isSavePathGroupByListName'] === 'true' ? 'album' : 'none'
@@ -2171,6 +2234,12 @@ onMounted(async () => {
     const fromList = sourceList.value.filter(s => s.active).map(s => s.id)
     if (fromList.length) activeSourceIds.value = fromList
   } catch {}
+  // 音源列表就绪后再同步，便于把旧版全局平台开关摊到各音源
+  const hadGlobalPlatforms = Array.isArray(parseSourcePlatformMap(settings[ENABLED_PLATFORMS_KEY]).__global__)
+  syncEnabledPlatformsFromSettings()
+  if (hadGlobalPlatforms && sourceList.value.length && !sourcePlatformMap.value.__global__) {
+    persistEnabledPlatforms().catch(() => {})
+  }
   await loadPaths()
   if (isAdminUser.value) loadFfmpegStatus()
 })
@@ -2179,6 +2248,7 @@ onUnmounted(() => {
   stopFfmpegPoll()
   clearTimeout(customColorSaveTimer)
   clearTimeout(lyricColorSaveTimer)
+  if (platformSaveTimer) clearTimeout(platformSaveTimer)
 })
 
 async function applyFfmpegStatus(res) {
@@ -2966,6 +3036,113 @@ async function refreshPlatformTabs() {
   ])
 }
 
+function syncEnabledPlatformsFromSettings() {
+  const map = parseSourcePlatformMap(settings[ENABLED_PLATFORMS_KEY])
+  // 旧版全局数组 → 摊到当前已导入的每个音源（列表未就绪时先保留 __global__）
+  if (Array.isArray(map.__global__) && sourceList.value.length) {
+    const global = map.__global__
+    for (const s of sourceList.value) {
+      if (!Object.prototype.hasOwnProperty.call(map, s.id)) {
+        map[s.id] = platformsOfSource(s).filter((k) => global.includes(k))
+      }
+    }
+    delete map.__global__
+  }
+  sourcePlatformMap.value = map
+  // 仍有 __global__ 时先不覆盖 settings，避免列表加载前把旧配置冲掉
+  if (!map.__global__) {
+    settings[ENABLED_PLATFORMS_KEY] = serializeSourcePlatformMap(map)
+  }
+}
+
+function ensureSourcePlatformEntry(source) {
+  const id = source?.id
+  if (!id) return platformsOfSource(source)
+  const map = sourcePlatformMap.value
+  if (Object.prototype.hasOwnProperty.call(map, id)) {
+    return map[id]
+  }
+  const defaults = platformsOfSource(source)
+  sourcePlatformMap.value = { ...map, [id]: [...defaults] }
+  return defaults
+}
+
+function platformOptionsForSource(source) {
+  return platformsOfSource(source).map((id) => ({
+    id,
+    label: PLATFORM_LABELS[id] || id,
+    short: PLATFORM_SHORT[id] || id.slice(0, 1).toUpperCase(),
+  }))
+}
+
+function isSourcePlatformOn(sourceId, platformId) {
+  const list = sourcePlatformMap.value[sourceId]
+  if (list) return list.includes(platformId)
+  const s = sourceList.value.find((row) => row.id === sourceId)
+  return platformsOfSource(s || {}).includes(platformId)
+}
+
+function sourcePlatformSummary(source) {
+  const all = platformsOfSource(source)
+  if (!all.length) return '无平台'
+  const on = all.filter((k) => isSourcePlatformOn(source.id, k))
+  if (on.length === all.length) return `平台 ${on.length}/${all.length}`
+  if (!on.length) return '平台已全部关闭'
+  return `平台 ${on.length}/${all.length}`
+}
+
+function toggleSourcePlatformPanel(sourceId) {
+  expandedSourceId.value = expandedSourceId.value === sourceId ? '' : sourceId
+  if (expandedSourceId.value) {
+    const s = sourceList.value.find((row) => row.id === sourceId)
+    if (s) ensureSourcePlatformEntry(s)
+  }
+}
+
+async function persistEnabledPlatforms() {
+  const payload = serializeSourcePlatformMap(sourcePlatformMap.value)
+  settings[ENABLED_PLATFORMS_KEY] = payload
+  try {
+    await api.settings.update({ [ENABLED_PLATFORMS_KEY]: payload })
+    await refreshPlatformTabs()
+    loadPlayerSettings()
+  } catch (e) {
+    showToast(e.message || '保存失败', 'error')
+    syncEnabledPlatformsFromSettings()
+  }
+}
+
+function schedulePersistEnabledPlatforms() {
+  if (platformSaveTimer) clearTimeout(platformSaveTimer)
+  platformSaveTimer = setTimeout(() => {
+    platformSaveTimer = 0
+    persistEnabledPlatforms()
+  }, 200)
+}
+
+function toggleSourcePlatform(source, platformId, on) {
+  const id = source.id
+  const base = ensureSourcePlatformEntry(source)
+  const next = new Set(base)
+  if (on) next.add(platformId)
+  else next.delete(platformId)
+  sourcePlatformMap.value = {
+    ...sourcePlatformMap.value,
+    [id]: PLATFORM_ORDER.filter((k) => next.has(k)),
+  }
+  schedulePersistEnabledPlatforms()
+}
+
+function setSourcePlatformsAll(source, on) {
+  const id = source.id
+  const all = platformsOfSource(source)
+  sourcePlatformMap.value = {
+    ...sourcePlatformMap.value,
+    [id]: on ? [...all] : [],
+  }
+  schedulePersistEnabledPlatforms()
+}
+
 async function activateSource(id) {
   try {
     const res = await api.source.activate(id)
@@ -3039,6 +3216,13 @@ async function removeSource(id) {
     await api.source.remove(id)
     sourceList.value = sourceList.value.filter(s => s.id !== id)
     activeSourceIds.value = activeSourceIds.value.filter(x => x !== id)
+    if (expandedSourceId.value === id) expandedSourceId.value = ''
+    if (Object.prototype.hasOwnProperty.call(sourcePlatformMap.value, id)) {
+      const next = { ...sourcePlatformMap.value }
+      delete next[id]
+      sourcePlatformMap.value = next
+      schedulePersistEnabledPlatforms()
+    }
     showToast('已删除', 'success')
     await refreshPlatformTabs()
   } catch (e) {
@@ -3612,20 +3796,156 @@ function showToast(text, type = 'info') {
   background: var(--bg-secondary, var(--surface-2, rgba(0,0,0,0.04)));
   border-radius: 8px;
 }
-.source-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
-.source-item {
+.source-platform-panel {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.platform-switch-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.platform-switch-tip {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+  flex: 1;
+}
+.platform-switch-actions {
+  display: flex;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.plat-link {
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: 13px;
+  cursor: pointer;
+}
+.plat-link-on { color: #2f9e44; }
+.plat-link-off { color: #e03131; }
+.plat-link:hover { opacity: 0.85; }
+.platform-switch-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.platform-switch-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--bg-elevated, var(--bg-card));
+  border: 1px solid var(--border);
+}
+.platform-switch-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.platform-badge {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 700;
+  color: #fff;
+  flex-shrink: 0;
+}
+.plat-tx { background: #12b886; }
+.plat-wy { background: #e03131; }
+.plat-kw { background: #f59f00; }
+.plat-kg { background: #1c7ed6; }
+.plat-mg { background: #e64980; }
+.platform-switch-meta { min-width: 0; }
+.platform-switch-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+.platform-code {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: var(--bg-hover);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+.platform-switch-status {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.platform-switch-status.on { color: #2f9e44; }
+
+.source-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+.source-item {
+  display: flex;
+  flex-direction: column;
   padding: 12px 14px;
   border-radius: var(--radius);
   background: var(--bg-input);
   border: 1px solid transparent;
 }
+.source-item-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+}
 .source-item.active { border-color: var(--accent); background: var(--accent-muted); }
 .source-item.unhealthy { border-color: var(--warning, #e6a23c); }
 .source-item.health-mixed { border-color: color-mix(in srgb, var(--accent) 45%, var(--warning, #e6a23c)); }
-.source-info { display: flex; flex-direction: column; gap: 2px; }
+.source-item.expanded { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
+.source-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.source-expand-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: var(--bg-elevated, var(--bg-card));
+  border: 1px solid var(--border-light, var(--border));
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+.source-expand-btn svg {
+  width: 14px;
+  height: 14px;
+  transition: transform 0.2s ease;
+}
+.source-expand-btn.expanded {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border-light, var(--border)));
+  background: var(--accent-muted);
+}
+.source-expand-btn.expanded svg { transform: rotate(180deg); }
+.source-expand-btn:hover {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border-light, var(--border)));
+  background: var(--accent-muted);
+}
 .source-name-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .source-name { font-size: 14px; font-weight: 500; }
 .source-health-badge {
@@ -3941,8 +4261,9 @@ function showToast(text, type = 'info') {
   }
   .path-actions { width: 100%; }
   .path-manual { flex-direction: column; }
-  .source-item { flex-direction: column; align-items: flex-start; gap: 10px; }
+  .source-item-main { flex-direction: column; align-items: flex-start; gap: 10px; }
   .source-actions { width: 100%; }
+  .source-platform-panel { width: 100%; }
   .import-area { flex-direction: column; align-items: stretch; }
   .url-input { min-width: 0; width: 100%; }
   .toast {

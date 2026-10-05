@@ -8,7 +8,7 @@ import { buildMusicInfo } from '../utils/musicInfo.js'
 import { fetchTrackLyric, fetchTrackCover } from '../utils/trackMeta.js'
 import { resolveCoverUrl } from '../utils/cover.js'
 import { detectImageMime, fetchPicBuffer } from '../utils/fetchPic.js'
-import { isAllowedMediaPath } from '../utils/filePaths.js'
+import { isAllowedMediaPath, mapToContainerPath } from '../utils/filePaths.js'
 import { formatUserError } from '../utils/userError.js'
 import { buildPlayUrlCacheKey, getCachedPlayUrl, getOrFetchPlayUrl, clearCachedPlayUrl } from '../utils/playUrlCache.js'
 import { createLimiter, withTimeout } from '../utils/asyncLimit.js'
@@ -21,6 +21,8 @@ import { resolvePathByTrackId } from '../utils/libraryCache.js'
 import { ensureApePlayWav } from '../utils/apePlay.js'
 import { buildMusicCdnHeaders } from '../utils/musicCdnHeaders.js'
 import { ensureSmoothPlayAac, needsSmoothPlayTranscode, warmSmoothPlayAac } from '../utils/smoothPlay.js'
+import { isPlatformEnabled } from '../utils/enabledPlatforms.js'
+import { AVAILABLE_SOURCES } from '../musicSdk.js'
 
 export const playRouter = Router()
 
@@ -130,12 +132,16 @@ playRouter.post('/ticket', (req, res) => {
       return res.status(401).json({ error: '未登录', code: 'UNAUTHORIZED' })
     }
     let streamUrl = String(req.body?.url || '').trim()
+    const libraryTrackId = pickLibraryTrackId(req.body || {})
     const localFilePath = resolveLocalFilePath(req.body || {})
-    if (!streamUrl && localFilePath) {
-      if (!isAllowedMediaPath(localFilePath, { userId: req.user.id })) {
+    if (!streamUrl && (libraryTrackId || localFilePath)) {
+      if (localFilePath && !isAllowedMediaPath(localFilePath, { userId: req.user.id })) {
         return res.status(400).json({ error: '本地文件不可用或不在允许目录内' })
       }
-      streamUrl = `/api/play/local?path=${encodeURIComponent(path.resolve(localFilePath))}`
+      const qs = libraryTrackId && LIBRARY_TRACK_ID_RE.test(libraryTrackId)
+        ? `trackId=${encodeURIComponent(libraryTrackId)}`
+        : `path=${encodeURIComponent(path.resolve(mapToContainerPath(localFilePath) || localFilePath))}`
+      streamUrl = `/api/play/local?${qs}`
     }
     if (!streamUrl) {
       return res.status(400).json({ error: '请提供 url 或 trackId/localPath' })
@@ -183,16 +189,24 @@ playRouter.post('/url', async (req, res) => {
       if (!isAllowedMediaPath(localFilePath, { userId: req.user?.id })) {
         return res.status(400).json({ error: '本地文件不可用或不在允许目录内，请在设置中检查音乐库/下载路径' })
       }
-      const resolvedLocal = path.resolve(localFilePath)
+      const mapped = mapToContainerPath(localFilePath) || localFilePath
+      const resolvedLocal = fs.existsSync(path.resolve(mapped))
+        ? path.resolve(mapped)
+        : path.resolve(localFilePath)
       const localExt = path.extname(resolvedLocal).toLowerCase()
       const wantSmooth = Boolean(req.body?.smooth)
         && needsSmoothPlayTranscode(resolvedLocal)
         && localExt !== '.ape'
+      // 有稳定 trackId 时用短地址，避免中文长路径被网关截断
+      const tid = String(libraryTrackId || '').trim()
+      const qs = tid && LIBRARY_TRACK_ID_RE.test(tid)
+        ? `trackId=${encodeURIComponent(tid)}`
+        : `path=${encodeURIComponent(resolvedLocal)}`
       const playPath = localExt === '.ape'
-        ? `/api/play/local-ape?path=${encodeURIComponent(resolvedLocal)}`
+        ? `/api/play/local-ape?${qs}`
         : wantSmooth
-          ? `/api/play/local-smooth?path=${encodeURIComponent(resolvedLocal)}`
-          : `/api/play/local?path=${encodeURIComponent(resolvedLocal)}`
+          ? `/api/play/local-smooth?${qs}`
+          : `/api/play/local?${qs}`
       const url = signPlayStreamUrl(playPath, req)
       return res.json({
         ok: true,
@@ -208,6 +222,11 @@ playRouter.post('/url', async (req, res) => {
     }
 
     if (!songId || !source) return res.status(400).json({ error: '缺少歌曲信息' })
+
+    if (!isPlatformEnabled(req.user?.id, source)) {
+      const name = AVAILABLE_SOURCES[source]?.name || source
+      return res.status(400).json({ error: `平台「${name}」已关闭，请在设置 → 音源管理中开启` })
+    }
 
     if (!hasActiveSource(getStoredActiveSourceIds(req.user?.id))) {
       return res.status(400).json({ error: '没有激活的音源，请先在设置中激活音源' })
@@ -238,6 +257,7 @@ playRouter.post('/url', async (req, res) => {
           preferredSourceId: sourceApiId || undefined,
           skipSourceIds: skipSourceIds || [],
           allowedSourceIds,
+          userId: req.user?.id,
         }),
         PLAY_URL_TIMEOUT_MS,
         '获取播放链接超时，请稍后重试',
@@ -278,6 +298,63 @@ function setLocalStreamHeaders(res, req) {
   res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges')
 }
 
+function readQueryFilePath(req) {
+  let filePath = req.query?.path
+  if (Array.isArray(filePath)) filePath = filePath[0]
+  if (!filePath || typeof filePath !== 'string') return ''
+  // Express 通常已解码；仅当仍含百分号编码时再解一次，避免把文件名里的 + 改成空格
+  if (/%[0-9A-Fa-f]{2}/.test(filePath)) {
+    try {
+      filePath = decodeURIComponent(filePath.replace(/\+/g, '%20'))
+    } catch {}
+  }
+  return filePath
+}
+
+function resolveStreamLocalFile(req) {
+  const trackId = String(req.query?.trackId || '').trim()
+  if (trackId && LIBRARY_TRACK_ID_RE.test(trackId)) {
+    const byId = resolvePathByTrackId(trackId)
+    if (byId) return byId
+  }
+  const fromQuery = readQueryFilePath(req)
+  if (fromQuery) return fromQuery
+  const fromTicket = req.streamTicket?.path
+  if (fromTicket) return String(fromTicket)
+  return ''
+}
+
+function applyRangeOrFull(res, req, filePath, mime) {
+  const stat = fs.statSync(filePath)
+  const total = stat.size
+  const range = req.headers.range
+  setLocalStreamHeaders(res, req)
+  res.setHeader('Accept-Ranges', 'bytes')
+  res.setHeader('Content-Type', mime)
+  res.setHeader('Cache-Control', 'private, max-age=3600')
+
+  if (range) {
+    const m = /^bytes=(\d*)-(\d*)$/.exec(range)
+    if (!m) return res.status(416).end()
+    const start = m[1] ? parseInt(m[1], 10) : 0
+    let end = m[2] ? parseInt(m[2], 10) : total - 1
+    if (Number.isNaN(start) || Number.isNaN(end)) return res.status(416).end()
+    end = Math.min(end, total - 1)
+    if (start >= total || start > end || end < 0) {
+      res.setHeader('Content-Range', `bytes */${total}`)
+      return res.status(416).end()
+    }
+    res.status(206)
+    res.setHeader('Content-Range', `bytes ${start}-${end}/${total}`)
+    res.setHeader('Content-Length', end - start + 1)
+    pipeLocalFile(res, filePath, { start, end })
+    return
+  }
+
+  res.setHeader('Content-Length', total)
+  pipeLocalFile(res, filePath)
+}
+
 function pipeLocalFile(res, filePath, { start = 0, end } = {}) {
   const options = end != null ? { start, end } : undefined
   const stream = fs.createReadStream(filePath, options)
@@ -296,56 +373,25 @@ function pipeLocalFile(res, filePath, { start = 0, end } = {}) {
 
 playRouter.get('/local', (req, res) => {
   try {
-    let filePath = req.query.path
-    if (!filePath || typeof filePath !== 'string') {
+    const filePath = resolveStreamLocalFile(req)
+    if (!filePath) {
       return res.status(400).json({ error: '缺少文件路径' })
     }
-    try {
-      // URLSearchParams 常把空格编成 +；decodeURIComponent 不会还原
-      filePath = decodeURIComponent(String(filePath).replace(/\+/g, '%20'))
-    } catch {
-      filePath = String(filePath).replace(/\+/g, ' ')
-    }
-    if (!isAllowedMediaPath(filePath)) {
+    if (!isAllowedMediaPath(filePath, { userId: req.user?.id })) {
       return res.status(403).json({ error: '无权访问该文件' })
     }
 
-    const resolved = path.resolve(filePath)
-    const ext = path.extname(resolved).toLowerCase()
+    const resolved = path.resolve(mapToContainerPath(filePath) || filePath)
+    const exists = fs.existsSync(resolved) ? resolved : path.resolve(filePath)
+    const ext = path.extname(exists).toLowerCase()
     if (ext === '.ape') {
       return res.status(415).json({
         error: 'APE 需转码后播放，请使用 /api/play/local-ape 或重新获取播放链接',
       })
     }
 
-    const stat = fs.statSync(resolved)
     const mime = AUDIO_MIME[ext] || 'application/octet-stream'
-    const total = stat.size
-    const range = req.headers.range
-
-    setLocalStreamHeaders(res, req)
-    res.setHeader('Accept-Ranges', 'bytes')
-    res.setHeader('Content-Type', mime)
-    res.setHeader('Cache-Control', 'private, max-age=3600')
-
-    if (range) {
-      const m = /^bytes=(\d*)-(\d*)$/.exec(range)
-      if (!m) return res.status(416).end()
-      const start = m[1] ? parseInt(m[1], 10) : 0
-      const end = m[2] ? parseInt(m[2], 10) : total - 1
-      if (start >= total || end >= total || start > end) {
-        res.setHeader('Content-Range', `bytes */${total}`)
-        return res.status(416).end()
-      }
-      res.status(206)
-      res.setHeader('Content-Range', `bytes ${start}-${end}/${total}`)
-      res.setHeader('Content-Length', end - start + 1)
-      pipeLocalFile(res, resolved, { start, end })
-      return
-    }
-
-    res.setHeader('Content-Length', total)
-    pipeLocalFile(res, resolved)
+    applyRangeOrFull(res, req, exists, mime)
   } catch (e) {
     if (!res.headersSent) {
       res.status(500).json({ error: formatUserError(e, '读取本地文件失败') })
@@ -356,52 +402,22 @@ playRouter.get('/local', (req, res) => {
 /** APE：ffmpeg 转成 WAV 缓存后再按本地文件流式输出（支持 Range） */
 playRouter.get('/local-ape', async (req, res) => {
   try {
-    let filePath = req.query.path
-    if (!filePath || typeof filePath !== 'string') {
+    const filePath = resolveStreamLocalFile(req)
+    if (!filePath) {
       return res.status(400).json({ error: '缺少文件路径' })
     }
-    try {
-      filePath = decodeURIComponent(String(filePath).replace(/\+/g, '%20'))
-    } catch {
-      filePath = String(filePath).replace(/\+/g, ' ')
-    }
-    if (!isAllowedMediaPath(filePath)) {
+    if (!isAllowedMediaPath(filePath, { userId: req.user?.id })) {
       return res.status(403).json({ error: '无权访问该文件' })
     }
 
-    const resolved = path.resolve(filePath)
-    if (path.extname(resolved).toLowerCase() !== '.ape') {
+    const resolved = path.resolve(mapToContainerPath(filePath) || filePath)
+    const exists = fs.existsSync(resolved) ? resolved : path.resolve(filePath)
+    if (path.extname(exists).toLowerCase() !== '.ape') {
       return res.status(400).json({ error: '仅支持 APE 文件' })
     }
 
-    const wavPath = await ensureApePlayWav(resolved)
-    const stat = fs.statSync(wavPath)
-    const total = stat.size
-    const range = req.headers.range
-
-    setLocalStreamHeaders(res, req)
-    res.setHeader('Accept-Ranges', 'bytes')
-    res.setHeader('Content-Type', 'audio/wav')
-    res.setHeader('Cache-Control', 'private, max-age=3600')
-
-    if (range) {
-      const m = /^bytes=(\d*)-(\d*)$/.exec(range)
-      if (!m) return res.status(416).end()
-      const start = m[1] ? parseInt(m[1], 10) : 0
-      const end = m[2] ? parseInt(m[2], 10) : total - 1
-      if (start >= total || end >= total || start > end) {
-        res.setHeader('Content-Range', `bytes */${total}`)
-        return res.status(416).end()
-      }
-      res.status(206)
-      res.setHeader('Content-Range', `bytes ${start}-${end}/${total}`)
-      res.setHeader('Content-Length', end - start + 1)
-      pipeLocalFile(res, wavPath, { start, end })
-      return
-    }
-
-    res.setHeader('Content-Length', total)
-    pipeLocalFile(res, wavPath)
+    const wavPath = await ensureApePlayWav(exists)
+    applyRangeOrFull(res, req, wavPath, 'audio/wav')
   } catch (e) {
     if (!res.headersSent) {
       const status = /ffmpeg|无法直接播放 APE/i.test(String(e?.message || '')) ? 415 : 500
@@ -416,52 +432,22 @@ playRouter.get('/local-ape', async (req, res) => {
  */
 playRouter.get('/local-smooth', async (req, res) => {
   try {
-    let filePath = req.query.path
-    if (!filePath || typeof filePath !== 'string') {
+    const filePath = resolveStreamLocalFile(req)
+    if (!filePath) {
       return res.status(400).json({ error: '缺少文件路径' })
-    }
-    try {
-      filePath = decodeURIComponent(String(filePath).replace(/\+/g, '%20'))
-    } catch {
-      filePath = String(filePath).replace(/\+/g, ' ')
     }
     if (!isAllowedMediaPath(filePath, { userId: req.user?.id })) {
       return res.status(403).json({ error: '无权访问该文件' })
     }
 
-    const resolved = path.resolve(filePath)
-    if (!needsSmoothPlayTranscode(resolved)) {
+    const resolved = path.resolve(mapToContainerPath(filePath) || filePath)
+    const exists = fs.existsSync(resolved) ? resolved : path.resolve(filePath)
+    if (!needsSmoothPlayTranscode(exists)) {
       return res.status(400).json({ error: '该格式无需流畅转码，请使用 /api/play/local' })
     }
 
-    const aacPath = await ensureSmoothPlayAac(resolved)
-    const stat = fs.statSync(aacPath)
-    const total = stat.size
-    const range = req.headers.range
-
-    setLocalStreamHeaders(res, req)
-    res.setHeader('Accept-Ranges', 'bytes')
-    res.setHeader('Content-Type', 'audio/mp4')
-    res.setHeader('Cache-Control', 'private, max-age=3600')
-
-    if (range) {
-      const m = /^bytes=(\d*)-(\d*)$/.exec(range)
-      if (!m) return res.status(416).end()
-      const start = m[1] ? parseInt(m[1], 10) : 0
-      const end = m[2] ? parseInt(m[2], 10) : total - 1
-      if (start >= total || end >= total || start > end) {
-        res.setHeader('Content-Range', `bytes */${total}`)
-        return res.status(416).end()
-      }
-      res.status(206)
-      res.setHeader('Content-Range', `bytes ${start}-${end}/${total}`)
-      res.setHeader('Content-Length', end - start + 1)
-      pipeLocalFile(res, aacPath, { start, end })
-      return
-    }
-
-    res.setHeader('Content-Length', total)
-    pipeLocalFile(res, aacPath)
+    const aacPath = await ensureSmoothPlayAac(exists)
+    applyRangeOrFull(res, req, aacPath, 'audio/mp4')
   } catch (e) {
     if (!res.headersSent) {
       const status = /ffmpeg|转码/i.test(String(e?.message || '')) ? 415 : 500

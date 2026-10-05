@@ -13,6 +13,7 @@ import {
 import { formatUserError } from './utils/userError.js'
 import { assertMusicUrl } from './utils/sourceResult.js'
 import { getSourceHealth } from './utils/sourceHealth.js'
+import { isSourcePlatformEnabled } from './utils/enabledPlatforms.js'
 
 /** @type {Map<string, { id: string, handler: Function|null, sources: object, pendingRequests: Map }>} */
 const activeSources = new Map()
@@ -327,7 +328,7 @@ export function getMergedSources(allowedSourceIds = null) {
   return merged
 }
 
-function candidatesFor(source, action, allowedSourceIds = null) {
+function candidatesFor(source, action, allowedSourceIds = null, userId = null) {
   const list = [...activeSources.values()]
   // 最近激活优先
   list.reverse()
@@ -337,6 +338,7 @@ function candidatesFor(source, action, allowedSourceIds = null) {
   return list.filter((entry) => {
     if (!entry?.handler) return false
     if (allow && !allow.has(entry.id)) return false
+    if (userId && !isSourcePlatformEnabled(userId, entry.id, source)) return false
     const info = entry.sources?.[source]
     if (!info) return false
     if (action && Array.isArray(info.actions) && info.actions.length && !info.actions.includes(action)) {
@@ -440,15 +442,20 @@ export function clearSourceNameCache(id) {
   else sourceNameCache.clear()
 }
 
-function resolveCandidates(source, action, allowedSourceIds = null) {
-  let candidates = candidatesFor(source, action, allowedSourceIds)
-  if (!candidates.length) candidates = candidatesFor(source, null, allowedSourceIds)
+function resolveCandidates(source, action, allowedSourceIds = null, userId = null) {
+  let candidates = candidatesFor(source, action, allowedSourceIds, userId)
+  if (!candidates.length) candidates = candidatesFor(source, null, allowedSourceIds, userId)
   if (!candidates.length) {
     const allow = Array.isArray(allowedSourceIds)
       ? new Set(allowedSourceIds.map(String))
       : null
     candidates = [...activeSources.values()]
-      .filter((s) => s?.handler && (!allow || allow.has(s.id)))
+      .filter((s) => {
+        if (!s?.handler) return false
+        if (allow && !allow.has(s.id)) return false
+        if (userId && !isSourcePlatformEnabled(userId, s.id, source)) return false
+        return true
+      })
       .reverse()
   }
   // 该平台历史上「完整」的音源优先，「多为试听」的靠后
@@ -491,6 +498,7 @@ export async function requestSourceWithMeta(source, action, info, options = {}) 
   const allowedSourceIds = Array.isArray(options.allowedSourceIds)
     ? options.allowedSourceIds.map(String).filter(Boolean)
     : null
+  const userId = options.userId || null
 
   if (!hasActiveSource(allowedSourceIds)) throw new Error('没有激活的音源')
 
@@ -498,14 +506,15 @@ export async function requestSourceWithMeta(source, action, info, options = {}) 
   const preferredSourceId = options.preferredSourceId || null
   const skipSourceIds = new Set((options.skipSourceIds || []).filter(Boolean))
 
-  let candidates = resolveCandidates(source, action, allowedSourceIds)
+  let candidates = resolveCandidates(source, action, allowedSourceIds, userId)
   if (preferredSourceId) {
     const preferred = candidates.find((entry) => entry.id === preferredSourceId)
     if (preferred) candidates = [preferred]
     else {
       const entry = activeSources.get(preferredSourceId)
       const allowed = !allowedSourceIds || allowedSourceIds.includes(preferredSourceId)
-      candidates = entry?.handler && allowed ? [entry] : []
+      const platOk = !userId || isSourcePlatformEnabled(userId, preferredSourceId, source)
+      candidates = entry?.handler && allowed && platOk ? [entry] : []
     }
   }
   candidates = candidates.filter((entry) => !skipSourceIds.has(entry.id))

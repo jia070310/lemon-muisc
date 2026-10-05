@@ -26,6 +26,7 @@ import {
   sourceHealthPublicView,
 } from '../utils/sourceHealth.js'
 import { parseScriptMeta, metaToDbFields } from '../utils/parseScriptMeta.js'
+import { fetchSourceScriptFromUrl } from '../utils/fetchSourceScript.js'
 import { requireAdmin } from '../middleware/auth.js'
 
 export const sourceRouter = Router()
@@ -43,12 +44,7 @@ function insertUserApi(script, metaExtra = {}) {
 }
 
 async function fetchScriptFromUrl(url) {
-  const { default: needle } = await import('needle')
-  const resp = await needle('get', url, { follow_max: 5, timeout: 15000, parse_response: false })
-  if (resp.statusCode !== 200) throw new Error(`下载失败: HTTP ${resp.statusCode}`)
-  const script = Buffer.isBuffer(resp.body) ? resp.body.toString('utf-8') : String(resp.body)
-  if (!script || script.length < 10) throw new Error('获取到的脚本内容为空')
-  return script
+  return fetchSourceScriptFromUrl(url)
 }
 
 sourceRouter.get('/list', (req, res) => {

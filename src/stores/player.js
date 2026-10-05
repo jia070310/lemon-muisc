@@ -2322,27 +2322,49 @@ function scheduleSmoothWarmupNext() {
   }, 1200)
 }
 
+const LOCAL_TRACK_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+function localStreamTrackId(item) {
+  const tid = String(item?.trackId || '').trim()
+  if (LOCAL_TRACK_ID_RE.test(tid)) return tid
+  const id = String(item?.id || '').trim()
+  if (!LOCAL_TRACK_ID_RE.test(id)) return ''
+  if (item?.songId || item?.songmid || item?.hash || item?.copyrightId || item?.musicId || item?.strMediaMid) return ''
+  if (item?.source && item.source !== 'local') return ''
+  return id
+}
+
+function fileExtOf(filePath) {
+  const base = String(filePath).replace(/\\/g, '/').split('/').pop() || ''
+  const i = base.lastIndexOf('.')
+  return i >= 0 ? base.slice(i + 1).toLowerCase() : ''
+}
+
+function buildLocalStreamUrl(item, { smooth = false } = {}) {
+  const filePath = getTrackFilePath(item)
+  const ext = fileExtOf(filePath)
+  const base = ext === 'ape'
+    ? '/api/play/local-ape'
+    : (smooth ? '/api/play/local-smooth' : '/api/play/local')
+  const tid = localStreamTrackId(item)
+  if (tid) return `${base}?trackId=${encodeURIComponent(tid)}`
+  if (filePath) return `${base}?path=${encodeURIComponent(filePath)}`
+  return ''
+}
+
 async function resolvePlayUrl(item, source, quality = getPlayQuality(), options = {}) {
   if (isLocalTrack(item, source)) {
-    // 普通本地文件直接拼同源流地址，省掉 /api/play/url 往返（情绪地图连播尤其明显）
+    // 优先用短 trackId 流地址，避免中文长路径 + token 被网关截断
     // APE 需服务端转码；流畅模式：高码率无损走 AAC 缓存流（车机/弱网）
     const filePath = getTrackFilePath(item)
-    if (filePath) {
-      const ext = (() => {
-        const base = String(filePath).replace(/\\/g, '/').split('/').pop() || ''
-        const i = base.lastIndexOf('.')
-        return i >= 0 ? base.slice(i + 1).toLowerCase() : ''
-      })()
-      if (ext && LOCAL_SMOOTH_EXTS.has(ext) && smoothStreamEnabled.value && !options.forceDirectLocal) {
-        const url = `/api/play/local-smooth?path=${encodeURIComponent(filePath)}`
-        if (!options.refresh) setCachedPlayUrl(item, 'local', `${quality}:smooth`, url)
-        return url
+    const ext = fileExtOf(filePath)
+    const wantSmooth = Boolean(ext && LOCAL_SMOOTH_EXTS.has(ext) && smoothStreamEnabled.value && !options.forceDirectLocal)
+    const direct = buildLocalStreamUrl(item, { smooth: wantSmooth })
+    if (direct) {
+      if (!options.refresh) {
+        setCachedPlayUrl(item, 'local', wantSmooth ? `${quality}:smooth` : quality, direct)
       }
-      if (ext && ext !== 'ape') {
-        const url = `/api/play/local?path=${encodeURIComponent(filePath)}`
-        if (!options.refresh) setCachedPlayUrl(item, 'local', quality, url)
-        return url
-      }
+      return direct
     }
     const res = await api.play.getUrl({
       ...buildPlayPayload(item, 'local', quality),

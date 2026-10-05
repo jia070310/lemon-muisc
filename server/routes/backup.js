@@ -16,6 +16,7 @@ const EXPORTABLE_USER_KEYS = [
   'playlist.remoteSyncDays',
   'download.usePersonalSavePath',
   'source.active',
+  'source.enabledPlatforms',
 ].filter((k) => USER_SETTING_KEYS.has(k))
 
 backupRouter.get('/export', (req, res) => {

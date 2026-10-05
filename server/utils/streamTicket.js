@@ -105,6 +105,8 @@ export function ticketClaimsFromStreamUrl(url) {
     }
     const p = u.searchParams.get('path') || ''
     if (p) return { path: p, scope: 'local' }
+    const trackId = u.searchParams.get('trackId') || ''
+    if (trackId) return { path: trackId, scope: 'local' }
     return { scope: 'stream' }
   } catch {
     return { scope: 'stream' }
@@ -114,11 +116,21 @@ export function ticketClaimsFromStreamUrl(url) {
 /**
  * 校验票据是否允许访问当前请求。
  */
+function ticketPathMatches(claimsPath, reqPath) {
+  if (!claimsPath || !reqPath) return false
+  try {
+    return path.resolve(String(claimsPath)) === path.resolve(String(reqPath))
+  } catch {
+    return String(claimsPath) === String(reqPath)
+  }
+}
+
 export function ticketAllowsRequest(claims, req) {
   if (!claims) return false
   const scope = claims.scope || ''
   const url = String(req.originalUrl || req.url || '')
   const reqPath = String(req.query?.path || req.query?.file || '').trim()
+  const reqTrackId = String(req.query?.trackId || '').trim()
 
   if (scope === 'proxy') {
     return url.includes('/play/proxy')
@@ -126,15 +138,16 @@ export function ticketAllowsRequest(claims, req) {
   if (scope === 'cover') {
     return url.includes('/cover') || url.includes('/tag/cover')
   }
+  if (reqTrackId) {
+    // trackId 短链：ticket 内 path 常为同一 trackId；或仅 scope=local/stream
+    if (!claims.path) return scope === 'local' || scope === 'stream'
+    return String(claims.path) === reqTrackId
+  }
   if (claims.path && reqPath) {
-    try {
-      return path.resolve(claims.path) === path.resolve(reqPath)
-    } catch {
-      return String(claims.path) === reqPath
-    }
+    return ticketPathMatches(claims.path, reqPath)
   }
   if (scope === 'local' || scope === 'stream') {
-    return Boolean(reqPath) || scope === 'stream'
+    return Boolean(reqPath || claims.path) || scope === 'stream'
   }
   return true
 }

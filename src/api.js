@@ -193,7 +193,7 @@ export const api = {
       if (!res.ok) throw new Error(formatUserError(data.error || '导入失败', '导入失败'))
       return data
     },
-    importUrl: (url) => request('/source/import-url', { method: 'POST', body: { url } }),
+    importUrl: (url) => request('/source/import-url', { method: 'POST', body: { url }, timeout: 90000 }),
     remove: (id) => request(`/source/${id}`, { method: 'DELETE' }),
     activate: (id) => request(`/source/activate/${id}`, { method: 'POST' }),
     deactivate: (id) => id
