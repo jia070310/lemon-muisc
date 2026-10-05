@@ -76,20 +76,25 @@ export function parseYrc(yrc) {
 
     const lineStartMs = Number(head[1]) || 0
     const rest = head[3] || ''
-    const words = []
+    const rawWords = []
     const wordRe = /\((\d+)\s*,\s*(\d+)(?:\s*,\s*-?\d+)?\)([^(]*)/g
     let wm
     while ((wm = wordRe.exec(rest)) !== null) {
-      const offsetMs = Number(wm[1]) || 0
+      const stampMs = Number(wm[1]) || 0
       const durMs = Number(wm[2]) || 0
       const text = wm[3] ?? ''
-      if (!text && !words.length) continue
-      words.push({
-        time: (lineStartMs + offsetMs) / 1000,
-        duration: durMs / 1000,
-        text,
-      })
+      if (!text && !rawWords.length) continue
+      rawWords.push({ stampMs, durMs, text })
     }
+    if (!rawWords.length) continue
+    // 网易 YRC 字时间为绝对毫秒；酷狗转出来的是相对行首。用首字判断。
+    const firstStamp = rawWords[0].stampMs
+    const absolute = firstStamp > 200 && firstStamp >= lineStartMs - 80
+    const words = rawWords.map((w) => ({
+      time: (absolute ? w.stampMs : lineStartMs + w.stampMs) / 1000,
+      duration: w.durMs / 1000,
+      text: w.text,
+    }))
     if (!words.length) continue
     const text = words.map((w) => w.text).join('')
     if (!text.trim()) continue
@@ -213,10 +218,19 @@ export function getLyricLineEndTime(lines, idx) {
 /**
  * 无官方逐字轴时，按行起止时间均分到每个字符，用于逐字高亮展示
  */
+function hasOfficialWordTimes(words) {
+  if (!Array.isArray(words) || !words.length) return false
+  if (words.some((w) => w?.synthetic)) return false
+  return words.every((w) => Number.isFinite(Number(w?.time)))
+}
+
 export function synthesizeWordTimings(lines) {
   if (!Array.isArray(lines) || !lines.length) return []
   return lines.map((line, i) => {
-    if (isProgressiveWordTiming(line?.words)) return line
+    if (hasOfficialWordTimes(line?.words)) {
+      const end = getLyricLineEndTime(lines, i)
+      return { ...line, words: inferWordDurations(line.words, end) }
+    }
     const text = String(line?.text || '')
     const chars = Array.from(text)
     if (!chars.length) return { ...line, words: null }
@@ -236,24 +250,31 @@ export function synthesizeWordTimings(lines) {
   })
 }
 
-/** 字时间是否单调不减且间隔合理（否则视为不可用，改走行内进度） */
+function inferWordDurations(words, endTime) {
+  return words.map((word, i) => {
+    const explicit = Number(word?.duration)
+    if (explicit > 0.03) return word
+    const t0 = Number(word?.time)
+    const t1 = i + 1 < words.length ? Number(words[i + 1]?.time) : Number(endTime)
+    const duration = Number.isFinite(t0) && Number.isFinite(t1) && t1 > t0 ? t1 - t0 : 0.28
+    return { ...word, duration }
+  })
+}
+
+/** 官方逐字轴：时间可用即可，不因字间隔稍大而整句均分 */
 export function isProgressiveWordTiming(words) {
-  if (!Array.isArray(words) || words.length < 2) return false
-  // 推算轴已带 synthetic，走统一的行进度逻辑更稳
-  if (words.some((w) => w?.synthetic)) return false
+  if (!hasOfficialWordTimes(words)) return false
+  if (words.length === 1) return Number(words[0]?.duration) > 0.03 || Number.isFinite(Number(words[0]?.time))
   let prev = Number(words[0]?.time)
   if (!Number.isFinite(prev)) return false
   let advanced = false
   for (let i = 1; i < words.length; i++) {
     const t = Number(words[i]?.time)
-    if (!Number.isFinite(t) || t < prev - 1e-4) return false
-    // 允许 0 时长占位（酷狗 KRC 常见），但不能倒退
+    if (!Number.isFinite(t) || t < prev - 0.05) return false
     if (t > prev + 1e-4) advanced = true
-    // 正常逐字很少超过 1.5s；更大间隔基本是坏轴
-    if (t - prev > 1.5) return false
     prev = t
   }
-  return advanced
+  return advanced || words.some((w) => Number(w?.duration) > 0.03)
 }
 
 function resolveLineEndTime(line, words, endTime) {
