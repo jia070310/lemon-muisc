@@ -38,6 +38,8 @@ backupRouter.get('/export', (req, res) => {
       data: {
         playlists: userData.playlists || [],
         favorites: userData.favorites || [],
+        favoriteAlbums: userData.favoriteAlbums || [],
+        favoriteArtists: userData.favoriteArtists || [],
         recentPlays: userData.recentPlays || [],
         settings,
       },
@@ -59,10 +61,12 @@ backupRouter.post('/import', (req, res) => {
 
     const playlists = Array.isArray(data.playlists) ? data.playlists : null
     const favorites = Array.isArray(data.favorites) ? data.favorites : null
+    const favoriteAlbums = Array.isArray(data.favoriteAlbums) ? data.favoriteAlbums : null
+    const favoriteArtists = Array.isArray(data.favoriteArtists) ? data.favoriteArtists : null
     const recentPlays = Array.isArray(data.recentPlays) ? data.recentPlays : null
     const settingsIn = data.settings && typeof data.settings === 'object' ? data.settings : {}
 
-    if (!playlists && !favorites && !recentPlays && !Object.keys(settingsIn).length) {
+    if (!playlists && !favorites && !favoriteAlbums && !favoriteArtists && !recentPlays && !Object.keys(settingsIn).length) {
       return res.status(400).json({ error: '备份中没有可导入的数据' })
     }
 
@@ -71,6 +75,8 @@ backupRouter.post('/import', (req, res) => {
 
     let nextPlaylists = current.playlists
     let nextFavorites = current.favorites
+    let nextFavoriteAlbums = current.favoriteAlbums
+    let nextFavoriteArtists = current.favoriteArtists
     let nextRecent = current.recentPlays
 
     if (playlists) {
@@ -96,10 +102,22 @@ backupRouter.post('/import', (req, res) => {
     if (recentPlays) {
       nextRecent = mode === 'replace' ? recentPlays : [...recentPlays, ...(current.recentPlays || [])].slice(0, 200)
     }
+    if (favoriteAlbums) {
+      nextFavoriteAlbums = mode === 'merge'
+        ? [...new Map([...(current.favoriteAlbums || []), ...favoriteAlbums].map((a) => [String(a?.id || ''), a])).values()].filter((a) => a?.id)
+        : favoriteAlbums
+    }
+    if (favoriteArtists) {
+      nextFavoriteArtists = mode === 'merge'
+        ? [...new Map([...(current.favoriteArtists || []), ...favoriteArtists].map((a) => [String(a?.id || ''), a])).values()].filter((a) => a?.id)
+        : favoriteArtists
+    }
 
     setLibraryUserData(req.user.id, {
       playlists: nextPlaylists,
       favorites: nextFavorites,
+      favoriteAlbums: nextFavoriteAlbums,
+      favoriteArtists: nextFavoriteArtists,
       recentPlays: nextRecent,
       revision: (current.revision || 0) + 1,
     })
@@ -116,6 +134,8 @@ backupRouter.post('/import', (req, res) => {
       imported: {
         playlists: playlists?.length || 0,
         favorites: favorites?.length || 0,
+        favoriteAlbums: favoriteAlbums?.length || 0,
+        favoriteArtists: favoriteArtists?.length || 0,
         recentPlays: recentPlays?.length || 0,
         settings: Object.keys(toSet).length,
         mode,

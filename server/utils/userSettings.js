@@ -39,6 +39,8 @@ export const GLOBAL_SETTING_KEYS = new Set([
 export const USER_SETTING_KEYS = new Set([
   'library.customPlaylists',
   'library.favorites',
+  'library.favoriteAlbums',
+  'library.favoriteArtists',
   'library.recentPlays',
   'library.userDataRevision',
   'ui.theme',

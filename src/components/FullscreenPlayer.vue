@@ -71,7 +71,6 @@
 
           <div class="fs-lyric-wrap">
             <div
-              v-if="displayLyricLines.length"
               class="fs-lyric-toolbar fs-chrome"
               @pointerdown.stop
               @click.stop
@@ -140,6 +139,15 @@
                     </label>
                   </div>
                 </div>
+              </div>
+              <div class="fs-lyric-edit">
+                <button
+                  type="button"
+                  class="fs-lyric-mode-btn"
+                  title="从网络重新选择歌词"
+                  :disabled="!currentPlaying || lyricPickBusy"
+                  @click.stop="openLyricPick"
+                >改歌词</button>
               </div>
             </div>
             <div
@@ -429,6 +437,18 @@
           @close="pickPlaylistTrack = null"
           @added="onAddedToPlaylist"
         />
+
+        <LyricPickModal
+          v-if="showLyricPick"
+          :artist="lyricPickArtist"
+          :title="lyricPickTitle"
+          :album="lyricPickAlbum"
+          :file-name="lyricPickFileName"
+          :default-source="lyricPickDefaultSource"
+          :busy="lyricPickBusy"
+          @close="showLyricPick = false"
+          @confirm="onLyricPickConfirm"
+        />
       </div>
     </Transition>
   </Teleport>
@@ -448,6 +468,7 @@ import {
   resumeOrTogglePause, unlockAudioFromGesture, currentLocalTrackPath, tryFillCoverFromNetwork,
   showPlayerNotice,
   peekPlaybackTime,
+  applyManualLyrics,
 } from '../stores/player.js'
 import { cleanText, formatArtists } from '../utils/text.js'
 import { resolveActiveWordIndex, getLyricLineEndTime, getWordFillProgress } from '../utils/lrc.js'
@@ -468,6 +489,8 @@ import { isAppIconUrl } from '../utils/appIcon.js'
 import SpectrumVisualizer from './SpectrumVisualizer.vue'
 import CoverArt from './CoverArt.vue'
 import PickPlaylistModal from './PickPlaylistModal.vue'
+import LyricPickModal from './LyricPickModal.vue'
+import { getTrackFilePath } from '../utils/trackPath.js'
 import { api } from '../api.js'
 import { assertActiveSourceForDownload } from '../stores/downloadGuard.js'
 import { buildDownloadTask, getItemQualities } from '../utils/musicPayload.js'
@@ -493,6 +516,48 @@ let lastPointerStamp = 0
 const showWordLyrics = computed(() => effectiveLyricDisplayMode.value === 'word')
 const lyricModeBusy = ref(false)
 const lyricColorMenuOpen = ref(false)
+const showLyricPick = ref(false)
+const lyricPickBusy = ref(false)
+
+const lyricPickArtist = computed(() => {
+  const item = currentPlaying.value
+  if (!item) return ''
+  return formatArtists(item.singer || item.artist || '')
+})
+const lyricPickTitle = computed(() => cleanText(currentPlaying.value?.name || ''))
+const lyricPickAlbum = computed(() => cleanText(currentPlaying.value?.album || currentPlaying.value?.albumName || ''))
+const lyricPickFileName = computed(() => {
+  const path = getTrackFilePath(currentPlaying.value) || ''
+  return path ? path.split(/[/\\]/).pop() || '' : ''
+})
+const lyricPickDefaultSource = computed(() => {
+  const src = String(currentPlaying.value?.source || '')
+  return src === 'wy' ? 'wy' : 'tx'
+})
+
+function openLyricPick() {
+  if (!currentPlaying.value || lyricPickBusy.value) return
+  lyricColorMenuOpen.value = false
+  showLyricPick.value = true
+}
+
+async function onLyricPickConfirm({ lyric, ylyric } = {}) {
+  if (!lyric || lyricPickBusy.value) return
+  lyricPickBusy.value = true
+  try {
+    const res = await applyManualLyrics(lyric, ylyric || '', { saveToFile: true })
+    showLyricPick.value = false
+    if (!res.ok) {
+      showPlayerNotice('应用歌词失败', 2500)
+      return
+    }
+    showPlayerNotice(res.savedToFile ? '歌词已更新并写入文件' : '歌词已更新', 2800)
+  } catch (e) {
+    showPlayerNotice(e?.message || '应用歌词失败', 2800)
+  } finally {
+    lyricPickBusy.value = false
+  }
+}
 let lyricColorSaveTimer = 0
 
 function closeLyricColorMenu() {
@@ -550,9 +615,17 @@ function stopWordAnim() {
   wordAnimRaf = 0
 }
 
+function restartWordAnim({ resetClock = false } = {}) {
+  stopWordAnim()
+  if (resetClock) lyricClock.value = 0
+  else lyricClock.value = peekPlaybackTime()
+  if (!showFullscreenPlayer.value || !showWordLyrics.value || isPaused.value) return
+  tickWordAnim()
+}
+
 function tickWordAnim() {
   lyricClock.value = peekPlaybackTime()
-  if (!showFullscreenPlayer.value || !showWordLyrics.value) {
+  if (!showFullscreenPlayer.value || !showWordLyrics.value || isPaused.value) {
     wordAnimRaf = 0
     return
   }
@@ -1030,6 +1103,10 @@ function onKeydown(e) {
   if (!showFullscreenPlayer.value) return
   if (desktopChromeAutoHide.value) revealChrome()
   if (e.key === 'Escape') {
+    if (showLyricPick.value) {
+      showLyricPick.value = false
+      return
+    }
     if (isScreenExpanded.value) {
       collapseScreenExpand()
       return
@@ -1061,8 +1138,23 @@ watch(displayLyricLines, async () => {
   lyricLineEls.value = []
   if (!showFullscreenPlayer.value) return
   resetLyricBrowseState()
+  // 切歌后歌词异步到位时，强制重开扫光，避免仍停在上一曲时钟
+  restartWordAnim()
   await nextTick()
   scrollActiveLyric(true)
+})
+
+const playingTrackKey = computed(() => {
+  const item = currentPlaying.value
+  if (!item) return ''
+  return String(item.key || item.localPath || item.filePath || item.id || item.name || '')
+})
+
+watch(playingTrackKey, () => {
+  if (!showFullscreenPlayer.value) return
+  // 切歌瞬间 audio 可能短暂为 null，先清时钟再等歌词/播放链拉起
+  restartWordAnim({ resetClock: true })
+  resetLyricBrowseState()
 })
 
 watch(showFullscreenPlayer, async (open) => {
@@ -1074,8 +1166,10 @@ watch(showFullscreenPlayer, async (open) => {
     updateMobileViewport()
     scrollActiveLyric(true)
     resetChromeIdleState()
+    restartWordAnim()
     return
   }
+  showLyricPick.value = false
   stopWordAnim()
   resetLyricBrowseState()
   resetChromeIdleState()
@@ -1090,24 +1184,23 @@ watch(showFullscreenPlayer, async (open) => {
 })
 
 watch(
-  [showFullscreenPlayer, showWordLyrics, isPaused],
-  ([open, word, paused]) => {
-    stopWordAnim()
-    if (!open || !word) return
-    lyricClock.value = peekPlaybackTime()
-    if (!paused) tickWordAnim()
+  [showFullscreenPlayer, showWordLyrics, isPaused, isBuffering],
+  () => {
+    restartWordAnim()
   },
   { immediate: true },
 )
 
-watch(currentTime, () => {
+watch(currentTime, (t) => {
   if (!showFullscreenPlayer.value || !showWordLyrics.value) return
-  if (!isPaused.value && wordAnimRaf) return
-  lyricClock.value = peekPlaybackTime()
+  const live = peekPlaybackTime()
+  // rAF 正常时只做漂移校正；rAF 停了则用 timeupdate 顶上
+  if (wordAnimRaf && Math.abs(Number(lyricClock.value) - live) < 0.35) return
+  lyricClock.value = Number.isFinite(live) ? live : Number(t) || 0
 })
 
 watch(
-  [isNativeFullscreen, isPaused, showQueuePanel, showTagEditModal, downloadMenuOpen, moreMenuOpen, pickPlaylistTrack, isMobileViewport],
+  [isNativeFullscreen, isPaused, showQueuePanel, showTagEditModal, downloadMenuOpen, moreMenuOpen, pickPlaylistTrack, showLyricPick, isMobileViewport],
   () => {
     if (!showFullscreenPlayer.value) return
     resetChromeIdleState()
@@ -1146,7 +1239,10 @@ onUnmounted(() => {
   exitNativeFullscreen()
 })
 
-watch(currentPlaying, () => closeDownloadMenu())
+watch(currentPlaying, () => {
+  closeDownloadMenu()
+  showLyricPick.value = false
+})
 </script>
 
 <style scoped>
@@ -1364,7 +1460,8 @@ watch(currentPlaying, () => closeDownloadMenu())
   isolation: isolate;
 }
 .fs-lyric-mode,
-.fs-lyric-color {
+.fs-lyric-color,
+.fs-lyric-edit {
   pointer-events: auto;
   display: inline-flex;
   align-items: center;

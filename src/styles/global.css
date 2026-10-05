@@ -405,7 +405,9 @@ a.btn-primary.btn-primary:disabled {
   background: var(--accent-muted);
 }
 .icon-action-btn.fav-active,
-.icon-action-btn.fav-active:hover {
+.icon-action-btn.fav-active:hover,
+.btn-ghost.fav-active,
+.btn-ghost.fav-active:hover {
   color: #f5a623;
   border-color: rgba(245, 166, 35, 0.5);
   background: rgba(245, 166, 35, 0.12);

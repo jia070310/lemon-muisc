@@ -52,19 +52,24 @@
         <div class="detail-info">
           <h2>{{ selectedCard.name }}</h2>
           <p class="detail-meta">
-            {{ selectedCard.count }} 首
-            <template v-if="canEditSelected && isImportedSelected">
-              · 本地 {{ trackOrigins.local }} / 网络 {{ trackOrigins.online }}
-              <template v-if="lastRemoteSyncLabel"> · {{ lastRemoteSyncLabel }}</template>
+            <template v-if="isFavoritesSelected">
+              {{ selectedCard.count }} 首 · {{ favoriteAlbums.length }} 张专辑 · {{ favoriteArtists.length }} 位歌手
             </template>
-            <template v-else-if="onlineTrackCount">
-              · 可下载 {{ onlineTrackCount }} 首
+            <template v-else>
+              {{ selectedCard.count }} 首
+              <template v-if="canEditSelected && isImportedSelected">
+                · 本地 {{ trackOrigins.local }} / 网络 {{ trackOrigins.online }}
+                <template v-if="lastRemoteSyncLabel"> · {{ lastRemoteSyncLabel }}</template>
+              </template>
+              <template v-else-if="onlineTrackCount">
+                · 可下载 {{ onlineTrackCount }} 首
+              </template>
             </template>
           </p>
-          <p v-if="selectedCard.tracks.length && !onlineTrackCount" class="detail-dl-hint">
+          <p v-if="showFavoritesSongActions && selectedCard.tracks.length && !onlineTrackCount" class="detail-dl-hint">
             当前歌单歌曲均已在本地，无需下载；含「网络」标记的歌曲才会显示「下载歌单」。
           </p>
-          <div class="detail-actions">
+          <div v-if="showFavoritesSongActions" class="detail-actions">
             <button class="btn-primary btn-sm" :disabled="!selectedCard.tracks.length" @click="playAll">播放全部</button>
             <button
               v-if="canEditSelected && isImportedSelected"
@@ -131,14 +136,85 @@
               </div>
             </div>
             <button v-if="canEditSelected" class="btn-ghost btn-sm" @click="openEdit">编辑歌单</button>
+            <button
+              v-if="canEditSelected"
+              class="btn-ghost btn-sm"
+              :disabled="!selectedCard.tracks.length || dedupBusy"
+              @click="openDedupModal"
+            >
+              歌单去重
+            </button>
+            <button
+              class="btn-ghost btn-sm"
+              :disabled="!selectedCount"
+              @click="openBatchPickPlaylist"
+            >
+              加入其他歌单{{ selectedCount ? ` (${selectedCount})` : '' }}
+            </button>
             <button v-if="canEditSelected" class="btn-ghost btn-sm" @click="showAddModal = true">添加歌曲</button>
             <button v-if="canEditSelected" class="btn-ghost btn-sm btn-danger-hover" @click="openDeletePlaylistModal">删除歌单</button>
           </div>
         </div>
       </div>
 
-      <div v-if="!selectedCard.tracks.length" class="detail-empty">
-        <p>暂无歌曲</p>
+      <div v-if="isFavoritesSelected" class="fav-tabs" role="tablist">
+        <button
+          type="button"
+          class="fav-tab"
+          :class="{ active: favTab === 'songs' }"
+          @click="favTab = 'songs'"
+        >单曲 {{ selectedCard.count }}</button>
+        <button
+          type="button"
+          class="fav-tab"
+          :class="{ active: favTab === 'albums' }"
+          @click="favTab = 'albums'"
+        >专辑 {{ favoriteAlbums.length }}</button>
+        <button
+          type="button"
+          class="fav-tab"
+          :class="{ active: favTab === 'artists' }"
+          @click="favTab = 'artists'"
+        >歌手 {{ favoriteArtists.length }}</button>
+      </div>
+
+      <template v-if="isFavoritesSelected && favTab === 'albums'">
+        <div v-if="!favoriteAlbums.length" class="detail-empty">
+          <p>暂无收藏专辑</p>
+        </div>
+        <div v-else class="fav-album-grid">
+          <div v-for="album in favoriteAlbums" :key="album.id" class="fav-album-card">
+            <button type="button" class="album-card" @click="openFavAlbum(album)">
+              <div class="album-cover">
+                <CoverArt :src="album.cover" />
+              </div>
+              <div class="album-name" :title="album.name">{{ album.name }}</div>
+              <div class="album-artist" :title="album.artist">{{ album.artist }}</div>
+            </button>
+            <button type="button" class="btn-ghost btn-sm fav-card-unfav" @click="toggleFavoriteAlbum(album)">取消收藏</button>
+          </div>
+        </div>
+      </template>
+      <template v-else-if="isFavoritesSelected && favTab === 'artists'">
+        <div v-if="!favoriteArtists.length" class="detail-empty">
+          <p>暂无收藏歌手</p>
+        </div>
+        <div v-else class="fav-artist-grid">
+          <div v-for="artist in favoriteArtists" :key="artist.id" class="fav-artist-wrap">
+            <button type="button" class="artist-card" @click="openFavArtist(artist)">
+              <div class="artist-card-cover">
+                <CoverArt v-if="artist.cover" :src="artist.cover" />
+                <div v-else class="artist-avatar-fallback">{{ artistInitial(artist.name) }}</div>
+              </div>
+              <div class="artist-card-name">{{ artist.name }}</div>
+              <div class="artist-card-meta">{{ artist.trackCount || 0 }} 首 · {{ artist.albumCount || 0 }} 张专辑</div>
+            </button>
+            <button type="button" class="btn-ghost btn-sm fav-card-unfav" @click="toggleFavoriteArtist(artist)">取消收藏</button>
+          </div>
+        </div>
+      </template>
+      <div v-else-if="!selectedCard.tracks.length" class="detail-empty">
+        <p>{{ isFavoritesSelected ? '暂无收藏单曲' : '暂无歌曲' }}</p>
         <button v-if="canEditSelected" class="btn-primary btn-sm" @click="showAddModal = true">添加歌曲</button>
       </div>
       <template v-else>
@@ -150,17 +226,26 @@
             @toast="onPacedToast"
           />
         </div>
-        <div v-if="onlineTrackCount" class="track-list-toolbar">
+        <div class="track-list-toolbar">
           <label class="batch-select-all">
             <input
               type="checkbox"
-              :checked="pageOnlineAllSelected"
-              :indeterminate.prop="pageOnlineSomeSelected && !pageOnlineAllSelected"
-              @change="toggleSelectPageOnline"
+              :checked="pageAllSelected"
+              :indeterminate.prop="pageSomeSelected && !pageAllSelected"
+              @change="toggleSelectPage"
             />
             全选本页
           </label>
           <button
+            type="button"
+            class="btn-ghost btn-sm"
+            :disabled="!selectedCard.tracks.length"
+            @click="toggleSelectAll"
+          >
+            {{ allSelected ? '取消全选' : `全选 (${selectedCard.tracks.length})` }}
+          </button>
+          <button
+            v-if="onlineTrackCount"
             type="button"
             class="btn-ghost btn-sm"
             :disabled="!onlineTrackCount"
@@ -168,7 +253,15 @@
           >
             {{ allOnlineSelected ? '取消全选网络曲' : `全选网络曲 (${onlineTrackCount})` }}
           </button>
-          <span v-if="selectedDownloadCount" class="batch-count">已选 {{ selectedDownloadCount }}</span>
+          <button
+            type="button"
+            class="btn-ghost btn-sm"
+            :disabled="!selectedCount"
+            @click="openBatchPickPlaylist"
+          >
+            加入其他歌单{{ selectedCount ? ` (${selectedCount})` : '' }}
+          </button>
+          <span v-if="selectedCount" class="batch-count">已选 {{ selectedCount }}</span>
         </div>
         <div class="track-list">
           <div
@@ -180,18 +273,13 @@
             @mouseleave="hoverKey = ''"
             @dblclick="playOne(song)"
           >
-            <label
-              v-if="onlineTrackCount && !song.isLocal"
-              class="track-check"
-              @click.stop
-            >
+            <label class="track-check" @click.stop>
               <input
                 type="checkbox"
                 :checked="selectedDownloadKeys.has(song.key)"
-                @change="toggleSelectOnline(song)"
+                @change="toggleSelect(song)"
               />
             </label>
-            <span v-else-if="onlineTrackCount && song.isLocal" class="track-check-placeholder" />
             <span class="track-index">{{ listStart + i + 1 }}</span>
             <button
               type="button"
@@ -307,6 +395,15 @@
       @save="confirmEdit"
     />
 
+    <PlaylistDedupModal
+      v-if="showDedupModal && selectedCard"
+      :tracks="selectedCard.tracks"
+      :playlist-name="selectedCard.name || ''"
+      :busy="dedupBusy"
+      @close="showDedupModal = false"
+      @confirm="confirmDedup"
+    />
+
     <AddToPlaylistModal
       v-if="showAddModal && canEditSelected"
       :playlist-id="selectedId"
@@ -317,11 +414,11 @@
     />
 
     <PickPlaylistModal
-      v-if="pickPlaylistTrack"
-      :track="pickPlaylistTrack"
+      v-if="pickPlaylistTracks?.length"
+      :tracks="pickPlaylistTracks"
       :source="pickPlaylistSource"
       :exclude-playlist-id="pickPlaylistExcludeId"
-      @close="pickPlaylistTrack = null"
+      @close="pickPlaylistTracks = null"
       @added="onAddedToPlaylist"
     />
 
@@ -372,6 +469,7 @@ import CoverArt from '../components/CoverArt.vue'
 import MobileRowActions from '../components/MobileRowActions.vue'
 import TrackMetaLinks from '../components/TrackMetaLinks.vue'
 import PlaylistEditModal from '../components/PlaylistEditModal.vue'
+import PlaylistDedupModal from '../components/PlaylistDedupModal.vue'
 import CreatePlaylistModal from '../components/CreatePlaylistModal.vue'
 import AddToPlaylistModal from '../components/AddToPlaylistModal.vue'
 import PickPlaylistModal from '../components/PickPlaylistModal.vue'
@@ -400,6 +498,7 @@ import {
   ROAM_PICK_SIZE,
   updatePlaylist,
   removeTrackFromPlaylist,
+  removeTracksFromPlaylist,
   deletePlaylist,
   isCustomPlaylist,
   isImportedPlaylist,
@@ -411,6 +510,10 @@ import {
   scanLibrary,
   isFavorite,
   toggleFavorite,
+  favoriteAlbums,
+  favoriteArtists,
+  toggleFavoriteAlbum,
+  toggleFavoriteArtist,
   randomPickLibraryTracks,
   setRoamTracks,
   ensureRoamPickPool,
@@ -427,6 +530,8 @@ const showCreateModal = ref(false)
 const showEditModal = ref(false)
 const showAddModal = ref(false)
 const showDeleteModal = ref(false)
+const showDedupModal = ref(false)
+const dedupBusy = ref(false)
 const toast = ref(null)
 const hoverKey = ref('')
 const actionsOpenKey = ref('')
@@ -443,7 +548,7 @@ const playlistCols = ref(4)
 /** 全部歌单页桌面端只预览一行；音乐库首页仍为两行 */
 const PLAYLIST_GRID_ROWS = 1
 const playlistPreviewLimit = computed(() => Math.max(PLAYLIST_GRID_ROWS, playlistCols.value * PLAYLIST_GRID_ROWS))
-const pickPlaylistTrack = ref(null)
+const pickPlaylistTracks = ref(null)
 const pickPlaylistSource = ref('local')
 const pickPlaylistExcludeId = ref('')
 const syncingLocal = ref(false)
@@ -518,6 +623,9 @@ const showPlaylistMoreBtn = computed(() => (
   !isNarrow.value && sourceCards.value.length > playlistPreviewLimit.value
 ))
 const selectedCard = computed(() => allCards.value.find(c => c.id === selectedId.value) || null)
+const isFavoritesSelected = computed(() => selectedId.value === 'favorites')
+const favTab = ref('songs')
+const showFavoritesSongActions = computed(() => !isFavoritesSelected.value || favTab.value === 'songs')
 const canEditSelected = computed(() => isCustomPlaylist(selectedId.value))
 const isImportedSelected = computed(() => isImportedPlaylist(editingPlaylist.value))
 const editingPlaylist = computed(() => getCustomPlaylist(selectedId.value))
@@ -549,9 +657,13 @@ const pagedTracks = computed(() => {
 
 const allOnlineTracks = computed(() => (selectedCard.value?.tracks || []).filter(s => !s.isLocal))
 const onlineTrackCount = computed(() => allOnlineTracks.value.length)
-const selectedDownloadCount = computed(() => selectedDownloadKeys.value.size)
+const selectedCount = computed(() => selectedDownloadKeys.value.size)
+const selectedDownloadCount = computed(() => selectedOnlineTracks.value.length)
 const selectedOnlineTracks = computed(() =>
   allOnlineTracks.value.filter(s => selectedDownloadKeys.value.has(s.key))
+)
+const selectedTracks = computed(() =>
+  (selectedCard.value?.tracks || []).filter(s => selectedDownloadKeys.value.has(s.key))
 )
 const batchDownloadCount = computed(() => selectedDownloadCount.value)
 const batchDownloadItems = computed(() => selectedOnlineTracks.value.map(trackPayload))
@@ -565,11 +677,22 @@ const pacedPreferredLabel = computed(() => {
   const q = pacedDialog.value?.preferred
   return q ? getQualityLabel(q) : ''
 })
+const allSelected = computed(() => {
+  const tracks = selectedCard.value?.tracks || []
+  return tracks.length > 0 && tracks.every(s => selectedDownloadKeys.value.has(s.key))
+})
 const allOnlineSelected = computed(() =>
   allOnlineTracks.value.length > 0
   && allOnlineTracks.value.every(s => selectedDownloadKeys.value.has(s.key))
 )
 const someOnlineSelected = computed(() => selectedDownloadCount.value > 0)
+const pageAllSelected = computed(() =>
+  pagedTracks.value.length > 0
+  && pagedTracks.value.every(s => selectedDownloadKeys.value.has(s.key))
+)
+const pageSomeSelected = computed(() =>
+  pagedTracks.value.some(s => selectedDownloadKeys.value.has(s.key))
+)
 const pageOnlineTracks = computed(() => pagedTracks.value.filter(s => !s.isLocal))
 const pageOnlineAllSelected = computed(() =>
   pageOnlineTracks.value.length > 0
@@ -581,7 +704,9 @@ const pageOnlineSomeSelected = computed(() =>
 
 watch(selectedId, () => {
   trackPage.value = 1
+  favTab.value = 'songs'
   selectedDownloadKeys.value = new Set()
+  showDedupModal.value = false
   closeMenus()
   refreshActiveJob()
 })
@@ -702,12 +827,37 @@ function songDownloadSource(song) {
   return song.source || playlistSource.value
 }
 
-function toggleSelectOnline(song) {
-  if (song.isLocal) return
+function toggleSelect(song) {
   const next = new Set(selectedDownloadKeys.value)
   if (next.has(song.key)) next.delete(song.key)
   else next.add(song.key)
   selectedDownloadKeys.value = next
+}
+
+function toggleSelectPage() {
+  const page = pagedTracks.value
+  if (!page.length) return
+  const next = new Set(selectedDownloadKeys.value)
+  if (pageAllSelected.value) {
+    for (const s of page) next.delete(s.key)
+  } else {
+    for (const s of page) next.add(s.key)
+  }
+  selectedDownloadKeys.value = next
+}
+
+function toggleSelectAll() {
+  const tracks = selectedCard.value?.tracks || []
+  if (allSelected.value) {
+    selectedDownloadKeys.value = new Set()
+    return
+  }
+  selectedDownloadKeys.value = new Set(tracks.map(s => s.key))
+}
+
+function toggleSelectOnline(song) {
+  if (song.isLocal) return
+  toggleSelect(song)
 }
 
 function toggleSelectPageOnline() {
@@ -723,11 +873,13 @@ function toggleSelectPageOnline() {
 }
 
 function toggleSelectAllOnline() {
+  const next = new Set(selectedDownloadKeys.value)
   if (allOnlineSelected.value) {
-    selectedDownloadKeys.value = new Set()
-    return
+    for (const s of allOnlineTracks.value) next.delete(s.key)
+  } else {
+    for (const s of allOnlineTracks.value) next.add(s.key)
   }
-  selectedDownloadKeys.value = new Set(allOnlineTracks.value.map(s => s.key))
+  selectedDownloadKeys.value = next
 }
 
 function toggleQualityMenu(song, event) {
@@ -981,15 +1133,30 @@ function queueOne(song) {
 
 function openPickPlaylist(song) {
   const source = song.source || (song.localPath ? 'local' : '')
-  pickPlaylistTrack.value = trackPayload(song)
+  pickPlaylistTracks.value = [trackPayload(song)]
   pickPlaylistSource.value = source
   pickPlaylistExcludeId.value = canEditSelected.value ? selectedId.value : ''
 }
 
-function onAddedToPlaylist({ playlist, duplicate }) {
-  pickPlaylistTrack.value = null
-  if (duplicate) showToast('歌曲已在歌单中', 'info')
-  else showToast(`已加入歌单：${playlist?.name || ''}`, 'success')
+function openBatchPickPlaylist() {
+  const list = selectedTracks.value
+  if (!list.length) {
+    showToast('请先勾选要加入的歌曲', 'info')
+    return
+  }
+  pickPlaylistTracks.value = list.map(trackPayload)
+  pickPlaylistSource.value = ''
+  pickPlaylistExcludeId.value = canEditSelected.value ? selectedId.value : ''
+}
+
+function onAddedToPlaylist({ playlist, duplicate, added }) {
+  pickPlaylistTracks.value = null
+  if (!added) {
+    showToast(duplicate ? '所选歌曲已在歌单中' : '未能加入歌单', 'info')
+    return
+  }
+  const name = playlist?.name || ''
+  showToast(added === 1 ? `已加入歌单：${name}` : `已加入歌单「${name}」${added} 首`, 'success')
 }
 
 function onlineBadgeLabel(song) {
@@ -1067,6 +1234,31 @@ function openEdit() {
   showEditModal.value = true
 }
 
+function openDedupModal() {
+  if (!canEditSelected.value || !selectedCard.value?.tracks?.length) return
+  showDedupModal.value = true
+}
+
+function confirmDedup({ removeKeys, removed } = {}) {
+  if (!canEditSelected.value || !selectedId.value || !removeKeys?.length) {
+    showDedupModal.value = false
+    return
+  }
+  dedupBusy.value = true
+  try {
+    const next = removeTracksFromPlaylist(selectedId.value, removeKeys)
+    showDedupModal.value = false
+    if (!next) {
+      showToast('去重失败', 'error')
+      return
+    }
+    showToast(`已移除重复歌曲 ${removed} 首`, 'success')
+    refreshPlaylistCards()
+  } finally {
+    dedupBusy.value = false
+  }
+}
+
 function confirmEdit(payload) {
   const pl = updatePlaylist(selectedId.value, payload)
   if (!pl) return
@@ -1103,6 +1295,24 @@ function onSongsAdded(res) {
 function showToast(text, type = 'info') {
   toast.value = { text, type }
   setTimeout(() => { toast.value = null }, 2800)
+}
+
+function openFavAlbum(album) {
+  if (!album?.id) return
+  router.push({ path: '/library/album', query: { id: album.id } })
+}
+
+function openFavArtist(artist) {
+  if (!artist?.id) return
+  router.push({ path: '/library/artist', query: { id: artist.id } })
+}
+
+function artistInitial(name) {
+  const n = String(name || '').trim()
+  if (!n) return '?'
+  const first = n[0]
+  if (/[a-zA-Z]/.test(first)) return first.toUpperCase()
+  return first
 }
 </script>
 
@@ -1158,6 +1368,126 @@ function showToast(text, type = 'info') {
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
+}
+.fav-tabs {
+  display: flex;
+  gap: 8px;
+  margin: 0 0 16px;
+  flex-wrap: wrap;
+}
+.fav-tab {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.fav-tab.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.fav-album-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(156px, 1fr));
+  gap: 22px 18px;
+}
+.fav-album-card,
+.fav-artist-wrap {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.album-card {
+  border: none;
+  background: transparent;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+}
+.album-cover {
+  aspect-ratio: 1;
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--bg-elevated);
+  margin-bottom: 12px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
+}
+.album-name {
+  font-size: 15px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.album-artist {
+  margin-top: 4px;
+  font-size: 13px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fav-artist-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 14px;
+}
+.artist-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 16px 12px 14px;
+  border-radius: 14px;
+  border: 1px solid var(--border-light);
+  background: var(--bg-card, var(--bg-elevated));
+  cursor: pointer;
+  width: 100%;
+}
+.artist-card-cover {
+  width: 86px;
+  height: 86px;
+  border-radius: 50%;
+  overflow: hidden;
+  flex-shrink: 0;
+  margin-bottom: 10px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+}
+.artist-avatar-fallback {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 30px;
+  font-weight: 700;
+  color: var(--accent);
+  background: var(--accent-muted);
+}
+.artist-card-name {
+  max-width: 100%;
+  font-size: 15px;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.artist-card-meta {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.fav-card-unfav {
+  align-self: center;
+}
+@media (max-width: 768px) {
+  .fav-album-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 12px; }
 }
 .track-list-toolbar {
   display: flex;

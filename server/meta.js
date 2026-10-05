@@ -9,18 +9,19 @@ import { writeM4aMeta, canWriteM4aExt } from './utils/m4aTag.js'
 import { joinArtists, normalizeArtistForWrite } from './utils/artistTag.js'
 
 export async function writeMeta(filePath, ext, meta) {
-  if (ext === '.mp3') return writeMp3Meta(filePath, meta)
-  if (ext === '.flac') return writeFlacMeta(filePath, meta)
-  if (ext === '.wav') {
-    return writeWavMeta(filePath, meta, { decodePicInput, atomicReplaceFile })
+  if (ext === '.mp3') await Promise.resolve(writeMp3Meta(filePath, meta))
+  else if (ext === '.flac') await writeFlacMeta(filePath, meta)
+  else if (ext === '.wav') {
+    await writeWavMeta(filePath, meta, { decodePicInput, atomicReplaceFile })
+  } else if (ext === '.ape') {
+    await writeApeMeta(filePath, meta, { decodePicInput, atomicReplaceFile })
+  } else if (canWriteM4aExt(ext)) {
+    await writeM4aMeta(filePath, meta, { decodePicInput })
+  } else {
+    throw new Error(`暂不支持 ${ext} 格式写入标签`)
   }
-  if (ext === '.ape') {
-    return writeApeMeta(filePath, meta, { decodePicInput, atomicReplaceFile })
-  }
-  if (canWriteM4aExt(ext)) {
-    return writeM4aMeta(filePath, meta, { decodePicInput })
-  }
-  throw new Error(`暂不支持 ${ext} 格式写入标签`)
+  // 各格式内嵌歌词可能被截断；同名 .lrc 作为可靠旁路
+  if (meta?.lyric != null) writeExternalLrc(filePath, meta.lyric)
 }
 
 function decodePicInput(pic) {
@@ -351,12 +352,8 @@ function extractLyricText(metadata, filePath) {
     lyric = pickBestLyricText(lyric, native?.lyric)
   }
 
-  if (!lyric) {
-    const lrcPath = filePath.replace(/\.[^.]+$/, '.lrc')
-    if (lrcPath !== filePath && fs.existsSync(lrcPath)) {
-      try { lyric = fs.readFileSync(lrcPath, 'utf-8').trim() } catch {}
-    }
-  }
+  // 同名 .lrc 优先取更完整的一份（内嵌 USLT 常被截断）
+  lyric = pickBestLyricText(lyric, readExternalLrc(filePath))
 
   return normalizeLyricText(lyric)
 }
@@ -546,6 +543,31 @@ function hasExternalLrc(filePath) {
   } catch {
     return false
   }
+}
+
+function externalLrcPath(filePath) {
+  const lrcPath = filePath.replace(/\.[^.]+$/, '.lrc')
+  return lrcPath !== filePath ? lrcPath : ''
+}
+
+function readExternalLrc(filePath) {
+  const lrcPath = externalLrcPath(filePath)
+  if (!lrcPath) return ''
+  try {
+    if (!fs.existsSync(lrcPath)) return ''
+    return normalizeLyricText(fs.readFileSync(lrcPath, 'utf-8'))
+  } catch {
+    return ''
+  }
+}
+
+/** 写入同名 .lrc，避免 ID3 USLT 容量/编码截断导致歌词残缺 */
+function writeExternalLrc(filePath, lyric) {
+  const lrcPath = externalLrcPath(filePath)
+  if (!lrcPath) return
+  const text = normalizeLyricText(lyric)
+  if (!text) return
+  fs.writeFileSync(lrcPath, `${text}\n`, 'utf-8')
 }
 
 function parseVorbisCommentBlock(blockData) {

@@ -34,6 +34,21 @@ import {
 import { platformLabel, PLATFORM_LABELS } from '../utils/platforms.js'
 import { QUALITY_LABELS, QUALITY_ORDER, getQualityLabel } from '../utils/quality.js'
 import { isPwaStandalone } from '../utils/pwa.js'
+import { logRuntime, snapshotAudioError } from '../utils/runtimeLog.js'
+
+function logPlayerIssue(level, message, extra = {}) {
+  const { item: extraItem, ...rest } = extra
+  const item = extraItem || currentPlaying.value
+  logRuntime(level, 'player', message, snapshotAudioError(audio, {
+    title: item?.name || item?.songname || '',
+    artist: item?.singer || item?.artist || '',
+    filePath: item ? getTrackFilePath(item) : '',
+    source: rest.source || item?.source || '',
+    smooth: smoothStreamEnabled.value,
+    local: item ? isLocalTrack(item, rest.source || item?.source || 'local') : undefined,
+    ...rest,
+  }))
+}
 
 export const currentPlaying = ref(null)
 export const loadingPlay = ref(null)
@@ -113,6 +128,11 @@ export const PLAYER_SMOOTH_STREAM_KEY = 'player.smoothStream'
 
 const LOCAL_SMOOTH_EXTS = new Set([
   'flac', 'wav', 'aiff', 'aif', 'ape', 'dsf', 'dff', 'wv', 'tak',
+])
+/** 直出失败后可走服务端转码修复（含浏览器 FFmpegDemuxer 不认的 MP3） */
+const LOCAL_REPAIR_EXTS = new Set([
+  ...LOCAL_SMOOTH_EXTS,
+  'mp3', 'm4a', 'aac', 'ogg', 'oga', 'opus', 'wma',
 ])
 export const showFullscreenPlayer = ref(false)
 export const playerError = ref('')
@@ -394,6 +414,7 @@ function isBackgroundPlayActive() {
 
 const QUEUE_STORAGE_KEY = 'lx-music-nas:play-queue'
 const SESSION_STORAGE_KEY = 'lx-music-nas:play-session'
+const MANUAL_LYRICS_STORAGE_KEY = 'lx-music-nas:manual-lyrics'
 const VOLUME_KEY = 'lx-music-nas:volume'
 const MUTE_KEY = 'lx-music-nas:muted'
 let volumeBeforeMute = 0.8
@@ -600,6 +621,7 @@ async function activateCachedAudio(entry, { resumeTime = 0 } = {}) {
   clearPlaybackError()
   endPlaybackBuffer()
   applyAudioOutput()
+  updateActiveLyric(audio?.currentTime || currentTime.value || 0)
   if (visualizerEnabled.value) {
     await ensurePlaybackGraph()
     scheduleAudioAnalyserRefresh()
@@ -683,6 +705,8 @@ function bindLyricsToTrack(trackKey, lyric, ylyric = '') {
   lyricLines.value = (lyric || ylyric) ? parseLyricRich(lyric, ylyric) : []
   activeLyricIdx.value = -1
   activeWordIdx.value = -1
+  const t = peekPlaybackTime()
+  if (Number.isFinite(t) && lyricLines.value.length) updateActiveLyric(t)
 }
 
 function applyLyricStateFromTagMeta(data, { announce = false } = {}) {
@@ -691,25 +715,61 @@ function applyLyricStateFromTagMeta(data, { announce = false } = {}) {
   if (data.lyric !== undefined) {
     const hasEmbedded = Boolean(String(data.lyric || '').trim() || String(data.ylyric || '').trim())
     if (hasEmbedded) {
+      // 手动改过的歌词：仅当文件歌词不短于当前缓存时才覆盖，避免读盘截断/旧标签冲掉选用结果
+      if (currentPlaying.value.lyricManual) {
+        const curLen = String(currentPlaying.value.lyric || '').length
+        const fileLen = String(data.lyric || data.ylyric || '').length
+        if (fileLen + 40 < curLen) return false
+      }
       bindLyricsToTrack(key, data.lyric, data.ylyric || '')
       if (audio && !audio.paused && lyricLines.value.some((line) => line.time > 0)) {
         updateActiveLyric(audio.currentTime)
       }
       if (announce) showPlayerNotice('歌词已同步到播放器', 2500)
+      return true
     }
     // 文件无内嵌歌词时不要清空已显示的网络歌词
-    return
+    return false
   }
   // hasLyrics === false：保留当前行，交由 fillLocalGapsFromNetwork / ensureLyricsForTrack 补网
+  return false
 }
 
 function applyLocalMetaToPlaying(data, filePath, { announceLyric = false } = {}) {
   if (!data || !filePath) return
   const updates = buildPlayerUpdatesFromTagMeta(data, filePath)
+
+  // 手动歌词：禁止用更短的文件标签覆盖队列/当前曲的完整歌词
+  const playing = currentPlaying.value
+  const playingPath = getTrackFilePath(playing)
+  const samePlaying = playingPath && isSameTrackPath(playingPath, filePath)
+  if (updates.lyric !== undefined) {
+    const manual = Boolean(
+      (samePlaying && playing?.lyricManual)
+      || playQueue.value.some((e) => {
+        const fp = getTrackFilePath(e.item)
+        return fp && isSameTrackPath(fp, filePath) && e.item?.lyricManual
+      }),
+    )
+    if (manual) {
+      const cached = samePlaying
+        ? String(playing?.lyric || '')
+        : String(playQueue.value.find((e) => {
+          const fp = getTrackFilePath(e.item)
+          return fp && isSameTrackPath(fp, filePath)
+        })?.item?.lyric || '')
+      const fileLyric = String(updates.lyric || '')
+      if (cached && fileLyric.length + 40 < cached.length) {
+        delete updates.lyric
+      } else {
+        updates.lyricManual = true
+      }
+    }
+  }
+
   const queueChanged = patchQueueItemsByPath(filePath, updates)
 
-  const playingPath = getTrackFilePath(currentPlaying.value)
-  if (!playingPath || !isSameTrackPath(playingPath, filePath)) {
+  if (!samePlaying) {
     if (queueChanged) saveQueueState()
     return
   }
@@ -720,7 +780,9 @@ function applyLocalMetaToPlaying(data, filePath, { announceLyric = false } = {})
   applyLyricStateFromTagMeta(data, { announce: announceLyric })
 
   if (Object.keys(updates).length) {
-    currentPlaying.value = cleanTrackItem({ ...currentPlaying.value, ...updates })
+    const next = { ...currentPlaying.value, ...updates }
+    if (currentPlaying.value?.lyricManual) next.lyricManual = true
+    currentPlaying.value = cleanTrackItem(next)
   }
   saveQueueState()
 }
@@ -1115,8 +1177,10 @@ function bindAudioElementEvents(el) {
     // 跳进度中的失败交给 seek 恢复逻辑，避免立刻弹「链接失效」并卡死
     if (seekInProgress) return
     isPaused.value = true
-    playerError.value = getAudioElementError(el) || '音频加载失败，请尝试其他歌曲'
+    const raw = getAudioElementError(el) || '音频加载失败，请尝试其他歌曲'
+    playerError.value = formatPlayClientError(new Error(raw)) || raw
     loadingPlay.value = null
+    logPlayerIssue('error', raw, { event: 'audio.error' })
   })
 }
 
@@ -1495,6 +1559,9 @@ function pickItemFields(item, queueKey = '') {
     albumName: cleaned.albumName,
     localPath,
     lyric: cleaned.lyric || '',
+    ylyric: cleaned.ylyric || '',
+    /** 全屏「改歌词」手动选定，禁止自动拉取覆盖 */
+    lyricManual: Boolean(cleaned.lyricManual),
   }
 }
 
@@ -2358,7 +2425,15 @@ async function resolvePlayUrl(item, source, quality = getPlayQuality(), options 
     // APE 需服务端转码；流畅模式：高码率无损走 AAC 缓存流（车机/弱网）
     const filePath = getTrackFilePath(item)
     const ext = fileExtOf(filePath)
-    const wantSmooth = Boolean(ext && LOCAL_SMOOTH_EXTS.has(ext) && smoothStreamEnabled.value && !options.forceDirectLocal)
+    const wantSmooth = Boolean(
+      ext
+      && !options.forceDirectLocal
+      && (
+        options.forceSmoothLocal
+          ? LOCAL_REPAIR_EXTS.has(ext)
+          : (LOCAL_SMOOTH_EXTS.has(ext) && smoothStreamEnabled.value)
+      ),
+    )
     const direct = buildLocalStreamUrl(item, { smooth: wantSmooth })
     if (direct) {
       if (!options.refresh) {
@@ -2368,7 +2443,7 @@ async function resolvePlayUrl(item, source, quality = getPlayQuality(), options 
     }
     const res = await api.play.getUrl({
       ...buildPlayPayload(item, 'local', quality),
-      ...((smoothStreamEnabled.value && !options.forceDirectLocal) ? { smooth: true } : {}),
+      ...((!options.forceDirectLocal && (smoothStreamEnabled.value || options.forceSmoothLocal)) ? { smooth: true } : {}),
     }, { signal: options.signal })
     return res.url || ''
   }
@@ -2458,9 +2533,10 @@ async function startPlaybackFromUrl(url, { resumeTime = 0, item, source, isLocal
   hasMediaSrc = true
   // 本地：至少等 HAVE_CURRENT_DATA / canplay，避免 metadata 假播放卡死 00:00
   // 流畅模式：等 canplaythrough，多缓冲再开播，减轻车机 WiFi 抖动欠载
+  const repairing = isLocal && /\/api\/play\/local-smooth(?:\?|$)/.test(String(url || ''))
   await waitForAudioReady(authedUrl, {
     isLocal,
-    preferCanPlay: Boolean(isLocal && smoothStreamEnabled.value),
+    preferCanPlay: Boolean(isLocal && (smoothStreamEnabled.value || repairing)),
     preferCanPlayThrough: Boolean(isLocal && smoothStreamEnabled.value),
   })
 
@@ -2489,6 +2565,7 @@ async function startPlaybackFromUrl(url, { resumeTime = 0, item, source, isLocal
   isPaused.value = false
   applyAudioOutput()
   rememberLoadedPlayUrl(item, source, url, quality)
+  updateActiveLyric(audio?.currentTime || currentTime.value || 0)
 
   // 真正出声前进度前进前保持「缓冲中」；本地先走原生输出，出声后再挂频谱，避免 MediaElementSource 卡死
   if ((audio.currentTime || 0) > 0.05) {
@@ -2811,9 +2888,9 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 }
   const maxAttempts = isLocal ? 3 : 2
   const audioBrokenAtStart = Boolean(audio?.error)
 
-  async function tryPlayAtQuality(playItem, playSource, quality, { forceRefresh = false, forceDirectLocal = false } = {}) {
+  async function tryPlayAtQuality(playItem, playSource, quality, { forceRefresh = false, forceDirectLocal = false, forceSmoothLocal = false } = {}) {
     const playKey = getTrackKey(playItem, playSource)
-    const cacheQuality = (smoothStreamEnabled.value && !forceDirectLocal && isLocalTrack(playItem, playSource))
+    const cacheQuality = (isLocalTrack(playItem, playSource) && !forceDirectLocal && (smoothStreamEnabled.value || forceSmoothLocal))
       ? `${quality}:smooth`
       : quality
     const cachedUrl = forceRefresh ? '' : getCachedPlayUrl(playItem, playSource, cacheQuality)
@@ -2835,6 +2912,7 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 }
         intent,
         refresh: forceRefresh,
         forceDirectLocal,
+        forceSmoothLocal,
       })
       if (!url) throw new Error('获取播放链接失败')
       await startPlaybackFromUrl(url, {
@@ -2880,6 +2958,8 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 }
     if (isLocal) {
       const quality = preferredQuality
       let usedSmoothFallback = false
+      let usedDecodeSmoothRetry = false
+      const canRepairThisFile = LOCAL_REPAIR_EXTS.has(fileExtOf(filePath))
       for (let attempt = 0; attempt < maxAttempts; attempt++) {
         if (intent !== playIntentToken) return
         if (attempt > 0 || audioBrokenAtStart) {
@@ -2887,10 +2967,12 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 }
           if (attempt > 0) await new Promise((r) => setTimeout(r, 250 * attempt))
         }
         try {
-          const forceDirectLocal = usedSmoothFallback || (attempt > 0 && smoothStreamEnabled.value)
+          const forceDirectLocal = usedSmoothFallback || (attempt > 0 && smoothStreamEnabled.value && !usedDecodeSmoothRetry)
+          const forceSmoothLocal = usedDecodeSmoothRetry
           await tryPlayAtQuality(enrichedItem, source, quality, {
             forceRefresh: attempt > 0 || audioBrokenAtStart,
             forceDirectLocal,
+            forceSmoothLocal,
           })
           if (intent !== playIntentToken) {
             try { audio?.pause() } catch {}
@@ -2910,17 +2992,33 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 }
           updateActiveLyric(audio?.currentTime || 0)
           saveQueueState()
           updateMediaSession()
-          if (forceDirectLocal && smoothStreamEnabled.value && attempt > 0) {
+          if (forceSmoothLocal && attempt > 0) {
+            showPlayerNotice('浏览器无法直出该文件，已改为转码播放', 3500)
+          } else if (forceDirectLocal && smoothStreamEnabled.value && attempt > 0) {
             showPlayerNotice('流畅转码不可用，已改直出原文件', 3500)
           }
           return
         } catch (e) {
           if (e.aborted || intent !== playIntentToken) throw e
           lastError = e
+          logPlayerIssue('warn', `本地播放失败，准备重试 ${attempt + 1}/${maxAttempts}`, {
+            item,
+            source,
+            attempt: attempt + 1,
+            err: e?.message || e,
+          })
           recoverPlaybackPipeline(trackKey, item, source, quality)
           const msg = String(e?.message || '')
           if (smoothStreamEnabled.value && !usedSmoothFallback && /ffmpeg|转码|流畅/i.test(msg)) {
             usedSmoothFallback = true
+            continue
+          }
+          if (
+            !usedDecodeSmoothRetry
+            && canRepairThisFile
+            && /解码|无法播放|链接失效|NotSupported|MEDIA_ERR_SRC|DEMUXER|PTS is not defined|本地文件暂时/i.test(msg)
+          ) {
+            usedDecodeSmoothRetry = true
             continue
           }
           if (attempt + 1 >= maxAttempts || !isRetryablePlayError(e)) throw e
@@ -3001,6 +3099,9 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 }
       }
       const message = formatPlayClientError(e)
       playerError.value = message
+      if (message) {
+        logPlayerIssue('error', message, { item, source, err: e?.message || e, stage: 'playTrackAt' })
+      }
       if (!message) return
       throw new Error(message)
     }
@@ -3022,8 +3123,19 @@ const AUDIO_ELEMENT_ERROR_TEXT = {
   4: '播放链接失效或浏览器无法解码该音频，请重试',
 }
 
+function isCurrentPlayLocal() {
+  const item = currentPlaying.value
+  return isLocalTrack(item, item?.source || 'local')
+}
+
 function getAudioElementError(el = audio) {
   const code = el?.error?.code
+  if (isCurrentPlayLocal()) {
+    if (code === 1) return '本地音频加载被中止，请再点一次播放'
+    if (code === 2) return '本地文件加载失败，请检查文件是否还在音乐库目录内'
+    if (code === 3) return '本地音频解码失败，文件可能已损坏'
+    if (code === 4) return '本地文件暂时无法播放，请再点一次，或在设置中开启流畅转码'
+  }
   if (code && AUDIO_ELEMENT_ERROR_TEXT[code]) return AUDIO_ELEMENT_ERROR_TEXT[code]
   return ''
 }
@@ -3031,7 +3143,7 @@ function getAudioElementError(el = audio) {
 function isRetryablePlayError(error) {
   const text = String(error?.message || error || '')
   if (error?.aborted || isBenignPlayInterrupt(error)) return false
-  return /播放链接失效|无法播放该音频|无法解码|音频加载超时|本地音频加载超时|网络异常|音频加载被中止|音频解码失败|音频加载失败|获取播放链接失败|获取.*音质.*失败|未获取到URL|获取URL失败|流畅|转码|ffmpeg/i.test(text)
+  return /播放链接失效|无法播放该音频|无法解码|音频加载超时|本地音频加载超时|本地文件暂时无法播放|本地文件加载失败|网络异常|音频加载被中止|音频解码失败|音频加载失败|获取播放链接失败|获取.*音质.*失败|未获取到URL|获取URL失败|流畅|转码|ffmpeg/i.test(text)
     || /NotSupportedError|no supported sources|MEDIA_ERR_SRC_NOT_SUPPORTED|MEDIA_ERR_NETWORK|MEDIA_ERR_ABORTED/i.test(text)
 }
 
@@ -3042,8 +3154,9 @@ function isBenignPlayInterrupt(error) {
 }
 
 function waitForAudioReady(expectedUrl = '', { isLocal = false, preferCanPlay = false, preferCanPlayThrough = false } = {}) {
+  const repairing = isLocal && /\/api\/play\/local-smooth(?:\?|$)/.test(String(expectedUrl || ''))
   const timeoutMs = isLocal
-    ? (preferCanPlayThrough || (preferCanPlay && smoothStreamEnabled.value) ? 45000 : 20000)
+    ? (preferCanPlayThrough || repairing || (preferCanPlay && smoothStreamEnabled.value) ? 45000 : 20000)
     : 8000
   // 本地：默认等 HAVE_CURRENT_DATA(2)；卡住重试时升到 canplay(3)；流畅模式等 canplaythrough(4)
   // 在线：metadata(1) 即可
@@ -3081,6 +3194,9 @@ function waitForAudioReady(expectedUrl = '', { isLocal = false, preferCanPlay = 
       if (isStale()) {
         reject(Object.assign(new Error('播放已取消'), { aborted: true }))
         return
+      }
+      if (isLocal && !err?.aborted) {
+        logPlayerIssue('error', err?.message || '本地音频未就绪', { event: 'waitForAudioReady' })
       }
       reject(err instanceof Error ? err : new Error(formatPlayClientError(err)))
     }
@@ -3458,18 +3574,94 @@ export function toggleQueuePanel() {
   showQueuePanel.value = !showQueuePanel.value
 }
 
+function isManualLyricItem(item) {
+  return Boolean(item?.lyricManual)
+}
+
+function readManualLyricsMap() {
+  try {
+    const raw = localStorage.getItem(MANUAL_LYRICS_STORAGE_KEY)
+    const data = raw ? JSON.parse(raw) : null
+    return data && typeof data === 'object' ? data : {}
+  } catch {
+    return {}
+  }
+}
+
+function writeManualLyricsMap(map) {
+  try {
+    localStorage.setItem(MANUAL_LYRICS_STORAGE_KEY, JSON.stringify(map || {}))
+  } catch {}
+}
+
+function rememberManualLyric(trackKey, lyric, ylyric = '') {
+  if (!trackKey) return
+  const map = readManualLyricsMap()
+  map[trackKey] = {
+    lyric: String(lyric || ''),
+    ylyric: String(ylyric || ''),
+    savedAt: Date.now(),
+  }
+  // 控制体积：最多保留 80 首手动歌词
+  const entries = Object.entries(map).sort((a, b) => (b[1]?.savedAt || 0) - (a[1]?.savedAt || 0))
+  writeManualLyricsMap(Object.fromEntries(entries.slice(0, 80)))
+}
+
+function loadRememberedManualLyric(trackKey) {
+  if (!trackKey) return null
+  const entry = readManualLyricsMap()[trackKey]
+  if (!entry) return null
+  const lyric = String(entry.lyric || '').trim()
+  const ylyric = String(entry.ylyric || '').trim()
+  if (!lyric && !ylyric) return null
+  return { lyric, ylyric }
+}
+
 function ensureLyricsForTrack(item, source, trackKey) {
-  if (lyricTrackKey === trackKey && lyricLines.value.length) {
-    if (lyricDisplayMode.value === 'word' && !lyricHasWords(lyricLines.value)) {
+  const remembered = loadRememberedManualLyric(trackKey)
+  const manual = isManualLyricItem(item) || Boolean(remembered)
+  const lyric = remembered?.lyric || item.lyric || ''
+  const ylyric = remembered?.ylyric || item.ylyric || ''
+
+  if (lyric || ylyric) {
+    // 记忆中的完整歌词优先写回队列，避免再次被残缺标签冲掉
+    if (remembered) {
+      patchQueueItem(trackKey, {
+        lyric: remembered.lyric,
+        ylyric: remembered.ylyric,
+        lyricManual: true,
+      })
+      if (currentPlaying.value && getTrackKey(currentPlaying.value, currentPlaying.value.source) === trackKey) {
+        currentPlaying.value = {
+          ...currentPlaying.value,
+          lyric: remembered.lyric,
+          ylyric: remembered.ylyric,
+          lyricManual: true,
+        }
+      }
+    }
+  }
+
+  const alreadyBound = lyricTrackKey === trackKey && lyricLines.value.length
+  if (alreadyBound) {
+    // 已绑定但明显短于手动缓存：强制换回完整歌词
+    if (remembered) {
+      const boundChars = lyricLines.value.reduce((n, l) => n + String(l?.text || '').length, 0)
+      const rememberedChars = String(remembered.lyric || '').length
+      if (rememberedChars > boundChars + 80) {
+        bindLyricsToTrack(trackKey, remembered.lyric, remembered.ylyric)
+      }
+    }
+    if (!manual && lyricDisplayMode.value === 'word' && !lyricHasWords(lyricLines.value)) {
       if (lyricFetchingKey !== trackKey) {
         fetchLyric(item, source, { preferWords: true })
       }
     }
     return
   }
-  if (item.lyric || item.ylyric) {
-    bindLyricsToTrack(trackKey, item.lyric || '', item.ylyric || '')
-    if (lyricDisplayMode.value === 'word' && !lyricHasWords(lyricLines.value)) {
+  if (lyric || ylyric) {
+    bindLyricsToTrack(trackKey, lyric, ylyric)
+    if (!manual && lyricDisplayMode.value === 'word' && !lyricHasWords(lyricLines.value)) {
       if (lyricFetchingKey !== trackKey) {
         fetchLyric(item, source, { preferWords: true })
       }
@@ -3496,9 +3688,13 @@ async function fetchLyric(item, activeSource, { preferWords = false } = {}) {
     if ((!lyric && !ylyric) || token !== lyricFetchToken) return false
     if (!currentPlaying.value) return false
     if (getTrackKey(currentPlaying.value, currentPlaying.value.source) !== trackKey) return false
+    // 全屏手动改过的歌词：禁止自动拉取覆盖
+    if (isManualLyricItem(currentPlaying.value) || isManualLyricItem(item) || loadRememberedManualLyric(trackKey)) {
+      return false
+    }
     bindLyricsToTrack(trackKey, lyric, ylyric)
-    currentPlaying.value = { ...currentPlaying.value, lyric, ylyric }
-    patchQueueItem(trackKey, { lyric, ylyric })
+    currentPlaying.value = { ...currentPlaying.value, lyric, ylyric, lyricManual: false }
+    patchQueueItem(trackKey, { lyric, ylyric, lyricManual: false })
     saveQueueState()
     if (audio && !audio.paused) updateActiveLyric(audio.currentTime)
     return true
@@ -3541,9 +3737,60 @@ async function fetchLyric(item, activeSource, { preferWords = false } = {}) {
 export async function refreshLyricsPreferWords() {
   const item = currentPlaying.value
   if (!item) return false
+  // 手动选定歌词：用行时间推算逐字，不再联网覆盖
+  if (isManualLyricItem(item)) {
+    return canShowWordLyrics.value
+  }
   lyricTrackKey = ''
   await fetchLyric(item, item.source, { preferWords: true })
   return lyricHasWords(lyricLines.value)
+}
+
+/**
+ * 手动选用网络歌词应用到当前播放（并可选写回本地文件标签）
+ * @returns {{ ok: boolean, savedToFile?: boolean, reason?: string }}
+ */
+export async function applyManualLyrics(lyric, ylyric = '', { saveToFile = true } = {}) {
+  const item = currentPlaying.value
+  if (!item) return { ok: false, reason: 'no-playing' }
+  const text = String(lyric || '').trim()
+  const ytext = String(ylyric || '').trim()
+  if (!text && !ytext) return { ok: false, reason: 'empty' }
+
+  lyricFetchToken += 1
+  lyricFetchingKey = ''
+  const trackKey = getTrackKey(item, item.source)
+  bindLyricsToTrack(trackKey, text, ytext)
+  currentPlaying.value = {
+    ...currentPlaying.value,
+    lyric: text,
+    ylyric: ytext,
+    lyricManual: true,
+  }
+  patchQueueItem(trackKey, { lyric: text, ylyric: ytext, lyricManual: true })
+  rememberManualLyric(trackKey, text, ytext)
+  saveQueueState()
+  if (audio && !audio.paused) updateActiveLyric(audio.currentTime)
+
+  let savedToFile = false
+  const filePath = getTrackFilePath(item)
+  if (saveToFile && filePath && text) {
+    try {
+      const res = await api.tag.write(filePath, { lyric: text })
+      savedToFile = !res?.error
+      if (savedToFile) {
+        // 保留 lyricManual，避免后续读标签/补拉把选用结果冲掉
+        applyLocalMetaToPlaying({ lyric: text, hasLyrics: true }, filePath)
+        if (currentPlaying.value) {
+          currentPlaying.value = { ...currentPlaying.value, lyricManual: true }
+        }
+        patchQueueItem(trackKey, { lyricManual: true })
+      }
+    } catch {
+      savedToFile = false
+    }
+  }
+  return { ok: true, savedToFile }
 }
 
 async function fetchCover(item, activeSource, { force = false } = {}) {

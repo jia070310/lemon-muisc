@@ -10,6 +10,7 @@ import { resolveCoverUrl } from '../utils/cover.js'
 import { detectImageMime, fetchPicBuffer } from '../utils/fetchPic.js'
 import { isAllowedMediaPath, mapToContainerPath } from '../utils/filePaths.js'
 import { formatUserError } from '../utils/userError.js'
+import { logRuntime } from '../utils/runtimeLog.js'
 import { buildPlayUrlCacheKey, getCachedPlayUrl, getOrFetchPlayUrl, clearCachedPlayUrl } from '../utils/playUrlCache.js'
 import { createLimiter, withTimeout } from '../utils/asyncLimit.js'
 import { getDB } from '../db.js'
@@ -20,7 +21,7 @@ import { createStreamTicket, ticketClaimsFromStreamUrl } from '../utils/streamTi
 import { resolvePathByTrackId } from '../utils/libraryCache.js'
 import { ensureApePlayWav } from '../utils/apePlay.js'
 import { buildMusicCdnHeaders } from '../utils/musicCdnHeaders.js'
-import { ensureSmoothPlayAac, needsSmoothPlayTranscode, warmSmoothPlayAac } from '../utils/smoothPlay.js'
+import { ensureSmoothPlayAac, canSmoothOrRepairTranscode, warmSmoothPlayAac } from '../utils/smoothPlay.js'
 import { isPlatformEnabled } from '../utils/enabledPlatforms.js'
 import { AVAILABLE_SOURCES } from '../musicSdk.js'
 
@@ -40,6 +41,17 @@ function readSettings() {
 
 function formatPlayError(err) {
   return formatUserError(err, '无法获取播放链接，请尝试其他歌曲')
+}
+
+function logPlayError(route, req, err, extra = {}) {
+  logRuntime('error', `play:${route}`, err?.message || err, {
+    status: extra.status || '',
+    trackId: String(req.query?.trackId || req.body?.trackId || '').slice(0, 80),
+    ext: extra.ext || path.extname(String(extra.filePath || '')).toLowerCase(),
+    exists: extra.exists,
+    size: extra.size,
+    filePath: extra.filePath || '',
+  })
 }
 
 const AUDIO_MIME = {
@@ -195,7 +207,7 @@ playRouter.post('/url', async (req, res) => {
         : path.resolve(localFilePath)
       const localExt = path.extname(resolvedLocal).toLowerCase()
       const wantSmooth = Boolean(req.body?.smooth)
-        && needsSmoothPlayTranscode(resolvedLocal)
+        && canSmoothOrRepairTranscode(resolvedLocal)
         && localExt !== '.ape'
       // 有稳定 trackId 时用短地址，避免中文长路径被网关截断
       const tid = String(libraryTrackId || '').trim()
@@ -359,6 +371,7 @@ function pipeLocalFile(res, filePath, { start = 0, end } = {}) {
   const options = end != null ? { start, end } : undefined
   const stream = fs.createReadStream(filePath, options)
   stream.on('error', (err) => {
+    logPlayError('local-stream', { query: {}, body: {} }, err, { filePath })
     if (!res.headersSent) {
       res.status(500).json({ error: formatUserError(err, '读取本地文件失败') })
       return
@@ -375,9 +388,11 @@ playRouter.get('/local', (req, res) => {
   try {
     const filePath = resolveStreamLocalFile(req)
     if (!filePath) {
+      logPlayError('local', req, '缺少文件路径', { status: 400 })
       return res.status(400).json({ error: '缺少文件路径' })
     }
     if (!isAllowedMediaPath(filePath, { userId: req.user?.id })) {
+      logPlayError('local', req, '无权访问该文件', { status: 403, filePath })
       return res.status(403).json({ error: '无权访问该文件' })
     }
 
@@ -385,14 +400,20 @@ playRouter.get('/local', (req, res) => {
     const exists = fs.existsSync(resolved) ? resolved : path.resolve(filePath)
     const ext = path.extname(exists).toLowerCase()
     if (ext === '.ape') {
+      logPlayError('local', req, 'APE 需转码后播放', { status: 415, filePath: exists, ext })
       return res.status(415).json({
         error: 'APE 需转码后播放，请使用 /api/play/local-ape 或重新获取播放链接',
       })
+    }
+    if (!fs.existsSync(exists)) {
+      logPlayError('local', req, '本地文件不存在', { status: 404, filePath: exists, ext, exists: false })
+      return res.status(404).json({ error: '本地文件不存在' })
     }
 
     const mime = AUDIO_MIME[ext] || 'application/octet-stream'
     applyRangeOrFull(res, req, exists, mime)
   } catch (e) {
+    logPlayError('local', req, e, { status: 500 })
     if (!res.headersSent) {
       res.status(500).json({ error: formatUserError(e, '读取本地文件失败') })
     }
@@ -419,6 +440,7 @@ playRouter.get('/local-ape', async (req, res) => {
     const wavPath = await ensureApePlayWav(exists)
     applyRangeOrFull(res, req, wavPath, 'audio/wav')
   } catch (e) {
+    logPlayError('local-ape', req, e, { status: 500 })
     if (!res.headersSent) {
       const status = /ffmpeg|无法直接播放 APE/i.test(String(e?.message || '')) ? 415 : 500
       res.status(status).json({ error: formatUserError(e, 'APE 播放失败') })
@@ -442,13 +464,14 @@ playRouter.get('/local-smooth', async (req, res) => {
 
     const resolved = path.resolve(mapToContainerPath(filePath) || filePath)
     const exists = fs.existsSync(resolved) ? resolved : path.resolve(filePath)
-    if (!needsSmoothPlayTranscode(exists)) {
+    if (!canSmoothOrRepairTranscode(exists)) {
       return res.status(400).json({ error: '该格式无需流畅转码，请使用 /api/play/local' })
     }
 
     const aacPath = await ensureSmoothPlayAac(exists)
     applyRangeOrFull(res, req, aacPath, 'audio/mp4')
   } catch (e) {
+    logPlayError('local-smooth', req, e, { status: 500 })
     if (!res.headersSent) {
       const status = /ffmpeg|转码/i.test(String(e?.message || '')) ? 415 : 500
       res.status(status).json({ error: formatUserError(e, '流畅播放转码失败') })

@@ -90,7 +90,8 @@ const playlists = computed(() =>
 function pick(pl) {
   const list = trackList.value
   if (!list.length) return
-  const res = addTracksToPlaylist(pl.id, list, props.source)
+  const override = list.length === 1 ? (props.source || '') : ''
+  const res = addTracksToPlaylist(pl.id, list, override)
   emit('added', {
     playlist: res.playlist,
     duplicate: res.added === 0,

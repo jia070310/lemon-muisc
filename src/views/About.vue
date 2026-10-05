@@ -327,6 +327,19 @@
       </p>
     </section>
 
+    <p class="about-export-hint">
+      本地播放失败或页面报错时，点下面按钮导出最近运行日志，发给开发者即可排查（不含登录密码）。
+    </p>
+    <div class="about-export-row">
+      <button
+        type="button"
+        class="btn-ghost btn-sm"
+        :disabled="exportingLogs"
+        @click="exportRuntimeLogs"
+      >
+        {{ exportingLogs ? '导出中…' : exportedLogs ? '已导出' : '导出运行日志' }}
+      </button>
+    </div>
     <p class="about-footer">© {{ new Date().getFullYear() }} {{ APP_NAME }}</p>
   </div>
 
@@ -343,6 +356,7 @@ import { isAdmin as isAdminUser } from '../utils/auth.js'
 import { getPwaInstallState, onPwaInstallState, promptPwaInstall } from '../utils/pwa.js'
 import { APP_ICON_URL } from '../utils/appIcon.js'
 import { onWS } from '../ws.js'
+import { formatRuntimeLogText, downloadTextFile, logRuntime } from '../utils/runtimeLog.js'
 
 const QQ_GROUP_ID = '1126326017'
 const QQ_GROUP_QR_URL = '/qq-group-qr.png'
@@ -356,6 +370,8 @@ const pwaInstalling = ref(false)
 const groupIdCopied = ref(false)
 const logDirCopied = ref(false)
 const appLogCopied = ref(false)
+const exportingLogs = ref(false)
+const exportedLogs = ref(false)
 let stopPwaWatch = null
 let groupCopyTimer = null
 let logDirCopyTimer = null
@@ -527,6 +543,46 @@ async function copyText(text, onOk) {
     await navigator.clipboard.writeText(val)
     onOk?.()
   } catch {}
+}
+
+async function exportRuntimeLogs() {
+  if (exportingLogs.value) return
+  exportingLogs.value = true
+  try {
+    logRuntime('info', 'about', 'export runtime log')
+    const sections = []
+    try {
+      const res = await api.about.diagnostics()
+      const data = res?.data || res || {}
+      const envLines = [
+        `version: ${data.currentVersion || info.value?.currentVersion || ''}`,
+        `node: ${data.node || ''}`,
+        `platform: ${data.platform || ''}`,
+        `uptimeSec: ${data.uptimeSec ?? ''}`,
+        `logDir: ${data.logDir || ''}`,
+        `generatedAt: ${data.generatedAt || ''}`,
+      ]
+      sections.push({ title: '--- 服务环境 ---', body: envLines.join('\n') })
+      if (data.recentText) {
+        sections.push({ title: '--- 服务端近期记录 ---', body: data.recentText })
+      }
+      for (const [name, text] of Object.entries(data.tails || {})) {
+        sections.push({ title: `--- 服务日志 ${name} ---`, body: text })
+      }
+    } catch (e) {
+      sections.push({ title: '--- 服务端日志 ---', body: `获取失败：${e?.message || e}` })
+    }
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+    const ver = String(info.value?.currentVersion || '').replace(/[^\d.]+/g, '') || 'unknown'
+    downloadTextFile(`lemon-music-log-v${ver}-${stamp}.txt`, formatRuntimeLogText(sections))
+    exportedLogs.value = true
+    showToast('已导出运行日志', 'success')
+    window.setTimeout(() => { exportedLogs.value = false }, 2500)
+  } catch (e) {
+    showToast(e?.message || '导出失败', 'error')
+  } finally {
+    exportingLogs.value = false
+  }
 }
 
 async function copyLogPath(kind) {
@@ -1629,6 +1685,18 @@ function formatDate(iso) {
   border: 1px solid rgba(52, 199, 89, 0.3);
 }
 
+.about-export-hint {
+  margin: 16px 0 8px;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-muted);
+}
+.about-export-row {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 8px;
+}
 .about-footer {
   margin-top: 4px;
   text-align: center;

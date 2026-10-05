@@ -34,7 +34,32 @@ export function getAppLogDir() {
 }
 
 /** 常见日志文件名（用于提示用户） */
-const MAIN_LOG_NAMES = ['app.log', 'npm-install.log', 'install.log', 'config.log']
+const MAIN_LOG_NAMES = ['app.log', 'runtime.log', 'npm-install.log', 'install.log', 'config.log']
+
+export function readLogTail(filePath, maxBytes = 80 * 1024) {
+  try {
+    if (!filePath || !fs.existsSync(filePath)) return ''
+    const size = fs.statSync(filePath).size || 0
+    if (size <= 0) return ''
+    const start = Math.max(0, size - maxBytes)
+    const fd = fs.openSync(filePath, 'r')
+    try {
+      const len = size - start
+      const buf = Buffer.alloc(len)
+      fs.readSync(fd, buf, 0, len, start)
+      let text = buf.toString('utf8')
+      if (start > 0) {
+        const nl = text.indexOf('\n')
+        if (nl >= 0 && nl < text.length - 1) text = text.slice(nl + 1)
+      }
+      return text
+    } finally {
+      fs.closeSync(fd)
+    }
+  } catch {
+    return ''
+  }
+}
 
 export function getAppLogInfo() {
   const logDir = getAppLogDir()

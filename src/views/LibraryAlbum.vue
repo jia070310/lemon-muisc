@@ -26,6 +26,14 @@
             <button
               class="btn-ghost btn-sm"
               type="button"
+              :class="{ 'fav-active': albumFavorited }"
+              @click="onToggleAlbumFavorite"
+            >
+              {{ albumFavorited ? '已收藏专辑' : '收藏专辑' }}
+            </button>
+            <button
+              class="btn-ghost btn-sm"
+              type="button"
               :disabled="albumSyncBusy || !(album.trackCount || album.tracks.length)"
               @click="openAlbumSync"
             >
@@ -164,6 +172,8 @@ import {
   scanLibrary,
   isFavorite,
   toggleFavorite,
+  isFavoriteAlbum,
+  toggleFavoriteAlbum,
   fetchLibraryTracksPage,
   fetchAllLibraryTracks,
   localCoverUrl,
@@ -218,6 +228,13 @@ function albumShell(artist, name, extras = {}) {
 }
 
 const albumTags = computed(() => (album.value ? formatAlbumTags(album.value) : ''))
+const albumFavorited = computed(() => (album.value ? isFavoriteAlbum(album.value) : false))
+
+function onToggleAlbumFavorite() {
+  if (!album.value) return
+  const added = toggleFavoriteAlbum(album.value)
+  showToast(added ? '已收藏专辑' : '已取消收藏专辑', added ? 'success' : 'info')
+}
 const totalPages = computed(() => Math.max(1, Math.ceil((album.value?.trackCount || album.value?.tracks?.length || 0) / pageSize)))
 const listStart = computed(() => (page.value - 1) * pageSize)
 const pagedTracks = computed(() => album.value?.tracks || [])

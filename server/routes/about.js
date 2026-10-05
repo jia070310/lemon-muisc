@@ -6,10 +6,12 @@ import needle from 'needle'
 import { pipeline } from 'stream/promises'
 import { Transform } from 'stream'
 import { compareVersion } from '../utils/version.js'
-import { getAppLogInfo } from '../utils/appPaths.js'
+import { getAppLogInfo, readLogTail } from '../utils/appPaths.js'
 import { getDownloadSavePath, getSharedDownloadSavePath } from '../utils/filePaths.js'
 import { requireAdmin } from '../middleware/auth.js'
 import { broadcast } from '../ws.js'
+import os from 'os'
+import { formatRuntimeLogLines } from '../utils/runtimeLog.js'
 
 export const aboutRouter = Router()
 
@@ -352,6 +354,33 @@ aboutRouter.get('/', async (_req, res) => {
     appLogPath: logInfo.appLog,
     logDirExists: logInfo.exists,
     logFiles: logInfo.files,
+  })
+})
+
+aboutRouter.get('/diagnostics', (_req, res) => {
+  const logInfo = getAppLogInfo()
+  const tails = {}
+  for (const file of logInfo.files || []) {
+    if (!file?.path || !file?.name) continue
+    const maxBytes = file.name === 'runtime.log' ? 120 * 1024 : 48 * 1024
+    const text = readLogTail(file.path, maxBytes)
+    if (text) tails[file.name] = text
+  }
+  if (!tails['runtime.log'] && logInfo.logDir) {
+    const runtimePath = path.join(logInfo.logDir, 'runtime.log')
+    const text = readLogTail(runtimePath, 120 * 1024)
+    if (text) tails['runtime.log'] = text
+  }
+  res.json({
+    generatedAt: new Date().toISOString(),
+    currentVersion: getCurrentVersion(),
+    node: process.version,
+    platform: `${process.platform} ${os.arch()}`,
+    uptimeSec: Math.round(process.uptime()),
+    logDir: logInfo.logDir,
+    logDirExists: logInfo.exists,
+    recentText: formatRuntimeLogLines(),
+    tails,
   })
 })
 

@@ -168,21 +168,29 @@ export function parsePlainLyric(text) {
 }
 
 /**
- * 优先 YRC / 增强 LRC 逐字，否则普通 LRC / 纯文本
- * @returns {{ time: number, text: string, words: null | { time: number, duration: number, text: string }[] }[]}
+ * 优先 YRC / 增强 LRC 逐字，否则普通 LRC / 纯文本。
+ * 若逐字解析行数明显偏少，回退普通 LRC，避免残缺逐字轴盖掉完整歌词。
  */
 export function parseLyricRich(lyric, ylyric = '') {
+  const plain = parseLyric(lyric)
   const yrcLines = parseYrc(ylyric)
-  if (yrcLines.length) return yrcLines
+  if (yrcLines.length && !(plain.length > yrcLines.length * 2 && plain.length >= 8)) {
+    return yrcLines
+  }
 
   const enhanced = parseEnhancedLrc(lyric)
-  if (enhanced.length) return enhanced
+  if (enhanced.length && !(plain.length > enhanced.length * 2 && plain.length >= 8)) {
+    return enhanced
+  }
 
   // 有时 yrc 内容被误放在 lyric 字段
   const yrcInLyric = parseYrc(lyric)
-  if (yrcInLyric.length) return yrcInLyric
+  if (yrcInLyric.length && !(plain.length > yrcInLyric.length * 2 && plain.length >= 8)) {
+    return yrcInLyric
+  }
 
-  return parseLyric(lyric)
+  if (plain.length) return plain
+  return yrcLines.length ? yrcLines : (enhanced.length ? enhanced : yrcInLyric)
 }
 
 /** 是否有可用的行级时间轴（可推算逐字） */

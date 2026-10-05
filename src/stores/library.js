@@ -6,6 +6,8 @@ import { splitArtists } from '../utils/text.js'
 import { encodeAlbumId } from '../utils/albumId.js'
 
 const FAVORITES_KEY_BASE = 'lemon-library-favorites'
+const FAVORITE_ALBUMS_KEY_BASE = 'lemon-library-favorite-albums'
+const FAVORITE_ARTISTS_KEY_BASE = 'lemon-library-favorite-artists'
 const RECENT_KEY_BASE = 'lemon-library-recent'
 const PLAYLISTS_KEY_BASE = 'lemon-library-playlists'
 const USER_DATA_REV_KEY_BASE = 'lemon-library-user-data-rev'
@@ -22,6 +24,8 @@ function storageKey(base) {
 }
 
 function favoritesKey() { return storageKey(FAVORITES_KEY_BASE) }
+function favoriteAlbumsKey() { return storageKey(FAVORITE_ALBUMS_KEY_BASE) }
+function favoriteArtistsKey() { return storageKey(FAVORITE_ARTISTS_KEY_BASE) }
 function recentKey() { return storageKey(RECENT_KEY_BASE) }
 function playlistsKey() { return storageKey(PLAYLISTS_KEY_BASE) }
 function userDataRevKey() { return storageKey(USER_DATA_REV_KEY_BASE) }
@@ -473,7 +477,14 @@ function pickNewerPlaylists(local, server) {
   return maxPlaylistStamp(local) >= maxPlaylistStamp(server) ? local : server
 }
 
-function applyLocalUserData({ playlists, favorites: favs, recentPlays: recent, revision } = {}) {
+function applyLocalUserData({
+  playlists,
+  favorites: favs,
+  favoriteAlbums: favAlbums,
+  favoriteArtists: favArtists,
+  recentPlays: recent,
+  revision,
+} = {}) {
   if (Array.isArray(playlists)) {
     customPlaylists.value = playlists.map(normalizePlaylist)
     writeJson(playlistsKey(), customPlaylists.value)
@@ -481,6 +492,14 @@ function applyLocalUserData({ playlists, favorites: favs, recentPlays: recent, r
   if (Array.isArray(favs)) {
     favorites.value = favs
     writeJson(favoritesKey(), favs)
+  }
+  if (Array.isArray(favAlbums)) {
+    favoriteAlbums.value = favAlbums
+    writeJson(favoriteAlbumsKey(), favAlbums)
+  }
+  if (Array.isArray(favArtists)) {
+    favoriteArtists.value = favArtists
+    writeJson(favoriteArtistsKey(), favArtists)
   }
   if (Array.isArray(recent)) {
     recentPlays.value = recent
@@ -496,6 +515,8 @@ async function saveUserDataToServer() {
     await libraryApi.library.userData.save({
       playlists: customPlaylists.value,
       favorites: favorites.value,
+      favoriteAlbums: favoriteAlbums.value,
+      favoriteArtists: favoriteArtists.value,
       recentPlays: recentPlays.value,
       revision,
     })
@@ -531,6 +552,16 @@ function persistFavorites() {
   scheduleUserDataPersist()
 }
 
+function persistFavoriteAlbums() {
+  writeJson(favoriteAlbumsKey(), favoriteAlbums.value)
+  scheduleUserDataPersist()
+}
+
+function persistFavoriteArtists() {
+  writeJson(favoriteArtistsKey(), favoriteArtists.value)
+  scheduleUserDataPersist()
+}
+
 function persistRecent() {
   writeJson(recentKey(), recentPlays.value)
   scheduleUserDataPersist()
@@ -546,7 +577,14 @@ function hasItems(list) {
   return Array.isArray(list) && list.length > 0
 }
 
-function applyRemoteUserData({ playlists, favorites: favs, recentPlays: recent, revision } = {}) {
+function applyRemoteUserData({
+  playlists,
+  favorites: favs,
+  favoriteAlbums: favAlbums,
+  favoriteArtists: favArtists,
+  recentPlays: recent,
+  revision,
+} = {}) {
   skipNextUserDataPersist = true
   if (Array.isArray(playlists)) {
     customPlaylists.value = playlists.map(normalizePlaylist)
@@ -555,6 +593,14 @@ function applyRemoteUserData({ playlists, favorites: favs, recentPlays: recent, 
   if (Array.isArray(favs)) {
     favorites.value = favs
     writeJson(favoritesKey(), favs)
+  }
+  if (Array.isArray(favAlbums)) {
+    favoriteAlbums.value = favAlbums
+    writeJson(favoriteAlbumsKey(), favAlbums)
+  }
+  if (Array.isArray(favArtists)) {
+    favoriteArtists.value = favArtists
+    writeJson(favoriteArtistsKey(), favArtists)
   }
   if (Array.isArray(recent)) {
     recentPlays.value = recent
@@ -588,6 +634,8 @@ function flushPendingUserDataPersist() {
 function clearInMemoryUserData() {
   customPlaylists.value = []
   favorites.value = []
+  favoriteAlbums.value = []
+  favoriteArtists.value = []
   recentPlays.value = []
   roamTracks.value = []
   roamPickPool = []
@@ -604,6 +652,8 @@ function migrateLegacyLocalUserData(userId) {
     if (localStorage.getItem(LEGACY_MIGRATED_KEY)) return
     const hasScoped = hasItems(readJson(`${PLAYLISTS_KEY_BASE}:${userId}`, []))
       || hasItems(readJson(`${FAVORITES_KEY_BASE}:${userId}`, []))
+      || hasItems(readJson(`${FAVORITE_ALBUMS_KEY_BASE}:${userId}`, []))
+      || hasItems(readJson(`${FAVORITE_ARTISTS_KEY_BASE}:${userId}`, []))
       || hasItems(readJson(`${RECENT_KEY_BASE}:${userId}`, []))
     if (hasScoped) {
       localStorage.setItem(LEGACY_MIGRATED_KEY, userId)
@@ -668,20 +718,30 @@ export async function initLibraryUserData(api, user = null) {
     const data = res.data || {}
     const serverPl = (data.playlists || []).map(normalizePlaylist)
     const serverFav = data.favorites || []
+    const serverFavAlbums = data.favoriteAlbums || []
+    const serverFavArtists = data.favoriteArtists || []
     const serverRecent = data.recentPlays || []
     const serverRev = Number(data.revision) || 0
 
     const localPl = readJson(playlistsKey(), []).map(normalizePlaylist)
     const localFav = readJson(favoritesKey(), [])
+    const localFavAlbums = readJson(favoriteAlbumsKey(), [])
+    const localFavArtists = readJson(favoriteArtistsKey(), [])
     const localRecent = readJson(recentKey(), [])
     const localRev = readLocalRevision()
 
     let needUpload = false
+    const hasLocalUserData = hasItems(localPl) || hasItems(localFav) || hasItems(localFavAlbums)
+      || hasItems(localFavArtists) || hasItems(localRecent)
+    const hasServerUserData = serverRev > 0 || hasItems(serverPl) || hasItems(serverFav)
+      || hasItems(serverFavAlbums) || hasItems(serverFavArtists) || hasItems(serverRecent)
 
     if (localRev > serverRev) {
       applyLocalUserData({
         playlists: localPl,
         favorites: localFav,
+        favoriteAlbums: localFavAlbums,
+        favoriteArtists: localFavArtists,
         recentPlays: localRecent,
         revision: localRev,
       })
@@ -690,14 +750,18 @@ export async function initLibraryUserData(api, user = null) {
       applyRemoteUserData({
         playlists: serverPl,
         favorites: serverFav,
+        favoriteAlbums: serverFavAlbums,
+        favoriteArtists: serverFavArtists,
         recentPlays: serverRecent,
         revision: serverRev,
       })
-    } else if (serverRev > 0 || hasItems(serverPl) || hasItems(serverFav) || hasItems(serverRecent)) {
+    } else if (hasServerUserData) {
       // 优先服务端（该用户权威数据），避免串用其他账号的浏览器缓存
       applyRemoteUserData({
         playlists: serverPl,
         favorites: serverFav,
+        favoriteAlbums: serverFavAlbums,
+        favoriteArtists: serverFavArtists,
         recentPlays: serverRecent,
         revision: serverRev || localRev,
       })
@@ -706,10 +770,12 @@ export async function initLibraryUserData(api, user = null) {
       applyLocalUserData({
         playlists: localPl,
         favorites: localFav,
+        favoriteAlbums: localFavAlbums,
+        favoriteArtists: localFavArtists,
         recentPlays: localRecent,
-        revision: localRev || (hasItems(localPl) || hasItems(localFav) || hasItems(localRecent) ? Date.now() : 0),
+        revision: localRev || (hasLocalUserData ? Date.now() : 0),
       })
-      needUpload = hasItems(localPl) || hasItems(localFav) || hasItems(localRecent)
+      needUpload = hasLocalUserData
     }
 
     if (needUpload) {
@@ -719,6 +785,8 @@ export async function initLibraryUserData(api, user = null) {
   } catch {
     customPlaylists.value = readJson(playlistsKey(), []).map(normalizePlaylist)
     favorites.value = readJson(favoritesKey(), [])
+    favoriteAlbums.value = readJson(favoriteAlbumsKey(), [])
+    favoriteArtists.value = readJson(favoriteArtistsKey(), [])
     recentPlays.value = readJson(recentKey(), [])
     roamTracks.value = loadRoamTracks()
   }
@@ -785,6 +853,8 @@ export function getLibraryTrackKey(track) {
 }
 
 export const favorites = ref([])
+export const favoriteAlbums = ref([])
+export const favoriteArtists = ref([])
 export const recentPlays = ref([])
 export const customPlaylists = ref([])
 /** 漫游歌单：从音乐库动态抽取的本地曲目快照列表（按用户隔离，不上传） */
@@ -793,6 +863,8 @@ export const roamTracks = ref([])
 let roamPickPool = []
 
 export const favoriteKeys = computed(() => new Set(favorites.value.map(f => f.key)))
+export const favoriteAlbumIds = computed(() => new Set(favoriteAlbums.value.map((a) => String(a?.id || '')).filter(Boolean)))
+export const favoriteArtistIds = computed(() => new Set(favoriteArtists.value.map((a) => String(a?.id || '')).filter(Boolean)))
 
 export function trackToSnapshot(track, sourceOverride) {
   const key = getLibraryTrackKey(track)
@@ -871,6 +943,71 @@ export function toggleFavorite(track) {
   else list.unshift(snapshot)
   favorites.value = list
   persistFavorites()
+  return idx < 0
+}
+
+function albumToFavoriteSnapshot(album) {
+  const name = String(album?.name || '').trim()
+  if (!name) return null
+  const artist = String(album?.artist || '').trim()
+  const id = String(album?.id || encodeAlbumId(artist, name) || '').trim()
+  if (!id) return null
+  return {
+    id,
+    name,
+    artist: artist || '未知艺术家',
+    cover: album.cover || album.picUrl || album.img || '',
+    trackCount: Number(album.trackCount || album.tracks?.length || 0) || 0,
+    addedAt: Date.now(),
+  }
+}
+
+function artistToFavoriteSnapshot(artist) {
+  const name = String(artist?.name || '').trim()
+  if (!name) return null
+  const id = String(artist?.id || artistToId(name) || '').trim()
+  if (!id) return null
+  return {
+    id,
+    name,
+    cover: artist.cover || artist.picUrl || artist.img || '',
+    trackCount: Number(artist.trackCount || artist.tracks?.length || 0) || 0,
+    albumCount: Number(artist.albumCount || 0) || 0,
+    addedAt: Date.now(),
+  }
+}
+
+export function isFavoriteAlbum(album) {
+  const id = String(album?.id || encodeAlbumId(album?.artist, album?.name) || '').trim()
+  return id ? favoriteAlbumIds.value.has(id) : false
+}
+
+export function toggleFavoriteAlbum(album) {
+  const snapshot = albumToFavoriteSnapshot(album)
+  if (!snapshot) return false
+  const list = [...favoriteAlbums.value]
+  const idx = list.findIndex((item) => String(item.id) === snapshot.id)
+  if (idx >= 0) list.splice(idx, 1)
+  else list.unshift(snapshot)
+  favoriteAlbums.value = list
+  persistFavoriteAlbums()
+  return idx < 0
+}
+
+export function isFavoriteArtist(artist) {
+  const id = String(artist?.id || artistToId(artist?.name) || '').trim()
+  return id ? favoriteArtistIds.value.has(id) : false
+}
+
+export function toggleFavoriteArtist(artist) {
+  const snapshot = artistToFavoriteSnapshot(artist)
+  if (!snapshot) return false
+  const list = [...favoriteArtists.value]
+  const idx = list.findIndex((item) => String(item.id) === snapshot.id)
+  if (idx >= 0) list.splice(idx, 1)
+  else list.unshift(snapshot)
+  favoriteArtists.value = list
+  persistFavoriteArtists()
   return idx < 0
 }
 
@@ -1313,12 +1450,19 @@ export function addTracksToPlaylist(playlistId, tracks, sourceOverride, options 
 }
 
 export function removeTrackFromPlaylist(playlistId, trackKey) {
+  return removeTracksFromPlaylist(playlistId, [trackKey])
+}
+
+/** 从歌单批量移除曲目（保持其余曲目顺序） */
+export function removeTracksFromPlaylist(playlistId, trackKeys) {
   const pl = customPlaylists.value.find(p => p.id === playlistId)
   if (!pl) return null
+  const removeSet = new Set((Array.isArray(trackKeys) ? trackKeys : [trackKeys]).filter(Boolean))
+  if (!removeSet.size) return normalizePlaylist(pl)
   const snapshots = { ...(pl.trackSnapshots || {}) }
-  delete snapshots[trackKey]
+  for (const key of removeSet) delete snapshots[key]
   return updatePlaylist(playlistId, {
-    trackKeys: (pl.trackKeys || []).filter(k => k !== trackKey),
+    trackKeys: (pl.trackKeys || []).filter((k) => !removeSet.has(k)),
     trackSnapshots: snapshots,
   })
 }
@@ -1634,10 +1778,15 @@ export function stopPlaylistPick() {
 }
 
 export function addToPickingPlaylist(track, sourceOverride) {
+  return addTracksToPickingPlaylist(track ? [track] : [], sourceOverride)
+}
+
+export function addTracksToPickingPlaylist(tracks, sourceOverride) {
   const target = playlistPickTarget.value
-  if (!target?.id) return { ok: false, reason: 'no-target' }
-  const res = addTracksToPlaylist(target.id, [track], sourceOverride)
-  return { ok: res.added > 0, duplicate: res.added === 0, playlist: res.playlist }
+  if (!target?.id) return { ok: false, reason: 'no-target', added: 0, duplicate: false, playlist: null }
+  const list = Array.isArray(tracks) ? tracks.filter(Boolean) : []
+  const res = addTracksToPlaylist(target.id, list, sourceOverride)
+  return { ok: res.added > 0, duplicate: res.added === 0, added: res.added, playlist: res.playlist }
 }
 
 export function resolveTracksByKeys(keys, allTracks, snapshots = []) {

@@ -17,12 +17,22 @@ export const SMOOTH_PLAY_EXTS = new Set([
   '.flac', '.wav', '.aiff', '.aif', '.ape', '.dsf', '.dff', '.wv', '.tak',
 ])
 
+/** 浏览器直出失败时可转 AAC 修复（假 MP3、缺 PTS、异常封装） */
+export const REPAIR_PLAY_EXTS = new Set([
+  '.mp3', '.m4a', '.aac', '.ogg', '.oga', '.opus', '.wma',
+])
+
 /** AAC 目标码率（kbps）；改动需同步 cacheKey 后缀 */
 export const SMOOTH_AAC_BITRATE = 128
 
 export function needsSmoothPlayTranscode(filePath) {
   const ext = path.extname(String(filePath || '')).toLowerCase()
   return SMOOTH_PLAY_EXTS.has(ext)
+}
+
+export function canSmoothOrRepairTranscode(filePath) {
+  const ext = path.extname(String(filePath || '')).toLowerCase()
+  return SMOOTH_PLAY_EXTS.has(ext) || REPAIR_PLAY_EXTS.has(ext)
 }
 
 function cacheDir() {
@@ -80,6 +90,8 @@ export async function ensureSmoothPlayAac(filePath) {
     '-y',
     '-hide_banner',
     '-loglevel', 'error',
+    '-fflags', '+genpts',
+    '-err_detect', 'ignore_err',
     '-i', resolved,
     '-vn',
     '-c:a', 'aac',

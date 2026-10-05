@@ -818,17 +818,30 @@ libraryRouter.get('/user-data', (req, res) => {
 /** 保存用户库数据（可部分更新） */
 libraryRouter.put('/user-data', (req, res) => {
   try {
-    const { playlists, favorites, recentPlays, revision } = req.body || {}
+    const { playlists, favorites, favoriteAlbums, favoriteArtists, recentPlays, revision } = req.body || {}
     if (playlists !== undefined && !Array.isArray(playlists)) {
       return res.status(400).json({ error: 'playlists 必须是数组' })
     }
     if (favorites !== undefined && !Array.isArray(favorites)) {
       return res.status(400).json({ error: 'favorites 必须是数组' })
     }
+    if (favoriteAlbums !== undefined && !Array.isArray(favoriteAlbums)) {
+      return res.status(400).json({ error: 'favoriteAlbums 必须是数组' })
+    }
+    if (favoriteArtists !== undefined && !Array.isArray(favoriteArtists)) {
+      return res.status(400).json({ error: 'favoriteArtists 必须是数组' })
+    }
     if (recentPlays !== undefined && !Array.isArray(recentPlays)) {
       return res.status(400).json({ error: 'recentPlays 必须是数组' })
     }
-    setLibraryUserData(req.user.id, { playlists, favorites, recentPlays, revision })
+    setLibraryUserData(req.user.id, {
+      playlists,
+      favorites,
+      favoriteAlbums,
+      favoriteArtists,
+      recentPlays,
+      revision,
+    })
     notifyLibraryUserDataChanged(req.user.id)
     res.json({ ok: true })
   } catch (e) {

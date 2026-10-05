@@ -24,6 +24,14 @@
             <button class="btn-primary btn-sm" :disabled="!artist.tracks.length" @click="playAll">播放全部</button>
             <button class="btn-ghost btn-sm" :disabled="!artist.tracks.length" @click="shufflePlay">随机播放</button>
             <button class="btn-ghost btn-sm" :disabled="!artist.tracks.length" @click="queueAll">加入试听列表</button>
+            <button
+              class="btn-ghost btn-sm"
+              type="button"
+              :class="{ 'fav-active': artistFavorited }"
+              @click="onToggleArtistFavorite"
+            >
+              {{ artistFavorited ? '已收藏歌手' : '收藏歌手' }}
+            </button>
           </div>
         </div>
       </section>
@@ -134,6 +142,8 @@ import {
   scanLibrary,
   isFavorite,
   toggleFavorite,
+  isFavoriteArtist,
+  toggleFavoriteArtist,
   fetchLibraryTracksPage,
   fetchLibraryAlbums,
   fetchAllLibraryTracks,
@@ -159,9 +169,16 @@ const toast = ref(null)
 const pickPlaylistTrack = ref(null)
 let narrowMq = null
 
+const artistFavorited = computed(() => (artist.value ? isFavoriteArtist(artist.value) : false))
 const totalPages = computed(() => Math.max(1, Math.ceil((artist.value?.trackCount || artist.value?.tracks?.length || 0) / pageSize)))
 const listStart = computed(() => (page.value - 1) * pageSize)
 const pagedTracks = computed(() => artist.value?.tracks || [])
+
+function onToggleArtistFavorite() {
+  if (!artist.value) return
+  const added = toggleFavoriteArtist(artist.value)
+  showToast(added ? '已收藏歌手' : '已取消收藏歌手', added ? 'success' : 'info')
+}
 
 async function loadArtist() {
   const name = artistFromId(artistId.value)

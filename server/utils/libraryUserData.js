@@ -3,6 +3,8 @@ import { getDB } from '../db.js'
 const KEYS = {
   playlists: 'library.customPlaylists',
   favorites: 'library.favorites',
+  favoriteAlbums: 'library.favoriteAlbums',
+  favoriteArtists: 'library.favoriteArtists',
   recentPlays: 'library.recentPlays',
   revision: 'library.userDataRevision',
 }
@@ -53,14 +55,25 @@ export function getLibraryUserData(userId) {
   return {
     playlists: readArray(userId, KEYS.playlists),
     favorites: readArray(userId, KEYS.favorites),
+    favoriteAlbums: readArray(userId, KEYS.favoriteAlbums),
+    favoriteArtists: readArray(userId, KEYS.favoriteArtists),
     recentPlays: readArray(userId, KEYS.recentPlays),
     revision: readNumber(userId, KEYS.revision),
   }
 }
 
-export function setLibraryUserData(userId, { playlists, favorites, recentPlays, revision } = {}) {
+export function setLibraryUserData(userId, {
+  playlists,
+  favorites,
+  favoriteAlbums,
+  favoriteArtists,
+  recentPlays,
+  revision,
+} = {}) {
   if (playlists !== undefined) writeArray(userId, KEYS.playlists, playlists)
   if (favorites !== undefined) writeArray(userId, KEYS.favorites, favorites)
+  if (favoriteAlbums !== undefined) writeArray(userId, KEYS.favoriteAlbums, favoriteAlbums)
+  if (favoriteArtists !== undefined) writeArray(userId, KEYS.favoriteArtists, favoriteArtists)
   if (recentPlays !== undefined) writeArray(userId, KEYS.recentPlays, recentPlays)
   if (revision !== undefined) writeNumber(userId, KEYS.revision, revision)
 }

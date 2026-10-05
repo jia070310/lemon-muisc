@@ -349,6 +349,8 @@ export function migrateAuthData(adminUserId) {
   const libraryKeys = [
     'library.customPlaylists',
     'library.favorites',
+    'library.favoriteAlbums',
+    'library.favoriteArtists',
     'library.recentPlays',
     'library.userDataRevision',
     'ui.theme',

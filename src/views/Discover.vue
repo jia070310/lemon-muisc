@@ -4,7 +4,7 @@
     <div class="page-subtitle">输入各平台歌单链接，浏览并试听、下载；大批量下载按批次与间隔入队，可查看剩余、立即继续或取消</div>
 
     <div v-if="playlistPickTarget" class="pick-hint card">
-      点击歌曲右侧「加入歌单」添加到「{{ playlistPickTarget.name }}」
+      点击歌曲右侧「加入歌单」，或勾选后点「加入歌单」，添加到「{{ playlistPickTarget.name }}」
     </div>
 
     <div class="discover-header card">
@@ -195,6 +195,13 @@
           </div>
           <button
             class="btn-ghost btn-sm"
+            :disabled="!selectedCount"
+            @click="addSelectedToPlaylist"
+          >
+            加入歌单{{ selectedCount ? ` (${selectedCount})` : '' }}
+          </button>
+          <button
+            class="btn-ghost btn-sm"
             :disabled="!discoverState.results.length || discoverState.loading || discoverState.loadingMore || importingPlaylist"
             @click="importCurrentPlaylistToLibrary"
           >
@@ -312,6 +319,14 @@
       @cancel="pacedDialog = null"
       @confirm="handlePacedConfirm"
     />
+
+    <PickPlaylistModal
+      v-if="pickPlaylistTracks?.length"
+      :tracks="pickPlaylistTracks"
+      :source="activeSource"
+      @close="pickPlaylistTracks = null"
+      @added="onBatchPlaylistAdded"
+    />
   </div>
 </template>
 
@@ -327,6 +342,7 @@ import SearchInput from '../components/SearchInput.vue'
 import { SEARCH_HISTORY_KEYS } from '../composables/useSearchHistory.js'
 import DiscoverSongItem from '../components/discover/DiscoverSongItem.vue'
 import DiscoverSongActions from '../components/discover/DiscoverSongActions.vue'
+import PickPlaylistModal from '../components/PickPlaylistModal.vue'
 import DiscoverPlaylistSection from '../components/discover/DiscoverPlaylistSection.vue'
 import DiscoverNewSongsSection from '../components/discover/DiscoverNewSongsSection.vue'
 import DiscoverNewAlbumsSection from '../components/discover/DiscoverNewAlbumsSection.vue'
@@ -353,7 +369,7 @@ import { getQualityLabel } from '../utils/quality.js'
 import { platformLabel } from '../utils/platforms.js'
 import { cleanText, cleanTrackItem } from '../utils/text.js'
 import { useQualityMenuPosition } from '../utils/qualityMenu.js'
-import { playlistPickTarget, importPlaylistFromLoaded } from '../stores/library.js'
+import { playlistPickTarget, addTracksToPickingPlaylist, importPlaylistFromLoaded } from '../stores/library.js'
 import { assertActiveSourceForDownload } from '../stores/downloadGuard.js'
 
 const router = useRouter()
@@ -365,6 +381,7 @@ const importConfirm = ref(null)
 const showBatchQualityMenu = ref(false)
 const showPacedQualityMenu = ref(false)
 const selectedKeys = ref(new Set())
+const pickPlaylistTracks = ref(null)
 const pacedDialog = ref(null)
 const pacedBusy = ref(false)
 const { menuStyle: batchMenuStyle, positionMenu: positionBatchMenu, clearMenuPosition: clearBatchMenuPosition } = useQualityMenuPosition()
@@ -1252,6 +1269,33 @@ async function downloadSelected(quality) {
 
 async function handleBatchConfirm(payload) {
   await confirmBatchDialog(payload)
+}
+
+function addSelectedToPlaylist() {
+  const items = selectedItems.value
+  if (!items.length) {
+    showToast('请先勾选要加入的歌曲', 'info')
+    return
+  }
+  if (playlistPickTarget.value) {
+    const res = addTracksToPickingPlaylist(items, activeSource.value)
+    onBatchPlaylistAdded(res)
+    return
+  }
+  pickPlaylistTracks.value = items.map((item) => ({
+    ...cleanTrackItem(item),
+    source: item.source || activeSource.value,
+  }))
+}
+
+function onBatchPlaylistAdded({ playlist, duplicate, added }) {
+  pickPlaylistTracks.value = null
+  if (!added) {
+    showToast(duplicate ? '所选歌曲已在歌单中' : (playlistPickTarget.value ? '未能加入歌单' : '请先打开歌单并点击添加歌曲'), 'info')
+    return
+  }
+  const name = playlist?.name || playlistPickTarget.value?.name || ''
+  showToast(added === 1 ? `已加入歌单：${name}` : `已加入歌单「${name}」${added} 首`, 'success')
 }
 
 function showToast(text, type = 'info') {

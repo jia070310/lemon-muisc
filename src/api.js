@@ -1,5 +1,6 @@
 import { formatUserError } from './utils/userError.js'
 import { getToken, clearAuthSession } from './utils/auth.js'
+import { logRuntime } from './utils/runtimeLog.js'
 
 const BASE = '/api'
 const DEFAULT_TIMEOUT = 30000
@@ -156,7 +157,15 @@ async function request(url, options = {}) {
       lastError = e
       if (e?.aborted || options.signal?.aborted) throw e
       const canRetry = attempt < retries && (e?.transient || isTransientRequestError(e))
-      if (!canRetry) throw e
+      if (!canRetry) {
+        if (!e?.aborted && !String(url).startsWith('/health') && !String(url).startsWith('/about')) {
+          logRuntime('error', 'api', `${String(options.method || 'GET').toUpperCase()} ${url} ${e?.message || e}`, {
+            attempt: attempt + 1,
+            code: e?.code || '',
+          })
+        }
+        throw e
+      }
       // 后端 --watch 重启 + 音源加载通常约 1–3s
       await sleep(400 * (2 ** attempt) + Math.floor(Math.random() * 250))
     }
@@ -574,6 +583,7 @@ export const api = {
       const q = qs.toString()
       return request(`/about/download-fpk/status${q ? `?${q}` : ''}`)
     },
+    diagnostics: () => request('/about/diagnostics', { timeout: 15000 }),
   },
   auth: {
     status: () => fetch('/api/auth/status').then(r => r.json()),

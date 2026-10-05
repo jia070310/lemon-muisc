@@ -22,7 +22,9 @@ import { installSourceFaultHandlers, recordSourceFault, getSourceFault } from '.
 import { startMemoryGuard } from './utils/memoryGuard.js'
 import { startLibraryAutoWatch, stopLibraryAutoWatch } from './utils/libraryAutoWatch.js'
 import { ensureDefaultAdmin } from './utils/auth.js'
+import { installServerRuntimeLog } from './utils/runtimeLog.js'
 
+installServerRuntimeLog()
 installSourceFaultHandlers()
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
