@@ -683,7 +683,7 @@
               unhealthy: s.health?.unhealthy,
               'health-mixed': s.health?.unhealthy && s.health?.level === 'mixed',
               'health-preview': s.health?.unhealthy && s.health?.level === 'preview',
-              expanded: expandedSourceId === s.id,
+              'platform-open': expandedSourceId === s.id,
             }"
           >
             <div class="source-item-main">
@@ -711,54 +711,65 @@
                 </div>
               </div>
               <div class="source-actions">
-                <button
-                  type="button"
-                  class="source-expand-btn"
-                  :class="{ expanded: expandedSourceId === s.id }"
-                  :aria-expanded="expandedSourceId === s.id"
-                  :title="expandedSourceId === s.id ? '收起平台开关' : '展开平台开关'"
-                  @click="toggleSourcePlatformPanel(s.id)"
-                >
-                  <span>平台</span>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
-                </button>
+                <div class="source-platform-wrap" :class="{ open: expandedSourceId === s.id }">
+                  <button
+                    type="button"
+                    class="source-expand-btn"
+                    :class="{ expanded: expandedSourceId === s.id }"
+                    :aria-expanded="expandedSourceId === s.id"
+                    :title="expandedSourceId === s.id ? '收起平台开关' : '展开平台开关'"
+                    @click.stop="toggleSourcePlatformPanel(s.id)"
+                  >
+                    <span>平台</span>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                  </button>
+                  <div
+                    v-if="expandedSourceId === s.id"
+                    class="source-platform-popover"
+                    role="dialog"
+                    :aria-label="`${s.name} 平台开关`"
+                    @click.stop
+                  >
+                    <div class="platform-popover-head">
+                      <div class="platform-popover-title-row">
+                        <div class="platform-popover-title">平台解析</div>
+                        <div class="platform-switch-actions">
+                          <button type="button" class="plat-link plat-link-on" @click="setSourcePlatformsAll(s, true)">全启用</button>
+                          <button type="button" class="plat-link plat-link-off" @click="setSourcePlatformsAll(s, false)">全关闭</button>
+                        </div>
+                      </div>
+                      <p class="platform-switch-tip">关闭后，该音源不再解析对应平台歌曲（仅对本账号生效）。</p>
+                    </div>
+                    <div class="platform-switch-list">
+                      <div v-for="p in platformOptionsForSource(s)" :key="p.id" class="platform-switch-item">
+                        <div class="platform-switch-left">
+                          <span class="platform-badge" :class="`plat-${p.id}`">{{ p.short }}</span>
+                          <div class="platform-switch-meta">
+                            <div class="platform-switch-name">
+                              {{ p.label }}
+                              <span class="platform-code">{{ p.id }}</span>
+                            </div>
+                            <div class="platform-switch-status" :class="{ on: isSourcePlatformOn(s.id, p.id), auto: isAutoClosedPlatform(s, p.id) }">
+                              {{ platformSwitchStatus(s, p.id) }}
+                            </div>
+                          </div>
+                        </div>
+                        <label class="toggle">
+                          <input
+                            type="checkbox"
+                            :checked="isSourcePlatformOn(s.id, p.id)"
+                            @change="toggleSourcePlatform(s, p.id, $event.target.checked)"
+                          />
+                          <span class="slider"></span>
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+                </div>
                 <button v-if="s.health?.unhealthy || autoClosedNotice(s)" class="btn-sm btn-ghost" @click="dismissSourceHealth(s)">知道了</button>
                 <button v-if="!isSourceActive(s.id)" class="btn-sm btn-primary" @click="activateSource(s.id)">激活</button>
                 <button v-else class="btn-sm btn-ghost" @click="deactivateSource(s.id)">停用</button>
                 <button v-if="isAdminUser" class="btn-sm btn-danger" @click="removeSource(s.id)">删除</button>
-              </div>
-            </div>
-            <div v-if="expandedSourceId === s.id" class="source-platform-panel">
-              <div class="platform-switch-head">
-                <p class="platform-switch-tip">关闭后，该音源不再解析对应平台歌曲（仅对本账号生效）。</p>
-                <div class="platform-switch-actions">
-                  <button type="button" class="plat-link plat-link-on" @click="setSourcePlatformsAll(s, true)">全启用</button>
-                  <button type="button" class="plat-link plat-link-off" @click="setSourcePlatformsAll(s, false)">全关闭</button>
-                </div>
-              </div>
-              <div class="platform-switch-list">
-                <div v-for="p in platformOptionsForSource(s)" :key="p.id" class="platform-switch-item">
-                  <div class="platform-switch-left">
-                    <span class="platform-badge" :class="`plat-${p.id}`">{{ p.short }}</span>
-                    <div class="platform-switch-meta">
-                      <div class="platform-switch-name">
-                        {{ p.label }}
-                        <span class="platform-code">{{ p.id }}</span>
-                      </div>
-                      <div class="platform-switch-status" :class="{ on: isSourcePlatformOn(s.id, p.id), auto: isAutoClosedPlatform(s, p.id) }">
-                        {{ platformSwitchStatus(s, p.id) }}
-                      </div>
-                    </div>
-                  </div>
-                  <label class="toggle">
-                    <input
-                      type="checkbox"
-                      :checked="isSourcePlatformOn(s.id, p.id)"
-                      @change="toggleSourcePlatform(s, p.id, $event.target.checked)"
-                    />
-                    <span class="slider"></span>
-                  </label>
-                </div>
               </div>
             </div>
           </div>
@@ -2243,6 +2254,8 @@ onMounted(async () => {
   }
   await loadPaths()
   if (isAdminUser.value) loadFfmpegStatus()
+  document.addEventListener('click', onSourcePlatformDocClick)
+  document.addEventListener('keydown', onSourcePlatformKeydown)
 })
 
 onUnmounted(() => {
@@ -2250,6 +2263,8 @@ onUnmounted(() => {
   clearTimeout(customColorSaveTimer)
   clearTimeout(lyricColorSaveTimer)
   if (platformSaveTimer) clearTimeout(platformSaveTimer)
+  document.removeEventListener('click', onSourcePlatformDocClick)
+  document.removeEventListener('keydown', onSourcePlatformKeydown)
 })
 
 async function applyFfmpegStatus(res) {
@@ -3124,12 +3139,27 @@ function sourcePlatformSummary(source) {
   return `平台 ${on.length}/${all.length}`
 }
 
+function closeSourcePlatformPanel() {
+  expandedSourceId.value = ''
+}
+
 function toggleSourcePlatformPanel(sourceId) {
   expandedSourceId.value = expandedSourceId.value === sourceId ? '' : sourceId
   if (expandedSourceId.value) {
     const s = sourceList.value.find((row) => row.id === sourceId)
     if (s) ensureSourcePlatformEntry(s)
   }
+}
+
+function onSourcePlatformDocClick(event) {
+  if (!expandedSourceId.value) return
+  const wrap = event.target?.closest?.('.source-platform-wrap')
+  if (wrap) return
+  closeSourcePlatformPanel()
+}
+
+function onSourcePlatformKeydown(event) {
+  if (event.key === 'Escape' && expandedSourceId.value) closeSourcePlatformPanel()
 }
 
 async function persistEnabledPlatforms() {
@@ -3834,24 +3864,49 @@ function showToast(text, type = 'info') {
   background: var(--bg-secondary, var(--surface-2, rgba(0,0,0,0.04)));
   border-radius: 8px;
 }
-.source-platform-panel {
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border);
+.source-platform-wrap {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+  z-index: 2;
 }
-.platform-switch-head {
+.source-platform-wrap.open {
+  z-index: 50;
+}
+.source-platform-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 40;
+  width: min(360px, calc(100vw - 48px));
+  max-height: min(420px, 70vh);
+  overflow: auto;
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated, var(--bg-card, var(--bg)));
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.28), 0 2px 8px rgba(0, 0, 0, 0.12);
+}
+.platform-popover-head {
+  margin-bottom: 12px;
+}
+.platform-popover-title-row {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 10px;
+  margin-bottom: 6px;
+}
+.platform-popover-title {
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--text);
 }
 .platform-switch-tip {
   margin: 0;
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1.45;
   color: var(--text-secondary);
-  flex: 1;
 }
 .platform-switch-actions {
   display: flex;
@@ -3939,6 +3994,7 @@ function showToast(text, type = 'info') {
   border-radius: var(--radius);
   background: var(--bg-input);
   border: 1px solid transparent;
+  overflow: visible;
 }
 .source-item-main {
   display: flex;
@@ -3946,11 +4002,23 @@ function showToast(text, type = 'info') {
   justify-content: space-between;
   gap: 12px;
   width: 100%;
+  overflow: visible;
 }
-.source-item.active { border-color: var(--accent); background: var(--accent-muted); }
+.source-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+  position: relative;
+  z-index: 1;
+  overflow: visible;
+}
+.source-item.platform-open {
+  z-index: 20;
+  position: relative;
+}
 .source-item.unhealthy { border-color: var(--warning, #e6a23c); }
 .source-item.health-mixed { border-color: color-mix(in srgb, var(--accent) 45%, var(--warning, #e6a23c)); }
-.source-item.expanded { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
 .source-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
 .source-expand-btn {
   display: inline-flex;
@@ -4044,7 +4112,6 @@ function showToast(text, type = 'info') {
   color: var(--text-secondary);
 }
 .source-meta { font-size: 12px; color: var(--text-muted); }
-.source-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 
 .import-tabs { display: flex; gap: 6px; margin-bottom: 12px; }
 .pill-tab {
@@ -4310,7 +4377,12 @@ function showToast(text, type = 'info') {
   .path-manual { flex-direction: column; }
   .source-item-main { flex-direction: column; align-items: flex-start; gap: 10px; }
   .source-actions { width: 100%; }
-  .source-platform-panel { width: 100%; }
+  .source-platform-wrap { margin-left: auto; }
+  .source-platform-popover {
+    right: 0;
+    left: auto;
+    width: min(360px, calc(100vw - 32px));
+  }
   .import-area { flex-direction: column; align-items: stretch; }
   .url-input { min-width: 0; width: 100%; }
   .toast {
