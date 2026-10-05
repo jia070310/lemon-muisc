@@ -656,8 +656,8 @@
 
       <!-- 音源管理 -->
       <div v-if="activeTab === 'source'" class="panel-body">
-        <p v-if="isAdminUser" class="source-tip">支持同时激活多个音源（落雪兼容 / 澜音原生 .js）。每个账号的激活状态相互独立；点「平台」可单独开关该音源支持的平台。试听 / 下载时按平台匹配，同一平台有多个音源时优先使用最近激活的。系统会根据近期播放/下载是否为「试听片段」评估音源健康度；试听检测到短片段时会自动换音源/其它平台。</p>
-        <p v-else class="source-tip">音源脚本由管理员导入。你可以自行激活或停用音源，并点「平台」单独开关各平台（仅对自己生效）。列表旁的健康标注来自本机近期播放/下载是否多为试听片段；试听遇短片段会自动尝试其它音源或平台。</p>
+        <p v-if="isAdminUser" class="source-tip">支持同时激活多个音源（落雪兼容 / 澜音原生 .js）。每个账号的激活状态相互独立；点「平台」可单独开关该音源支持的平台。若某平台近期多为试听片段，会自动关闭该音源对它的解析。试听 / 下载时按平台匹配，同一平台有多个音源时优先使用最近激活的。</p>
+        <p v-else class="source-tip">音源脚本由管理员导入。你可以自行激活或停用音源，并点「平台」单独开关各平台（仅对自己生效）。某平台被检测为多为试听时会自动关闭解析。列表旁的健康标注来自本机近期播放/下载。</p>
         <div v-if="isAdminUser" class="setting-item">
           <div class="setting-item-info">
             <div class="setting-item-label">音源切换方式</div>
@@ -699,6 +699,7 @@
                 </div>
                 <span class="source-meta">{{ s.author || '未知作者' }} · v{{ s.version || '?' }}{{ isSourceActive(s.id) ? ' · 已激活' : '' }} · {{ sourcePlatformSummary(s) }}</span>
                 <span v-if="s.health?.unhealthy && s.health?.tip" class="source-health-tip">{{ s.health.tip }}</span>
+                <span v-if="autoClosedNotice(s)" class="source-autoclose-tip">{{ autoClosedNotice(s) }}</span>
                 <div v-if="s.health?.unhealthy && healthPlatformChips(s).length" class="source-health-platforms">
                   <span
                     v-for="p in healthPlatformChips(s)"
@@ -721,7 +722,7 @@
                   <span>平台</span>
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
                 </button>
-                <button v-if="s.health?.unhealthy" class="btn-sm btn-ghost" @click="dismissSourceHealth(s)">知道了</button>
+                <button v-if="s.health?.unhealthy || autoClosedNotice(s)" class="btn-sm btn-ghost" @click="dismissSourceHealth(s)">知道了</button>
                 <button v-if="!isSourceActive(s.id)" class="btn-sm btn-primary" @click="activateSource(s.id)">激活</button>
                 <button v-else class="btn-sm btn-ghost" @click="deactivateSource(s.id)">停用</button>
                 <button v-if="isAdminUser" class="btn-sm btn-danger" @click="removeSource(s.id)">删除</button>
@@ -744,8 +745,8 @@
                         {{ p.label }}
                         <span class="platform-code">{{ p.id }}</span>
                       </div>
-                      <div class="platform-switch-status" :class="{ on: isSourcePlatformOn(s.id, p.id) }">
-                        {{ isSourcePlatformOn(s.id, p.id) ? '允许解析' : '已关闭' }}
+                      <div class="platform-switch-status" :class="{ on: isSourcePlatformOn(s.id, p.id), auto: isAutoClosedPlatform(s, p.id) }">
+                        {{ platformSwitchStatus(s, p.id) }}
                       </div>
                     </div>
                   </div>
@@ -3082,6 +3083,38 @@ function isSourcePlatformOn(sourceId, platformId) {
   return platformsOfSource(s || {}).includes(platformId)
 }
 
+function autoClosedList(source) {
+  const list = source?.health?.autoClosedPlatforms
+  return Array.isArray(list) ? list : []
+}
+
+function autoClosedNotice(source) {
+  const names = autoClosedList(source).map((p) => p.label || p.id).filter(Boolean)
+  if (!names.length) return ''
+  return `${names.join('、')} 为试听源，已自动关闭平台解析`
+}
+
+function isAutoClosedPlatform(source, platformId) {
+  return autoClosedList(source).some((p) => p.id === platformId) && !isSourcePlatformOn(source.id, platformId)
+}
+
+function platformSwitchStatus(source, platformId) {
+  if (isSourcePlatformOn(source.id, platformId)) return '允许解析'
+  if (isAutoClosedPlatform(source, platformId)) return '试听源，已自动关闭'
+  return '已关闭'
+}
+
+function clearLocalAutoClosed(sourceId, platformIds = null) {
+  sourceList.value = sourceList.value.map((row) => {
+    if (row.id !== sourceId || !row.health) return row
+    const prev = Array.isArray(row.health.autoClosedPlatforms) ? row.health.autoClosedPlatforms : []
+    const next = platformIds
+      ? prev.filter((p) => !platformIds.includes(p.id))
+      : []
+    return { ...row, health: { ...row.health, autoClosedPlatforms: next } }
+  })
+}
+
 function sourcePlatformSummary(source) {
   const all = platformsOfSource(source)
   if (!all.length) return '无平台'
@@ -3106,6 +3139,9 @@ async function persistEnabledPlatforms() {
     await api.settings.update({ [ENABLED_PLATFORMS_KEY]: payload })
     await refreshPlatformTabs()
     loadPlayerSettings()
+    try {
+      sourceList.value = await api.source.list()
+    } catch {}
   } catch (e) {
     showToast(e.message || '保存失败', 'error')
     syncEnabledPlatformsFromSettings()
@@ -3130,6 +3166,7 @@ function toggleSourcePlatform(source, platformId, on) {
     ...sourcePlatformMap.value,
     [id]: PLATFORM_ORDER.filter((k) => next.has(k)),
   }
+  if (on) clearLocalAutoClosed(id, [platformId])
   schedulePersistEnabledPlatforms()
 }
 
@@ -3140,6 +3177,7 @@ function setSourcePlatformsAll(source, on) {
     ...sourcePlatformMap.value,
     [id]: on ? [...all] : [],
   }
+  if (on) clearLocalAutoClosed(id)
   schedulePersistEnabledPlatforms()
 }
 
@@ -3167,7 +3205,7 @@ async function dismissSourceHealth(s) {
     await api.source.dismissHealth(s.id)
     sourceList.value = sourceList.value.map((row) => (
       row.id === s.id
-        ? { ...row, health: row.health ? { ...row.health, unhealthy: false, tip: '', badge: '' } : null }
+        ? { ...row, health: row.health ? { ...row.health, unhealthy: false, tip: '', badge: '', autoClosedPlatforms: [] } : null }
         : row
     ))
     showToast('已关闭该音源健康提示', 'info')
@@ -3891,6 +3929,7 @@ function showToast(text, type = 'info') {
   color: var(--text-muted);
 }
 .platform-switch-status.on { color: #2f9e44; }
+.platform-switch-status.auto { color: var(--warning, #e6a23c); }
 
 .source-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
 .source-item {
@@ -3960,6 +3999,14 @@ function showToast(text, type = 'info') {
   color: var(--accent);
 }
 .source-health-tip {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--warning, #e6a23c);
+  line-height: 1.45;
+  max-width: 52ch;
+}
+.source-autoclose-tip {
   display: block;
   margin-top: 4px;
   font-size: 12px;

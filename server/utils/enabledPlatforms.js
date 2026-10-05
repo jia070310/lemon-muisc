@@ -1,9 +1,11 @@
 import { AVAILABLE_SOURCES } from '../musicSdk.js'
-import { getMergedSettings } from './userSettings.js'
+import { getMergedSettings, setUserSettings } from './userSettings.js'
 import { getStoredActiveSourceIds } from './activeSources.js'
 import { getActiveSources } from '../sourceManager.js'
 
 export const ENABLED_PLATFORMS_KEY = 'source.enabledPlatforms'
+export const AUTO_CLOSED_KEY = 'source.autoClosedPlatforms'
+export const AUTO_CLOSE_SKIP_KEY = 'source.previewAutoCloseSkip'
 
 /** 固定顺序，与设置页展示一致 */
 export const PLATFORM_ORDER = ['tx', 'wy', 'kw', 'kg', 'mg']
@@ -122,4 +124,151 @@ export function serializeSourcePlatformMap(map) {
     out[id] = ordered
   }
   return JSON.stringify(out)
+}
+
+function parseAutoClosedMap(raw) {
+  const data = parseJson(raw, null)
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return {}
+  const allow = new Set(allPlatformKeys())
+  const out = {}
+  for (const [sid, plats] of Object.entries(data)) {
+    if (!sid || !plats || typeof plats !== 'object') continue
+    const src = {}
+    for (const [plat, info] of Object.entries(plats)) {
+      if (!allow.has(plat) || !info || typeof info !== 'object') continue
+      src[plat] = {
+        at: String(info.at || ''),
+        label: String(info.label || plat),
+        dismissed: Boolean(info.dismissed),
+      }
+    }
+    if (Object.keys(src).length) out[sid] = src
+  }
+  return out
+}
+
+function parseSkipMap(raw) {
+  const data = parseJson(raw, null)
+  if (!data || typeof data !== 'object') return {}
+  const allow = new Set(allPlatformKeys())
+  const out = {}
+  for (const [sid, list] of Object.entries(data)) {
+    if (!sid || !Array.isArray(list)) continue
+    out[sid] = [...new Set(list.map(String).filter((k) => allow.has(k)))]
+  }
+  return out
+}
+
+function getAutoClosedMap(userId) {
+  if (!userId) return {}
+  try {
+    return parseAutoClosedMap(getMergedSettings(userId)[AUTO_CLOSED_KEY])
+  } catch {
+    return {}
+  }
+}
+
+function getSkipMap(userId) {
+  if (!userId) return {}
+  try {
+    return parseSkipMap(getMergedSettings(userId)[AUTO_CLOSE_SKIP_KEY])
+  } catch {
+    return {}
+  }
+}
+
+export function getAutoClosedPlatformsPublic(userId, sourceId) {
+  const src = getAutoClosedMap(userId)[String(sourceId || '')] || {}
+  return Object.entries(src)
+    .filter(([, info]) => info && !info.dismissed)
+    .map(([id, info]) => ({ id, label: info.label || id, at: info.at || '' }))
+}
+
+/**
+ * 某平台被判定为「多为试听」时，自动关闭该音源对该平台的解析。
+ * 用户手动重新打开后，在健康恢复前不会再次自动关闭。
+ */
+export function applyPreviewAutoClose(userId, sourceId, platform, label = '') {
+  const uid = userId || null
+  const sid = String(sourceId || '').trim()
+  const plat = String(platform || '').trim()
+  if (!uid || !sid || !plat || !AVAILABLE_SOURCES[plat]) return { closed: false }
+
+  const skip = new Set(getSkipMap(uid)[sid] || [])
+  if (skip.has(plat)) return { closed: false }
+
+  const map = getSourcePlatformMap(uid)
+  let current
+  if (Object.prototype.hasOwnProperty.call(map, sid)) current = [...map[sid]]
+  else if (Object.prototype.hasOwnProperty.call(map, '__global__')) current = [...map.__global__]
+  else current = platformsDeclaredBySource(sid)
+
+  if (!current.includes(plat)) return { closed: false }
+
+  map[sid] = current.filter((k) => k !== plat)
+  const notices = getAutoClosedMap(uid)
+  notices[sid] = {
+    ...(notices[sid] || {}),
+    [plat]: {
+      at: new Date().toISOString(),
+      label: label || AVAILABLE_SOURCES[plat]?.name || plat,
+      dismissed: false,
+    },
+  }
+  setUserSettings(uid, {
+    [ENABLED_PLATFORMS_KEY]: serializeSourcePlatformMap(map),
+    [AUTO_CLOSED_KEY]: JSON.stringify(notices),
+  })
+  return { closed: true }
+}
+
+/** 用户手动打开已被自动关闭的平台后，记入跳过，避免立刻再关 */
+export function syncPreviewAutoCloseOverrides(userId, nextPlatformMap) {
+  if (!userId) return
+  const notices = getAutoClosedMap(userId)
+  const skip = getSkipMap(userId)
+  let changed = false
+  for (const [sid, closed] of Object.entries(notices)) {
+    const enabled = Array.isArray(nextPlatformMap?.[sid]) ? nextPlatformMap[sid] : null
+    if (!enabled) continue
+    for (const plat of Object.keys(closed)) {
+      if (!enabled.includes(plat)) continue
+      delete closed[plat]
+      skip[sid] = [...new Set([...(skip[sid] || []), plat])]
+      changed = true
+    }
+    if (!Object.keys(closed).length) delete notices[sid]
+  }
+  if (!changed) return
+  setUserSettings(userId, {
+    [AUTO_CLOSED_KEY]: JSON.stringify(notices),
+    [AUTO_CLOSE_SKIP_KEY]: JSON.stringify(skip),
+  })
+}
+
+export function dismissAutoClosedPlatforms(userId, sourceId) {
+  const uid = userId || null
+  const sid = String(sourceId || '').trim()
+  if (!uid || !sid) return
+  const notices = getAutoClosedMap(uid)
+  const src = notices[sid]
+  if (!src) return
+  for (const info of Object.values(src)) {
+    if (info) info.dismissed = true
+  }
+  setUserSettings(uid, { [AUTO_CLOSED_KEY]: JSON.stringify(notices) })
+}
+
+/** 该平台健康恢复后，允许下次再自动关闭 */
+export function clearPreviewAutoCloseSkip(userId, sourceId, platform) {
+  const uid = userId || null
+  const sid = String(sourceId || '').trim()
+  const plat = String(platform || '').trim()
+  if (!uid || !sid || !plat) return
+  const skip = getSkipMap(uid)
+  const list = skip[sid] || []
+  if (!list.includes(plat)) return
+  skip[sid] = list.filter((k) => k !== plat)
+  if (!skip[sid].length) delete skip[sid]
+  setUserSettings(uid, { [AUTO_CLOSE_SKIP_KEY]: JSON.stringify(skip) })
 }

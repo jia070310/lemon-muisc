@@ -1,4 +1,8 @@
 import { getDB } from '../db.js'
+import {
+  applyPreviewAutoClose,
+  clearPreviewAutoCloseSkip,
+} from './enabledPlatforms.js'
 
 const HEALTH_KEY = 'source.health'
 const WINDOW = 20
@@ -164,7 +168,7 @@ function pushOutcome(list, isPreview) {
 }
 
 /** Record one outcome for a source. isPreview=true means clip/trial length. */
-export function recordSourceHealthOutcome(sourceId, isPreview, platform = '') {
+export function recordSourceHealthOutcome(sourceId, isPreview, platform = '', userId = null) {
   const id = String(sourceId || '').trim()
   if (!id) return null
   const map = readAll()
@@ -197,6 +201,15 @@ export function recordSourceHealthOutcome(sourceId, isPreview, platform = '') {
   })
   map[id] = next
   writeAll(map)
+
+  if (userId && plat) {
+    const platView = (next.platforms || []).find((p) => p.id === plat)
+    if (platView?.level === 'preview') {
+      applyPreviewAutoClose(userId, id, plat, platView.label)
+    } else if (platView?.level === 'ok') {
+      clearPreviewAutoCloseSkip(userId, id, plat)
+    }
+  }
   return next
 }
 

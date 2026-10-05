@@ -28,6 +28,10 @@ import {
 import { parseScriptMeta, metaToDbFields } from '../utils/parseScriptMeta.js'
 import { fetchSourceScriptFromUrl } from '../utils/fetchSourceScript.js'
 import { requireAdmin } from '../middleware/auth.js'
+import {
+  getAutoClosedPlatformsPublic,
+  dismissAutoClosedPlatforms,
+} from '../utils/enabledPlatforms.js'
 
 export const sourceRouter = Router()
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } })
@@ -56,7 +60,10 @@ sourceRouter.get('/list', (req, res) => {
     ...r,
     sources: JSON.parse(r.sources),
     active: activeIds.has(r.id),
-    health: sourceHealthPublicView(healthMap[r.id]),
+    health: {
+      ...(sourceHealthPublicView(healthMap[r.id]) || {}),
+      autoClosedPlatforms: getAutoClosedPlatformsPublic(req.user?.id, r.id),
+    },
   })))
 })
 
@@ -113,8 +120,15 @@ sourceRouter.post('/health/report', (req, res) => {
       sourceId,
       Boolean(isPreview),
       platform || source || '',
+      req.user?.id || null,
     )
-    res.json({ ok: true, health: sourceHealthPublicView(entry) })
+    res.json({
+      ok: true,
+      health: {
+        ...(sourceHealthPublicView(entry) || {}),
+        autoClosedPlatforms: getAutoClosedPlatformsPublic(req.user?.id, sourceId),
+      },
+    })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
@@ -125,7 +139,14 @@ sourceRouter.post('/health/dismiss', (req, res) => {
     const { sourceId } = req.body || {}
     if (!sourceId) return res.status(400).json({ error: '缺少 sourceId' })
     const entry = dismissSourceHealth(sourceId)
-    res.json({ ok: true, health: sourceHealthPublicView(entry) })
+    dismissAutoClosedPlatforms(req.user?.id, sourceId)
+    res.json({
+      ok: true,
+      health: {
+        ...(sourceHealthPublicView(entry) || {}),
+        autoClosedPlatforms: [],
+      },
+    })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }

@@ -17,6 +17,8 @@ const EXPORTABLE_USER_KEYS = [
   'download.usePersonalSavePath',
   'source.active',
   'source.enabledPlatforms',
+  'source.autoClosedPlatforms',
+  'source.previewAutoCloseSkip',
 ].filter((k) => USER_SETTING_KEYS.has(k))
 
 backupRouter.get('/export', (req, res) => {

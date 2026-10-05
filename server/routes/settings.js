@@ -17,6 +17,7 @@ import {
   getFfmpegInstallStatus,
   runFfmpegInstallWizard,
 } from '../utils/ffmpegInstall.js'
+import { ENABLED_PLATFORMS_KEY, parseSourcePlatformMap, syncPreviewAutoCloseOverrides } from '../utils/enabledPlatforms.js'
 
 export const settingsRouter = Router()
 
@@ -72,6 +73,9 @@ settingsRouter.put('/', (req, res) => {
 
   if (Object.keys(globalEntries).length) setGlobalSettings(globalEntries)
   if (Object.keys(userEntries).length) setUserSettings(req.user.id, userEntries)
+  if (Object.prototype.hasOwnProperty.call(userEntries, ENABLED_PLATFORMS_KEY)) {
+    syncPreviewAutoCloseOverrides(req.user.id, parseSourcePlatformMap(userEntries[ENABLED_PLATFORMS_KEY]))
+  }
 
   res.json({ ok: true })
 })

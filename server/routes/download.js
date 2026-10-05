@@ -821,7 +821,10 @@ function saveTaskMeta(taskId, meta) {
 /** 当前音源本档失败：记入 skip，后续同档尝试换其它激活音源 */
 function skipCurrentDownloadSource(meta, taskId, platform, { preview = true } = {}) {
   if (!meta?.sourceApiId) return
-  recordSourceHealthOutcome(meta.sourceApiId, preview, platform || '')
+  const userId = taskId
+    ? (getDB().prepare('SELECT user_id FROM download_tasks WHERE id = ?').get(taskId)?.user_id || null)
+    : null
+  recordSourceHealthOutcome(meta.sourceApiId, preview, platform || '', userId)
   const skipped = new Set([...(meta.skipSourceIds || []), meta.sourceApiId].filter(Boolean))
   meta.skipSourceIds = [...skipped]
   if (taskId) saveTaskMeta(taskId, meta)
@@ -831,7 +834,10 @@ function skipCurrentDownloadSource(meta, taskId, platform, { preview = true } = 
 function skipFailedSource(meta, taskId, platform = '', { markPreview = true } = {}) {
   const sourceId = meta?.sourceApiId
   if (!sourceId) return false
-  if (markPreview) recordSourceHealthOutcome(sourceId, true, platform)
+  const userId = taskId
+    ? (getDB().prepare('SELECT user_id FROM download_tasks WHERE id = ?').get(taskId)?.user_id || null)
+    : null
+  if (markPreview) recordSourceHealthOutcome(sourceId, true, platform, userId)
   const skipped = new Set([...(meta.skipSourceIds || []), sourceId].filter(Boolean))
   meta.skipSourceIds = [...skipped]
   if (taskId) saveTaskMeta(taskId, meta)
@@ -1890,7 +1896,7 @@ async function downloadTask(task, settings, abortSignal = null) {
               delete meta.forceOverwrite
             }
 
-            if (meta.sourceApiId) recordSourceHealthOutcome(meta.sourceApiId, false, source)
+            if (meta.sourceApiId) recordSourceHealthOutcome(meta.sourceApiId, false, source, task.user_id)
             cleanupStagingDir(task.id)
             cleanupTaskDownloadArtifacts(task, meta, settings, { exceptPath: filePath, onlyTracked: true })
             rememberDownloadArtifact(meta, filePath)

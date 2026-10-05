@@ -62,6 +62,8 @@ export const USER_SETTING_KEYS = new Set([
   'download.playlistIntervalHours',
   'source.active',
   'source.enabledPlatforms',
+  'source.autoClosedPlatforms',
+  'source.previewAutoCloseSkip',
   'tag.matchConcurrency',
   'tag.matchPreferFolderAlbum',
   'tag.matchFillMissingOnly',
