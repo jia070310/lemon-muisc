@@ -670,11 +670,24 @@
     />
 
     <!-- 网络获取信息弹窗 -->
-    <div class="modal-overlay" v-if="showFetchModal" @click.self="closeFetchModal">
+    <div class="modal-overlay fetch-overlay" v-if="showFetchModal" @click.self="closeFetchModal">
       <div class="fetch-modal">
         <div class="fetch-header">
-          <h3>{{ fetchIntentLabel }} · {{ fetchSourceLabel }}</h3>
-          <button class="btn-icon" @click="closeFetchModal">×</button>
+          <div class="fetch-header-main">
+            <h3>{{ fetchIntentLabel }}</h3>
+            <div class="source-tabs" role="group" aria-label="音源">
+              <button
+                v-for="opt in sourceOptions"
+                :key="opt.value"
+                type="button"
+                class="source-tab"
+                :class="{ active: fetchSource === opt.value }"
+                :disabled="fetchLoading"
+                @click="selectFetchSource(opt.value)"
+              >{{ opt.label }}</button>
+            </div>
+          </div>
+          <button class="btn-icon" type="button" @click="closeFetchModal">×</button>
         </div>
 
         <div class="fetch-search">
@@ -692,9 +705,9 @@
             <span>歌名</span>
             <ClearableInput v-model="fetchTitle" variant="plain" placeholder="歌曲名" @enter="doFetchSearch" />
           </label>
-          <label class="search-field">
+          <label class="search-field album-field">
             <span>专辑</span>
-            <ClearableInput v-model="fetchAlbum" variant="plain" placeholder="专辑名（可选，同名多专辑时建议填写）" @enter="doFetchSearch" />
+            <ClearableInput v-model="fetchAlbum" variant="plain" placeholder="可选" @enter="doFetchSearch" />
           </label>
           <button class="btn-primary btn-sm search-btn" @click="doFetchSearch" :disabled="fetchLoading">
             {{ fetchLoading ? '搜索中...' : '搜索' }}
@@ -703,62 +716,82 @@
 
         <div class="fetch-body">
           <div class="fetch-list">
-            <div v-if="!fetchResults.length && !fetchLoading" class="fetch-empty">暂无结果，请调整歌手、歌名或专辑后重试</div>
-            <div
-              v-for="(item, i) in fetchResults" :key="i"
-              :class="['fetch-item', { active: fetchPreview?.id === item.id && fetchPreview?.source === item.source }]"
+            <div v-if="fetchLoading && !fetchResults.length" class="fetch-empty">正在搜索…</div>
+            <div v-else-if="!fetchResults.length" class="fetch-empty">暂无结果，请调整歌手、歌名或专辑后重试</div>
+            <button
+              v-for="(item, i) in fetchResults"
+              :key="`${item.source || fetchSource}-${item.id || i}`"
+              type="button"
+              class="fetch-item"
+              :class="{ active: fetchPreview?.id === item.id && fetchPreview?.source === item.source }"
               @click="previewFetchItem(item)"
             >
-              <img v-if="fetchIntent === 'cover' && item.picUrl" :src="item.picUrl" class="fetch-thumb" alt="" />
-              <div v-else-if="item.picUrl" class="fetch-thumb"><img :src="item.picUrl" alt="" /></div>
-              <div v-else class="fetch-thumb placeholder">♪</div>
+              <div class="fetch-thumb">
+                <img v-if="item.picUrl" :src="item.picUrl" alt="" />
+                <span v-else class="placeholder">♪</span>
+              </div>
               <div class="fetch-item-info">
                 <div class="fetch-item-name">{{ item.name }}</div>
                 <div class="fetch-item-meta">{{ item.singer }} · {{ item.album || item.albumName || '-' }}</div>
                 <div class="fetch-item-score">匹配度 {{ item._score }}</div>
               </div>
-            </div>
+            </button>
           </div>
 
-          <div class="fetch-preview" v-if="fetchPreviewMeta">
-            <div class="preview-info">
-              <p><strong>标题</strong> {{ fetchPreviewMeta.title || fetchPreview?.name || '-' }}</p>
-              <p><strong>歌手</strong> {{ fetchPreviewMeta.artist || fetchPreview?.singer || '-' }}</p>
-              <p><strong>专辑艺术家</strong> {{ fetchPreviewMeta.albumArtist || '-' }}</p>
-              <p><strong>专辑</strong> {{ fetchPreviewMeta.album || '-' }}</p>
-              <p v-if="fetchIntent !== 'cover' && fetchIntent !== 'lyric' || fetchPreviewMeta.year">
-                <strong>年份</strong> {{ fetchPreviewMeta.year || '-' }}
-              </p>
-              <p v-if="fetchIntent !== 'cover' && fetchIntent !== 'lyric' || fetchPreviewMeta.genre">
-                <strong>风格</strong> {{ fetchPreviewMeta.genre || '-' }}
-              </p>
-              <p v-if="fetchIntent === 'meta' && fetchPreviewMeta.comment">
-                <strong>描述</strong> {{ fetchPreviewMeta.comment }}
-              </p>
+          <div v-if="fetchPreviewMeta" class="fetch-preview">
+            <div class="preview-meta-grid">
+              <div class="meta-cell">
+                <span class="meta-label">标题</span>
+                <span class="meta-value">{{ fetchPreviewMeta.title || fetchPreview?.name || '-' }}</span>
+              </div>
+              <div class="meta-cell">
+                <span class="meta-label">歌手</span>
+                <span class="meta-value">{{ fetchPreviewMeta.artist || fetchPreview?.singer || '-' }}</span>
+              </div>
+              <div class="meta-cell">
+                <span class="meta-label">专辑艺术家</span>
+                <span class="meta-value">{{ fetchPreviewMeta.albumArtist || '-' }}</span>
+              </div>
+              <div class="meta-cell">
+                <span class="meta-label">专辑</span>
+                <span class="meta-value">{{ fetchPreviewMeta.album || '-' }}</span>
+              </div>
+              <div v-if="fetchIntent === 'meta' || fetchPreviewMeta.year" class="meta-cell">
+                <span class="meta-label">年份</span>
+                <span class="meta-value">{{ fetchPreviewMeta.year || '-' }}</span>
+              </div>
+              <div v-if="fetchIntent === 'meta' || fetchPreviewMeta.genre" class="meta-cell">
+                <span class="meta-label">风格</span>
+                <span class="meta-value">{{ fetchPreviewMeta.genre || '-' }}</span>
+              </div>
+              <div v-if="fetchIntent === 'meta' && fetchPreviewMeta.comment" class="meta-cell meta-cell-full">
+                <span class="meta-label">描述</span>
+                <span class="meta-value">{{ fetchPreviewMeta.comment }}</span>
+              </div>
             </div>
 
-            <template v-if="fetchIntent === 'cover'">
-              <div class="preview-cover large">
-                <img v-if="fetchPreviewMeta.pic || fetchPreview?.picUrl" :src="fetchPreviewMeta.pic || fetchPreview?.picUrl" alt="cover" />
-                <div v-else class="cover-placeholder">无封面</div>
-              </div>
-            </template>
-
-            <template v-else>
-              <div class="preview-lyric">
-                <div class="preview-lyric-title">歌词预览</div>
-                <pre>{{ fetchPreviewMeta.lyric ? fetchPreviewMeta.lyric.slice(0, 800) : '暂无歌词' }}{{ fetchPreviewMeta.lyric?.length > 800 ? '...' : '' }}</pre>
-              </div>
-            </template>
+            <div v-if="fetchIntent === 'cover'" class="preview-cover-wrap">
+              <img
+                v-if="fetchPreviewMeta.pic || fetchPreview?.picUrl"
+                :src="fetchPreviewMeta.pic || fetchPreview?.picUrl"
+                alt="cover"
+              />
+              <div v-else class="cover-placeholder">无封面</div>
+            </div>
+            <div v-else class="preview-lyric">
+              <div class="preview-lyric-title">歌词预览</div>
+              <pre>{{ fetchPreviewMeta.lyric ? fetchPreviewMeta.lyric.slice(0, 1200) : '暂无歌词' }}{{ fetchPreviewMeta.lyric?.length > 1200 ? '…' : '' }}</pre>
+            </div>
           </div>
-          <div class="fetch-preview empty" v-else>
+          <div v-else class="fetch-preview empty">
             <p>请从左侧选择一条结果查看{{ fetchPreviewEmptyHint }}</p>
           </div>
         </div>
 
         <div class="fetch-footer">
-          <button class="btn-ghost" @click="closeFetchModal">取消</button>
+          <button type="button" class="btn-ghost" @click="closeFetchModal">取消</button>
           <button
+            type="button"
             class="btn-primary"
             @click="confirmFetchApply"
             :disabled="!fetchPreviewMeta || !canConfirmFetch"
@@ -1188,7 +1221,6 @@ const batchApplyFields = reactive({
   lyric: false,
   cover: false,
 })
-const fetchSourceLabel = computed(() => fetchSource.value === 'tx' ? 'QQ音乐' : '网易云')
 const fetchIntentLabel = computed(() => {
   if (fetchIntent.value === 'cover') return '网络获取封面'
   if (fetchIntent.value === 'lyric') return '网络获取歌词'
@@ -2578,6 +2610,15 @@ function swapFetchArtistTitle() {
   fetchTitle.value = a
 }
 
+function selectFetchSource(next) {
+  if (fetchSource.value === next || fetchLoading.value) return
+  fetchSource.value = next
+  fetchResults.value = []
+  fetchPreview.value = null
+  fetchPreviewMeta.value = null
+  void doFetchSearch()
+}
+
 function closeFetchModal() {
   showFetchModal.value = false
   fetchPreview.value = null
@@ -3621,9 +3662,13 @@ tr.playing .play-btn,
   /* 避免键盘/动态工具栏把底部按钮顶出视口 */
   padding-bottom: max(20px, env(safe-area-inset-bottom, 0px));
 }
+.modal-overlay.fetch-overlay {
+  z-index: 2200;
+}
 .fetch-modal {
-  width: min(920px, 100%);
-  max-height: min(85vh, 85dvh, calc(100dvh - 40px));
+  width: min(960px, 100%);
+  height: min(720px, 85vh, 85dvh, calc(100dvh - 40px));
+  max-height: min(720px, 85vh, 85dvh, calc(100dvh - 40px));
   background: var(--bg-card);
   border: 1px solid var(--border-light);
   border-radius: var(--radius-lg);
@@ -3637,19 +3682,59 @@ tr.playing .play-btn,
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 20px;
+  gap: 12px;
+  padding: 12px 16px;
   border-bottom: 1px solid var(--border-light);
   background: var(--bg-elevated);
   flex-shrink: 0;
 }
-.fetch-header h3 { font-size: 15px; font-weight: 600; margin: 0; }
+.fetch-header-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.fetch-header h3 {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0;
+  white-space: nowrap;
+}
+.source-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-light);
+}
+.source-tab {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1;
+  padding: 6px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.source-tab:hover:not(:disabled) { color: var(--text-primary); }
+.source-tab.active {
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+.source-tab:disabled { opacity: 0.55; cursor: not-allowed; }
 .fetch-search {
   display: flex;
-  gap: 10px;
-  padding: 16px 20px;
+  gap: 8px;
+  padding: 10px 16px;
   border-bottom: 1px solid var(--border-light);
   align-items: flex-end;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   background: var(--bg-card);
   flex-shrink: 0;
 }
@@ -3657,29 +3742,35 @@ tr.playing .play-btn,
   display: flex;
   flex-direction: column;
   gap: 4px;
-  flex: 1;
-  min-width: 140px;
+  flex: 1 1 0;
+  min-width: 0;
 }
+.search-field.album-field { flex: 0.85 1 0; }
 .search-field span { font-size: 12px; color: var(--text-muted); }
 .fetch-swap-btn {
   flex-shrink: 0;
   padding: 8px 10px;
   white-space: nowrap;
+  align-self: flex-end;
 }
 .search-field :deep(input) {
   font-size: 13px;
   border-radius: var(--radius);
+  height: 36px;
 }
-.search-btn { flex-shrink: 0; margin-bottom: 1px; border-radius: var(--radius); }
+.search-btn {
+  flex-shrink: 0;
+  height: 36px;
+  padding: 0 16px;
+  border-radius: var(--radius);
+  align-self: flex-end;
+}
 .fetch-body {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(260px, 38%) minmax(0, 1fr);
   flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
-}
-@media (min-width: 1101px) {
-  .fetch-body { min-height: 280px; }
 }
 .fetch-list {
   overflow-y: auto;
@@ -3689,7 +3780,7 @@ tr.playing .play-btn,
   min-height: 0;
 }
 .fetch-empty {
-  padding: 24px 12px;
+  padding: 32px 12px;
   text-align: center;
   color: var(--text-muted);
   font-size: 13px;
@@ -3697,21 +3788,32 @@ tr.playing .play-btn,
 .fetch-item {
   display: flex;
   gap: 10px;
+  width: 100%;
   padding: 8px;
+  border: 1px solid transparent;
   border-radius: var(--radius);
   cursor: pointer;
   margin-bottom: 4px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  font: inherit;
 }
 .fetch-item:hover { background: var(--bg-hover); }
-.fetch-item.active { background: var(--accent-muted); border: 1px solid var(--accent); }
+.fetch-item.active {
+  background: var(--accent-muted);
+  border-color: var(--accent);
+}
 .fetch-thumb {
   width: 48px;
   height: 48px;
   border-radius: var(--radius);
-  object-fit: cover;
   flex-shrink: 0;
   background: var(--bg-input);
   overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 .fetch-thumb img {
   width: 100%;
@@ -3719,21 +3821,31 @@ tr.playing .play-btn,
   object-fit: cover;
   display: block;
 }
-.fetch-thumb.placeholder {
-  display: flex;
-  align-items: center;
-  justify-content: center;
+.fetch-thumb .placeholder {
   font-size: 18px;
   color: var(--text-muted);
 }
 .fetch-item-info { min-width: 0; flex: 1; }
-.fetch-item-name { font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.fetch-item-meta { font-size: 11px; color: var(--text-muted); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fetch-item-name {
+  font-size: 13px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fetch-item-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .fetch-item-score { font-size: 11px; color: var(--accent); margin-top: 2px; }
 
 .fetch-preview {
-  padding: 16px;
-  overflow-y: auto;
+  padding: 14px 16px;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -3744,40 +3856,89 @@ tr.playing .play-btn,
   justify-content: center;
   color: var(--text-muted);
   font-size: 13px;
+  overflow-y: auto;
 }
-.preview-cover {
-  width: 140px;
-  height: 140px;
+.preview-meta-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 12px;
+  flex-shrink: 0;
+}
+.meta-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.meta-cell-full { grid-column: 1 / -1; }
+.meta-label {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.meta-value {
+  font-size: 13px;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.meta-cell-full .meta-value {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.preview-cover-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-input);
   border-radius: var(--radius);
   overflow: hidden;
-  background: var(--bg-input);
-  align-self: center;
 }
-.preview-cover img { width: 100%; height: 100%; object-fit: cover; }
-.preview-info p { font-size: 13px; margin: 4px 0; }
-.preview-lyric-title { font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }
-.preview-cover.large {
-  width: 200px;
-  height: 200px;
+.preview-cover-wrap img {
+  width: min(220px, 70%);
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: var(--radius);
+}
+.preview-cover-wrap .cover-placeholder {
+  width: min(220px, 70%);
+  aspect-ratio: 1;
+}
+.preview-lyric {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.preview-lyric-title {
+  font-size: 12px;
+  color: var(--text-muted);
+  flex-shrink: 0;
 }
 .preview-lyric pre {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
   font-size: 11px;
   line-height: 1.5;
-  max-height: min(280px, 40vh);
   overflow-y: auto;
   background: var(--bg-input);
-  padding: 8px;
+  padding: 10px 12px;
   border-radius: var(--radius);
   white-space: pre-wrap;
   word-break: break-word;
-  margin: 0;
 }
 .fetch-footer {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
-  padding: 14px 20px;
-  padding-bottom: max(14px, env(safe-area-inset-bottom, 0px));
+  padding: 12px 16px;
+  padding-bottom: max(12px, env(safe-area-inset-bottom, 0px));
   border-top: 1px solid var(--border-light);
   background: var(--bg-elevated);
   flex-shrink: 0;
@@ -3990,7 +4151,42 @@ tr.playing .play-btn,
     -webkit-overflow-scrolling: touch;
   }
   .edit-empty { display: none; }
+}
 
+@media (max-width: 900px) {
+  .fetch-search { flex-wrap: wrap; }
+  .search-field { min-width: 120px; }
+}
+
+@media (max-width: 768px) {
+  .modal-overlay.fetch-overlay {
+    padding: 0;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    align-items: flex-end;
+  }
+  .fetch-modal {
+    width: 100%;
+    height: min(92dvh, 92svh, calc(100dvh - 8px - env(safe-area-inset-bottom, 0px)));
+    max-height: min(92dvh, 92svh, calc(100dvh - 8px - env(safe-area-inset-bottom, 0px)));
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  }
+  .fetch-header { padding: 10px 12px; }
+  .fetch-header-main { gap: 8px; }
+  .fetch-search {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    grid-template-areas:
+      "artist swap title"
+      "album album search";
+    padding: 8px 12px;
+    gap: 6px 8px;
+    align-items: end;
+  }
+  .fetch-search .search-field:nth-of-type(1) { grid-area: artist; }
+  .fetch-swap-btn { grid-area: swap; align-self: end; }
+  .fetch-search .search-field:nth-of-type(2) { grid-area: title; }
+  .fetch-search .album-field { grid-area: album; }
+  .search-btn { grid-area: search; width: 100%; height: 36px; }
   .fetch-body {
     grid-template-columns: 1fr;
     display: flex;
@@ -3998,40 +4194,20 @@ tr.playing .play-btn,
   }
   .fetch-list {
     border-right: none;
-    border-bottom: 1px solid var(--border);
-    /* 与预览区按剩余高度分摊，避免矮屏把页脚顶出 */
-    flex: 1 1 38%;
-    max-height: none;
-    min-height: 72px;
+    border-bottom: 1px solid var(--border-light);
+    flex: 0 0 38%;
+    max-height: 38%;
+    min-height: 120px;
   }
   .fetch-preview {
-    flex: 1 1 42%;
-    min-height: 80px;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
   }
-  .modal-overlay {
-    padding: 10px;
+  .preview-meta-grid { grid-template-columns: 1fr 1fr; gap: 6px 10px; }
+  .fetch-footer {
+    padding: 10px 12px;
     padding-bottom: max(10px, env(safe-area-inset-bottom, 0px));
-    align-items: flex-end;
-  }
-  .fetch-modal {
-    width: 100%;
-    max-height: min(92dvh, 92svh, calc(100dvh - 12px - env(safe-area-inset-bottom, 0px)));
-    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
-  }
-  .fetch-search {
-    padding: 12px 14px;
-    gap: 8px;
-  }
-  .search-field {
-    min-width: 0;
-    flex: 1 1 100%;
-  }
-  .fetch-header,
-  .fetch-footer {
-    padding: 12px 14px;
-  }
-  .fetch-footer {
-    padding-bottom: max(12px, env(safe-area-inset-bottom, 0px));
     gap: 8px;
   }
   .fetch-footer .btn-ghost,
@@ -4040,44 +4216,6 @@ tr.playing .play-btn,
     flex: 1 1 0;
     padding: 10px 12px;
   }
-  .preview-cover.large {
-    width: 120px;
-    height: 120px;
-  }
-  .preview-lyric pre {
-    max-height: none;
-    flex: 1 1 auto;
-    min-height: 0;
-  }
-  .preview-lyric {
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-    flex: 1 1 auto;
-  }
-}
-
-/* 矮屏（横屏小机、浏览器底栏展开）：进一步压缩搜索区与结果区 */
-@media (max-width: 1100px) and (max-height: 720px) {
-  .fetch-header { padding: 10px 12px; }
-  .fetch-search { padding: 8px 12px; gap: 6px; }
-  .fetch-footer { padding: 10px 12px; }
-  .fetch-list { flex-basis: 32%; min-height: 56px; }
-  .fetch-preview { padding: 10px 12px; min-height: 64px; }
-  .preview-info p { margin: 2px 0; font-size: 12px; }
-  .preview-cover.large { width: 88px; height: 88px; }
-}
-
-@media (max-width: 1100px) and (max-height: 560px) {
-  .fetch-modal {
-    max-height: min(98dvh, 98svh, calc(100dvh - env(safe-area-inset-bottom, 0px)));
-  }
-  .fetch-search .search-field span { display: none; }
-  .fetch-list { flex-basis: 28%; min-height: 48px; }
-  .preview-cover.large { width: 64px; height: 64px; }
-}
-
-@media (max-width: 768px) {
   .page-header {
     flex-direction: column;
     align-items: stretch;
@@ -4188,5 +4326,12 @@ tr.playing .play-btn,
     right: 12px;
     bottom: calc(var(--player-height) + var(--mobile-nav-height) + 16px);
   }
+}
+
+@media (max-width: 768px) and (max-height: 640px) {
+  .fetch-header h3 { font-size: 14px; }
+  .fetch-list { flex: 0 0 32%; max-height: 32%; min-height: 96px; }
+  .preview-meta-grid { grid-template-columns: 1fr; }
+  .fetch-search .search-field span { display: none; }
 }
 </style>

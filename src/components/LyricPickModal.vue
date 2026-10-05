@@ -30,10 +30,20 @@
             <span>专辑</span>
             <ClearableInput v-model="album" variant="plain" placeholder="可选" @enter="doSearch" />
           </label>
-          <label class="search-field source-field">
+          <div class="search-field source-field">
             <span>音源</span>
-            <AppSelect v-model="source" :options="sourceOptions" size="sm" block />
-          </label>
+            <div class="source-tabs" role="group" aria-label="歌词音源">
+              <button
+                v-for="opt in sourceOptions"
+                :key="opt.value"
+                type="button"
+                class="source-tab"
+                :class="{ active: source === opt.value }"
+                :disabled="busy || loading"
+                @click="selectSource(opt.value)"
+              >{{ opt.label }}</button>
+            </div>
+          </div>
           <button type="button" class="btn-primary btn-sm search-btn" :disabled="busy || loading" @click="doSearch">
             {{ loading ? '搜索中…' : '搜索' }}
           </button>
@@ -96,7 +106,6 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { api } from '../api.js'
-import AppSelect from './AppSelect.vue'
 import ClearableInput from './ClearableInput.vue'
 import { resolveSearchArtistTitle } from '../utils/filenameParse.js'
 import { PLATFORM_LABELS } from '../utils/platforms.js'
@@ -158,6 +167,15 @@ function swapArtistTitle() {
   const a = artist.value
   artist.value = title.value
   title.value = a
+}
+
+function selectSource(next) {
+  if (source.value === next || props.busy || loading.value) return
+  source.value = next
+  results.value = []
+  preview.value = null
+  previewMeta.value = null
+  void doSearch()
 }
 
 async function doSearch() {
@@ -269,7 +287,33 @@ function confirm() {
   color: var(--text-muted);
 }
 .album-field { flex: 0.8; }
-.source-field { flex: 0 0 120px; min-width: 110px; }
+.source-field { flex: 0 0 auto; min-width: 168px; }
+.source-tabs {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-input, var(--bg));
+}
+.source-tab {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1;
+  padding: 8px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.source-tab:hover:not(:disabled) { color: var(--text); }
+.source-tab.active {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+  font-weight: 650;
+}
+.source-tab:disabled { opacity: 0.5; cursor: not-allowed; }
 .swap-btn { flex-shrink: 0; margin-bottom: 1px; }
 .search-btn { flex-shrink: 0; min-width: 72px; }
 .body {
