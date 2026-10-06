@@ -847,7 +847,7 @@
         <div class="setting-item">
           <div class="setting-item-info">
             <div class="setting-item-label">仅补全缺失标签</div>
-            <div class="setting-item-desc">匹配后只写入本地为空的字段；已有专辑 / 歌手 / 封面等不会被覆盖。「按文件名重设」仍会整份覆盖</div>
+              <div class="setting-item-desc">「补全缺失」只写入本地为空的字段。「整理标签」在下拉窗勾选字段后覆盖写入。</div>
           </div>
           <div class="setting-item-action">
             <label class="toggle">

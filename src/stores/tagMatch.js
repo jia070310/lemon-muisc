@@ -229,6 +229,9 @@ export async function startTagMatchBatch(targets, source, options = {}) {
   const savedLibraryFiles = []
   const matchOpts = {
     forceOverwrite: Boolean(options.forceOverwrite),
+    rewriteAll: Boolean(options.rewriteAll),
+    useExistingTags: Boolean(options.useExistingTags),
+    rewriteFields: Array.isArray(options.rewriteFields) ? options.rewriteFields : undefined,
     preferFolderAlbum: options.preferFolderAlbum,
     fillMissingOnly: options.fillMissingOnly,
     rejectForeignArtist: options.rejectForeignArtist,

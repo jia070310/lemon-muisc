@@ -486,6 +486,13 @@ export async function scanBatchAndCache(files) {
       }
     }
 
+    // 写入后立刻读可能被文件锁挡住：不要用文件名 stub 覆盖已有标签缓存
+    const existing = getCacheEntry(fp)
+    if (existing && (existing.album || existing.year || existing.genre
+      || (existing.title && existing.title !== existing.parsedTitle)
+      || (existing.artist && existing.artist !== existing.parsedArtist))) {
+      return { ...existing, filePath: fp, ok: false, error: lastErr?.message || '读取失败' }
+    }
     const stub = buildStubEntry(fp)
     stub.mtime = mtime
     stub.size = size
@@ -495,6 +502,65 @@ export async function scanBatchAndCache(files) {
     upsertCacheEntry(fp, mtime, size, metaOnly)
     return stub
   })
+}
+
+const TAG_WRITE_CACHE_KEYS = ['title', 'artist', 'albumArtist', 'album', 'year', 'genre', 'comment']
+
+/** 标签写入后立刻更新 library_index，避免列表仍显示旧缓存，要点开文件才刷新 */
+export async function refreshCacheAfterTagWrite(filePath, writtenMeta = {}) {
+  ensureLibraryCacheTable()
+  const fp = normalizePathKey(filePath)
+  if (!fp || !fs.existsSync(fp)) return { ok: false, filePath: fp, error: '文件不存在' }
+
+  const overlay = {}
+  for (const key of TAG_WRITE_CACHE_KEYS) {
+    if (writtenMeta[key] != null) overlay[key] = String(writtenMeta[key])
+  }
+  if (writtenMeta.lyric != null) overlay.hasLyrics = Boolean(String(writtenMeta.lyric).trim())
+  if (writtenMeta.pic || writtenMeta.pictureBase64 || writtenMeta.picUrl) overlay.hasPicture = true
+
+  const prev = getCacheEntry(fp) || buildStubEntry(fp)
+  let merged = {
+    ...prev,
+    ...overlay,
+    filePath: fp,
+    fileName: path.basename(fp),
+  }
+
+  let mtime = prev.mtime || 0
+  let size = prev.size || 0
+  const delays = [0, 160, 360]
+  let readOk = false
+  for (const delay of delays) {
+    if (delay) await new Promise((resolve) => setTimeout(resolve, delay))
+    try {
+      const st = fs.statSync(fp)
+      mtime = st.mtimeMs || mtime
+      size = st.size || size
+    } catch {}
+    try {
+      const meta = await readMetaLite(fp)
+      const parsed = parseFilename(path.basename(fp))
+      merged = {
+        ...merged,
+        ...meta,
+        ...overlay,
+        parsedTitle: parsed.title,
+        parsedArtist: parsed.artist,
+        fileName: path.basename(fp),
+        filePath: fp,
+      }
+      readOk = true
+      break
+    } catch {}
+  }
+  try {
+    const st = fs.statSync(fp)
+    mtime = st.mtimeMs || mtime
+    size = st.size || size
+  } catch {}
+  upsertCacheEntry(fp, mtime, size, merged)
+  return { ok: true, filePath: fp, readOk }
 }
 
 function isDiskEntryFresh(row, filePath) {

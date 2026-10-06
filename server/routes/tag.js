@@ -9,7 +9,7 @@ import { getMusicPaths, getMusicPathsForUser, addMusicPath, removeMusicPath, isU
 import { listAudioFiles, listDirEntries, probeDir } from '../utils/audioScan.js'
 import { mapWithConcurrency } from '../utils/asyncPool.js'
 import { notifyLibraryChanged } from '../utils/libraryNotify.js'
-import { scanBatchAndCache, enrichFilesFromCache, readBatchFromCacheOrScan, getAllCachedTracks } from '../utils/libraryCache.js'
+import { enrichFilesFromCache, readBatchFromCacheOrScan, getAllCachedTracks, refreshCacheAfterTagWrite } from '../utils/libraryCache.js'
 import { getMergedSettings } from '../utils/userSettings.js'
 import {
   albumHintFromFilePath,
@@ -18,6 +18,42 @@ import {
 } from '../utils/pathAlbumHint.js'
 
 export const tagRouter = Router()
+
+function matchSongKey(item) {
+  return `${item.source || ''}:${item.id || item.songId || item.songmid || item.hash || item.name || ''}`
+}
+
+function mergeScoredMatches(...lists) {
+  const map = new Map()
+  for (const list of lists) {
+    if (!Array.isArray(list)) continue
+    for (const item of list) {
+      const key = matchSongKey(item)
+      const prev = map.get(key)
+      if (!prev || (Number(item._score) || 0) > (Number(prev._score) || 0)) map.set(key, item)
+    }
+  }
+  return [...map.values()].sort((a, b) => (Number(b._score) || 0) - (Number(a._score) || 0))
+}
+
+function keepRewriteFields(meta, fields) {
+  if (!Array.isArray(fields) || !fields.length) return meta
+  const set = new Set(fields)
+  const out = { ...meta }
+  if (!set.has('title')) delete out.title
+  if (!set.has('artist')) delete out.artist
+  if (!set.has('albumArtist')) delete out.albumArtist
+  if (!set.has('album')) delete out.album
+  if (!set.has('cover')) {
+    delete out.pic
+    delete out.picUrl
+  }
+  if (!set.has('lyric')) delete out.lyric
+  if (!set.has('year')) delete out.year
+  if (!set.has('genre')) delete out.genre
+  if (!set.has('comment')) delete out.comment
+  return out
+}
 
 function buildFileStub(fp) {
   const fileName = path.basename(fp)
@@ -168,7 +204,7 @@ tagRouter.post('/write', async (req, res) => {
     }
 
     await writeMeta(filePath, ext, writeData)
-    await scanBatchAndCache([{ filePath }]).catch(() => {})
+    await refreshCacheAfterTagWrite(filePath, writeData).catch(() => {})
     notifyLibraryChanged([filePath], { reason: 'tag-write' })
     res.json({ ok: true })
   } catch (e) {
@@ -193,8 +229,10 @@ tagRouter.post('/write-batch', async (req, res) => {
     }
 
     const results = await batchWriteMeta(prepared)
-    await scanBatchAndCache(prepared.map(f => ({ filePath: f.filePath }))).catch(() => {})
-    notifyLibraryChanged(prepared.map(f => f.filePath), { reason: 'tag-write-batch' })
+    const written = results.filter((row) => row?.ok).map((row) => row.filePath).filter(Boolean)
+    const metaByPath = new Map(prepared.map((f) => [f.filePath, f.meta]))
+    await Promise.all(written.map((fp) => refreshCacheAfterTagWrite(fp, metaByPath.get(fp) || {}).catch(() => {})))
+    notifyLibraryChanged(written, { reason: 'tag-write-batch' })
     res.json({ ok: true, data: results })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -324,7 +362,12 @@ tagRouter.post('/match-batch', async (req, res) => {
     if (files.length > 50) return res.status(400).json({ error: '单次最多 50 个文件' })
 
     const settings = getMergedSettings(req.user?.id)
-    const forceOverwrite = req.body.forceOverwrite === true
+    const rewriteAll = req.body.rewriteAll === true
+    const useExistingTags = req.body.useExistingTags === true
+    const rewriteFields = Array.isArray(req.body.rewriteFields)
+      ? req.body.rewriteFields.map((k) => String(k || '').trim()).filter(Boolean)
+      : []
+    const forceOverwrite = req.body.forceOverwrite === true || rewriteAll
     const preferFolderAlbum = req.body.preferFolderAlbum != null
       ? req.body.preferFolderAlbum !== false
       : settings['tag.matchPreferFolderAlbum'] !== 'false'
@@ -346,26 +389,59 @@ tagRouter.post('/match-batch', async (req, res) => {
     const results = await mapWithConcurrency(files, concurrency, async (file) => {
       try {
         const cached = cacheMap.get(path.resolve(String(file.filePath || ''))) || {}
-        const artist = String(file.artist || cached.artist || '').trim()
-        const title = String(file.title || cached.title || '').trim()
-        const taggedAlbum = String(file.album || cached.album || '').trim()
+        const parsedName = parseFilename(file.fileName || path.basename(file.filePath || ''))
+        const existArtist = String(file.artist || cached.artist || '').trim()
+        const existTitle = String(file.title || cached.title || '').trim()
+        const existAlbum = String(file.album || cached.album || '').trim()
+        const parsedArtist = String(parsedName.artist || '').trim()
+        const parsedTitle = String(parsedName.title || '').trim()
         const folderAlbum = preferFolderAlbum ? albumHintFromFilePath(file.filePath) : ''
+        const artist = rewriteAll
+          ? (useExistingTags ? (parsedArtist || existArtist) : parsedArtist)
+          : existArtist
+        const title = rewriteAll
+          ? (useExistingTags ? (parsedTitle || existTitle) : parsedTitle)
+          : existTitle
+        const taggedAlbum = rewriteAll
+          ? (useExistingTags ? existAlbum : '')
+          : existAlbum
         const album = taggedAlbum || folderAlbum
-        const matches = (title || artist || album)
-          ? await matchByArtistTitle(artist, title, sdkSource, 8, null, taggedAlbum, folderAlbum)
-          : await matchByFilename(file.fileName, sdkSource, 8, taggedAlbum, folderAlbum)
+        let matches
+        if (rewriteAll) {
+          const byName = await matchByFilename(file.fileName, sdkSource, 8, taggedAlbum, folderAlbum)
+          if (useExistingTags && (existArtist || existTitle)) {
+            const byTags = await matchByArtistTitle(
+              existArtist || parsedArtist,
+              existTitle || parsedTitle,
+              sdkSource,
+              8,
+              null,
+              existAlbum || taggedAlbum,
+              folderAlbum,
+            )
+            matches = mergeScoredMatches(byName, byTags)
+          } else {
+            matches = byName
+          }
+        } else {
+          matches = (title || artist || album)
+            ? await matchByArtistTitle(artist, title, sdkSource, 8, null, taggedAlbum, folderAlbum)
+            : await matchByFilename(file.fileName, sdkSource, 8, taggedAlbum, folderAlbum)
+        }
         if (!matches.length) {
           return { filePath: file.filePath, ok: false, error: '未找到匹配' }
         }
         let picked = matches[0]
         if (rejectForeignArtist) {
-          const acceptable = matches.find((m) => isMatchArtistAcceptable(m.singer, artist, file.filePath))
+          const filterArtist = artist || existArtist || parsedArtist
+          const acceptable = matches.find((m) => isMatchArtistAcceptable(m.singer, filterArtist, file.filePath))
           if (!acceptable) {
             return { filePath: file.filePath, ok: false, error: '未找到与本地歌手/目录相符的结果' }
           }
           picked = acceptable
         }
-        let meta = await fetchMatchMeta(picked, sdkSource, null, { title, artist })
+        const fetchFields = rewriteAll && rewriteFields.length ? rewriteFields : null
+        let meta = await fetchMatchMeta(picked, sdkSource, fetchFields, { title, artist })
         if (fillMissingOnly) {
           meta = mergeMatchMetaFillMissing({
             title: cached.title || title,
@@ -382,12 +458,21 @@ tagRouter.post('/match-batch', async (req, res) => {
         } else if (!taggedAlbum && folderAlbum && !String(meta.album || '').trim()) {
           meta.album = folderAlbum
         }
+        if (rewriteAll && rewriteFields.length) {
+          meta = keepRewriteFields(meta, rewriteFields)
+        }
         return {
           filePath: file.filePath,
           ok: true,
           meta,
           match: picked,
-          hints: { folderAlbum: folderAlbum || undefined, fillMissingOnly },
+          hints: {
+            folderAlbum: folderAlbum || undefined,
+            fillMissingOnly,
+            rewriteAll,
+            useExistingTags: rewriteAll ? useExistingTags : undefined,
+            rewriteFields: rewriteAll && rewriteFields.length ? rewriteFields : undefined,
+          },
         }
       } catch (e) {
         return { filePath: file.filePath, ok: false, error: e.message }

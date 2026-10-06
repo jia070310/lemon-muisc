@@ -1923,6 +1923,11 @@ const KG_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
 }
 
+const KG_MOBILE_HTML_HEADERS = {
+  Referer: 'https://m.kugou.com/',
+  'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1',
+}
+
 function parseKgTagResponse(buf) {
   let text = Buffer.isBuffer(buf) ? buf.toString() : String(buf || '')
   text = text.replace(/^\uFEFF/, '').trim()
@@ -2168,6 +2173,60 @@ async function kgPlaylistFromSpecial(id, options = {}) {
   }
 }
 
+function kgExtractIdsFromShareHtml(html) {
+  const text = String(html || '')
+  let payload = null
+  const raw = extractJsonAfterMarker(text, 'window.$output =')
+    || extractJsonAfterMarker(text, 'window.$output=')
+  if (raw) {
+    try { payload = JSON.parse(raw) } catch {}
+  }
+  const info = payload?.info && typeof payload.info === 'object' ? payload.info : (payload || {})
+  const listinfo = info?.listinfo && typeof info.listinfo === 'object' ? info.listinfo : {}
+  const specialId = String(
+    info.specialid
+    || info.special_id
+    || listinfo.specialid
+    || text.match(/"specialid"\s*:\s*"?(\d{3,})/)?.[1]
+    || '',
+  ).trim()
+  const gid = String(
+    listinfo.global_collection_id
+    || info.global_collection_id
+    || payload?.global_collection_id
+    || text.match(/"global_collection_id"\s*:\s*"(collection_[^"]+)"/)?.[1]
+    || '',
+  ).trim()
+  return {
+    specialId: /^\d+$/.test(specialId) ? specialId : '',
+    globalCollectionId: gid.startsWith('collection_') ? gid : '',
+  }
+}
+
+async function kgResolveGcid(encodeGcid) {
+  const gcid = String(encodeGcid || '').trim()
+  if (!/^gcid_[a-zA-Z0-9_]+$/i.test(gcid)) {
+    throw new Error('无法解析酷狗 gcid 歌单')
+  }
+  const urls = [
+    `https://m.kugou.com/songlist/${gcid}/`,
+    `https://www.kugou.com/songlist/${gcid}/`,
+  ]
+  let lastErr = null
+  for (const url of urls) {
+    try {
+      const html = (await req('get', url, null, KG_MOBILE_HTML_HEADERS)).toString()
+      const ids = kgExtractIdsFromShareHtml(html)
+      if (ids.globalCollectionId || ids.specialId) return ids
+    } catch (e) {
+      lastErr = e
+    }
+  }
+  throw lastErr instanceof Error
+    ? lastErr
+    : new Error('无法解析酷狗 gcid 歌单，请改用数字 ID 或官网链接')
+}
+
 async function kgPlaylistFromGid(globalCollectionId, options = {}) {
   const pageSize = 300
   const fetchPage = async (page) => {
@@ -2244,7 +2303,10 @@ async function kgResolveShareInput(raw) {
 async function kgPlaylist(parsed, options = {}) {
   if (parsed.id) return kgPlaylistFromSpecial(parsed.id, options)
   if (parsed.encodeGcid) {
-    throw new Error('酷狗 gcid 分享链接暂不稳定，请在浏览器打开歌单后复制数字 ID 或官网链接')
+    const ids = await kgResolveGcid(parsed.encodeGcid)
+    if (ids.globalCollectionId) return kgPlaylistFromGid(ids.globalCollectionId, options)
+    if (ids.specialId) return kgPlaylistFromSpecial(ids.specialId, options)
+    throw new Error('无法解析酷狗 gcid 歌单，请改用数字 ID 或官网链接')
   }
   if (parsed.globalCollectionId) return kgPlaylistFromGid(parsed.globalCollectionId, options)
   throw new Error('无法解析酷狗歌单')

@@ -2126,7 +2126,8 @@ async function writeMetaIfNeeded(task, meta, filePath, ext, settings) {
       metaData.lyric = buildEmbedLyrics(lrcResult, settings)
     }
     try {
-      await writeMeta(filePath, ext, metaData)
+      // 不在此写 .lrc：是否落盘歌词文件只看 download.isDownloadLrc
+      await writeMeta(filePath, ext, metaData, { writeExternalLrc: false })
     } catch (e) {
       console.error('写入内嵌标签失败:', task.name, e.message)
     }

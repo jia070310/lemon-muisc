@@ -3,9 +3,9 @@
     <div class="page-header" :class="{ 'page-header--embed': embedded }">
       <div v-if="!embedded">
         <div class="page-title">标签编辑</div>
-        <div class="page-subtitle">批量编辑本地音乐元数据、封面与歌词；「匹配缺失 / 匹配选中」会自动保存到文件</div>
+        <div class="page-subtitle">「补全缺失」自动补本目录空字段。「整理标签」在下拉窗勾选要覆盖的字段；默认识别文件名，也可同时用已有歌手/歌名搜索。</div>
       </div>
-      <div v-else class="embed-toolbar-hint">批量编辑元数据、封面与歌词；匹配后会自动保存到文件</div>
+      <div v-else class="embed-toolbar-hint">「补全缺失」只补空字段；「整理标签」下拉勾选字段后覆盖写入</div>
       <div class="header-actions">
         <button class="btn-primary btn-sm" @click="saveAll" :disabled="!hasChanges || saving">
           {{ saving ? '保存中...' : '保存全部修改' }}
@@ -227,20 +227,26 @@
             <button class="btn-ghost btn-sm" :disabled="!missingFilesCount || matching || tagChecking" @click="selectMissingFiles">
               选中缺失
             </button>
-            <button class="btn-ghost btn-sm" :disabled="!missingFilesCount || matching || tagChecking" @click="autoMatchMissing">
-              {{ matching ? '匹配中...' : `匹配缺失 (${missingMatchCount})` }}
-            </button>
-            <button class="btn-ghost btn-sm" :disabled="!selectedFiles.length || matching || tagChecking" @click="autoMatchSelected">
-              {{ matching ? '匹配中...' : `匹配选中 (${selectedFiles.length})` }}
-            </button>
             <button
               class="btn-ghost btn-sm"
-              :disabled="!selectedFiles.length || matching || tagChecking"
-              title="按文件名搜索并为勾选的文件重写标签/封面/歌词，直接保存到磁盘"
-              @click="autoRematchSelectedByFilename"
+              :disabled="!missingFilesCount || matching || tagChecking"
+              title="不需要勾选。自动找出本目录里缺标题/歌手/专辑/封面/歌词的文件，只补空字段"
+              @click="autoMatchMissing"
             >
-              {{ matching ? '匹配中...' : `按文件名重设 (${selectedFiles.length})` }}
+              {{ matching ? '匹配中...' : `补全缺失 (${missingMatchCount})` }}
             </button>
+            <div class="organize-wrap" ref="organizeWrapRef">
+              <button
+                class="btn-ghost btn-sm"
+                :class="{ open: showOrganizeMenu }"
+                :disabled="!selectedFiles.length || matching || tagChecking"
+                title="勾选要覆盖的字段，再按文件名（可选加上已有歌手/歌名）搜索并保存"
+                :aria-expanded="showOrganizeMenu"
+                @click.stop="toggleOrganizeMenu"
+              >
+                {{ matching ? '匹配中...' : `整理标签 (${selectedFiles.length})` }}
+              </button>
+            </div>
             <button
               class="btn-ghost btn-sm"
               :disabled="tagChecking || matching || (!selectedFiles.length && !editingFile)"
@@ -669,6 +675,44 @@
       @added="onAddedToPlaylist"
     />
 
+    <Teleport to="body">
+      <div
+        v-if="showOrganizeMenu"
+        class="organize-backdrop"
+        :class="{ sheet: organizeAsSheet }"
+        @click="closeOrganizeMenu"
+      />
+      <div
+        v-if="showOrganizeMenu"
+        ref="organizeMenuRef"
+        class="organize-popover"
+        :class="{ sheet: organizeAsSheet }"
+        :style="organizeMenuStyle"
+        role="dialog"
+        aria-label="整理标签"
+        @click.stop
+      >
+        <div class="organize-pop-head">
+          <div class="organize-pop-title">写入字段（默认不改歌名）</div>
+          <div class="organize-pop-meta">{{ selectedFiles.length }} 首 · {{ organizeSourceLabel }}</div>
+        </div>
+        <div class="organize-field-grid">
+          <label v-for="item in batchFieldOptions" :key="item.key" class="organize-field-item" :title="item.label">
+            <input v-model="rewriteFieldFlags[item.key]" type="checkbox" />
+            <span>{{ item.label }}</span>
+          </label>
+        </div>
+        <label class="organize-search-opt">
+          <input v-model="rewriteUseExistingTags" type="checkbox" />
+          <span>同时用已有歌手/歌名搜索</span>
+        </label>
+        <div class="organize-pop-actions">
+          <button type="button" class="btn-ghost btn-sm" @click="closeOrganizeMenu">取消</button>
+          <button type="button" class="btn-primary btn-sm" @click="confirmOrganizeTags">开始整理</button>
+        </div>
+      </div>
+    </Teleport>
+
     <!-- 网络获取信息弹窗 -->
     <div class="modal-overlay fetch-overlay" v-if="showFetchModal" @click.self="closeFetchModal">
       <div class="fetch-modal">
@@ -805,7 +849,7 @@
 </template>
 
 <script setup>
-import { ref, computed, reactive, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, reactive, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { api } from '../api.js'
 import {
   updateLibraryTracksFromFiles,
@@ -885,6 +929,130 @@ const renamingFile = ref(false)
 /** 保存标签时按「歌名 - 歌手」同步改文件名（默认开，便于清掉 Unknown） */
 const renameOnSave = ref(true)
 const fetchSource = ref('tx')
+const REWRITE_PREF_KEY = 'lemon-tag-rewrite-prefs'
+const rewriteFieldFlags = reactive({
+  title: false,
+  artist: true,
+  albumArtist: true,
+  album: true,
+  year: true,
+  genre: true,
+  comment: false,
+  lyric: false,
+  cover: false,
+})
+const rewriteUseExistingTags = ref(false)
+const showOrganizeMenu = ref(false)
+const organizeAsSheet = ref(false)
+const organizeWrapRef = ref(null)
+const organizeMenuRef = ref(null)
+const organizeMenuStyle = ref({})
+
+function loadRewritePrefs() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(REWRITE_PREF_KEY) || '{}')
+    for (const key of Object.keys(rewriteFieldFlags)) {
+      if (typeof raw[key] === 'boolean') rewriteFieldFlags[key] = raw[key]
+    }
+    if (typeof raw.useExistingTags === 'boolean') rewriteUseExistingTags.value = raw.useExistingTags
+  } catch {}
+}
+
+function selectedRewriteFields() {
+  return Object.entries(rewriteFieldFlags).filter(([, on]) => on).map(([key]) => key)
+}
+
+function updateOrganizeMenuPosition() {
+  const trigger = organizeWrapRef.value
+  const menu = organizeMenuRef.value
+  if (!trigger || !menu) return
+  const rect = trigger.getBoundingClientRect()
+  const vw = window.innerWidth
+  const vh = window.innerHeight
+  const pad = 10
+  const narrow = vw <= 768
+  organizeAsSheet.value = narrow
+
+  if (narrow) {
+    const safeBottom = 'calc(var(--player-height, 64px) + var(--mobile-nav-height, 0px) + env(safe-area-inset-bottom, 0px) + 8px)'
+    organizeMenuStyle.value = {
+      position: 'fixed',
+      left: `${pad}px`,
+      right: `${pad}px`,
+      bottom: safeBottom,
+      top: 'auto',
+      width: 'auto',
+      maxHeight: 'min(68dvh, 420px)',
+      zIndex: 1400,
+    }
+    return
+  }
+
+  const width = Math.min(312, vw - pad * 2)
+  let left = rect.right - width
+  left = Math.max(pad, Math.min(left, vw - width - pad))
+  const menuHeight = menu.offsetHeight || 300
+  const spaceBelow = vh - rect.bottom - pad
+  const spaceAbove = rect.top - pad
+  const placeBelow = spaceBelow >= Math.min(menuHeight, 220) || spaceBelow >= spaceAbove
+  const top = placeBelow
+    ? rect.bottom + 6
+    : Math.max(pad, rect.top - menuHeight - 6)
+  const maxHeight = placeBelow
+    ? Math.max(180, vh - top - pad)
+    : Math.max(180, rect.top - pad - 6)
+  organizeMenuStyle.value = {
+    position: 'fixed',
+    top: `${top}px`,
+    left: `${left}px`,
+    width: `${width}px`,
+    maxHeight: `${Math.min(maxHeight, 420)}px`,
+    zIndex: 1400,
+  }
+}
+
+function onOrganizeDocClick(e) {
+  if (organizeWrapRef.value?.contains(e.target) || organizeMenuRef.value?.contains(e.target)) return
+  closeOrganizeMenu()
+}
+
+function onOrganizeKeydown(e) {
+  if (e.key === 'Escape') closeOrganizeMenu()
+}
+
+function bindOrganizeMenuEvents() {
+  document.addEventListener('click', onOrganizeDocClick)
+  document.addEventListener('keydown', onOrganizeKeydown)
+  window.addEventListener('resize', updateOrganizeMenuPosition)
+  window.addEventListener('scroll', updateOrganizeMenuPosition, true)
+}
+
+function unbindOrganizeMenuEvents() {
+  document.removeEventListener('click', onOrganizeDocClick)
+  document.removeEventListener('keydown', onOrganizeKeydown)
+  window.removeEventListener('resize', updateOrganizeMenuPosition)
+  window.removeEventListener('scroll', updateOrganizeMenuPosition, true)
+}
+
+watch(showOrganizeMenu, async (open) => {
+  unbindOrganizeMenuEvents()
+  if (!open) return
+  await nextTick()
+  updateOrganizeMenuPosition()
+  await nextTick()
+  updateOrganizeMenuPosition()
+  bindOrganizeMenuEvents()
+})
+
+const organizeSourceLabel = computed(() => sourceOptions.find(o => o.value === fetchSource.value)?.label || fetchSource.value)
+
+watch(
+  () => ({ ...rewriteFieldFlags, useExistingTags: rewriteUseExistingTags.value }),
+  (prefs) => {
+    try { localStorage.setItem(REWRITE_PREF_KEY, JSON.stringify(prefs)) } catch {}
+  },
+  { deep: true },
+)
 const fetchLoading = ref(false)
 const fetchResults = ref([])
 const fetchPreview = ref(null)
@@ -1287,11 +1455,12 @@ watch(tagMatchResult, (result) => {
   clearTagMatchResult()
 })
 
-watch(missingFilter, () => {
-  selectAll.value = false
+watch(matching, (running) => {
+  if (running) closeOrganizeMenu()
 })
 
 onMounted(async () => {
+  loadRewritePrefs()
   compactMq = window.matchMedia('(max-width: 1100px)')
   syncCompactLayout()
   if (compactMq.addEventListener) compactMq.addEventListener('change', syncCompactLayout)
@@ -1314,6 +1483,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  unbindOrganizeMenuEvents()
   if (compactMq) {
     if (compactMq.removeEventListener) compactMq.removeEventListener('change', syncCompactLayout)
     else compactMq.removeListener?.(syncCompactLayout)
@@ -1489,31 +1659,31 @@ function applyMetaRow(file, item) {
   if (!file || !item?.ok) return false
   const hasPicture = Boolean(item.hasPicture || item.pictureBase64)
   const hasLyrics = Boolean(item.hasLyrics || item.lyric)
-  if (!file._metaLoaded) {
-    Object.assign(file, {
-      title: item.title || file.parsedTitle || file.title,
-      artist: item.artist || file.parsedArtist || file.artist,
-      albumArtist: item.albumArtist || file.albumArtist || '',
-      album: item.album || '',
-      year: item.year || '',
-      genre: item.genre || '',
-      comment: item.comment || '',
-    })
-    file._metaLoaded = true
-  } else {
+  if (file._modified) {
     if (item.albumArtist) file.albumArtist = item.albumArtist
     if (item.year) file.year = item.year
     if (item.genre) file.genre = item.genre
     if (item.comment) file.comment = item.comment
-    // 已有文本字段时，用磁盘/缓存补全空值（匹配后列表即时正确）
     if (!hasTagText(file.album) && item.album) file.album = item.album
     if (!hasTagText(file.title) && item.title) file.title = item.title
     if (!hasTagText(file.artist) && item.artist) file.artist = item.artist
+    if (hasPicture) file.hasPicture = true
+    if (hasLyrics) file.hasLyrics = true
+    return true
   }
-  // 只升不降：避免轻量缓存误报 false 盖掉匹配结果 / 已确认有封面歌词
-  if (hasPicture) file.hasPicture = true
+  Object.assign(file, {
+    title: item.title || file.parsedTitle || file.title,
+    artist: item.artist || file.parsedArtist || file.artist,
+    albumArtist: item.albumArtist || '',
+    album: item.album || '',
+    year: item.year || '',
+    genre: item.genre || '',
+    comment: item.comment || '',
+  })
+  file._metaLoaded = true
+  if (item.hasPicture != null || item.pictureBase64) file.hasPicture = hasPicture
   else if (file.hasPicture == null) file.hasPicture = false
-  if (hasLyrics) file.hasLyrics = true
+  if (item.hasLyrics != null || item.lyric) file.hasLyrics = hasLyrics
   else if (file.hasLyrics == null) file.hasLyrics = false
   return true
 }
@@ -1628,26 +1798,40 @@ function autoMatchMissing() {
   runTagMatch(targets)
 }
 
-/** 按文件名重新搜索，覆盖重写勾选文件的标签/封面/歌词并落盘 */
-async function autoRematchSelectedByFilename() {
-  const targets = selectedFiles.value
-  if (!targets.length) {
-    showToast('请先勾选要重设的文件', 'info')
+function toggleOrganizeMenu() {
+  if (!selectedFiles.value.length) {
+    showToast('请先勾选要整理的文件', 'info')
     return
   }
   if (matching.value) {
     showToast('已有自动匹配任务进行中', 'info')
     return
   }
-  const srcLabel = sourceOptions.find(o => o.value === fetchSource.value)?.label || fetchSource.value
-  const ok = await appConfirm({
-    title: '按文件名重设',
-    message: `将按文件名重新搜索（音源：${srcLabel}），并为已勾选的 ${targets.length} 个文件重写：\n标题、歌手、专辑、封面、歌词等，并直接保存到磁盘。`,
-    hint: '现有标签会被覆盖（不受「仅补全缺失」限制）。确定继续？',
-    confirmText: '开始重设',
+  showOrganizeMenu.value = !showOrganizeMenu.value
+}
+
+function closeOrganizeMenu() {
+  showOrganizeMenu.value = false
+}
+
+function confirmOrganizeTags() {
+  const targets = selectedFiles.value
+  if (!targets.length) {
+    showToast('请先勾选要整理的文件', 'info')
+    return
+  }
+  const fields = selectedRewriteFields()
+  if (!fields.length) {
+    showToast('请至少勾选一项要整理的内容', 'info')
+    return
+  }
+  showOrganizeMenu.value = false
+  runTagMatch(targets, {
+    rewriteAll: true,
+    forceOverwrite: true,
+    useExistingTags: rewriteUseExistingTags.value,
+    rewriteFields: fields,
   })
-  if (!ok) return
-  runTagMatch(targets, { forceOverwrite: true })
 }
 
 /** 修改磁盘文件名（同目录）；可从编辑区或列表右键触发 */
@@ -2708,11 +2892,6 @@ function confirmFetchApply() {
   showToast(toastMap[fetchIntent.value] || '已应用网络信息', 'success')
 }
 
-function autoMatchSelected() {
-  if (!selectedFiles.value.length) return
-  runTagMatch(selectedFiles.value)
-}
-
 function fileMetaForPlayerRefresh(f) {
   return {
     title: f.title,
@@ -3291,10 +3470,125 @@ function showToast(text, type = 'info') {
   min-width: 0;
   justify-content: flex-end;
 }
+.organize-wrap {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+.organize-wrap > .btn-ghost.open {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.organize-backdrop {
+  display: none;
+}
+.organize-popover {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border-light);
+  background: var(--bg-elevated, var(--bg-card));
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28), 0 2px 8px rgba(0, 0, 0, 0.12);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.organize-pop-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+.organize-pop-title {
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--text);
+  line-height: 1.3;
+}
+.organize-pop-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.organize-field-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 2px 8px;
+}
+.organize-field-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 30px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+.organize-field-item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.organize-field-item input,
+.organize-search-opt input {
+  flex-shrink: 0;
+  accent-color: var(--accent);
+}
+.organize-search-opt {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-light);
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+.organize-pop-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.organize-pop-actions .btn-sm {
+  min-height: 32px;
+}
+.organize-backdrop.sheet {
+  display: block;
+  position: fixed;
+  inset: 0;
+  z-index: 1390;
+  background: rgba(0, 0, 0, 0.38);
+}
+.organize-popover.sheet {
+  padding: 14px;
+  border-radius: 14px;
+}
+.organize-popover.sheet .organize-field-item {
+  min-height: 36px;
+  font-size: 13px;
+}
+.organize-popover.sheet .organize-pop-actions .btn-sm {
+  flex: 1;
+  min-height: 40px;
+}
+@media (max-width: 380px) {
+  .organize-field-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
 .file-toolbar-actions .btn-ghost,
 .file-toolbar-meta .check-all,
 .file-toolbar-meta :deep(.app-select),
-.file-toolbar-actions :deep(.app-select) {
+.file-toolbar-actions :deep(.app-select),
+.file-toolbar-actions .organize-wrap {
   flex-shrink: 0;
   white-space: nowrap;
 }
@@ -4102,10 +4396,16 @@ tr.playing .play-btn,
   .file-toolbar-actions .btn-primary,
   .file-toolbar-actions :deep(.app-select),
   .file-toolbar-meta .check-all,
-  .file-toolbar-meta :deep(.app-select) {
+  .file-toolbar-meta :deep(.app-select),
+  .file-toolbar-actions .organize-wrap {
     flex: 1 1 calc(50% - 6px);
     min-width: 0;
     max-width: 100%;
+  }
+  .file-toolbar-actions .organize-wrap > .btn-ghost {
+    flex: 1 1 auto;
+    width: 100%;
+    max-width: none;
   }
   .file-panel .empty {
     writing-mode: horizontal-tb;
@@ -4247,10 +4547,15 @@ tr.playing .play-btn,
   .file-toolbar-actions {
     order: 4;
   }
-  .file-toolbar-actions .btn-ghost {
+  .file-toolbar-actions .btn-ghost,
+  .file-toolbar-actions .organize-wrap {
     flex: 1 1 calc(50% - 6px);
     min-width: 0;
     justify-content: center;
+  }
+  .file-toolbar-actions .organize-wrap > .btn-ghost {
+    width: 100%;
+    flex: 1 1 auto;
   }
   .edit-panel.sheet-open {
     bottom: calc(var(--player-height) + var(--mobile-nav-height));

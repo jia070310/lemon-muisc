@@ -8,7 +8,12 @@ import { writeApeMeta } from './utils/apeTag.js'
 import { writeM4aMeta, canWriteM4aExt } from './utils/m4aTag.js'
 import { joinArtists, normalizeArtistForWrite } from './utils/artistTag.js'
 
-export async function writeMeta(filePath, ext, meta) {
+/**
+ * @param {{ writeExternalLrc?: boolean }} [options]
+ * writeExternalLrc 默认 true：内嵌歌词同时写同名 .lrc（标签编辑备用）。
+ * 下载流程应传 false，改由 isDownloadLrc 单独控制是否落盘 .lrc。
+ */
+export async function writeMeta(filePath, ext, meta, options = {}) {
   if (ext === '.mp3') await Promise.resolve(writeMp3Meta(filePath, meta))
   else if (ext === '.flac') await writeFlacMeta(filePath, meta)
   else if (ext === '.wav') {
@@ -20,8 +25,10 @@ export async function writeMeta(filePath, ext, meta) {
   } else {
     throw new Error(`暂不支持 ${ext} 格式写入标签`)
   }
-  // 各格式内嵌歌词可能被截断；同名 .lrc 作为可靠旁路
-  if (meta?.lyric != null) writeExternalLrc(filePath, meta.lyric)
+  // 各格式内嵌歌词可能被截断；同名 .lrc 作为可靠旁路（可关闭）
+  if (options.writeExternalLrc !== false && meta?.lyric != null) {
+    writeExternalLrc(filePath, meta.lyric)
+  }
 }
 
 function decodePicInput(pic) {

@@ -8,7 +8,7 @@
           :history-key="SEARCH_HISTORY_KEYS.library"
           variant="pill"
           show-search-icon
-          placeholder="搜索歌曲 / 歌手 / 专辑 / 歌单"
+          placeholder="搜索音乐库：歌曲 / 歌手 / 专辑 / 歌单"
           @clear="clearSearch"
           @select="applySearch"
         />
