@@ -265,6 +265,11 @@ export async function fetchTrackCover({
   allowedSourceIds = null,
 } = {}) {
   const merged = { ...musicInfo, ...meta, ...task, source: source || musicInfo.source || meta.source }
+  if (merged.coverFallback) {
+    merged.picUrl = ''
+    merged.img = ''
+    merged.cover = ''
+  }
   const src = isOnlineSource(merged.source || source) ? (merged.source || source) : ''
   const candidates = resolveCoverCandidates(merged)
   const allowIds = allowedSourceIds || (userId ? getStoredActiveSourceIds(userId) : null)

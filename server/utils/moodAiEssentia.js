@@ -246,9 +246,17 @@ export async function ensureMoodModels({ onProgress } = {}) {
 
 function resolvePythonCandidates() {
   const envBin = String(process.env.MOOD_PYTHON || process.env.PYTHON || '').trim()
-  if (envBin) return [envBin]
-  if (process.platform === 'win32') return ['py', 'python', 'python3']
-  return ['python3', 'python', '/usr/bin/python3']
+  if (process.platform === 'win32') {
+    return [envBin, 'py', 'python', 'python3'].filter(Boolean)
+  }
+  return [
+    envBin,
+    '/var/apps/python312/target/bin/python3',
+    '/var/apps/python312/bin/python3',
+    'python3',
+    'python',
+    '/usr/bin/python3',
+  ].filter(Boolean)
 }
 
 function runProcess(command, args, { timeoutMs = 120000 } = {}) {
@@ -279,13 +287,14 @@ function runProcess(command, args, { timeoutMs = 120000 } = {}) {
 async function listPythonBins() {
   const bins = []
   try {
-    const { resolveMoodAiPython, getMoodAiPaths, migrateLegacyMoodAiIfNeeded } = await import('./moodAiInstall.js')
+    const { resolveMoodAiPython, getMoodAiPaths, migrateLegacyMoodAiIfNeeded, listStorePythonBins } = await import('./moodAiInstall.js')
     migrateLegacyMoodAiIfNeeded()
     const managed = await resolveMoodAiPython()
     if (managed) bins.push(managed)
     const { venvBin, portableBin } = getMoodAiPaths()
     if (venvBin) bins.push(venvBin)
     if (portableBin) bins.push(portableBin)
+    bins.push(...listStorePythonBins())
   } catch {}
   bins.push(...resolvePythonCandidates())
   return [...new Set(bins.filter(Boolean))]

@@ -139,7 +139,7 @@
         <span v-if="sleepTimerMinutes" class="sleep-left">{{ sleepTimerLeftLabel || `${sleepTimerMinutes}m` }}</span>
         <span v-else class="sleep-hint">定时</span>
       </button>
-      <div v-if="moodRadioActive && currentPlaying" class="mood-fb-group" title="心情反馈">
+      <div v-if="moodRadioActive && currentPlaying" class="mood-fb-group desktop-extra" title="心情反馈">
         <button
           class="ctrl-btn ctrl-mood-like"
           :class="{ active: moodRadioFeedback === 'like' }"

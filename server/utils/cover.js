@@ -8,9 +8,11 @@ export function resolveCoverCandidates(info = {}) {
     if (!list.includes(u)) list.push(u)
   }
 
-  push(info.picUrl)
-  push(info.img)
-  push(info.cover)
+  if (!info.coverFallback) {
+    push(info.picUrl)
+    push(info.img)
+    push(info.cover)
+  }
   push(info.albumpic)
   push(info.Image)
   push(info.AlbumImage)

@@ -20,10 +20,14 @@ export function useProgressiveTrackCovers(getRows, {
     inflight.add(key)
     try {
       const source = item.source || unref(getSource) || ''
-      const res = await api.play.getCover({
-        ...item,
-        source,
-      })
+      const payload = { ...item, source }
+      if (item.coverFallback) {
+        payload.picUrl = ''
+        payload.img = ''
+        payload.cover = ''
+        payload.coverFallback = true
+      }
+      const res = await api.play.getCover(payload)
       const url = res?.url || res?.data?.url || ''
       if (!url) return
       item.picUrl = url

@@ -519,6 +519,7 @@ import {
   ensureRoamPickPool,
 } from '../stores/library.js'
 import { api } from '../api.js'
+import { useProgressiveTrackCovers } from '../composables/useProgressiveTrackCovers.js'
 import { assertActiveSourceForDownload } from '../stores/downloadGuard.js'
 
 const route = useRoute()
@@ -653,6 +654,10 @@ const listStart = computed(() => (trackPage.value - 1) * trackPageSize)
 const pagedTracks = computed(() => {
   const tracks = selectedCard.value?.tracks || []
   return tracks.slice(listStart.value, listStart.value + trackPageSize)
+})
+
+useProgressiveTrackCovers(() => pagedTracks.value, {
+  enabled: () => Boolean(selectedCard.value && !isFavoritesSelected.value),
 })
 
 const allOnlineTracks = computed(() => (selectedCard.value?.tracks || []).filter(s => !s.isLocal))

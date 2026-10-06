@@ -389,6 +389,7 @@ import { useBatchDownload, formatBatchDownloadToast } from '../composables/useBa
 import { usePacedJobUi, formatPacedStartToast } from '../composables/usePacedJobUi.js'
 import PlaylistPacedJobPanel from '../components/PlaylistPacedJobPanel.vue'
 import { useTrackListView } from '../composables/useTrackListView.js'
+import { useProgressiveTrackCovers } from '../composables/useProgressiveTrackCovers.js'
 import { api } from '../api.js'
 import { assertActiveSourceForDownload } from '../stores/downloadGuard.js'
 import { searchState, loadSearchSources } from '../stores/search.js'
@@ -509,6 +510,11 @@ const {
   measureViewport,
 } = useTrackListView(() => searchState.results, {
   paginateWhen: () => searchState.viewMode === 'album-detail' || searchState.viewMode === 'playlist-detail',
+})
+
+useProgressiveTrackCovers(() => displayRows.value, {
+  getSource: () => searchState.activeSource,
+  enabled: () => searchState.viewMode === 'playlist-detail' || searchState.viewMode === 'album-detail',
 })
 
 const searchPlaceholder = computed(() => {

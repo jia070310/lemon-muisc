@@ -1043,16 +1043,32 @@ export function getPlaylistCoverUrls(playlist, tracks = [], limit = 4) {
   return urls
 }
 
-function trackHasDisplayCover(track) {
-  return Boolean(track?.picUrl || track?.img)
+function sameCoverUrl(a, b) {
+  const na = String(a || '').trim().replace(/\{size\}/g, '400').replace(/^https?:/i, '').split('?')[0]
+  const nb = String(b || '').trim().replace(/\{size\}/g, '400').replace(/^https?:/i, '').split('?')[0]
+  return Boolean(na && nb && na === nb)
+}
+
+function trackHasOwnCover(track, playlistCover = '') {
+  const pic = String(track?.picUrl || track?.img || '').trim()
+  if (!pic) return false
+  if (track?.coverFallback) return false
+  if (playlistCover && sameCoverUrl(pic, playlistCover)) return false
+  return true
 }
 
 function withCoverFallback(track, fallbackCover = '') {
   if (!track) return track
-  const pic = track.picUrl || track.img || fallbackCover || ''
-  if (!pic) return track
-  if (track.picUrl === pic && (track.img === pic || !track.img)) return track
-  return { ...track, picUrl: pic, img: pic }
+  if (trackHasOwnCover(track, fallbackCover)) {
+    const pic = track.picUrl || track.img
+    if (track.picUrl === pic && (track.img === pic || !track.img)) return track
+    return { ...track, picUrl: pic, img: pic }
+  }
+  const own = String(track.picUrl || track.img || '').trim()
+  if (own && fallbackCover && sameCoverUrl(own, fallbackCover)) {
+    return { ...track, picUrl: '', img: '', coverFallback: true }
+  }
+  return track
 }
 
 export function bumpLibraryCoverVersion(filePath) {
@@ -1084,10 +1100,8 @@ export function resolvePlaylistTracks(playlist, allTracks) {
       let track = enrichLocalCover(map.get(k))
       const snap = snapshots[k]
       const onlinePic = snap?.picUrl || snap?.img || ''
-      if (!trackHasDisplayCover(track) && onlinePic) {
+      if (!trackHasOwnCover(track, playlistCover) && trackHasOwnCover({ picUrl: onlinePic }, playlistCover)) {
         track = { ...track, picUrl: onlinePic, img: onlinePic }
-      } else if (!trackHasDisplayCover(track) && playlistCover) {
-        track = { ...track, picUrl: playlistCover, img: playlistCover }
       }
       return { ...track, isLocal: true }
     }
@@ -1531,7 +1545,7 @@ export function syncPlaylistLocalTracks(playlistId) {
       const localCovered = enrichLocalCover(local)
       delete snapshots[k]
       // 本地无内嵌封面时保留线上封面，供歌单列表展示
-      if (onlinePic && !trackHasDisplayCover(localCovered)) {
+      if (onlinePic && trackHasOwnCover({ picUrl: onlinePic }, pl.coverUrl) && !trackHasOwnCover(localCovered, pl.coverUrl)) {
         snapshots[localKey] = {
           ...(snapshots[localKey] || {}),
           key: localKey,
@@ -1606,19 +1620,23 @@ export async function refreshImportedPlaylistFromNetwork(api, playlistId, { onPr
   for (const track of list) {
     const snap = trackToSnapshot(track, pl.importSource)
     if (!snap) continue
-    const pic = snap.picUrl || snap.img || playlistCover || ''
-    if (pic) {
-      snap.picUrl = pic
-      snap.img = pic
+    const ownPic = trackHasOwnCover(snap, playlistCover) ? (snap.picUrl || snap.img) : ''
+    if (ownPic) {
+      snap.picUrl = ownPic
+      snap.img = ownPic
       snap.hasPicture = true
+    } else {
+      snap.picUrl = ''
+      snap.img = ''
+      snap.hasPicture = Boolean(snap.hasPicture)
     }
     if (existingKeys.has(snap.key)) {
       const prev = snapshots[snap.key]
-      if (prev && pic && !(prev.picUrl || prev.img)) {
+      if (prev && ownPic && !trackHasOwnCover(prev, playlistCover)) {
         snapshots[snap.key] = {
           ...prev,
-          picUrl: pic,
-          img: pic,
+          picUrl: ownPic,
+          img: ownPic,
           hasPicture: true,
           albumId: snap.albumId || prev.albumId,
           albumMid: snap.albumMid || prev.albumMid,
@@ -1627,7 +1645,7 @@ export async function refreshImportedPlaylistFromNetwork(api, playlistId, { onPr
       }
       continue
     }
-    newTracks.push({ ...track, picUrl: pic || track.picUrl, img: pic || track.img })
+    newTracks.push({ ...track, picUrl: ownPic || '', img: ownPic || '' })
     existingKeys.add(snap.key)
   }
 

@@ -226,21 +226,21 @@ async function mgSearch(keyword, page = 1, limit = 30) {
 
 // --- utils ---
 function kwPicUrl(item) {
-  // 搜索接口
+  // 搜索接口：专辑短路径
   const album = String(item.web_albumpic_short || '').trim()
   if (album) {
     return `https://img4.kuwo.cn/star/albumcover/${album.replace(/120/, '500')}`
   }
+  // 歌单条目：只用专辑图，不用泛化 pic（常是歌单封面）
+  for (const key of ['albumpic', 'album_pic', 'pic120', 'musicPic', 'pic', 'img']) {
+    const v = item[key]
+    if (typeof v === 'string' && /^https?:\/\//i.test(v.trim()) && /albumcover|star\/album/i.test(v)) {
+      return v.trim().replace(/\/120\//, '/500/')
+    }
+  }
   const artist = String(item.web_artistpic_short || '').trim()
   if (artist) {
     return `https://img1.kuwo.cn/star/starheads/${artist.replace(/120/, '500')}`
-  }
-  // 歌单 / 其它接口：pic、albumpic、artistPic 等
-  for (const key of ['albumpic', 'pic', 'pic120', 'musicPic', 'artistPic', 'img']) {
-    const v = item[key]
-    if (typeof v === 'string' && /^https?:\/\//i.test(v.trim())) {
-      return v.trim().replace(/\/120\//, '/500/')
-    }
   }
   return ''
 }
@@ -287,7 +287,7 @@ export async function kgResolveAlbumCover(albumId) {
   return pending
 }
 
-async function enrichKgSongsCoversByAlbum(songs, { playlistCover = '', concurrency = 5 } = {}) {
+async function enrichKgSongsCoversByAlbum(songs, { concurrency = 6 } = {}) {
   if (!Array.isArray(songs) || !songs.length) return songs
   const needIds = [...new Set(
     songs
@@ -305,13 +305,12 @@ async function enrichKgSongsCoversByAlbum(songs, { playlistCover = '', concurren
       }
     }))
   }
-  const fallback = String(playlistCover || '').replace(/\{size\}/g, '400')
   return songs.map((s) => {
     if (s.picUrl || s.img) return s
     const albumPic = s.albumId ? kgAlbumCoverCache.get(String(s.albumId).trim()) : ''
-    const pic = (typeof albumPic === 'string' ? albumPic : '') || fallback
+    const pic = typeof albumPic === 'string' ? albumPic : ''
     if (!pic) return s
-    return { ...s, picUrl: pic, img: pic, coverFallback: Boolean(fallback && pic === fallback) }
+    return { ...s, picUrl: pic, img: pic }
   })
 }
 
@@ -1458,10 +1457,17 @@ async function wyFetchSongsByIds(ids, headers) {
   return { songs, privileges }
 }
 
+function wyAlbumPic(al) {
+  if (!al || typeof al !== 'object') return ''
+  const url = String(al.picUrl || '').trim()
+  if (/^https?:\/\//i.test(url)) return url
+  return ''
+}
+
 function mapWyPlaylistTrack(item, priv, pl) {
   const types = parseWyTypes({ ...item, privilege: priv })
   const artists = item.ar || item.artists || []
-  const albumName = cleanHtml(item.al?.name || pl?.name || '')
+  const albumName = cleanHtml(item.al?.name || '')
   const albumArtist = formatArtists(
     (pl?.artist ? [pl.artist] : [])
       .concat(pl?.artists || [])
@@ -1471,6 +1477,7 @@ function mapWyPlaylistTrack(item, priv, pl) {
   )
   const singer = formatArtists(artists.map((a) => a.name).filter(Boolean).join('/'))
     || albumArtist
+  const pic = wyAlbumPic(item.al)
   return withTypes({
     id: String(item.id),
     name: cleanHtml(item.name),
@@ -1478,29 +1485,50 @@ function mapWyPlaylistTrack(item, priv, pl) {
     albumArtist: albumArtist || singer,
     album: albumName,
     albumName,
+    albumId: item.al?.id != null ? String(item.al.id) : '',
     interval: formatTime(Math.floor((item.dt || 0) / 1000)),
     source: 'wy',
     songId: String(item.id),
     songmid: String(item.id),
-    picUrl: item.al?.picUrl || pl.coverImgUrl || pl.picUrl || '',
-    img: item.al?.picUrl || pl.coverImgUrl || pl.picUrl || '',
+    picUrl: pic,
+    img: pic,
   }, types)
+}
+
+async function wyFillMissingTrackPics(list, headers) {
+  if (!Array.isArray(list) || !list.length) return list
+  const missingIds = list.filter((s) => !(s.picUrl || s.img) && s.id).map((s) => s.id)
+  if (!missingIds.length) return list
+  const fetched = await wyFetchSongsByIds(missingIds, headers)
+  const picById = new Map()
+  for (const song of fetched.songs || []) {
+    const pic = wyAlbumPic(song?.al)
+    if (pic) picById.set(String(song.id), pic)
+  }
+  if (!picById.size) return list
+  return list.map((s) => {
+    if (s.picUrl || s.img) return s
+    const pic = picById.get(String(s.id))
+    if (!pic) return s
+    return { ...s, picUrl: pic, img: pic }
+  })
 }
 
 const PLAYLIST_PARTIAL_LIMIT = 100
 
-/** 歌单曲目缺封面时回落到歌单封面，避免导入音乐库后大量空白封面 */
-function applyPlaylistTrackCoverFallback(list, cover) {
-  const fallback = String(cover || '').replace(/\{size\}/g, '400').trim()
-  if (!Array.isArray(list) || !list.length) return list || []
-  const resolvedCover = fallback
-    || list.find((s) => s?.picUrl || s?.img)?.picUrl
-    || list.find((s) => s?.img)?.img
-    || ''
-  if (!resolvedCover) return list
+function coversMatch(a, b) {
+  const na = String(a || '').replace(/\{size\}/g, '400').replace(/^https?:/i, '').split('?')[0].trim()
+  const nb = String(b || '').replace(/\{size\}/g, '400').replace(/^https?:/i, '').split('?')[0].trim()
+  return Boolean(na && nb && na === nb)
+}
+
+/** 条目封面若就是歌单封面，视为缺失，避免整单同一张图 */
+function clearMatchingTrackCovers(list, playlistCover) {
+  if (!Array.isArray(list) || !playlistCover) return list || []
   return list.map((s) => {
-    if (s?.picUrl || s?.img) return s
-    return { ...s, picUrl: resolvedCover, img: resolvedCover, coverFallback: true }
+    const pic = s?.picUrl || s?.img || ''
+    if (!coversMatch(pic, playlistCover)) return s
+    return { ...s, picUrl: '', img: '' }
   })
 }
 
@@ -1519,10 +1547,10 @@ function finalizePlaylistInfo(info, list) {
 
 function buildPlaylistResponse(list, total, source, info, { partial = false, hasMore = false } = {}) {
   const nextInfo = finalizePlaylistInfo(info, list)
-  const enriched = applyPlaylistTrackCoverFallback(list, nextInfo.img || nextInfo.picUrl || '')
+  const cleaned = clearMatchingTrackCovers(list, nextInfo.img || nextInfo.picUrl || '')
   return {
-    list: enriched,
-    total: total || enriched.length,
+    list: Array.isArray(cleaned) ? cleaned : [],
+    total: total || (cleaned?.length || 0),
     source,
     info: nextInfo,
     ...(partial ? { partial: true, hasMore: Boolean(hasMore) } : { partial: false, hasMore: false }),
@@ -1565,7 +1593,10 @@ async function wyPlaylist({ id, token }, options = {}) {
     } else {
       tracks = tracks.slice(0, PLAYLIST_PARTIAL_LIMIT)
     }
-    const list = tracks.map(item => mapWyPlaylistTrack(item, privMap.get(item.id), pl))
+    const list = await wyFillMissingTrackPics(
+      tracks.map(item => mapWyPlaylistTrack(item, privMap.get(item.id), pl)),
+      headers,
+    )
     return buildPlaylistResponse(list, total, 'wy', info, { partial: true, hasMore: total > list.length })
   }
 
@@ -1582,7 +1613,10 @@ async function wyPlaylist({ id, token }, options = {}) {
     throw new Error('歌单歌曲未返回，若为私人歌单请在链接或 ID 后加 ###MUSIC_U')
   }
 
-  const list = tracks.map(item => mapWyPlaylistTrack(item, privMap.get(item.id), pl))
+  const list = await wyFillMissingTrackPics(
+    tracks.map(item => mapWyPlaylistTrack(item, privMap.get(item.id), pl)),
+    headers,
+  )
   return buildPlaylistResponse(list, total, 'wy', info)
 }
 
@@ -2017,12 +2051,11 @@ async function kgFetchMobilePlaylistPages(specialId, { pageSize = 100, partial =
   const info = kgMapMobilePlaylistInfo(infoData?.data || {})
   const playlistCover = info.img || ''
 
-  // 首屏（partial）只用歌单封面兜底，避免上百次专辑封面请求拖过 30s 超时
   if (partial) {
-    const list = applyPlaylistTrackCoverFallback(firstBatch, playlistCover)
+    const list = await enrichKgSongsCoversByAlbum(clearMatchingTrackCovers(firstBatch, playlistCover))
     const infoFinal = finalizePlaylistInfo(info, list)
     return {
-      list: applyPlaylistTrackCoverFallback(list, infoFinal.img || playlistCover),
+      list,
       total,
       source: 'kg',
       info: infoFinal,
@@ -2047,16 +2080,11 @@ async function kgFetchMobilePlaylistPages(specialId, { pageSize = 100, partial =
   }
 
   const flat = pageResults.flat()
-  // 仅充实首屏封面，其余走兜底，避免等全部专辑封面才出列表
-  const headSize = Math.min(50, flat.length)
-  const head = await enrichKgSongsCoversByAlbum(flat.slice(0, headSize), { playlistCover })
-  const rest = applyPlaylistTrackCoverFallback(flat.slice(headSize), playlistCover)
-  const list = head.concat(rest)
+  const list = await enrichKgSongsCoversByAlbum(clearMatchingTrackCovers(flat, info.img || ''))
   const infoFinal = finalizePlaylistInfo(info, list)
-  const enriched = applyPlaylistTrackCoverFallback(list, infoFinal.img || playlistCover)
   return {
-    list: enriched,
-    total: total || enriched.length,
+    list,
+    total: total || list.length,
     source: 'kg',
     info: infoFinal,
     hasMore: false,
@@ -2122,15 +2150,9 @@ async function kgPlaylistFromHtml(id) {
     }
     return mapKgSongItem(item)
   }).filter(s => s.hash || s.name)
-  const playlistCover = info.img || ''
-  const headSize = Math.min(50, mapped.length)
-  const head = await enrichKgSongsCoversByAlbum(mapped.slice(0, headSize), { playlistCover })
-  const rest = applyPlaylistTrackCoverFallback(mapped.slice(headSize), playlistCover)
-  const list = head.concat(rest)
-
+  const list = await enrichKgSongsCoversByAlbum(clearMatchingTrackCovers(mapped, info.img || ''))
   const infoFinal = finalizePlaylistInfo(info, list)
-  const enriched = applyPlaylistTrackCoverFallback(list, infoFinal.img || info.img || '')
-  return { list: enriched, total: enriched.length, source: 'kg', info: infoFinal }
+  return { list, total: list.length, source: 'kg', info: infoFinal }
 }
 
 async function kgPlaylistFromSpecial(id, options = {}) {
@@ -2175,14 +2197,11 @@ async function kgPlaylistFromGid(globalCollectionId, options = {}) {
   const mapPageSongs = (data) => (data.data?.info?.songs || data.data?.songs || data.data?.lists || []).map(mapKgSongItem)
   const firstBatch = mapPageSongs(firstData)
   const total = parseInt(firstData.data?.count || firstData.data?.total, 10) || firstBatch.length
-  const playlistCover = info.img || ''
-
   if (options.partial) {
-    // 首屏尽快返回：用歌单封面兜底，不阻塞拉专辑封面
-    const list = applyPlaylistTrackCoverFallback(firstBatch, playlistCover)
+    const list = await enrichKgSongsCoversByAlbum(clearMatchingTrackCovers(firstBatch, info.img || ''))
     const infoFinal = finalizePlaylistInfo(info, list)
     return {
-      list: applyPlaylistTrackCoverFallback(list, infoFinal.img || playlistCover),
+      list,
       total: total || list.length,
       source: 'kg',
       info: infoFinal,
@@ -2201,14 +2220,9 @@ async function kgPlaylistFromGid(globalCollectionId, options = {}) {
   }
 
   const flat = batches.flat()
-  // 仅充实首屏封面，其余用兜底，避免等全部专辑封面才返回
-  const headSize = Math.min(50, flat.length)
-  const head = await enrichKgSongsCoversByAlbum(flat.slice(0, headSize), { playlistCover })
-  const rest = applyPlaylistTrackCoverFallback(flat.slice(headSize), playlistCover)
-  const list = head.concat(rest)
+  const list = await enrichKgSongsCoversByAlbum(clearMatchingTrackCovers(flat, info.img || ''))
   const infoFinal = finalizePlaylistInfo(info, list)
-  const enriched = applyPlaylistTrackCoverFallback(list, infoFinal.img || playlistCover)
-  return { list: enriched, total: total || enriched.length, source: 'kg', info: infoFinal, hasMore: false, partial: false }
+  return { list, total: total || list.length, source: 'kg', info: infoFinal, hasMore: false, partial: false }
 }
 
 async function kgResolveShareInput(raw) {

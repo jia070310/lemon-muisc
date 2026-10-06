@@ -31,11 +31,16 @@ const PIP_DEP_INDEXES = [
 const ESSENTIA_TF_VERSION = '2.1b6.dev1389'
 const ESSENTIA_TF_SPEC = `essentia-tensorflow==${ESSENTIA_TF_VERSION}`
 
-/** 便携 Python 3.11 + Linux x86_64 的已知轮子路径（PyPI packages/ 相对路径） */
+/** Linux x86_64 已知轮子路径（PyPI packages/ 相对路径）；3.12 对应飞牛 python312 */
 const ESSENTIA_WHEEL_FALLBACK = {
   'linux-x64-cp311':
     'f0/5f/7283634ee1d5d195d75986adc98a2309fab2df121a4618f3826eb2073d29/essentia_tensorflow-2.1b6.dev1389-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl',
+  'linux-x64-cp312':
+    '0d/8e/d32e6256e1897b36c4db635102ee0a340732d49611d657af72983c79f2ed/essentia_tensorflow-2.1b6.dev1389-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl',
 }
+
+/** Essentia 官方轮子覆盖的 CPython 次版本（含飞牛 python312） */
+const ESSENTIA_PY_MINORS = new Set([9, 10, 11, 12])
 
 /**
  * essentia-tensorflow 官方只发了 Linux x86_64 与 macOS 轮子，无 Windows / Linux ARM。
@@ -407,7 +412,8 @@ async function extractTarGz(archive, destDir) {
 }
 
 async function probePythonBin(bin) {
-  if (!bin || !fs.existsSync(bin)) return false
+  if (!bin) return false
+  if (bin !== 'py' && bin !== 'python' && bin !== 'python3' && !fs.existsSync(bin)) return false
   try {
     const r = await runSpawn(bin, ['-c', 'import sys; print(sys.version_info[0])'], { timeoutMs: 15000 })
     return r.code === 0 && /3/.test(r.stdout)
@@ -416,30 +422,97 @@ async function probePythonBin(bin) {
   }
 }
 
-async function findSystemPython() {
-  const envBin = String(process.env.MOOD_PYTHON || process.env.PYTHON || '').trim()
-  const candidates = []
-  if (envBin) candidates.push(envBin)
-  if (process.platform === 'win32') {
-    candidates.push('py', 'python', 'python3')
-  } else {
-    candidates.push('python3', 'python')
-    candidates.push('/usr/bin/python3', '/usr/local/bin/python3')
+async function pythonMinor(bin) {
+  const args = bin === 'py'
+    ? ['-3', '-c', 'import sys; print("%d.%d"%sys.version_info[:2])']
+    : ['-c', 'import sys; print("%d.%d"%sys.version_info[:2])']
+  try {
+    const r = await runSpawn(bin, args, { timeoutMs: 15000 })
+    if (r.code !== 0) return 0
+    const m = String(r.stdout || '').trim().match(/3\.(\d+)/)
+    return m ? Number(m[1]) : 0
+  } catch {
+    return 0
   }
-  for (const bin of candidates) {
-    const args = bin === 'py'
-      ? ['-3', '-c', 'import sys; print(sys.executable)']
-      : ['-c', 'import sys; print(sys.executable)']
-    try {
-      const r = await runSpawn(bin, args, { timeoutMs: 15000 })
-      if (r.code === 0) {
-        const exe = String(r.stdout || '').trim().split(/\r?\n/).filter(Boolean).pop()
-        if (exe && (await probePythonBin(exe))) return exe
-        if (bin !== 'py' && await probePythonBin(bin)) return bin
-      }
-    } catch {}
+}
+
+function essentiaCompatible(minor) {
+  return ESSENTIA_PY_MINORS.has(Number(minor))
+}
+
+/** 飞牛应用中心 Python（文档：/var/apps/python312/target/bin） */
+export function listStorePythonBins() {
+  if (process.platform === 'win32') return []
+  const pkgs = ['python312', 'python311', 'python310']
+  const bins = []
+  const pushPkg = (base) => {
+    for (const pkg of pkgs) {
+      bins.push(path.join(base, pkg, 'target', 'bin', 'python3'))
+      bins.push(path.join(base, pkg, 'bin', 'python3'))
+    }
   }
+  pushPkg('/var/apps')
+  pushPkg('/usr/local/apps/@appcenter')
+  try {
+    for (const name of fs.readdirSync('/')) {
+      if (!/^vol\d+$/i.test(name)) continue
+      pushPkg(path.join('/', name, '@appcenter'))
+    }
+  } catch {}
+  return [...new Set(bins)]
+}
+
+async function resolvePythonExecutable(bin) {
+  const args = bin === 'py'
+    ? ['-3', '-c', 'import sys; print(sys.executable)']
+    : ['-c', 'import sys; print(sys.executable)']
+  try {
+    const r = await runSpawn(bin, args, { timeoutMs: 15000 })
+    if (r.code !== 0) return ''
+    const exe = String(r.stdout || '').trim().split(/\r?\n/).filter(Boolean).pop()
+    if (exe && (await probePythonBin(exe))) return exe
+    if (bin !== 'py' && await probePythonBin(bin)) return bin
+  } catch {}
   return ''
+}
+
+/**
+ * 启用 AI 时优先飞牛 python312，再 PATH 上的 3.9–3.12。
+ * 不调用 appcenter-cli（会卡 downloading 0%）；没有则由向导后台下便携 3.11。
+ */
+async function findSystemPython() {
+  const ranked = []
+  const seen = new Set()
+  const consider = async (bin, prefer = 0) => {
+    if (!bin || seen.has(bin)) return
+    seen.add(bin)
+    const exe = await resolvePythonExecutable(bin)
+    if (!exe) return
+    const minor = await pythonMinor(exe)
+    if (!essentiaCompatible(minor)) {
+      pushLog(`跳过不兼容 Python 3.${minor || '?'}：${exe}`)
+      return
+    }
+    ranked.push({ exe, minor, prefer })
+  }
+
+  const envBin = String(process.env.MOOD_PYTHON || process.env.PYTHON || '').trim()
+  if (envBin) await consider(envBin, 100)
+
+  for (const bin of listStorePythonBins()) {
+    await consider(bin, bin.includes('python312') ? 90 : 80)
+  }
+
+  if (process.platform === 'win32') {
+    for (const bin of ['py', 'python', 'python3']) await consider(bin, 10)
+  } else {
+    for (const bin of ['python3', 'python', '/usr/bin/python3', '/usr/local/bin/python3']) {
+      await consider(bin, 10)
+    }
+  }
+
+  ranked.sort((a, b) => b.prefer - a.prefer || b.minor - a.minor)
+  return ranked[0]?.exe || ''
 }
 
 async function ensurePortablePython() {
@@ -498,6 +571,12 @@ async function ensurePortablePython() {
   throw new Error(toUserFriendlyError(lastErr) || '下载 Python 失败，请检查网络后重试')
 }
 
+function pythonBinDirEnv(basePython) {
+  const dir = path.dirname(basePython)
+  if (!dir || dir === '.') return undefined
+  return { PATH: `${dir}${path.delimiter}${process.env.PATH || ''}` }
+}
+
 async function ensureVenv(basePython) {
   const { venvDir, venvBin } = getMoodAiPaths()
   if (await probePythonBin(venvBin)) {
@@ -509,6 +588,7 @@ async function ensureVenv(basePython) {
   try { fs.rmSync(venvDir, { recursive: true, force: true }) } catch {}
   const r = await runSpawn(basePython, ['-m', 'venv', venvDir], {
     timeoutMs: 180000,
+    env: pythonBinDirEnv(basePython),
     onStderr: (s) => pushLog(s),
   })
   if (r.code !== 0 || !(await probePythonBin(venvBin))) {
@@ -662,17 +742,27 @@ export async function runMoodAiPrepareWizard() {
         }
       }
 
-      setPhase('detect', '检测 Python…', 8)
+      setPhase('detect', '检测飞牛 / 系统 Python…', 8)
       let basePy = await findSystemPython()
       if (basePy) {
-        setPhase('detect', `已找到系统 Python：${basePy}`, 18)
+        const minor = await pythonMinor(basePy)
+        const storeHint = /[/\\]python31\d[/\\]/.test(basePy) ? '飞牛' : '系统'
+        setPhase('detect', `已使用${storeHint} Python 3.${minor}：${basePy}`, 18)
       } else {
-        setPhase('download-python', '未检测到系统 Python，开始下载便携版…', 8)
+        setPhase('download-python', '未找到飞牛 python312，正在后台下载便携 Python（不调用应用中心）…', 8)
         basePy = await ensurePortablePython()
         setPhase('detect', `便携 Python 就绪：${basePy}`, 26)
       }
 
-      const venvPy = await ensureVenv(basePy)
+      let venvPy
+      try {
+        venvPy = await ensureVenv(basePy)
+      } catch (e) {
+        pushLog(`用 ${basePy} 创建虚拟环境失败：${e.message || e}，改下便携版`)
+        setPhase('download-python', '系统 Python 无法建环境，改为后台下载便携版…', 8)
+        basePy = await ensurePortablePython()
+        venvPy = await ensureVenv(basePy)
+      }
       await pipInstallEssentia(venvPy)
 
       setPhase('models', '正在准备 Essentia 情绪模型…', 76)

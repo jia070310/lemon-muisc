@@ -602,8 +602,11 @@ playRouter.post('/lyric', async (req, res) => {
 
 playRouter.post('/cover', async (req, res) => {
   try {
-    const { source } = req.body
-    const musicInfo = buildMusicInfo(req.body)
+    const { source, coverFallback } = req.body
+    const rawInfo = buildMusicInfo(req.body)
+    const musicInfo = coverFallback
+      ? { ...rawInfo, picUrl: '', img: '', cover: '', coverFallback: true }
+      : rawInfo
     const lookupSource = source === 'local' ? '' : (source || '')
     if (lookupSource) {
       const direct = resolveCoverUrl({ ...musicInfo, source: lookupSource })
@@ -614,7 +617,7 @@ playRouter.post('/cover', async (req, res) => {
       fetchTrackCover({
         source: lookupSource,
         musicInfo: { ...musicInfo, source: lookupSource || musicInfo.source },
-        meta: { ...req.body, source: lookupSource },
+        meta: { ...musicInfo, source: lookupSource },
         asBuffer: false,
         useOtherSource: true,
         userId: req.user?.id,
