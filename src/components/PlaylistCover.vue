@@ -387,4 +387,40 @@ const playableUrls = computed(() => displayUrls.value.map((u) => toPlayableCover
   text-shadow: none;
   opacity: 0.88;
 }
+
+@media (max-width: 768px) {
+  .size-card,
+  .size-row {
+    aspect-ratio: 1 / 1;
+    min-height: 0;
+    border-radius: 12px;
+  }
+  .size-card .mosaic-solo,
+  .size-row .mosaic-solo {
+    width: min(54%, 100px);
+    height: auto;
+    max-height: 68%;
+  }
+  .playlist-cover-icon-side {
+    right: 10px;
+    top: 10px;
+  }
+  .playlist-cover-icon-side :deep(svg) {
+    width: 22px;
+    height: 22px;
+  }
+  .playlist-cover-meta {
+    padding: 10px 12px;
+  }
+  .playlist-cover-meta .playlist-cover-name {
+    font-size: 14px;
+  }
+  .playlist-cover-meta .playlist-cover-count {
+    margin-top: 2px;
+    font-size: 11px;
+  }
+  .is-gradient .playlist-cover-meta {
+    max-width: calc(100% - 36px);
+  }
+}
 </style>

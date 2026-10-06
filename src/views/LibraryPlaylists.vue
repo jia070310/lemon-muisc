@@ -14,26 +14,29 @@
       <button class="btn-primary btn-sm" @click="openCreate">创建歌单</button>
     </div>
 
-    <div ref="playlistGridEl" class="playlist-grid">
-      <button
-        v-for="card in gridCards"
-        :key="card.id"
-        class="playlist-card-btn"
-        :class="{ active: selectedId === card.id }"
-        @click="selectCard(card)"
-      >
-        <PlaylistCover
-          size="row"
-          :cover-style="card.coverStyle"
-          :cover-url="card.coverUrl"
-          :cover-urls="card.coverUrls"
-          :gradient="card.gradient"
-          :icon="card.icon"
-          :name="card.name"
-          :count="card.count"
-          show-meta
-        />
-      </button>
+    <div ref="playlistScrollEl" class="playlist-scroll">
+      <div ref="playlistGridEl" class="playlist-grid">
+        <button
+          v-for="card in gridCards"
+          :key="card.id"
+          class="playlist-card-btn"
+          :class="{ active: selectedId === card.id }"
+          :data-playlist-id="card.id"
+          @click="selectCard(card)"
+        >
+          <PlaylistCover
+            :size="isNarrow ? 'compact' : 'row'"
+            :cover-style="card.coverStyle"
+            :cover-url="card.coverUrl"
+            :cover-urls="card.coverUrls"
+            :gradient="card.gradient"
+            :icon="card.icon"
+            :name="card.name"
+            :count="card.count"
+            :show-meta="!isNarrow"
+          />
+        </button>
+      </div>
     </div>
 
     <section v-if="selectedCard" class="detail card">
@@ -462,7 +465,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import PlaylistCover from '../components/PlaylistCover.vue'
 import CoverArt from '../components/CoverArt.vue'
@@ -544,6 +547,7 @@ function toggleRowActions(key) {
 const coverPendingPauseKey = ref('')
 const isNarrow = ref(false)
 const showAllPlaylistCards = ref(false)
+const playlistScrollEl = ref(null)
 const playlistGridEl = ref(null)
 const playlistCols = ref(4)
 /** 全部歌单页桌面端只预览一行；音乐库首页仍为两行 */
@@ -598,7 +602,8 @@ const {
 })
 
 function updateNarrow() {
-  isNarrow.value = narrowMq?.matches ?? window.innerWidth <= 768
+  // 与侧栏紧凑布局一致：平板/横屏也用小卡横滑，避免大卡多列撑满屏
+  isNarrow.value = narrowMq?.matches ?? window.innerWidth <= 1100
 }
 
 const allCards = ref([])
@@ -732,8 +737,16 @@ watch([selectedId, playlistPreviewLimit, sourceCards], () => {
   if (idx >= playlistPreviewLimit.value) showAllPlaylistCards.value = true
 })
 
+watch(selectedId, async (id) => {
+  if (!id || !isNarrow.value) return
+  await nextTick()
+  const safe = String(id).replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+  const el = playlistScrollEl.value?.querySelector(`[data-playlist-id="${safe}"]`)
+  el?.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' })
+})
+
 onMounted(async () => {
-  narrowMq = window.matchMedia('(max-width: 768px)')
+  narrowMq = window.matchMedia('(max-width: 1100px)')
   updateNarrow()
   narrowMq.addEventListener('change', updateNarrow)
   document.addEventListener('click', closeMenus)
@@ -1331,11 +1344,11 @@ function artistInitial(name) {
   flex-wrap: wrap;
 }
 .page-title { font-size: 22px; font-weight: 600; flex: 1; }
+.playlist-scroll { margin-bottom: 24px; }
 .playlist-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   gap: 18px;
-  margin-bottom: 24px;
 }
 .playlist-card-btn {
   padding: 0;
@@ -1347,6 +1360,7 @@ function artistInitial(name) {
   text-align: left;
   min-width: 0;
 }
+/* 桌面大卡：选中描边在整卡上；小卡横滑时只描封面方块 */
 .playlist-card-btn.active { outline: 2px solid var(--accent); outline-offset: 2px; }
 .detail { padding: 18px; }
 .detail-hero {
@@ -1738,11 +1752,58 @@ function artistInitial(name) {
   gap: 10px;
 }
 
+@media (max-width: 1100px) {
+  .page-header-row {
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .page-title { font-size: 18px; }
+  /* 只显示一行；左右滑动选其他歌单 */
+  .playlist-scroll {
+    margin: 0 -14px 14px;
+    /* 上下留白，避免选中描边被 overflow 裁切 */
+    padding: 3px 14px 6px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+  .playlist-scroll::-webkit-scrollbar { display: none; }
+  .playlist-grid {
+    display: flex;
+    flex-flow: row nowrap;
+    align-items: flex-start;
+    gap: 12px;
+    width: max-content;
+    min-width: 100%;
+  }
+  .playlist-card-btn {
+    flex: 0 0 112px;
+    width: 112px;
+    border-radius: 0;
+    overflow: visible;
+  }
+  .playlist-card-btn.active {
+    outline: none;
+  }
+  .playlist-card-btn.active :deep(.playlist-compact-cover) {
+    box-shadow: 0 0 0 2px var(--accent);
+  }
+}
+
 @media (max-width: 768px) {
   .detail { padding: 12px; }
-  .detail-hero { gap: 0; margin-bottom: 14px; }
-  .detail-info h2 { font-size: 20px; margin-bottom: 6px; }
-  .detail-meta { margin-bottom: 12px; font-size: 13px; }
+  .detail-hero { gap: 0; margin-bottom: 12px; }
+  .detail-info { min-width: 0; }
+  .detail-info h2 { font-size: 18px; margin-bottom: 4px; }
+  .detail-meta { margin-bottom: 10px; font-size: 12px; }
+  .detail-actions { gap: 6px; }
+  .detail-actions .btn-sm {
+    min-height: 34px;
+    padding: 6px 10px;
+    font-size: 12px;
+  }
   .song-cover-btn {
     width: 48px;
     height: 48px;
