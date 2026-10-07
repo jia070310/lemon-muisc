@@ -18,6 +18,22 @@ import { isSourcePlatformEnabled } from './utils/enabledPlatforms.js'
 /** @type {Map<string, { id: string, handler: Function|null, sources: object, pendingRequests: Map }>} */
 const activeSources = new Map()
 
+/** 脚本 send('updateAlert') 时记录，供设置页「检查更新」展示 */
+/** @type {Map<string, { log?: string, updateUrl?: string, at: number }>} */
+const sourceUpdateAlerts = new Map()
+
+export function getSourceUpdateAlert(id) {
+  return sourceUpdateAlerts.get(id) || null
+}
+
+export function clearSourceUpdateAlert(id) {
+  if (id) sourceUpdateAlerts.delete(id)
+}
+
+export function listSourceUpdateAlerts() {
+  return [...sourceUpdateAlerts.entries()].map(([id, info]) => ({ id, ...info }))
+}
+
 const SUPPORTED_SOURCES = ['kw', 'kg', 'tx', 'wy', 'mg']
 const SUPPORTED_ACTIONS = ['musicUrl', 'lyric', 'pic']
 const SUPPORTED_QUALITYS = ['128k', '320k', 'flac', 'flac24bit', 'hires', 'atmos', 'atmos_plus', 'master']
@@ -126,7 +142,13 @@ export async function loadSource(id, script) {
           activeSources.set(id, entry)
           finish(null, sources)
         } else if (event === 'updateAlert') {
-          // 兼容脚本更新提示，服务端忽略弹窗即可
+          // 落雪脚本更新提示：记录供「检查更新」使用（不再弹窗）
+          const payload = data && typeof data === 'object' ? data : {}
+          sourceUpdateAlerts.set(id, {
+            log: String(payload.log || payload.message || payload.msg || '').trim(),
+            updateUrl: String(payload.updateUrl || payload.url || payload.homepage || '').trim(),
+            at: Date.now(),
+          })
         }
       },
       on(event, handler) {

@@ -188,9 +188,14 @@ export const api = {
   source: {
     list: () => request('/source/list'),
     importScript: (script) => request('/source/import', { method: 'POST', body: { script } }),
-    importFile: async (file) => {
+    importFile: async (fileOrFiles) => {
+      const files = Array.isArray(fileOrFiles) ? fileOrFiles : [fileOrFiles]
       const form = new FormData()
-      form.append('file', file)
+      if (files.length === 1) {
+        form.append('file', files[0])
+      } else {
+        for (const f of files) form.append('files', f)
+      }
       const token = getToken()
       const res = await fetch(BASE + '/source/import', {
         method: 'POST',
@@ -202,7 +207,21 @@ export const api = {
       if (!res.ok) throw new Error(formatUserError(data.error || '导入失败', '导入失败'))
       return data
     },
-    importUrl: (url) => request('/source/import-url', { method: 'POST', body: { url }, timeout: 90000 }),
+    importUrl: (urlOrUrls) => request('/source/import-url', {
+      method: 'POST',
+      body: Array.isArray(urlOrUrls) ? { urls: urlOrUrls } : { url: urlOrUrls },
+      timeout: 180000,
+    }),
+    checkUpdates: (id) => request('/source/check-updates', {
+      method: 'POST',
+      body: id ? { id } : {},
+      timeout: 180000,
+    }),
+    updateSource: (id, url) => request(`/source/update/${encodeURIComponent(id)}`, {
+      method: 'POST',
+      body: url ? { url } : {},
+      timeout: 90000,
+    }),
     remove: (id) => request(`/source/${id}`, { method: 'DELETE' }),
     activate: (id) => request(`/source/activate/${id}`, { method: 'POST', timeout: 25000 }),
     deactivate: (id) => id

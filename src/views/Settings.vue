@@ -673,6 +673,16 @@
           </div>
         </div>
 
+        <div v-if="isAdminUser" class="source-admin-toolbar">
+          <button
+            class="btn-ghost btn-sm"
+            type="button"
+            :disabled="checkingSourceUpdates || !sourceList.length"
+            @click="checkSourceUpdates"
+          >{{ checkingSourceUpdates ? '检查中…' : '检查音源更新' }}</button>
+          <span v-if="sourceUpdateSummary" class="hint">{{ sourceUpdateSummary }}</span>
+        </div>
+
         <div class="source-list" v-if="sourceList.length">
           <div
             v-for="s in sourceList"
@@ -696,8 +706,13 @@
                     :class="s.health.level === 'mixed' ? 'mixed' : 'preview'"
                     :title="s.health.tip"
                   >{{ s.health.badge }}</span>
+                  <span
+                    v-if="sourceUpdateMap[s.id]?.hasUpdate"
+                    class="source-update-badge"
+                    :title="sourceUpdateTip(s.id)"
+                  >有更新</span>
                 </div>
-                <span class="source-meta">{{ s.author || '未知作者' }} · v{{ s.version || '?' }}{{ isSourceActive(s.id) ? ' · 已激活' : '' }} · {{ sourcePlatformSummary(s) }}</span>
+                <span class="source-meta">{{ s.author || '未知作者' }} · v{{ s.version || '?' }}{{ sourceUpdateMap[s.id]?.remoteVersion ? ` → v${sourceUpdateMap[s.id].remoteVersion}` : '' }}{{ isSourceActive(s.id) ? ' · 已激活' : '' }} · {{ sourcePlatformSummary(s) }}</span>
                 <span v-if="s.health?.unhealthy && s.health?.tip" class="source-health-tip">{{ s.health.tip }}</span>
                 <span v-if="autoClosedNotice(s)" class="source-autoclose-tip">{{ autoClosedNotice(s) }}</span>
                 <div v-if="s.health?.unhealthy && healthPlatformChips(s).length" class="source-health-platforms">
@@ -768,9 +783,15 @@
                 </div>
                 <button v-if="s.health?.unhealthy || autoClosedNotice(s)" class="btn-sm btn-ghost" @click="dismissSourceHealth(s)">知道了</button>
                 <button
+                  v-if="isAdminUser && sourceUpdateMap[s.id]?.hasUpdate"
+                  class="btn-sm btn-primary"
+                  :disabled="sourceBusyId === s.id || sourceUpdatingId === s.id || checkingSourceUpdates"
+                  @click="applySourceUpdate(s)"
+                >{{ sourceUpdatingId === s.id ? '更新中…' : '更新' }}</button>
+                <button
                   v-if="!isSourceActive(s.id)"
                   class="btn-sm btn-primary"
-                  :disabled="sourceBusyId === s.id || importingUrl"
+                  :disabled="sourceBusyId === s.id || importingUrl || importingFiles"
                   @click="activateSource(s.id)"
                 >{{ sourceBusyId === s.id ? '激活中…' : '激活' }}</button>
                 <button
@@ -782,7 +803,7 @@
                 <button
                   v-if="isAdminUser"
                   class="btn-sm btn-danger"
-                  :disabled="sourceBusyId === s.id || importingUrl"
+                  :disabled="sourceBusyId === s.id || importingUrl || importingFiles"
                   @click="removeSource(s.id)"
                 >删除</button>
               </div>
@@ -796,16 +817,23 @@
           <button :class="['pill-tab', { active: importMode === 'url' }]" @click="importMode = 'url'">在线导入</button>
         </div>
         <div class="import-area" v-if="isAdminUser && importMode === 'file'">
-          <input type="file" ref="fileInput" accept=".js" @change="importFile" style="display:none" />
-          <button class="btn-primary btn-sm" @click="$refs.fileInput.click()">选择文件</button>
-          <span class="hint">支持落雪兼容与澜音（CeruMusic）原生 .js 音源</span>
+          <input type="file" ref="fileInput" accept=".js,text/javascript" multiple @change="importFile" style="display:none" />
+          <button class="btn-primary btn-sm" :disabled="importingFiles" @click="$refs.fileInput.click()">
+            {{ importingFiles ? '导入中…' : '选择文件' }}
+          </button>
+          <span class="hint">可多选 .js；支持落雪兼容与澜音（CeruMusic）原生音源</span>
         </div>
-        <div class="import-area" v-else-if="isAdminUser">
-          <input v-model="importUrl" placeholder="输入 .js 直链（GitHub / Gitee / gist）" class="url-input" />
+        <div class="import-area import-area-url" v-else-if="isAdminUser">
+          <textarea
+            v-model="importUrl"
+            class="url-input url-textarea"
+            rows="3"
+            placeholder="输入 .js 直链，多个用英文逗号或换行分隔（GitHub / Gitee / gist）"
+          />
           <button class="btn-primary btn-sm" @click="importFromUrl" :disabled="importingUrl">
             {{ importingUrl ? '导入中...' : '导入' }}
           </button>
-          <span class="hint">GitHub 直连失败会自动换镜像；也可用「本地导入」</span>
+          <span class="hint">多个地址可用逗号或换行分开；GitHub 失败会自动换镜像</span>
         </div>
 
         <div class="playlist-sync-settings card-inner">
@@ -1443,6 +1471,11 @@ const toast = ref(null)
 const importMode = ref('file')
 const importUrl = ref('')
 const importingUrl = ref(false)
+const importingFiles = ref(false)
+const checkingSourceUpdates = ref(false)
+const sourceUpdatingId = ref('')
+const sourceUpdateMap = ref({})
+const sourceUpdateSummary = ref('')
 /** 正在激活/停用的音源 id，避免无反馈空等像卡死 */
 const sourceBusyId = ref('')
 const PLATFORM_SHORT = { tx: 'QQ', wy: '云', kw: '酷', kg: '狗', mg: '咪' }
@@ -3032,52 +3065,128 @@ async function toggleSmoothStreamSetting() {
   }
 }
 
+function splitImportUrls(text) {
+  return String(text || '')
+    .split(/[\n,;，；]+/)
+    .map((u) => u.trim())
+    .filter((u) => /^https?:\/\//i.test(u))
+}
+
+function sourceUpdateTip(id) {
+  const u = sourceUpdateMap.value[id]
+  if (!u?.hasUpdate) return ''
+  if (u.remoteVersion) return `远程 v${u.remoteVersion}（当前 v${u.currentVersion || '?'}）`
+  if (u.log) return u.log
+  return '检测到可更新脚本'
+}
+
 async function importFile(e) {
-  const file = e.target.files?.[0]
-  if (!file) return
+  const files = [...(e.target.files || [])]
+  if (!files.length || importingFiles.value) return
+  importingFiles.value = true
   try {
-    const res = await api.source.importFile(file)
+    const res = await api.source.importFile(files)
     if (res.error) throw new Error(res.error)
-    showToast(`导入成功: ${res.name || file.name}`, 'success')
+    if (res.batch) {
+      const fail = res.failed || 0
+      showToast(
+        fail
+          ? `已导入 ${res.imported} 个，失败 ${fail} 个（需点「激活」）`
+          : `已导入 ${res.imported} 个音源（需点「激活」）`,
+        fail ? 'warning' : 'success',
+      )
+    } else {
+      showToast(`导入成功: ${res.name || files[0].name}（需点「激活」）`, 'success')
+    }
     sourceList.value = await api.source.list()
-  } catch (e) {
-    showToast(e.message, 'error')
+  } catch (err) {
+    showToast(err.message, 'error')
+  } finally {
+    importingFiles.value = false
+    e.target.value = ''
   }
-  e.target.value = ''
 }
 
 async function importFromUrl() {
-  if (!importUrl.value.trim() || importingUrl.value) return
+  const urls = splitImportUrls(importUrl.value)
+  if (!urls.length || importingUrl.value) {
+    if (!urls.length && importUrl.value.trim()) showToast('请填写有效的 http(s) 直链', 'error')
+    return
+  }
   importingUrl.value = true
   try {
-    const res = await api.source.importUrl(importUrl.value.trim())
+    const res = await api.source.importUrl(urls.length === 1 ? urls[0] : urls)
     if (res.error) throw new Error(res.error)
-    showToast(`导入成功: ${res.name}（需点「激活」后才能搜索/播放）`, 'success')
-    importUrl.value = ''
-    // 先乐观插入，避免 list 慢时界面像卡死
-    if (res.id && !sourceList.value.some((s) => s.id === res.id)) {
-      sourceList.value = [
-        {
-          id: res.id,
-          name: res.name || '未命名音源',
-          description: '',
-          author: '',
-          version: '',
-          homepage: '',
-          sources: {},
-          active: false,
-          health: null,
-        },
-        ...sourceList.value,
-      ]
+    if (res.batch) {
+      const fail = res.failed || 0
+      showToast(
+        fail
+          ? `已导入 ${res.imported} 个，失败 ${fail} 个（需点「激活」）`
+          : `已导入 ${res.imported} 个音源（需点「激活」）`,
+        fail ? 'warning' : 'success',
+      )
+    } else {
+      showToast(`导入成功: ${res.name}（需点「激活」后才能搜索/播放）`, 'success')
     }
+    importUrl.value = ''
     try {
       sourceList.value = await api.source.list()
     } catch {}
-  } catch (e) {
-    showToast(e.message || '导入失败', 'error')
+  } catch (err) {
+    showToast(err.message || '导入失败', 'error')
   } finally {
     importingUrl.value = false
+  }
+}
+
+async function checkSourceUpdates() {
+  if (checkingSourceUpdates.value) return
+  checkingSourceUpdates.value = true
+  sourceUpdateSummary.value = ''
+  try {
+    const res = await api.source.checkUpdates()
+    if (res.error) throw new Error(res.error)
+    const map = {}
+    for (const u of res.updates || []) {
+      map[u.id] = u
+    }
+    sourceUpdateMap.value = map
+    const n = res.outdated || 0
+    sourceUpdateSummary.value = n
+      ? `发现 ${n} 个可更新`
+      : `已检查 ${res.checked || 0} 个，均已是最新`
+    showToast(sourceUpdateSummary.value, n ? 'warning' : 'success')
+  } catch (err) {
+    showToast(err.message || '检查更新失败', 'error')
+  } finally {
+    checkingSourceUpdates.value = false
+  }
+}
+
+async function applySourceUpdate(source) {
+  const id = source?.id
+  if (!id || sourceUpdatingId.value) return
+  sourceUpdatingId.value = id
+  try {
+    const hint = sourceUpdateMap.value[id]
+    const res = await api.source.updateSource(id, hint?.updateUrl || '')
+    if (res.error) throw new Error(res.error)
+    showToast(
+      res.reloadError
+        ? `已更新 ${res.name}，请手动重新激活`
+        : `已更新 ${res.name}${res.version ? ` → v${res.version}` : ''}`,
+      res.reloadError ? 'warning' : 'success',
+    )
+    const next = { ...sourceUpdateMap.value }
+    delete next[id]
+    sourceUpdateMap.value = next
+    const left = Object.values(next).filter((u) => u.hasUpdate).length
+    sourceUpdateSummary.value = left ? `仍有 ${left} 个可更新` : ''
+    sourceList.value = await api.source.list()
+  } catch (err) {
+    showToast(err.message || '更新失败', 'error')
+  } finally {
+    sourceUpdatingId.value = ''
   }
 }
 
@@ -4169,7 +4278,32 @@ function showToast(text, type = 'info') {
 .pill-tab:hover { background: var(--bg-hover); }
 .pill-tab.active { color: #fff; }
 
+.source-admin-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 0 0 12px;
+}
+.source-update-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--accent, #3d8bfd);
+}
 .import-area { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.import-area-url { align-items: flex-start; }
+.url-textarea {
+  flex: 1;
+  min-width: 220px;
+  min-height: 72px;
+  resize: vertical;
+  font-family: inherit;
+}
 .url-input { flex: 1; min-width: 200px; }
 .hint { font-size: 12px; color: var(--text-muted); }
 
@@ -4344,6 +4478,7 @@ function showToast(text, type = 'info') {
 }
 .toast.success { background: var(--success); color: #fff; }
 .toast.error { background: var(--error); color: #fff; }
+.toast.warning { background: var(--warning, #e6a23c); color: #fff; }
 .toast.info { background: var(--bg-card); border: 1px solid var(--border); }
 
 @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
