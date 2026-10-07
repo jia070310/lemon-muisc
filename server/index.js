@@ -25,6 +25,7 @@ import { startLibraryAutoWatch, stopLibraryAutoWatch } from './utils/libraryAuto
 import { ensureDefaultAdmin } from './utils/auth.js'
 import { installServerRuntimeLog } from './utils/runtimeLog.js'
 import {
+  listFeiniuCertificates,
   resolveTlsListen,
   syncNativeDesktopProtocol,
   writeDesktopProtocolHint,
@@ -45,6 +46,14 @@ if (tls.enabled && tls.error) {
   console.error('[https] 已回退为 HTTP。确认飞牛证书可读后重启应用即可。')
 } else if (!tls.enabled && tls.meta?.mode === 'auto-no-cert') {
   console.log('[https] 未找到飞牛证书，当前使用 HTTP（有证书后将自动启用 HTTPS）')
+  console.log('[https] 已扫描 network_cert_all.conf / network_gateway_cert.conf 与 trim_connect/ssls')
+  try {
+    if (listFeiniuCertificates().length === 0 && process.env.LEMON_NATIVE) {
+      console.log('[https] 若飞牛「证书」里已有证书仍走 HTTP，请检查应用是否可读 /usr/trim/var/trim_connect/ssls')
+    }
+  } catch {}
+} else if (tls.enabled && tls.meta?.certName) {
+  console.log(`[https] 使用飞牛证书: ${tls.meta.certName}`)
 }
 const useHttps = Boolean(tls.enabled && tls.credentials && !tls.error)
 const server = useHttps

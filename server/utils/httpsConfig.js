@@ -198,6 +198,29 @@ export function readDesktopProtocolHint() {
   return 'auto'
 }
 
+/** 在多个候选路径中选第一个可读文件；优先含 fullchain 的路径（完整链，减少浏览器「不安全」） */
+function firstReadableCert(paths) {
+  const list = (paths || []).map((p) => String(p || '').trim()).filter(Boolean)
+  const preferred = list.filter((p) => /fullchain/i.test(p))
+  const rest = list.filter((p) => !/fullchain/i.test(p))
+  return [...preferred, ...rest].find(readableFile) || ''
+}
+
+function firstReadableKey(paths) {
+  const list = (paths || []).map((p) => String(p || '').trim()).filter(Boolean)
+  return list.find(readableFile) || ''
+}
+
+function scoreCertEntry(entry) {
+  let s = 0
+  if (entry.used) s += 100
+  if (entry.fromGateway) s += 40
+  if (/fullchain/i.test(entry.certPath || '')) s += 20
+  if (!/^fnos$/i.test(entry.name || '')) s += 10
+  s += Math.min(10, Math.floor((entry.mtime || 0) / 1e12))
+  return s
+}
+
 /** 从飞牛证书配置 / 目录扫描可用证书 */
 export function listFeiniuCertificates() {
   const byKey = new Map()
@@ -209,60 +232,92 @@ export function listFeiniuCertificates() {
     if (!name || !readableFile(certPath) || !readableFile(keyPath)) return
     let mtime = 0
     try { mtime = fs.statSync(certPath).mtimeMs } catch {}
+    const next = {
+      name,
+      certPath,
+      keyPath,
+      mtime,
+      source: 'feiniu',
+      used: Boolean(entry.used),
+      fromGateway: Boolean(entry.fromGateway),
+    }
     const prev = byKey.get(name)
-    if (!prev || mtime >= prev.mtime) {
-      byKey.set(name, { name, certPath, keyPath, mtime, source: 'feiniu' })
+    if (!prev || scoreCertEntry(next) >= scoreCertEntry(prev)) {
+      byKey.set(name, next)
     }
   }
 
   for (const conf of FNOS_CERT_CONF) {
     const text = safeRead(conf)
     if (!text) continue
-    // JSON 数组 / 对象
+    const fromGateway = /network_gateway_cert\.conf$/i.test(conf)
+    // JSON 数组 / 对象（飞牛常见：host + cert + key；另有 fullchain / old_*）
     try {
       const data = JSON.parse(text)
       const items = Array.isArray(data) ? data : (data.certs || data.list || data.items || [data])
       for (const item of items) {
         if (!item || typeof item !== 'object') continue
+        const certPath = firstReadableCert([
+          item.fullchain,
+          item.old_fullchain,
+          item.cert,
+          item.crt,
+          item.old_crt,
+        ])
+        const keyPath = firstReadableKey([
+          item.key,
+          item.privateKey,
+          item.old_key,
+          item.privkey,
+        ])
         add({
           name: item.host || item.domain || item.name || item.certName,
-          certPath: item.cert || item.crt || item.fullchain || item.old_crt,
-          keyPath: item.key || item.privateKey || item.old_key,
+          certPath,
+          keyPath,
+          used: item.used === true || item.used === 1 || item.used === '1',
+          fromGateway,
         })
       }
     } catch {
       // 非标准 JSON：用正则抽路径
     }
-    const certRe = /"(?:cert|crt|fullchain|old_crt)"\s*:\s*"([^"]+\.crt)"/gi
-    const keyRe = /"(?:key|privateKey|old_key)"\s*:\s*"([^"]+\.key)"/gi
+    const certRe = /"(?:fullchain|old_fullchain|cert|crt|old_crt)"\s*:\s*"([^"]+\.(?:crt|pem))"/gi
+    const keyRe = /"(?:key|privateKey|old_key|privkey)"\s*:\s*"([^"]+\.(?:key|pem))"/gi
     const hostRe = /"(?:host|domain|name|certName)"\s*:\s*"([^"]+)"/gi
     const certs = [...text.matchAll(certRe)].map((m) => m[1])
     const keys = [...text.matchAll(keyRe)].map((m) => m[1])
     const hosts = [...text.matchAll(hostRe)].map((m) => m[1])
     const n = Math.max(certs.length, keys.length)
     for (let i = 0; i < n; i++) {
-      const certPath = certs[i] || ''
-      const keyPath = keys[i] || ''
-      const fromPath = path.basename(certPath, '.crt')
+      const certPath = firstReadableCert([certs[i]])
+      const keyPath = firstReadableKey([keys[i]])
+      const fromPath = certPath
+        ? path.basename(certPath).replace(/\.(crt|pem)$/i, '')
+        : ''
       add({
-        name: hosts[i] || fromPath || `cert-${i + 1}`,
+        name: hosts[i] || (fromPath && fromPath !== 'fullchain' ? fromPath : '') || `cert-${i + 1}`,
         certPath,
         keyPath,
+        fromGateway,
       })
     }
-    // yaml 风格 old_crt: "..."
+    // yaml 风格：优先 old_fullchain，再 old_crt / crt
+    const yamlFull = text.match(/(?:^|\n)\s*(?:old_)?fullchain\s*:\s*"([^"]+)"/i)
     const yamlCert = text.match(/(?:^|\n)\s*(?:old_)?crt\s*:\s*"([^"]+)"/i)
     const yamlKey = text.match(/(?:^|\n)\s*(?:old_)?key\s*:\s*"([^"]+)"/i)
-    if (yamlCert && yamlKey) {
+    if (yamlKey && (yamlFull || yamlCert)) {
+      const certPath = firstReadableCert([yamlFull?.[1], yamlCert?.[1]])
       add({
-        name: path.basename(yamlCert[1], '.crt') || 'fnOS',
-        certPath: yamlCert[1],
+        name: path.basename(certPath || yamlCert?.[1] || '', path.extname(certPath || yamlCert?.[1] || '')) || 'fnOS',
+        certPath,
         keyPath: yamlKey[1],
+        fromGateway,
       })
     }
   }
 
-  // 扫描证书目录：/usr/trim/var/trim_connect/ssls/<name>/<ts>/<name>.crt
+  // 扫描：/usr/trim/var/trim_connect/ssls/<name>/<timestamp>/…
+  // 同域名多版本时优先数字时间戳更大的目录；证书优先 fullchain.*
   try {
     if (fs.existsSync(FNOS_SSLS_ROOT)) {
       for (const name of fs.readdirSync(FNOS_SSLS_ROOT)) {
@@ -272,32 +327,52 @@ export function listFeiniuCertificates() {
         if (!st.isDirectory()) continue
         let versions = []
         try { versions = fs.readdirSync(domainDir) } catch { continue }
+        versions.sort((a, b) => {
+          const na = Number(a)
+          const nb = Number(b)
+          if (Number.isFinite(na) && Number.isFinite(nb)) return nb - na
+          return String(b).localeCompare(String(a))
+        })
         for (const ver of versions) {
           const dir = path.join(domainDir, ver)
           try {
             if (!fs.statSync(dir).isDirectory()) continue
           } catch { continue }
-          const candidates = [
-            path.join(dir, `${name}.crt`),
+          const certPath = firstReadableCert([
             path.join(dir, 'fullchain.crt'),
+            path.join(dir, 'fullchain.pem'),
+            path.join(dir, `${name}.crt`),
+            path.join(dir, `${name}.pem`),
             path.join(dir, 'cert.crt'),
-          ]
-          const keyCandidates = [
+            path.join(dir, 'cert.pem'),
+          ])
+          const keyPath = firstReadableKey([
             path.join(dir, `${name}.key`),
+            path.join(dir, 'privkey.pem'),
             path.join(dir, 'private.key'),
             path.join(dir, 'cert.key'),
-          ]
-          const certPath = candidates.find(readableFile)
-          const keyPath = keyCandidates.find(readableFile)
-          if (certPath && keyPath) add({ name, certPath, keyPath })
+            path.join(dir, `${name}.pem`),
+          ])
+          if (certPath && keyPath && certPath !== keyPath) {
+            add({ name, certPath, keyPath })
+            // 已找到该域名最新可用版本，不再扫更旧时间戳
+            break
+          }
         }
       }
     }
   } catch {}
 
   return [...byKey.values()]
-    .sort((a, b) => a.name.localeCompare(b.name))
-    .map(({ name, certPath, keyPath, source }) => ({ name, certPath, keyPath, source }))
+    .sort((a, b) => scoreCertEntry(b) - scoreCertEntry(a) || a.name.localeCompare(b.name))
+    .map(({ name, certPath, keyPath, source, used, fromGateway }) => ({
+      name,
+      certPath,
+      keyPath,
+      source,
+      used: Boolean(used),
+      fromGateway: Boolean(fromGateway),
+    }))
 }
 
 function resolveFeiniuPair(certName) {
@@ -309,10 +384,15 @@ function resolveFeiniuPair(certName) {
     if (exact) return exact
     const fuzzy = list.find((c) => c.name.toLowerCase() === want.toLowerCase())
     if (fuzzy) return fuzzy
+    // 域名包含匹配（如证书目录名与入口域名略有差异）
+    const contain = list.find((c) =>
+      c.name.toLowerCase().includes(want.toLowerCase())
+      || want.toLowerCase().includes(c.name.toLowerCase()),
+    )
+    if (contain) return contain
   }
-  // 优先非系统默认名
-  const prefer = list.find((c) => !/^fnos$/i.test(c.name)) || list[0]
-  return prefer
+  // 已按 score 排序：gateway / used / fullchain / 非 fnOS 优先
+  return list[0]
 }
 
 /**
@@ -339,8 +419,9 @@ export function resolveTlsListen() {
         certPath = copied.certPath
         keyPath = copied.keyPath
         try {
+          // 保持 auto（null）语义，勿把首次成功启动写成强制 enabled:true
           const snap = {
-            enabled: cfg.enabled === false ? false : true,
+            enabled: cfg.enabled === false ? false : cfg.enabled === true ? true : null,
             source: 'feiniu',
             certName,
             certPath,
@@ -349,9 +430,13 @@ export function resolveTlsListen() {
           fs.mkdirSync(configRoot(), { recursive: true })
           fs.writeFileSync(httpsConfigPath(), `${JSON.stringify(snap, null, 2)}\n`, 'utf8')
         } catch {}
-      } catch {
+      } catch (e) {
+        // 复制失败时仍可直接读系统路径（权限允许时）
         certPath = pair.certPath
         keyPath = pair.keyPath
+        try {
+          console.warn(`[https] 复制飞牛证书到配置目录失败，尝试直读系统路径: ${e?.message || e}`)
+        } catch {}
       }
     }
   }
