@@ -37,49 +37,78 @@
         </div>
         <div class="modal-body">
           <p class="lead">
-            忘记密码时，请在 NAS 上用脚本<b>只重置登录密码</b>。
-            不会清空歌单、收藏、下载任务或音乐文件。
+            忘记密码时，要在 <b>NAS 的命令行</b>里执行一条命令，<b>只改登录密码</b>。
+            不会清空歌单、收藏、下载任务或音乐文件。文件管理器里点来点去<b>无法</b>改这个密码。
           </p>
 
           <section class="step">
-            <h3>1. 先确认账号名</h3>
-            <p>常见管理员账号是安装后改过的名字；若从未改过，首次默认可能是 <code>admin123</code>。</p>
-            <p>不确定时，可在 SSH 里先列出全部账号（不会改密码）：</p>
-            <pre class="cmd">PATH=/var/apps/nodejs_v22/target/bin:$PATH CONFIG_PATH=/vol1/@appconf/lemon-music/config node /var/apps/lemon-music/target/scripts/reset-password.js --list</pre>
+            <h3>先分清两套账号</h3>
+            <ul>
+              <li><b>飞牛系统账号</b>：登录飞牛网页 / SSH 用的，一般是装 NAS 时设的管理员。</li>
+              <li><b>柠檬音乐账号</b>：登录本页用的。首次默认多为 <code>admin123</code>，你改过用户名就要用新名字。</li>
+            </ul>
+            <p>下面命令里的「用户名 / 新密码」指的是<b>柠檬音乐账号</b>；SSH 登录用的是<b>飞牛系统账号</b>。</p>
           </section>
 
           <section class="step">
-            <h3>2. 用飞牛 SSH 重置密码</h3>
-            <p>打开飞牛的 SSH / 终端，把下面命令里的 <code>用户名</code> 和 <code>新密码</code> 换成你的，再执行：</p>
-            <pre class="cmd">PATH=/var/apps/nodejs_v22/target/bin:$PATH CONFIG_PATH=/vol1/@appconf/lemon-music/config node /var/apps/lemon-music/target/scripts/reset-password.js 用户名 新密码</pre>
+            <h3>方式一：在飞牛网页里操作（推荐，不用装软件）</h3>
+            <ol>
+              <li>用<b>电脑浏览器</b>打开飞牛系统（手机 App 里通常没有完整终端）。</li>
+              <li>打开 <b>控制面板 → 终端</b>（有的版本叫「SSH」或「终端服务」）。若 SSH 是关的，先打开「允许 SSH」，保存。</li>
+              <li>再打开飞牛的 <b>「终端」</b>应用（或控制面板里的网页终端），用<b>飞牛系统账号</b>登录。看到类似 <code>#</code> 或 <code>$</code> 的提示符即可。</li>
+              <li>飞牛终端里<b>不要</b>输入 <code>npm ...</code>（系统没有 npm，会报 <code>command not found</code>）。整行复制下面这条即可：</li>
+            </ol>
+            <pre class="cmd">PATH=/var/apps/nodejs_v22/target/bin:$PATH CONFIG_PATH=/vol1/@appdata/lemon-music/config node /var/apps/lemon-music/target/scripts/reset-password.js --list</pre>
+            <p>记住列表里的用户名，再执行重置（把 <code>用户名</code> 和 <code>新密码</code> 换成你的；新密码建议字母+数字，不要空格、不要中文）：</p>
+            <pre class="cmd">PATH=/var/apps/nodejs_v22/target/bin:$PATH CONFIG_PATH=/vol1/@appdata/lemon-music/config node /var/apps/lemon-music/target/scripts/reset-password.js 用户名 新密码</pre>
+            <p>示例：账号是 <code>admin</code>、新密码是 <code>MyPass123</code>，最后两段写成 <code>admin MyPass123</code>。</p>
+          </section>
+
+          <section class="step">
+            <h3>方式二：电脑外部终端连到 NAS</h3>
+            <p>适合已经开了 SSH、习惯用电脑连 NAS 的情况。工具任选其一：</p>
             <ul>
-              <li>示例：用户名为 <code>admin</code>、新密码为 <code>MyPass123</code> 时，最后两段写成 <code>admin MyPass123</code>。</li>
-              <li>配置目录不在 <code>vol1</code> 时，请把 <code>CONFIG_PATH</code> 改成实际路径（账号在 <code>lx-music.db</code> 里）。</li>
-              <li>依赖应用中心的 <b>Node.js v22</b>；若提示找不到 <code>node</code>，请确认已安装并勾选依赖。</li>
+              <li><b>Windows 11</b>：开始菜单搜「终端」或「PowerShell」（也可用 PuTTY）。</li>
+              <li><b>Windows 10</b>：开始菜单搜「cmd」或「PowerShell」。</li>
+              <li><b>Mac</b>：启动台 → 其他 → 终端。</li>
+              <li><b>Linux</b>：系统自带终端。</li>
+            </ul>
+            <p>先连上 NAS（把 IP 和飞牛用户名换成你的，例如 <code>192.168.1.8</code>）：</p>
+            <pre class="cmd">ssh 飞牛用户名@NAS的IP地址</pre>
+            <p>提示输入密码时，输入<b>飞牛系统密码</b>（输入时屏幕往往不显示圆点，直接打完回车即可）。连上后再粘贴上面的 <code>--list</code> / 重置命令。</p>
+          </section>
+
+          <section class="step">
+            <h3>命令失败时看这里</h3>
+            <ul>
+              <li>提示 <code>npm: command not found</code>：这是正常的。飞牛请用上面那条以 <code>PATH=/var/apps/nodejs_v22</code> 开头的命令，不要用 <code>npm</code>。</li>
+              <li>提示找不到 <code>node</code>：到飞牛<b>应用中心</b>安装 <b>Node.js v22</b>，并确认柠檬音乐依赖了它，然后重试。</li>
+              <li>提示找不到配置、或显示「没有任何用户」：配置在 <code>@appdata</code>，不是 <code>@appconf</code>。也可能不在 vol1。把命令里的路径改成实际卷，例如 <code>/vol2/@appdata/lemon-music/config</code>。也可执行 <code>find /vol1 /vol2 -name "lx-music.db"</code> 查找。</li>
+              <li>提示没有权限：用飞牛<b>管理员</b>账号登录终端，不要用普通用户。</li>
             </ul>
           </section>
 
           <section class="step">
-            <h3>3. 自托管（非飞牛）时</h3>
-            <p>在项目目录执行：</p>
-            <pre class="cmd">npm run auth:reset-password -- 用户名 新密码</pre>
-            <p>同样可用 <code>--list</code> 查看账号列表。</p>
+            <h3>自托管（不是飞牛、自己跑的项目）</h3>
+            <p>仅限自己在电脑上跑源码的情况。<b>飞牛 NAS 不要用下面两条</b>：</p>
+            <pre class="cmd">npm run auth:reset-password -- --list
+npm run auth:reset-password -- 用户名 新密码</pre>
           </section>
 
           <section class="step">
-            <h3>4. 重置后如何重新登录</h3>
+            <h3>重置成功后</h3>
             <ol>
-              <li>回到本登录页，用「用户名 + 新密码」登录。</li>
-              <li>若浏览器仍自动用旧会话登录失败，请清除本站 Cookie / 站点数据，或换无痕窗口再试。</li>
-              <li>登录成功后，可在「设置 → 账号管理」再次修改密码；管理员也可在此为其他用户重置密码。</li>
+              <li>回到本登录页，用柠檬音乐「用户名 + 新密码」登录。</li>
+              <li>若还是登不进去，用浏览器无痕窗口，或清除本站 Cookie / 站点数据后再试。</li>
+              <li>登录后可在「设置 → 账号管理」再改密码；管理员也可在那里给别人重置（那就不用命令行了）。</li>
             </ol>
           </section>
 
           <section class="step warn">
             <h3>请不要这样做</h3>
             <ul>
-              <li>不要为了找回密码去清空用户数据、删除配置目录或卸载并抹掉数据——那样会丢掉歌单与设置。</li>
-              <li>不要把新密码发给不可信的人；命令只在你自己的 NAS 上执行即可。</li>
+              <li>不要为了找回密码去清空用户数据、删配置目录，或卸载时勾选抹掉数据——歌单和设置会一起没。</li>
+              <li>命令只在你自己的 NAS / 电脑上执行；不要把新密码发给陌生人。</li>
             </ul>
           </section>
         </div>

@@ -533,6 +533,7 @@ function applyLocalUserData({
     writeJson(recentKey(), recent)
   }
   if (revision !== undefined) writeLocalRevision(revision)
+  bumpPlaylistCardsRevision()
 }
 
 async function saveUserDataToServer() {
@@ -569,14 +570,24 @@ function persistUserDataNow() {
   return saveUserDataToServer()
 }
 
+/** 歌单卡片本地快照版本：收藏/歌单变更后递增，页面据此重算数量与封面 */
+export const playlistCardsRevision = ref(0)
+
+function bumpPlaylistCardsRevision() {
+  playlistCardsCacheState = null
+  playlistCardsRevision.value += 1
+}
+
 function persistPlaylists() {
   writeJson(playlistsKey(), customPlaylists.value)
   scheduleUserDataPersist()
+  bumpPlaylistCardsRevision()
 }
 
 function persistFavorites() {
   writeJson(favoritesKey(), favorites.value)
   scheduleUserDataPersist()
+  bumpPlaylistCardsRevision()
 }
 
 function persistFavoriteAlbums() {
@@ -592,6 +603,7 @@ function persistFavoriteArtists() {
 function persistRecent() {
   writeJson(recentKey(), recentPlays.value)
   scheduleUserDataPersist()
+  bumpPlaylistCardsRevision()
 }
 
 let libraryApi = null
@@ -634,6 +646,7 @@ function applyRemoteUserData({
     writeJson(recentKey(), recent)
   }
   if (revision !== undefined) writeLocalRevision(revision)
+  bumpPlaylistCardsRevision()
 }
 
 function scheduleUserDataPersist() {
@@ -1170,7 +1183,9 @@ function buildPlaylistCardsUncached(allTracks, { limit } = {}) {
     else if (card.id === 'favorites') tracks = resolveTracksByKeys(favorites.value.map(f => f.key), allTracks, favorites.value)
     else if (card.id === 'roam') tracks = resolveRoamTracks(allTracks)
     // random-start 为入口卡，无固定曲目
+    // 收藏清空后回退渐变心形，避免残留旧封面
     const useGradientStyle = GRADIENT_CARD_IDS.has(card.id)
+      || (card.id === 'favorites' && tracks.length === 0)
     const coverUrls = useGradientStyle ? [] : getPlaylistCoverUrls({ coverMode: 'auto' }, tracks)
     return {
       ...card,
@@ -1232,6 +1247,25 @@ export function buildPlaylistCards(allTracks, { limit } = {}) {
   const cards = buildPlaylistCardsUncached(allTracks, { limit })
   playlistCardsCacheState = { ...state, cards }
   return cards
+}
+
+/** 用现有卡片里的曲目工作集就地重算（取消收藏后立即刷新数量/封面，不必再打接口） */
+export function rebuildPlaylistCardsLocal(existingCards = [], { limit } = {}) {
+  playlistCardsCacheState = null
+  const byKey = new Map()
+  for (const card of existingCards || []) {
+    for (const t of card?.tracks || []) {
+      const k = getLibraryTrackKey(t)
+      if (k) byKey.set(k, t)
+    }
+  }
+  for (const f of favorites.value) {
+    if (f?.key && !byKey.has(f.key)) byKey.set(f.key, f)
+  }
+  for (const r of recentPlays.value) {
+    if (r?.key && !byKey.has(r.key)) byKey.set(r.key, r)
+  }
+  return buildPlaylistCards([...byKey.values()], { limit })
 }
 
 export const PLAYLIST_SORT_OPTIONS = [
@@ -1867,6 +1901,7 @@ function persistRoamTracks() {
       .filter(Boolean)
     localStorage.setItem(roamTracksKey(), JSON.stringify(slim))
   } catch {}
+  bumpPlaylistCardsRevision()
 }
 
 function loadRoamTracks() {
@@ -2018,25 +2053,133 @@ function mergeLibraryTracks(newTracks) {
   libraryTracks.value = sortTracksByMtime([...map.values()])
 }
 
+function normalizeLocalPathKey(p) {
+  return String(p || '').replace(/\\/g, '/').toLowerCase()
+}
+
+function localRefMatchesRemoved(entry, removed, removedNorm) {
+  if (!entry) return false
+  const key = String(entry.key || '')
+  const fp = String(entry.filePath || entry.localPath || '')
+  if (key.startsWith('local:')) {
+    const p = key.slice(6)
+    if (removed.has(p) || removedNorm.has(normalizeLocalPathKey(p))) return true
+  }
+  if (fp && (removed.has(fp) || removedNorm.has(normalizeLocalPathKey(fp)))) return true
+  return false
+}
+
+/**
+ * 文件已从磁盘/索引移除后，同步清掉收藏、最近播放、漫游、自定义歌单里的幽灵本地引用，
+ * 避免每日推荐 / 漫游仍带进已删歌曲。
+ */
+export function pruneLocalPlayRefs(filePaths) {
+  const raw = (filePaths || []).filter(Boolean).map(String)
+  if (!raw.length) return { favorites: 0, recent: 0, roam: 0, playlists: 0 }
+  const removed = new Set(raw)
+  const removedNorm = new Set(raw.map(normalizeLocalPathKey))
+  const goneKeys = new Set()
+  for (const p of raw) {
+    goneKeys.add(`local:${p}`)
+    goneKeys.add(`local:${p.replace(/\\/g, '/')}`)
+  }
+
+  let favN = 0
+  const nextFav = favorites.value.filter((f) => {
+    if (localRefMatchesRemoved(f, removed, removedNorm) || goneKeys.has(String(f.key || ''))) {
+      favN += 1
+      return false
+    }
+    return true
+  })
+  if (favN) {
+    favorites.value = nextFav
+    persistFavorites()
+  }
+
+  let recentN = 0
+  const nextRecent = recentPlays.value.filter((r) => {
+    if (localRefMatchesRemoved(r, removed, removedNorm) || goneKeys.has(String(r.key || ''))) {
+      recentN += 1
+      return false
+    }
+    return true
+  })
+  if (recentN) {
+    recentPlays.value = nextRecent
+    persistRecent()
+  }
+
+  let roamN = 0
+  const nextRoam = roamTracks.value.filter((t) => {
+    if (localRefMatchesRemoved(t, removed, removedNorm) || goneKeys.has(getLibraryTrackKey(t) || '')) {
+      roamN += 1
+      return false
+    }
+    return true
+  })
+  if (roamN) {
+    roamTracks.value = nextRoam
+    persistRoamTracks()
+  }
+
+  let plN = 0
+  let playlistsChanged = false
+  const nextPlaylists = customPlaylists.value.map((pl) => {
+    const normalized = normalizePlaylist(pl)
+    const keys = normalized.trackKeys || []
+    const nextKeys = keys.filter((k) => {
+      if (goneKeys.has(k)) return false
+      if (String(k).startsWith('local:')) {
+        const p = k.slice(6)
+        if (removed.has(p) || removedNorm.has(normalizeLocalPathKey(p))) return false
+      }
+      return true
+    })
+    if (nextKeys.length === keys.length) return pl
+    plN += keys.length - nextKeys.length
+    playlistsChanged = true
+    const snaps = { ...(normalized.trackSnapshots || {}) }
+    for (const k of keys) {
+      if (!nextKeys.includes(k)) delete snaps[k]
+    }
+    return { ...normalized, trackKeys: nextKeys, trackSnapshots: snaps }
+  })
+  if (playlistsChanged) {
+    customPlaylists.value = nextPlaylists
+    persistPlaylists()
+  }
+
+  return { favorites: favN, recent: recentN, roam: roamN, playlists: plN }
+}
+
 export function removeLibraryTracks(filePaths) {
   const raw = (filePaths || []).filter(Boolean).map(String)
   if (!raw.length) return 0
   const removed = new Set(raw)
   // Windows 路径大小写 / 正反斜杠不一致时也尽量命中
-  const removedNorm = new Set(raw.map((p) => p.replace(/\\/g, '/').toLowerCase()))
+  const removedNorm = new Set(raw.map(normalizeLocalPathKey))
   const before = libraryTracks.value.length
   libraryTracks.value = libraryTracks.value.filter((t) => {
     const fp = String(t.filePath || '')
     const lp = String(t.localPath || '')
     if (removed.has(fp) || removed.has(lp)) return false
-    const nfp = fp.replace(/\\/g, '/').toLowerCase()
-    const nlp = lp.replace(/\\/g, '/').toLowerCase()
+    const nfp = normalizeLocalPathKey(fp)
+    const nlp = normalizeLocalPathKey(lp)
     if (removedNorm.has(nfp) || removedNorm.has(nlp)) return false
     return true
   })
   const n = before - libraryTracks.value.length
   if (n > 0) saveSessionTracks(libraryTracks.value)
   libraryTrackTotal.value = Math.max(0, libraryTrackTotal.value - raw.length)
+  // 清掉收藏/最近/漫游/歌单中的幽灵本地曲，并通知推荐卡片刷新
+  pruneLocalPlayRefs(raw)
+  try {
+    import('./libraryMix.js').then((m) => m.pruneMixLocalTracks?.(raw)).catch(() => {})
+  } catch {}
+  try {
+    import('./player.js').then((m) => m.pruneQueueLocalTracks?.(raw)).catch(() => {})
+  } catch {}
   // 即使工作集没命中路径，服务端已删索引 → 仍刷新首页专辑/歌手预览
   bumpLibraryBrowseRevision()
   return n

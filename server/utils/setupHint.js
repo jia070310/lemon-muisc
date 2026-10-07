@@ -49,8 +49,9 @@ export function writeSetupHint(configPath, {
         '  在登录页点击「忘记密码」，按提示操作。',
         '',
       ]),
-    '方式二：命令行重置（NAS SSH）',
-    `  CONFIG_PATH="${configPath}" npm run auth:reset-password -- ${username} 新密码`,
+    '方式二：命令行重置（飞牛不要用 npm，系统里没有）',
+    `  PATH=/var/apps/nodejs_v22/target/bin:$PATH CONFIG_PATH="${configPath}" node /var/apps/lemon-music/target/scripts/reset-password.js ${username} 新密码`,
+    '  配置一般在 /volX/@appdata/lemon-music/config（不是 @appconf）。可先加 --list 查看账号。',
     '',
     '安全提示：',
     '  · 本文件不含密码。',
@@ -84,8 +85,8 @@ export function writeLocalCredentials(configPath, { username, password, displayN
     '此文件在初始化时由你选择的「本地保存账号」方式生成，忘记密码时可查看。',
     '请妥善保管，切勿分享给他人、上传到公网或放入共享文件夹。',
     '',
-    '若丢失此文件，可在服务器执行：',
-    `  CONFIG_PATH="${configPath}" npm run auth:reset-password -- ${username} 新密码`,
+    '若丢失此文件，可在飞牛终端执行（不要用 npm）：',
+    `  PATH=/var/apps/nodejs_v22/target/bin:$PATH CONFIG_PATH="${configPath}" node /var/apps/lemon-music/target/scripts/reset-password.js ${username} 新密码`,
     '',
   ]
 

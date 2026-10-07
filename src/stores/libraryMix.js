@@ -151,17 +151,39 @@ function fromSnapshot(s) {
   }
 }
 
+/** 本地曲若不在当前音乐库索引中，视为已删幽灵，不进推荐池 */
+function isGhostLocalTrack(t, libraryKeys) {
+  const k = trackKey(t)
+  if (!k) return true
+  if (libraryKeys.has(k)) return false
+  const src = String(t?.source || '')
+  const localPath = t?.localPath || t?.filePath || ''
+  if (src === 'local' || localPath || k.startsWith('local:')) return true
+  return false
+}
+
 function mergePool(extra = []) {
   const map = new Map()
-  const push = (t) => {
+  const libraryKeys = new Set()
+  const push = (t, { requireInLibrary = false } = {}) => {
     const k = trackKey(t)
     if (!k || map.has(k)) return
+    if (requireInLibrary && isGhostLocalTrack(t, libraryKeys)) return
     map.set(k, t)
   }
-  for (const t of libraryTracks.value) push(t)
-  for (const t of extra) push(t)
-  for (const s of favorites.value) push(fromSnapshot(s))
-  for (const s of recentPlays.value) push(fromSnapshot(s))
+  for (const t of libraryTracks.value) {
+    const k = trackKey(t)
+    if (k) libraryKeys.add(k)
+    push(t)
+  }
+  for (const t of extra) {
+    const k = trackKey(t)
+    if (k) libraryKeys.add(k)
+    push(t)
+  }
+  // 收藏/最近仅作偏好信号；本地曲必须仍在库中，避免已删文件进每日推荐/漫游
+  for (const s of favorites.value) push(fromSnapshot(s), { requireInLibrary: true })
+  for (const s of recentPlays.value) push(fromSnapshot(s), { requireInLibrary: true })
   return [...map.values()]
 }
 
@@ -204,8 +226,13 @@ function resolveByKeys(keys, pool) {
 }
 
 function buildDaily(pool, seed) {
-  const fav = favorites.value.map(fromSnapshot).filter(t => trackKey(t))
-  const recent = recentPlays.value.map(fromSnapshot).filter(t => trackKey(t))
+  const libraryKeys = new Set(pool.map(trackKey).filter(Boolean))
+  const fav = favorites.value
+    .map(fromSnapshot)
+    .filter((t) => trackKey(t) && !isGhostLocalTrack(t, libraryKeys))
+  const recent = recentPlays.value
+    .map(fromSnapshot)
+    .filter((t) => trackKey(t) && !isGhostLocalTrack(t, libraryKeys))
   const favPick = shufflePick(fav, 12, `${seed}-fav`)
   const recentPick = shufflePick(recent.filter(t => !favPick.some(f => trackKey(f) === trackKey(t))), 10, `${seed}-recent`)
   const used = new Set([...favPick, ...recentPick].map(trackKey))
@@ -227,6 +254,63 @@ function buildDaily(pool, seed) {
     if (mixed.length >= DAILY_SIZE) break
   }
   return mixed
+}
+
+/** 磁盘文件删除后，立刻从每日推荐/推荐歌单卡片里去掉对应本地曲 */
+export function pruneMixLocalTracks(filePaths) {
+  const raw = (filePaths || []).filter(Boolean).map(String)
+  if (!raw.length) return 0
+  const goneKeys = new Set()
+  const goneNorm = new Set(raw.map((p) => p.replace(/\\/g, '/').toLowerCase()))
+  for (const p of raw) {
+    goneKeys.add(`local:${p}`)
+    goneKeys.add(`local:${p.replace(/\\/g, '/')}`)
+  }
+  const isGone = (t) => {
+    const k = trackKey(t)
+    if (k && goneKeys.has(k)) return true
+    const fp = String(t?.filePath || t?.localPath || '')
+    if (!fp) return false
+    if (raw.includes(fp)) return true
+    return goneNorm.has(fp.replace(/\\/g, '/').toLowerCase())
+  }
+  let n = 0
+  if (dailyMix.value?.tracks?.length) {
+    const before = dailyMix.value.tracks.length
+    const tracks = dailyMix.value.tracks.filter((t) => !isGone(t))
+    n += before - tracks.length
+    if (tracks.length !== before) {
+      dailyMix.value = {
+        ...dailyMix.value,
+        tracks,
+        count: tracks.length,
+        durationText: formatDurationSum(tracks),
+        themeText: tracks.length ? themeLine(tracks) : '',
+      }
+      if (dailyMix.value.dateKey) {
+        persist(`lemon-mix-daily:${userKey()}:${dailyMix.value.dateKey}`, {
+          keys: tracks.map(trackKey),
+          at: Date.now(),
+        })
+      }
+    }
+  }
+  if (recoPlaylists.value?.length) {
+    recoPlaylists.value = recoPlaylists.value.map((card) => {
+      if (card?.network || !card?.tracks?.length) return card
+      const before = card.tracks.length
+      const tracks = card.tracks.filter((t) => !isGone(t))
+      if (tracks.length === before) return card
+      n += before - tracks.length
+      return {
+        ...card,
+        tracks,
+        count: tracks.length,
+        durationText: formatDurationSum(tracks),
+      }
+    })
+  }
+  return n
 }
 
 function buildThemed(pool, size, seed, pred) {

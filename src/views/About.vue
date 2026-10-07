@@ -307,26 +307,34 @@
     <section v-if="isAdminUser" class="about-admin">
       <h2 class="section-title about-admin-heading">账号恢复</h2>
       <p class="account-info-text account-intro">
-        忘记管理员密码时，用下面命令<b>只重置登录密码</b>，不会清空歌单、收藏、下载任务或音乐文件。账号在 <code>lx-music.db</code>（飞牛默认 <code>/vol1/@appconf/lemon-music/config/</code>）。仍记得密码时，也可在「设置 → 账号管理」改密或给其他用户重置。
+        忘记管理员密码时，要在 <b>NAS 命令行</b>里执行，<b>只改登录密码</b>，不会清空歌单、收藏或音乐文件。
+        文件管理器改不了这个密码。仍记得密码时，直接去「设置 → 账号管理」改即可。
       </p>
       <div class="account-actions">
         <div class="account-action card">
-          <h3 class="action-title">重置管理员密码</h3>
-          <p class="action-desc">飞牛 SSH（把 <code>admin</code> 和 <code>新密码</code> 换成实际账号；配置不在 vol1 时改 CONFIG_PATH）：</p>
+          <h3 class="action-title">怎么打开命令行</h3>
+          <p class="action-desc"><b>飞牛网页（推荐）</b>：电脑打开飞牛 → 控制面板开启 SSH → 打开「终端」应用，用<b>飞牛系统账号</b>登录。</p>
+          <p class="action-desc"><b>电脑外部终端</b>：Windows 用「终端 / PowerShell」，Mac / Linux 用自带「终端」，执行 <code>ssh 飞牛用户名@NAS的IP</code>，密码是飞牛系统密码。</p>
+          <p class="action-desc">飞牛终端里<b>不要用 npm</b>。配置一般在 <code>@appdata</code>（不是 <code>@appconf</code>）。先列出柠檬音乐账号，再把 <code>用户名</code>、<code>新密码</code> 换成柠檬音乐账号。不在 vol1 时改路径。需已安装应用中心 <b>Node.js v22</b>。</p>
           <div class="cmd-wrap">
-            <span class="cmd-label">飞牛 NAS</span>
-            <pre class="cmd-block">PATH=/var/apps/nodejs_v22/target/bin:$PATH CONFIG_PATH=/vol1/@appconf/lemon-music/config node /var/apps/lemon-music/target/scripts/reset-password.js admin 新密码</pre>
+            <span class="cmd-label">列出账号</span>
+            <pre class="cmd-block">PATH=/var/apps/nodejs_v22/target/bin:$PATH CONFIG_PATH=/vol1/@appdata/lemon-music/config node /var/apps/lemon-music/target/scripts/reset-password.js --list</pre>
           </div>
-          <p class="action-desc">自托管项目目录：</p>
+          <div class="cmd-wrap">
+            <span class="cmd-label">重置密码</span>
+            <pre class="cmd-block">PATH=/var/apps/nodejs_v22/target/bin:$PATH CONFIG_PATH=/vol1/@appdata/lemon-music/config node /var/apps/lemon-music/target/scripts/reset-password.js 用户名 新密码</pre>
+          </div>
+          <p class="action-desc">自托管（电脑项目目录；<b>飞牛不要用 npm</b>，会提示 command not found）：</p>
           <div class="cmd-wrap">
             <span class="cmd-label">终端命令</span>
-            <pre class="cmd-block">npm run auth:reset-password -- 用户名 新密码</pre>
+            <pre class="cmd-block">npm run auth:reset-password -- --list
+npm run auth:reset-password -- 用户名 新密码</pre>
           </div>
         </div>
       </div>
       <p class="account-tip">
         <span class="account-tip-icon" aria-hidden="true">ℹ</span>
-        加 <code>--list</code> 可查看用户名。执行后请刷新页面；若仍自动登录，请清除本站登录缓存。不要用清空用户数据的方式来找回密码。
+        账号在 <code>lx-music.db</code>（飞牛默认 <code>/vol1/@appdata/lemon-music/config/</code>，不是 <code>@appconf</code>）。若提示没有任何用户，请用 <code>find /vol1 /vol2 -name "lx-music.db"</code> 找对目录。执行后刷新登录页；若仍自动登录，清除本站 Cookie 或用无痕窗口。
       </p>
     </section>
 

@@ -61,3 +61,21 @@ export function isMobileUiContext(maxWidth = 860) {
   } catch {}
   return isTouchMobileDevice()
 }
+
+/**
+ * 弱网 / 流量环境（蜂窝、省流、2g/3g）。
+ * 用于拉长开播等待、压低试听音质，减轻手机流量下卡死与连跳。
+ */
+export function isConstrainedNetwork() {
+  if (typeof navigator === 'undefined') return false
+  try {
+    const c = navigator.connection || navigator.mozConnection || navigator.webkitConnection
+    if (!c) return false
+    if (c.saveData) return true
+    const type = String(c.type || '').toLowerCase()
+    if (type === 'cellular') return true
+    const eff = String(c.effectiveType || '').toLowerCase()
+    if (eff === 'slow-2g' || eff === '2g' || eff === '3g') return true
+  } catch {}
+  return false
+}

@@ -35,6 +35,7 @@ import { platformLabel, PLATFORM_LABELS } from '../utils/platforms.js'
 import { QUALITY_LABELS, QUALITY_ORDER, getQualityLabel } from '../utils/quality.js'
 import { isPwaStandalone } from '../utils/pwa.js'
 import { logRuntime, snapshotAudioError } from '../utils/runtimeLog.js'
+import { isConstrainedNetwork, isTouchMobileDevice } from '../utils/device.js'
 
 function logPlayerIssue(level, message, extra = {}) {
   const { item: extraItem, ...rest } = extra
@@ -352,6 +353,9 @@ let inited = false
 let hasMediaSrc = false
 /** 进度跳转进行中：error 时勿立刻弹「链接失效」，交给 commitSeek 恢复 */
 let seekInProgress = false
+/** 中途 audio.error 自动跳歌，防抖避免连触发 */
+let mediaErrorAutoSkipInFlight = false
+let mediaErrorAutoSkipTimer = null
 /** 用户正在拖进度条：timeupdate 勿覆盖预览进度/歌词 */
 let uiScrubbing = false
 let seekRecoverToken = 0
@@ -1049,8 +1053,9 @@ export function normalizePlayQuality(raw) {
 
 export function getPlayQuality() {
   const q = normalizePlayQuality(playQuality.value)
-  // 流畅模式：在线试听也压到 128k，避免无线 CarPlay 再拉高码率流
-  if (smoothStreamEnabled.value) {
+  // 流畅模式 / 手机流量：压到 128k，降低取链失败与卡顿
+  const capCellular = !smoothStreamEnabled.value && isConstrainedNetwork()
+  if (smoothStreamEnabled.value || capCellular) {
     const idx = QUALITY_ORDER.indexOf(q)
     const capIdx = QUALITY_ORDER.indexOf('128k')
     if (idx >= 0 && capIdx >= 0 && idx < capIdx) return '128k'
@@ -1176,11 +1181,16 @@ function bindAudioElementEvents(el) {
     endPlaybackBuffer()
     // 跳进度中的失败交给 seek 恢复逻辑，避免立刻弹「链接失效」并卡死
     if (seekInProgress) return
-    isPaused.value = true
     const raw = getAudioElementError(el) || '音频加载失败，请尝试其他歌曲'
     playerError.value = formatPlayClientError(new Error(raw)) || raw
     loadingPlay.value = null
     logPlayerIssue('error', raw, { event: 'audio.error' })
+    // 弱网/流量中途断流：自动跳下一首，避免整列表卡在暂停
+    if (playQueue.value.length > 1 && !mediaErrorAutoSkipInFlight) {
+      scheduleMediaErrorAutoSkip(raw)
+      return
+    }
+    isPaused.value = true
   })
 }
 
@@ -2163,6 +2173,25 @@ function maybeRefillRoamQueue() {
   saveQueueState()
 }
 
+function scheduleMediaErrorAutoSkip(reason = '') {
+  if (mediaErrorAutoSkipTimer) clearTimeout(mediaErrorAutoSkipTimer)
+  mediaErrorAutoSkipTimer = setTimeout(() => {
+    mediaErrorAutoSkipTimer = null
+    if (seekInProgress || mediaErrorAutoSkipInFlight) return
+    if (!playQueue.value.length) {
+      isPaused.value = true
+      return
+    }
+    mediaErrorAutoSkipInFlight = true
+    showPlayerNotice('网络中断，已跳过当前曲目', 4000)
+    logPlayerIssue('warn', reason || 'media error auto-skip', { event: 'audio.error.autoskip' })
+    Promise.resolve()
+      .then(() => playNextAuto())
+      .catch(() => { isPaused.value = true })
+      .finally(() => { mediaErrorAutoSkipInFlight = false })
+  }, 350)
+}
+
 async function playNextAuto() {
   try {
     const { isMoodRadioActive, playMoodRadioNext } = await import('./moodRadio.js')
@@ -2177,10 +2206,18 @@ async function playNextAuto() {
   }
   const maxSkip = Math.min(playQueue.value.length, 8)
   const tried = new Set()
+  let skipCount = 0
   for (let i = 0; i < maxSkip; i++) {
+    const prevIdx = currentQueueIndex.value
     const next = resolveNextIndex(true)
     if (next < 0) {
       isPaused.value = true
+      return
+    }
+    // 循环模式：已因失败跳过若干首后又绕回队首 → 停播，避免「只播几首又从头」
+    if (playMode.value === 'loop' && skipCount > 0 && next <= prevIdx) {
+      isPaused.value = true
+      showPlayerNotice('后续曲目暂时无法播放，已暂停', 5000)
       return
     }
     if (tried.has(next)) {
@@ -2193,11 +2230,13 @@ async function playNextAuto() {
       return
     } catch (e) {
       if (e?.aborted) return
+      skipCount += 1
       // 自动连播时跳过无法播放的曲目，继续下一首
       if (i === 0) showPlayerNotice('当前曲目无法播放，已跳过', 4000)
     }
   }
   isPaused.value = true
+  showPlayerNotice('连续多首无法播放，已暂停', 5000)
 }
 
 export async function loadCoverStyle() {
@@ -2425,13 +2464,14 @@ async function resolvePlayUrl(item, source, quality = getPlayQuality(), options 
     // APE 需服务端转码；流畅模式：高码率无损走 AAC 缓存流（车机/弱网）
     const filePath = getTrackFilePath(item)
     const ext = fileExtOf(filePath)
+    // 流量/弱网下本地无损默认转 AAC，避免手机拉整轨 FLAC 卡死
     const wantSmooth = Boolean(
       ext
       && !options.forceDirectLocal
       && (
         options.forceSmoothLocal
           ? LOCAL_REPAIR_EXTS.has(ext)
-          : (LOCAL_SMOOTH_EXTS.has(ext) && smoothStreamEnabled.value)
+          : (LOCAL_SMOOTH_EXTS.has(ext) && (smoothStreamEnabled.value || isConstrainedNetwork()))
       ),
     )
     const direct = buildLocalStreamUrl(item, { smooth: wantSmooth })
@@ -2443,7 +2483,7 @@ async function resolvePlayUrl(item, source, quality = getPlayQuality(), options 
     }
     const res = await api.play.getUrl({
       ...buildPlayPayload(item, 'local', quality),
-      ...((!options.forceDirectLocal && (smoothStreamEnabled.value || options.forceSmoothLocal)) ? { smooth: true } : {}),
+      ...((!options.forceDirectLocal && (smoothStreamEnabled.value || options.forceSmoothLocal || isConstrainedNetwork())) ? { smooth: true } : {}),
     }, { signal: options.signal })
     return res.url || ''
   }
@@ -2648,7 +2688,16 @@ function watchPlaybackKickstart({ intent, isLocal, url, item, source }) {
     }
 
     if (waited >= 12000) {
-      // 仍无进度：保持缓冲结束，让 waiting/error 或用户操作接手
+      // 仍无进度：弱网常见「一直 00:00」——结束缓冲并自动跳下一首
+      endPlaybackBuffer()
+      if (intent !== playIntentToken || token !== playbackKickToken) return
+      if (playQueue.value.length > 1) {
+        showPlayerNotice('加载过慢，已跳过当前曲目', 4000)
+        playNextAuto().catch(() => { isPaused.value = true })
+      } else {
+        isPaused.value = true
+        playerError.value = '音频加载过慢，请检查网络后重试'
+      }
       return
     }
     playbackKickTimer = setTimeout(tick, 250)
@@ -2726,8 +2775,87 @@ export async function startPlayTracks(tracks, sourceOverride = '', opts = {}) {
 
   activeDynamicList.value = opts.dynamic === false ? null : ROAM_PLAYLIST_ID
   if (currentQueueIndex.value >= playQueue.value.length) currentQueueIndex.value = -1
-  await playTrackAt(0)
+  try {
+    await playTrackAt(0)
+  } catch (e) {
+    if (e?.aborted) return
+    // 首曲失败（常见：本地文件已删）→ 自动向后跳，避免整列表报错停住
+    await playNextAuto()
+  }
   saveQueueState()
+}
+
+/** 本地文件删除后，从试听队列剔除幽灵曲目 */
+export function pruneQueueLocalTracks(filePaths) {
+  const raw = (filePaths || []).filter(Boolean).map(String)
+  if (!raw.length || !playQueue.value.length) return 0
+  const removed = new Set(raw)
+  const removedNorm = new Set(raw.map((p) => p.replace(/\\/g, '/').toLowerCase()))
+  const goneKeys = new Set()
+  for (const p of raw) {
+    goneKeys.add(`local:${p}`)
+    goneKeys.add(`local:${p.replace(/\\/g, '/')}`)
+  }
+  const prevIdx = currentQueueIndex.value
+  const curKey = playQueue.value[prevIdx]?.key || ''
+  const before = playQueue.value.length
+  playQueue.value = playQueue.value.filter((e) => {
+    const k = String(e?.key || '')
+    if (goneKeys.has(k)) return false
+    if (k.startsWith('local:')) {
+      const p = k.slice(6)
+      if (removed.has(p) || removedNorm.has(p.replace(/\\/g, '/').toLowerCase())) return false
+    }
+    const fp = getTrackFilePath(e?.item)
+    if (fp && (removed.has(fp) || removedNorm.has(fp.replace(/\\/g, '/').toLowerCase()))) return false
+    return true
+  })
+  const n = before - playQueue.value.length
+  if (!n) return 0
+  if (!playQueue.value.length) {
+    currentQueueIndex.value = -1
+    currentPlaying.value = null
+    isPaused.value = true
+    saveQueueState()
+    return n
+  }
+  const nextIdx = playQueue.value.findIndex((e) => e.key === curKey)
+  if (nextIdx >= 0) {
+    currentQueueIndex.value = nextIdx
+  } else {
+    // 当前曲被删：索引落在「下一首」的前一位，便于 playNextAuto 的 +1 播到正确曲目
+    currentQueueIndex.value = Math.min(Math.max(prevIdx, 0), playQueue.value.length) - 1
+  }
+  saveQueueState()
+  return n
+}
+
+function isMissingLocalFileError(error) {
+  const text = String(error?.message || error || '')
+  return /本地文件不存在|本地文件不可用|不在允许目录|文件不存在|本地文件加载失败|请检查文件是否还在音乐库/i.test(text)
+}
+
+async function handleMissingLocalPlayFailure(item, trackKey) {
+  const fp = getTrackFilePath(item)
+  const paths = []
+  if (fp) paths.push(fp)
+  if (String(trackKey || '').startsWith('local:')) paths.push(String(trackKey).slice(6))
+  const uniq = [...new Set(paths.filter(Boolean))]
+  if (uniq.length) {
+    try {
+      const { removeLibraryTracks } = await import('./library.js')
+      removeLibraryTracks(uniq)
+    } catch {
+      pruneQueueLocalTracks(uniq)
+    }
+  } else if (trackKey) {
+    const idx = playQueue.value.findIndex((e) => e.key === trackKey)
+    if (idx >= 0) {
+      playQueue.value.splice(idx, 1)
+      if (currentQueueIndex.value >= idx) currentQueueIndex.value = Math.max(-1, currentQueueIndex.value - 1)
+      saveQueueState()
+    }
+  }
 }
 
 export function removeFromQueue(index) {
@@ -2890,7 +3018,7 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 }
 
   async function tryPlayAtQuality(playItem, playSource, quality, { forceRefresh = false, forceDirectLocal = false, forceSmoothLocal = false } = {}) {
     const playKey = getTrackKey(playItem, playSource)
-    const cacheQuality = (isLocalTrack(playItem, playSource) && !forceDirectLocal && (smoothStreamEnabled.value || forceSmoothLocal))
+    const cacheQuality = (isLocalTrack(playItem, playSource) && !forceDirectLocal && (smoothStreamEnabled.value || forceSmoothLocal || isConstrainedNetwork()))
       ? `${quality}:smooth`
       : quality
     const cachedUrl = forceRefresh ? '' : getCachedPlayUrl(playItem, playSource, cacheQuality)
@@ -3092,12 +3220,20 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0 }
     if (intent === playIntentToken) {
       if (e.aborted) return
       endPlaybackBuffer()
-      isPaused.value = true
       // 最终失败也重建，保证用户再点不会卡在坏 Audio / 坏链
       if (isRetryablePlayError(e)) {
         recoverPlaybackPipeline(trackKey, item, source, preferredQuality)
       }
-      const message = formatPlayClientError(e)
+      const message = formatPlayClientError(e) || String(e?.message || '')
+      if (isMissingLocalFileError(e) || isMissingLocalFileError(message)) {
+        // 文件已删：清队列/库引用后抛出让 playNextAuto 继续，勿先暂停卡住
+        await handleMissingLocalPlayFailure(item, trackKey)
+        playerError.value = ''
+        showPlayerNotice('本地文件已不存在，已跳过', 3500)
+        logPlayerIssue('warn', message || '本地文件不存在', { item, source, stage: 'playTrackAt.missing' })
+        throw new Error(message || '本地文件不存在')
+      }
+      isPaused.value = true
       playerError.value = message
       if (message) {
         logPlayerIssue('error', message, { item, source, err: e?.message || e, stage: 'playTrackAt' })
@@ -3143,6 +3279,7 @@ function getAudioElementError(el = audio) {
 function isRetryablePlayError(error) {
   const text = String(error?.message || error || '')
   if (error?.aborted || isBenignPlayInterrupt(error)) return false
+  if (isMissingLocalFileError(error)) return true
   return /播放链接失效|无法播放该音频|无法解码|音频加载超时|本地音频加载超时|本地文件暂时无法播放|本地文件加载失败|网络异常|音频加载被中止|音频解码失败|音频加载失败|获取播放链接失败|获取.*音质.*失败|未获取到URL|获取URL失败|流畅|转码|ffmpeg/i.test(text)
     || /NotSupportedError|no supported sources|MEDIA_ERR_SRC_NOT_SUPPORTED|MEDIA_ERR_NETWORK|MEDIA_ERR_ABORTED/i.test(text)
 }
@@ -3155,9 +3292,18 @@ function isBenignPlayInterrupt(error) {
 
 function waitForAudioReady(expectedUrl = '', { isLocal = false, preferCanPlay = false, preferCanPlayThrough = false } = {}) {
   const repairing = isLocal && /\/api\/play\/local-smooth(?:\?|$)/.test(String(expectedUrl || ''))
-  const timeoutMs = isLocal
-    ? (preferCanPlayThrough || repairing || (preferCanPlay && smoothStreamEnabled.value) ? 45000 : 20000)
-    : 8000
+  const slowNet = isConstrainedNetwork() || isTouchMobileDevice()
+  // 手机流量/弱网拉长就绪等待，减少误判超时后连跳又绕回第一首
+  let timeoutMs
+  if (isLocal) {
+    if (preferCanPlayThrough || repairing || (preferCanPlay && smoothStreamEnabled.value)) {
+      timeoutMs = slowNet ? 60000 : 45000
+    } else {
+      timeoutMs = slowNet ? 35000 : 20000
+    }
+  } else {
+    timeoutMs = slowNet ? 22000 : 8000
+  }
   // 本地：默认等 HAVE_CURRENT_DATA(2)；卡住重试时升到 canplay(3)；流畅模式等 canplaythrough(4)
   // 在线：metadata(1) 即可
   const minReady = isLocal

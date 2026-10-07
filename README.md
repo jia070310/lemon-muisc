@@ -456,7 +456,7 @@ npm start
 | 项目 | 路径 |
 |------|------|
 | 本地开发（默认） | `config/lx-music.db` |
-| 飞牛 NAS（示例） | `/vol1/@appconf/lemon-music/config/lx-music.db` |
+| 飞牛 NAS（示例） | `/vol1/@appdata/lemon-music/config/lx-music.db` |
 
 相关表：`users`（账号）、`sessions`（登录会话）、`user_settings`（个人歌单/收藏）。
 
@@ -466,29 +466,56 @@ npm start
 
 ### 忘记密码
 
-```bash
-# 列出用户
-npm run auth:reset-password -- --list
+只改登录密码，**不会**清空歌单、收藏或音乐文件。文件管理器无法改这个密码，必须进 **命令行**。
 
-# 重置指定用户密码（保留账号）
-CONFIG_PATH=/你的配置目录 npm run auth:reset-password -- 用户名 新密码
+先分清两套账号：飞牛系统账号用来开终端 / SSH；柠檬音乐账号才是登录本应用的用户名（首次默认多为 `admin123`）。
+
+**飞牛网页（推荐，不用装软件）**
+
+1. 电脑浏览器打开飞牛 → 控制面板开启 SSH → 打开「终端」应用，用飞牛系统账号登录。
+2. 先列出柠檬音乐账号，再重置（把用户名、新密码换成你的；配置不在 vol1 时改 `CONFIG_PATH`）：
+
+```bash
+PATH=/var/apps/nodejs_v22/target/bin:$PATH CONFIG_PATH=/vol1/@appdata/lemon-music/config node /var/apps/lemon-music/target/scripts/reset-password.js --list
+
+PATH=/var/apps/nodejs_v22/target/bin:$PATH CONFIG_PATH=/vol1/@appdata/lemon-music/config node /var/apps/lemon-music/target/scripts/reset-password.js 用户名 新密码
 ```
 
-管理员也可在「设置 → 账号管理」为其他用户重置密码。
+需已安装应用中心 **Node.js v22**。配置在 **`@appdata`**，不是 `@appconf`。若提示「没有任何用户」，是连错了目录，执行 `find /vol1 /vol2 -name "lx-music.db"` 查找。
+
+**电脑外部终端**
+
+Windows 用「终端 / PowerShell」，Mac / Linux 用自带终端：
+
+```bash
+ssh 飞牛用户名@NAS的IP地址
+```
+
+连上后再粘贴上面的命令。SSH 密码是飞牛系统密码，不是柠檬音乐密码。
+
+**自托管（电脑上自己跑源码，飞牛不要用 npm）**
+
+飞牛 SSH 里没有 `npm`，请用上面的 `PATH=/var/apps/nodejs_v22/...` 命令。仅在项目目录：
+
+```bash
+npm run auth:reset-password -- --list
+npm run auth:reset-password -- 用户名 新密码
+```
+
+管理员登录后也可在「设置 → 账号管理」为其他用户重置密码。
 
 ### 清空所有用户
 
 删除全部账号后会重新生成默认管理员 `admin123` / `admin123`。**不会**删除音源、路径、下载任务等全局数据。
 
 ```bash
-# 先查看当前用户
+# 仅电脑自己跑源码时（飞牛不要用 npm）
 npm run auth:reset-users -- --list
-
-# 确认清空（必须带 --yes）
 npm run auth:reset-users -- --yes
 
-# 飞牛 NAS 示例
-CONFIG_PATH=/vol1/@appconf/lemon-music/config npm run auth:reset-users -- --yes
+# 飞牛 NAS（不要用 npm；配置在 @appdata，不是 @appconf）
+PATH=/var/apps/nodejs_v22/target/bin:$PATH CONFIG_PATH=/vol1/@appdata/lemon-music/config node /var/apps/lemon-music/target/scripts/reset-users.js --list
+PATH=/var/apps/nodejs_v22/target/bin:$PATH CONFIG_PATH=/vol1/@appdata/lemon-music/config node /var/apps/lemon-music/target/scripts/reset-users.js --yes
 ```
 
 执行后请刷新浏览器；若仍自动登录，清除本站 `localStorage`（键名 `lemon-auth-token`）。
@@ -521,10 +548,10 @@ npm run fpk:publish
 | `npm run build` | 构建前端到 `dist/public` |
 | `npm run start` | 启动后端 |
 | `npm run openapi:build` | 重新生成 `docs/openapi.json` / `openapi.yaml` |
-| `npm run auth:reset-password -- --list` | 列出所有用户 |
-| `npm run auth:reset-password -- <用户> <新密码>` | 重置用户密码 |
-| `npm run auth:reset-users -- --list` | 查看用户（清空前预览） |
-| `npm run auth:reset-users -- --yes` | 清空所有用户并重新初始化 |
+| `npm run auth:reset-password -- --list` | 本地源码：列出所有用户。飞牛见上文 `node .../reset-password.js --list` |
+| `npm run auth:reset-password -- <用户> <新密码>` | 本地源码：重置用户密码。飞牛不要用 npm |
+| `npm run auth:reset-users -- --list` | 本地源码：查看用户（清空前预览） |
+| `npm run auth:reset-users -- --yes` | 本地源码：清空所有用户并重新初始化 |
 | `npm run fpk:build` | 本机打包原生 FPK |
 | `npm run fpk:publish` | 本机打包并上传 GitHub Release |
 

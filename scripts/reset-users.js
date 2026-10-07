@@ -4,9 +4,11 @@
  * 不会删除音源、路径、下载记录等全局设置。
  *
  * 用法：
- *   npm run auth:reset-users -- --yes
- *   CONFIG_PATH=/path/to/config node scripts/reset-users.js --yes
- *   node scripts/reset-users.js --list
+ *   飞牛（不要用 npm）：
+ *     PATH=/var/apps/nodejs_v22/target/bin:$PATH CONFIG_PATH=/vol1/@appdata/lemon-music/config node /var/apps/lemon-music/target/scripts/reset-users.js --yes
+ *   本地源码：
+ *     npm run auth:reset-users -- --yes
+ *     CONFIG_PATH=/path/to/config node scripts/reset-users.js --yes
  */
 import fs from 'fs'
 import path from 'path'
@@ -21,7 +23,11 @@ function printHelp() {
   console.log(`
 柠檬音乐 · 清空所有用户
 
-用法:
+飞牛 NAS（不要用 npm，系统里没有）:
+  PATH=/var/apps/nodejs_v22/target/bin:$PATH CONFIG_PATH=/vol1/@appdata/lemon-music/config node /var/apps/lemon-music/target/scripts/reset-users.js --list
+  PATH=/var/apps/nodejs_v22/target/bin:$PATH CONFIG_PATH=/vol1/@appdata/lemon-music/config node /var/apps/lemon-music/target/scripts/reset-users.js --yes
+
+自托管:
   npm run auth:reset-users -- --yes
   node scripts/reset-users.js --yes
 
@@ -40,7 +46,7 @@ function printHelp() {
   · 浏览器若仍自动登录，请清除本站 localStorage 或退出登录
 
 飞牛 NAS 配置目录示例:
-  /vol1/@appconf/lemon-music/config
+  /vol1/@appdata/lemon-music/config（不是 @appconf）
 
 数据库文件:
   {CONFIG_PATH}/lx-music.db

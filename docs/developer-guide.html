@@ -540,7 +540,13 @@ npm start         # Express 托管 + API</code></pre>
   </table>
 
   <h3 data-page-node-id="8q7zQmQ0an8q3zZTeRVFwI">账号恢复</h3>
-  <pre data-page-node-id="Uv4e4UI3nUIYEItGv9sA91"><code data-page-node-id="nCSvmGOupxf9bjLCYkGeHJ">npm run auth:reset-password -- --list                # 列出用户
+  <p>飞牛 NAS <strong>不要用 npm</strong>（会报 command not found）。配置一般在 <code>/vol1/@appdata/lemon-music/config</code>（不是 <code>@appconf</code>）。</p>
+  <pre data-page-node-id="Uv4e4UI3nUIYEItGv9sA91"><code data-page-node-id="nCSvmGOupxf9bjLCYkGeHJ"># 飞牛终端 / SSH
+PATH=/var/apps/nodejs_v22/target/bin:$PATH CONFIG_PATH=/vol1/@appdata/lemon-music/config node /var/apps/lemon-music/target/scripts/reset-password.js --list
+PATH=/var/apps/nodejs_v22/target/bin:$PATH CONFIG_PATH=/vol1/@appdata/lemon-music/config node /var/apps/lemon-music/target/scripts/reset-password.js 用户名 新密码
+
+# 仅电脑自己跑源码时
+npm run auth:reset-password -- --list                # 列出用户
 CONFIG_PATH=/你的配置目录 npm run auth:reset-password -- admin 新密码
 npm run auth:reset-users -- --list                   # 预览
 npm run auth:reset-users -- --yes                    # 清空所有用户（重新初始化向导）</code></pre>
@@ -559,8 +565,8 @@ npm run auth:reset-users -- --yes                    # 清空所有用户（重�
     <tr data-page-node-id="vpvOj12oT6sWjHFD27Lhln"><th data-page-node-id="q1tt0DtfjrDr5LXUgfetCP">命令</th><th data-page-node-id="gnhnWCzGAZMtCcDu2aYjcp">说明</th></tr>
     <tr data-page-node-id="ZDFwr5WrghL5lLCet32now"><td data-page-node-id="Ih3PsI3YL8ZDDgGKpXGVTy"><code data-page-node-id="sTz5gcurAGh5iQgQNctQ2L">npm run dev</code></td><td data-page-node-id="EvyLAK88H907A0xMrUi8tm">前后端并行开发</td></tr>
     <tr data-page-node-id="5wY6QdWCY2aN9rxKmPhFOY"><td data-page-node-id="2V6cLvsvBiHD2DVrRwgg2D"><code data-page-node-id="dW3CS3yjLUMpf1xsH9e2K2">npm run build / start</code></td><td data-page-node-id="TxsMgLT2dk2tWESDK2OZic">构建前端 / 启动后端</td></tr>
-    <tr data-page-node-id="YqyF6iQFxRcvRznIIzBzHa"><td data-page-node-id="BKJSW33tkTQsT49CHEIX1H"><code data-page-node-id="BT34sMQAcPAZuWPULsLnY9">npm run auth:reset-password</code></td><td data-page-node-id="PvD15wUy63P5qIo2ukFKkn">重置用户密码（--list 列出）</td></tr>
-    <tr data-page-node-id="Jrt6tKz9umW4ah5GSnHYdF"><td data-page-node-id="mda3RlYC6EUIBfQ2V9Vv3T"><code data-page-node-id="ffrp1VXDDrwbaGuAOzl9gL">npm run auth:reset-users</code></td><td data-page-node-id="H6trrqhMzHpioDEG5wpTZD">清空所有用户重新初始化（必须 --yes）</td></tr>
+    <tr data-page-node-id="YqyF6iQFxRcvRznIIzBzHa"><td data-page-node-id="BKJSW33tkTQsT49CHEIX1H"><code data-page-node-id="BT34sMQAcPAZuWPULsLnY9">npm run auth:reset-password</code></td><td data-page-node-id="PvD15wUy63P5qIo2ukFKkn">本地源码重置密码（--list 列出）。飞牛用 node …/reset-password.js</td></tr>
+    <tr data-page-node-id="Jrt6tKz9umW4ah5GSnHYdF"><td data-page-node-id="mda3RlYC6EUIBfQ2V9Vv3T"><code data-page-node-id="ffrp1VXDDrwbaGuAOzl9gL">npm run auth:reset-users</code></td><td data-page-node-id="H6trrqhMzHpioDEG5wpTZD">本地源码清空用户（必须 --yes）。飞牛不要用 npm</td></tr>
     <tr data-page-node-id="hZo8hQVm1XL4ZgeAsABavj"><td data-page-node-id="1bhDVecqff0dZhbkB6BCq0"><code data-page-node-id="EP3GliujGdkuqLDyBDYYyn">npm run fpk:build</code></td><td data-page-node-id="PdUABo6ynhAKU2MptybG2O">打包飞牛 FPK</td></tr>
   </table>
   <p class="muted" style="margin-top:10px" data-page-node-id="r1p1q8G013JE0XakKgUKZO">CI：<code data-page-node-id="maV9ToxvnW3xD2YBXV4wsr">.github/workflows/fpk.yml</code> 自动构建双架构 FPK。</p>

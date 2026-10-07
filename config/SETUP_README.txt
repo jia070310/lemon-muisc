@@ -10,8 +10,9 @@
 方式一：查看本地账号文件
   D:\xiangmu\lemon-music\config\ADMIN_CREDENTIALS.txt
   文件内含初始化时设置的用户名与密码，请妥善保管。
-方式二：命令行重置（NAS SSH）
-  CONFIG_PATH="D:\xiangmu\lemon-music\config" npm run auth:reset-password -- admin 新密码
+方式二：命令行重置（飞牛不要用 npm，系统里没有）
+  PATH=/var/apps/nodejs_v22/target/bin:$PATH CONFIG_PATH="D:\xiangmu\lemon-music\config" node /var/apps/lemon-music/target/scripts/reset-password.js admin 新密码
+  配置一般在 /volX/@appdata/lemon-music/config（不是 @appconf）。可先加 --list 查看账号。
 安全提示：
   · 本文件不含密码。
   · 账号密码保存在 ADMIN_CREDENTIALS.txt，请勿泄露或上传到公网。

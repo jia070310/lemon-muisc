@@ -496,6 +496,8 @@ import {
   libraryTrackTotal,
   buildPlaylistCards,
   loadPlaylistCardsFromServer,
+  rebuildPlaylistCardsLocal,
+  playlistCardsRevision,
   SMART_PLAYLIST_IDS,
   ROAM_PLAYLIST_ID,
   ROAM_PICK_SIZE,
@@ -719,6 +721,11 @@ watch(selectedId, () => {
   showDedupModal.value = false
   closeMenus()
   refreshActiveJob()
+})
+
+watch(playlistCardsRevision, () => {
+  if (!allCards.value.length) return
+  allCards.value = rebuildPlaylistCardsLocal(allCards.value)
 })
 
 watch(() => route.query.id, (id) => {

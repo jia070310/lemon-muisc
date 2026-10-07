@@ -421,6 +421,8 @@ import {
   fetchLibraryTracksPage, fetchLibraryArtists, fetchLibraryAlbums, fetchLibraryGenres,
   libraryBrowseRevision,
   loadPlaylistCardsFromServer,
+  rebuildPlaylistCardsLocal,
+  playlistCardsRevision,
   refreshLibraryTrackTotal,
   setLibraryTrackTotal,
 } from '../stores/library.js'
@@ -600,6 +602,11 @@ async function loadBrowsePreviews() {
     previewGenres.value = []
   }
 }
+watch(playlistCardsRevision, () => {
+  if (!playlistCards.value.length) return
+  playlistCards.value = rebuildPlaylistCardsLocal(playlistCards.value)
+})
+
 watch(playlistSort, (value) => {
   try { localStorage.setItem(PLAYLIST_SORT_KEY, value) } catch {}
   showAllPlaylistCards.value = false

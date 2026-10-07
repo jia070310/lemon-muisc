@@ -47,7 +47,12 @@
         <li>打开「启用邮件」，保存各项设置。</li>
         <li>在下方填写测试收件邮箱，点击「发送测试邮件」确认能收到。</li>
         <li>各用户在「设置」中绑定邮箱并完成验证后，方可使用「忘记密码」。</li>
-        <li>若忘记管理员密码且未配置邮件，可在服务器执行：<code>npm run auth:reset-password -- 用户名 新密码</code></li>
+        <li>若忘记管理员密码且未配置邮件：飞牛请打开「终端 / SSH」，<b>不要用 npm</b>（会报 command not found）。配置目录一般是 <code>/vol1/@appdata/lemon-music/config</code>（不是 <code>@appconf</code>）。先列出账号再重置：</li>
+      </ol>
+      <pre class="mail-guide-cmd">PATH=/var/apps/nodejs_v22/target/bin:$PATH CONFIG_PATH=/vol1/@appdata/lemon-music/config node /var/apps/lemon-music/target/scripts/reset-password.js --list
+PATH=/var/apps/nodejs_v22/target/bin:$PATH CONFIG_PATH=/vol1/@appdata/lemon-music/config node /var/apps/lemon-music/target/scripts/reset-password.js 用户名 新密码</pre>
+      <ol start="5">
+        <li>仅在电脑自己跑源码时才用 <code>npm run auth:reset-password -- 用户名 新密码</code>。登录页「忘记密码」有逐步说明。</li>
       </ol>
     </div>
   </details>
@@ -110,6 +115,18 @@ defineProps({
   background: var(--bg-input);
   padding: 1px 5px;
   border-radius: 4px;
+}
+.mail-guide-cmd {
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--bg-input, rgba(0,0,0,0.25));
+  border: 1px solid var(--border-light);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 .mail-guide-body a { color: var(--accent); }
 .mail-guide-table {

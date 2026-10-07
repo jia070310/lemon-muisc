@@ -273,9 +273,14 @@ npm start          # Express 托管
 
 环境变量：`PORT`(7983)、`DOWNLOAD_PATH`(./data)、`CONFIG_PATH`(./config)。
 
-账号恢复：
+账号恢复（飞牛 NAS **不要用 npm**，系统里没有）：
 
 ```bash
+# 飞牛终端 / SSH（配置一般在 @appdata，不是 @appconf；不在 vol1 时改路径）
+PATH=/var/apps/nodejs_v22/target/bin:$PATH CONFIG_PATH=/vol1/@appdata/lemon-music/config node /var/apps/lemon-music/target/scripts/reset-password.js --list
+PATH=/var/apps/nodejs_v22/target/bin:$PATH CONFIG_PATH=/vol1/@appdata/lemon-music/config node /var/apps/lemon-music/target/scripts/reset-password.js 用户名 新密码
+
+# 仅电脑自己跑源码时
 npm run auth:reset-password -- --list
 CONFIG_PATH=/你的配置目录 npm run auth:reset-password -- admin 新密码
 npm run auth:reset-users -- --list   # 预览
@@ -296,8 +301,8 @@ npm run fpk:build                # → fpk/lemon-music-1.2.13.9-{x86,arm}.fpk
 |------|------|
 | `npm run dev` | 前后端并行开发 |
 | `npm run build` / `npm start` | 构建 / 启动 |
-| `npm run auth:reset-password` | 重置用户密码（--list 列出） |
-| `npm run auth:reset-users` | 清空用户重新初始化（须 --yes） |
+| `npm run auth:reset-password` | 本地源码重置密码（--list 列出）。飞牛用 `node .../reset-password.js` |
+| `npm run auth:reset-users` | 本地源码清空用户（须 --yes）。飞牛不要用 npm |
 | `npm run fpk:build` | 打包飞牛 FPK |
 
 CI：`.github/workflows/fpk.yml` 自动构建双架构 FPK。
