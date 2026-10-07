@@ -22,18 +22,42 @@ const SUPPORTED_SOURCES = ['kw', 'kg', 'tx', 'wy', 'mg']
 const SUPPORTED_ACTIONS = ['musicUrl', 'lyric', 'pic']
 const SUPPORTED_QUALITYS = ['128k', '320k', 'flac', 'flac24bit', 'hires', 'atmos', 'atmos_plus', 'master']
 
+function clearSandboxTimers(entry) {
+  if (!entry) return
+  for (const t of entry.timers || []) {
+    try { clearTimeout(t) } catch {}
+  }
+  for (const t of entry.intervals || []) {
+    try { clearInterval(t) } catch {}
+  }
+  if (entry.timers) entry.timers.clear()
+  if (entry.intervals) entry.intervals.clear()
+}
+
 /** 加载音源脚本并加入激活列表（不卸载其他已激活音源） */
 export async function loadSource(id, script) {
   // 同 id 先卸再装，避免重复沙箱
   unloadSource(id)
+  // 让出事件循环，避免激活时同步卡住其它 API
+  await new Promise((r) => setImmediate(r))
 
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error('音源初始化超时(20s)')), 20000)
     const pendingRequests = new Map()
+    const timers = new Set()
+    const intervals = new Set()
     let sources = {}
     let requestHandler = null
     let settled = false
     let entry = null
+
+    const timeout = setTimeout(() => {
+      clearSandboxTimers({ timers, intervals })
+      if (entry) {
+        activeSources.delete(id)
+        entry = null
+      }
+      finish(new Error('音源初始化超时(20s)'))
+    }, 20000)
 
     const meta = parseScriptMeta(script)
     const finish = (err, result) => {
@@ -41,6 +65,7 @@ export async function loadSource(id, script) {
       settled = true
       clearTimeout(timeout)
       if (err) {
+        clearSandboxTimers(entry || { timers, intervals })
         if (entry) {
           activeSources.delete(id)
           entry = null
@@ -49,6 +74,28 @@ export async function loadSource(id, script) {
       } else {
         resolve(result)
       }
+    }
+
+    const trackedSetTimeout = (fn, ms, ...args) => {
+      const handle = setTimeout((...a) => {
+        timers.delete(handle)
+        try { fn(...a) } catch {}
+      }, ms, ...args)
+      timers.add(handle)
+      return handle
+    }
+    const trackedClearTimeout = (handle) => {
+      timers.delete(handle)
+      return clearTimeout(handle)
+    }
+    const trackedSetInterval = (fn, ms, ...args) => {
+      const handle = setInterval(fn, ms, ...args)
+      intervals.add(handle)
+      return handle
+    }
+    const trackedClearInterval = (handle) => {
+      intervals.delete(handle)
+      return clearInterval(handle)
     }
 
     const lxApi = {
@@ -68,7 +115,14 @@ export async function loadSource(id, script) {
           if (data?.sources) {
             sources = validateSources(data.sources)
           }
-          entry = { id, handler: requestHandler, sources, pendingRequests }
+          entry = {
+            id,
+            handler: requestHandler,
+            sources,
+            pendingRequests,
+            timers,
+            intervals,
+          }
           activeSources.set(id, entry)
           finish(null, sources)
         } else if (event === 'updateAlert') {
@@ -101,10 +155,10 @@ export async function loadSource(id, script) {
         group: () => {},
         groupEnd: () => {},
       },
-      setTimeout,
-      clearTimeout,
-      setInterval,
-      clearInterval,
+      setTimeout: trackedSetTimeout,
+      clearTimeout: trackedClearTimeout,
+      setInterval: trackedSetInterval,
+      clearInterval: trackedClearInterval,
       queueMicrotask,
       URL,
       URLSearchParams,
@@ -172,29 +226,41 @@ export async function loadSource(id, script) {
     sandbox.window = sandbox
     sandbox.self = sandbox
 
-    try {
-      vm.runInContext(script, sandbox, {
-        timeout: 15000,
-        displayErrors: true,
-      })
-      // 澜音原生音源：不调用 lx.send('inited')，而是 module.exports = { pluginInfo, sources, musicUrl, ... }
-      if (!settled) {
-        const exported = sandbox.module?.exports
-        if (isCeruNativePlugin(exported)) {
-          sources = validateSources(normalizeCeruSources(exported))
-          if (!Object.keys(sources).length) {
-            finish(new Error('澜音音源未声明支持的平台（kw/kg/tx/wy/mg）'))
-            return
+    // 放到下一个 tick，避免 Promise 构造器内同步跑脚本堵死整站
+    setImmediate(() => {
+      if (settled) return
+      try {
+        vm.runInContext(script, sandbox, {
+          timeout: 15000,
+          displayErrors: true,
+        })
+        // 澜音原生音源：不调用 lx.send('inited')，而是 module.exports = { pluginInfo, sources, musicUrl, ... }
+        if (!settled) {
+          const exported = sandbox.module?.exports
+          if (isCeruNativePlugin(exported)) {
+            sources = validateSources(normalizeCeruSources(exported))
+            if (!Object.keys(sources).length) {
+              finish(new Error('澜音音源未声明支持的平台（kw/kg/tx/wy/mg）'))
+              return
+            }
+            requestHandler = createCeruHandler(exported)
+            entry = {
+              id, handler: requestHandler, sources, pendingRequests, runtime: 'ceru', timers, intervals,
+            }
+            activeSources.set(id, entry)
+            finish(null, sources)
+          } else {
+            // 落雪脚本：先登记占位，便于超时/重复加载时能清掉沙箱定时器
+            entry = {
+              id, handler: requestHandler, sources, pendingRequests, timers, intervals, loading: true,
+            }
+            activeSources.set(id, entry)
           }
-          requestHandler = createCeruHandler(exported)
-          entry = { id, handler: requestHandler, sources, pendingRequests, runtime: 'ceru' }
-          activeSources.set(id, entry)
-          finish(null, sources)
         }
+      } catch (e) {
+        finish(new Error(`音源脚本执行失败: ${e.message}`))
       }
-    } catch (e) {
-      finish(new Error(`音源脚本执行失败: ${e.message}`))
-    }
+    })
   })
 }
 
@@ -263,12 +329,14 @@ export function unloadSource(id) {
   if (id) {
     const entry = activeSources.get(id)
     if (entry) {
+      clearSandboxTimers(entry)
       entry.pendingRequests.clear()
       activeSources.delete(id)
     }
     return
   }
   for (const entry of activeSources.values()) {
+    clearSandboxTimers(entry)
     entry.pendingRequests.clear()
   }
   activeSources.clear()

@@ -139,20 +139,41 @@ function describeFetchError(err, triedMirrors) {
   return msg.startsWith('HTTP_') ? `下载失败（${msg.replace('HTTP_', 'HTTP ')}）` : (msg || '下载音源脚本失败')
 }
 
-/** 拉取音源脚本：规范化链接，GitHub 失败时自动换镜像 */
+/** 拉取音源脚本：规范化链接；多候选时竞速，避免串行镜像各自卡满超时 */
 export async function fetchSourceScriptFromUrl(input) {
   const candidates = sourceScriptFetchCandidates(input)
   if (!candidates.length) throw new Error('请提供有效的 http(s) 音源链接')
   if (!/^https?:\/\//i.test(candidates[0])) throw new Error('仅支持 http/https 音源链接')
 
-  let lastErr = null
-  for (const url of candidates) {
+  if (candidates.length === 1) {
     try {
-      return await fetchOnce(url)
+      return await fetchOnce(candidates[0])
     } catch (e) {
-      lastErr = e
-      console.warn(`[音源导入] ${url} 失败: ${e?.message || e}`)
+      console.warn(`[音源导入] ${candidates[0]} 失败: ${e?.message || e}`)
+      throw new Error(describeFetchError(e, false))
     }
   }
-  throw new Error(describeFetchError(lastErr, candidates.length > 1))
+
+  return new Promise((resolve, reject) => {
+    let pending = candidates.length
+    let settled = false
+    let lastErr = null
+    for (const url of candidates) {
+      fetchOnce(url).then(
+        (script) => {
+          if (settled) return
+          settled = true
+          resolve(script)
+        },
+        (e) => {
+          lastErr = e
+          console.warn(`[音源导入] ${url} 失败: ${e?.message || e}`)
+          pending -= 1
+          if (!settled && pending <= 0) {
+            reject(new Error(describeFetchError(lastErr, true)))
+          }
+        },
+      )
+    }
+  })
 }

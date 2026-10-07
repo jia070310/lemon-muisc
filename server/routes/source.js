@@ -52,13 +52,13 @@ async function fetchScriptFromUrl(url) {
 }
 
 sourceRouter.get('/list', (req, res) => {
-  refreshStoredSourceMeta()
+  // 勿在每次列表时 refreshStoredSourceMeta：会把全部脚本读进内存并同步解析，大音源导入后易把事件循环卡住
   const activeIds = new Set(getStoredActiveSourceIds(req.user?.id))
   const healthMap = getAllSourceHealth()
   const rows = getDB().prepare('SELECT id, name, description, author, version, homepage, sources FROM user_apis').all()
   res.json(rows.map(r => ({
     ...r,
-    sources: JSON.parse(r.sources),
+    sources: JSON.parse(r.sources || '{}'),
     active: activeIds.has(r.id),
     health: {
       ...(sourceHealthPublicView(healthMap[r.id]) || {}),

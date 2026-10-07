@@ -767,9 +767,24 @@
                   </div>
                 </div>
                 <button v-if="s.health?.unhealthy || autoClosedNotice(s)" class="btn-sm btn-ghost" @click="dismissSourceHealth(s)">知道了</button>
-                <button v-if="!isSourceActive(s.id)" class="btn-sm btn-primary" @click="activateSource(s.id)">激活</button>
-                <button v-else class="btn-sm btn-ghost" @click="deactivateSource(s.id)">停用</button>
-                <button v-if="isAdminUser" class="btn-sm btn-danger" @click="removeSource(s.id)">删除</button>
+                <button
+                  v-if="!isSourceActive(s.id)"
+                  class="btn-sm btn-primary"
+                  :disabled="sourceBusyId === s.id || importingUrl"
+                  @click="activateSource(s.id)"
+                >{{ sourceBusyId === s.id ? '激活中…' : '激活' }}</button>
+                <button
+                  v-else
+                  class="btn-sm btn-ghost"
+                  :disabled="sourceBusyId === s.id"
+                  @click="deactivateSource(s.id)"
+                >{{ sourceBusyId === s.id ? '停用中…' : '停用' }}</button>
+                <button
+                  v-if="isAdminUser"
+                  class="btn-sm btn-danger"
+                  :disabled="sourceBusyId === s.id || importingUrl"
+                  @click="removeSource(s.id)"
+                >删除</button>
               </div>
             </div>
           </div>
@@ -1428,6 +1443,8 @@ const toast = ref(null)
 const importMode = ref('file')
 const importUrl = ref('')
 const importingUrl = ref(false)
+/** 正在激活/停用的音源 id，避免无反馈空等像卡死 */
+const sourceBusyId = ref('')
 const PLATFORM_SHORT = { tx: 'QQ', wy: '云', kw: '酷', kg: '狗', mg: '咪' }
 /** @type {import('vue').Ref<Record<string, string[]>>} */
 const sourcePlatformMap = ref({})
@@ -3030,16 +3047,35 @@ async function importFile(e) {
 }
 
 async function importFromUrl() {
-  if (!importUrl.value.trim()) return
+  if (!importUrl.value.trim() || importingUrl.value) return
   importingUrl.value = true
   try {
     const res = await api.source.importUrl(importUrl.value.trim())
     if (res.error) throw new Error(res.error)
-    showToast(`导入成功: ${res.name}`, 'success')
-    sourceList.value = await api.source.list()
+    showToast(`导入成功: ${res.name}（需点「激活」后才能搜索/播放）`, 'success')
     importUrl.value = ''
+    // 先乐观插入，避免 list 慢时界面像卡死
+    if (res.id && !sourceList.value.some((s) => s.id === res.id)) {
+      sourceList.value = [
+        {
+          id: res.id,
+          name: res.name || '未命名音源',
+          description: '',
+          author: '',
+          version: '',
+          homepage: '',
+          sources: {},
+          active: false,
+          health: null,
+        },
+        ...sourceList.value,
+      ]
+    }
+    try {
+      sourceList.value = await api.source.list()
+    } catch {}
   } catch (e) {
-    showToast(e.message, 'error')
+    showToast(e.message || '导入失败', 'error')
   } finally {
     importingUrl.value = false
   }
@@ -3212,6 +3248,8 @@ function setSourcePlatformsAll(source, on) {
 }
 
 async function activateSource(id) {
+  if (!id || sourceBusyId.value) return
+  sourceBusyId.value = id
   try {
     const res = await api.source.activate(id)
     if (Array.isArray(res?.activeIds)) {
@@ -3226,7 +3264,9 @@ async function activateSource(id) {
     showToast('音源已激活', 'success')
     await refreshPlatformTabs()
   } catch (e) {
-    showToast(e.message, 'error')
+    showToast(e.message || '激活失败', 'error')
+  } finally {
+    sourceBusyId.value = ''
   }
 }
 
@@ -3261,6 +3301,8 @@ function platformHealthTitle(p) {
 }
 
 async function deactivateSource(id) {
+  if (!id || sourceBusyId.value) return
+  sourceBusyId.value = id
   try {
     const res = await api.source.deactivate(id)
     if (Array.isArray(res?.activeIds)) {
@@ -3275,7 +3317,9 @@ async function deactivateSource(id) {
     showToast('音源已停用', 'success')
     await refreshPlatformTabs()
   } catch (e) {
-    showToast(e.message, 'error')
+    showToast(e.message || '停用失败', 'error')
+  } finally {
+    sourceBusyId.value = ''
   }
 }
 

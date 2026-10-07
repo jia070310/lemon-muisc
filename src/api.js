@@ -204,10 +204,10 @@ export const api = {
     },
     importUrl: (url) => request('/source/import-url', { method: 'POST', body: { url }, timeout: 90000 }),
     remove: (id) => request(`/source/${id}`, { method: 'DELETE' }),
-    activate: (id) => request(`/source/activate/${id}`, { method: 'POST' }),
+    activate: (id) => request(`/source/activate/${id}`, { method: 'POST', timeout: 25000 }),
     deactivate: (id) => id
-      ? request(`/source/deactivate/${encodeURIComponent(id)}`, { method: 'POST' })
-      : request('/source/deactivate', { method: 'POST' }),
+      ? request(`/source/deactivate/${encodeURIComponent(id)}`, { method: 'POST', timeout: 15000 })
+      : request('/source/deactivate', { method: 'POST', timeout: 15000 }),
     active: () => request('/source/active'),
     getFault: () => request('/source/fault'),
     deleteFault: () => request('/source/fault/delete', { method: 'POST' }),
