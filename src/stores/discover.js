@@ -93,7 +93,7 @@ export function resetDiscoverHomeFeed() {
 
 export const sourcePlaceholders = {
   kw: '粘贴酷我歌单链接或 ID，如 https://www.kuwo.cn/playlist_detail/2886046289',
-  kg: '粘贴酷狗歌单分享链接、gcid 或官方歌单 ID',
+  kg: '粘贴酷狗歌单分享链接（含 gcid 自建歌单）、collection_ 或官方歌单 ID',
   tx: '粘贴 QQ 音乐歌单链接或 ID，如 https://y.qq.com/n/yqq/playlist/7217720898.html',
   wy: '粘贴网易云歌单链接或 ID；私人歌单：ID###MUSIC_U',
   mg: '粘贴咪咕歌单链接或 ID，如 https://music.migu.cn/v3/music/playlist/161044573',

@@ -4397,17 +4397,30 @@ tr.playing .play-btn,
 }
 
 @media (max-width: 1100px) {
-  .tag-page { height: auto; max-height: none; overflow: visible; }
+  /* 纵可溢出（抽屉/弹层），横必须裁切，避免部分 WebView 被工具栏撑出右侧空白 */
+  .tag-page {
+    height: auto;
+    max-height: none;
+    max-width: 100%;
+    overflow-x: clip;
+    overflow-y: visible;
+  }
   .tag-layout,
   .tag-page.embedded .tag-layout {
-    grid-template-columns: 1fr;
-    overflow: visible;
+    grid-template-columns: minmax(0, 1fr);
+    overflow-x: clip;
+    overflow-y: visible;
     min-height: auto;
+    min-width: 0;
+    max-width: 100%;
     gap: 12px;
   }
   .dir-panel, .file-panel {
-    overflow: visible;
+    overflow-x: clip;
+    overflow-y: visible;
     min-height: auto;
+    min-width: 0;
+    max-width: 100%;
   }
   .dir-tree,
   .artist-list {
@@ -4425,6 +4438,7 @@ tr.playing .play-btn,
     flex-wrap: wrap;
     align-items: stretch;
     gap: 8px;
+    max-width: 100%;
   }
   /* 过滤框独占一行，避免被「0/0 · 全部文件」挤成「按文」 */
   .file-toolbar > .filter-slot {
@@ -4442,23 +4456,28 @@ tr.playing .play-btn,
   .file-toolbar-meta {
     flex: 1 1 100%;
     width: 100%;
+    max-width: 100%;
     order: 3;
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     align-items: center;
-    gap: 8px 10px;
+    gap: 8px;
+    min-width: 0;
   }
   .file-toolbar-meta .file-count {
-    flex: 0 0 auto;
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .file-toolbar-meta :deep(.app-select) {
-    flex: 1 1 140px;
-    min-width: 120px;
+    flex: 1 1 0;
+    min-width: 0;
     max-width: 100%;
   }
   .file-toolbar-meta .check-all {
     flex: 0 0 auto;
-    margin-left: auto;
+    margin-left: 0;
     white-space: nowrap;
   }
   .file-toolbar-actions {
@@ -4468,6 +4487,8 @@ tr.playing .play-btn,
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 6px;
     width: 100%;
+    max-width: 100%;
+    min-width: 0;
     justify-content: stretch;
   }
   .file-toolbar-actions .btn-ghost,
@@ -4476,16 +4497,24 @@ tr.playing .play-btn,
     flex: unset;
     width: 100%;
     min-width: 0;
-    max-width: none;
+    max-width: 100%;
     justify-content: center;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    box-sizing: border-box;
   }
   .file-toolbar-actions .organize-wrap > .btn-ghost {
     width: 100%;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .file-toolbar-actions :deep(.app-select) {
     grid-column: 1 / -1;
     width: 100%;
-    max-width: none;
+    max-width: 100%;
+    min-width: 0;
   }
   .file-panel .empty {
     writing-mode: horizontal-tb;
@@ -4611,19 +4640,24 @@ tr.playing .play-btn,
   }
   .file-toolbar {
     gap: 8px;
+    max-width: 100%;
   }
   .file-toolbar-actions .btn-ghost,
   .file-toolbar-actions .btn-primary,
   .file-toolbar-actions .organize-wrap > .btn-ghost {
     min-height: 36px;
-    padding: 8px 10px;
+    padding: 8px 6px;
     font-size: 12px;
   }
   .file-panel {
     padding: 12px;
+    max-width: 100%;
+    box-sizing: border-box;
   }
   .dir-panel {
     padding: 12px;
+    max-width: 100%;
+    box-sizing: border-box;
   }
   .dir-hint {
     font-size: 11px;

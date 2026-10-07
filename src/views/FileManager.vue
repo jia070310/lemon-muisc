@@ -1151,7 +1151,9 @@ async function startOrganize() {
   .file-manager-page.fm-embed-tag {
     height: auto;
     min-height: 0;
-    overflow: visible;
+    max-width: 100%;
+    overflow-x: clip;
+    overflow-y: visible;
     display: block;
     padding-bottom: 24px;
   }
@@ -1159,7 +1161,10 @@ async function startOrganize() {
     flex: none;
     height: auto;
     min-height: 0;
-    overflow: visible;
+    min-width: 0;
+    max-width: 100%;
+    overflow-x: clip;
+    overflow-y: visible;
     display: block;
   }
   .fm-tag-host :deep(.tag-page) {
@@ -1167,11 +1172,16 @@ async function startOrganize() {
     height: auto;
     max-height: none;
     min-height: 0;
-    overflow: visible;
+    max-width: 100%;
+    overflow-x: clip;
+    overflow-y: visible;
   }
   .fm-tag-host :deep(.tag-layout) {
-    grid-template-columns: 1fr;
-    overflow: visible;
+    grid-template-columns: minmax(0, 1fr);
+    max-width: 100%;
+    min-width: 0;
+    overflow-x: clip;
+    overflow-y: visible;
     min-height: auto;
   }
 }
@@ -1190,19 +1200,24 @@ async function startOrganize() {
 }
 .fm-tabs {
   display: flex;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 4px 0;
   border-bottom: 1px solid var(--border);
   margin-bottom: 18px;
+  max-width: 100%;
+  min-width: 0;
 }
 .fm-tab {
   border: none;
   background: transparent;
-  padding: 9px 18px;
+  padding: 9px 14px;
   font-size: 14px;
   color: var(--text-muted);
   cursor: pointer;
   border-bottom: 2px solid transparent;
   margin-bottom: -1px;
+  flex: 0 1 auto;
+  white-space: nowrap;
 }
 .fm-tab:hover {
   color: var(--text);

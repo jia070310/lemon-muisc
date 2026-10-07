@@ -1,9 +1,9 @@
-/* 柠檬音乐：仅缓存前端壳，不缓存 /api、/ws 与音频流 */
-const CACHE = 'lemon-shell-v1.2.16.16-orange-round-3'
+/* 柠檬音乐：仅缓存前端壳，不缓存 /api、/ws 与音频流
+ * 多域名各自独立注册 SW；导航与 assets 均网络优先，避免旧壳引用已失效的 hash 资源导致白屏。
+ */
+const CACHE = 'lemon-shell-v1.2.17.2'
 
 const PRECACHE = [
-  '/',
-  '/index.html',
   '/manifest.webmanifest',
   '/icon.png',
   '/favicon.png',
@@ -58,37 +58,28 @@ self.addEventListener('fetch', (event) => {
   }
   if (!sameOrigin(url) || shouldBypass(url)) return
 
-  // SPA 文档：网络优先，失败回退壳
+  // SPA 文档：始终网络优先，不把 HTML 写入长期缓存（多域名/升级后旧壳最易白屏）
   if (req.mode === 'navigate') {
     event.respondWith(
-      fetch(req)
-        .then((res) => {
-          if (res.ok) {
-            const copy = res.clone()
-            caches.open(CACHE).then((c) => c.put('/index.html', copy)).catch(() => {})
-          }
-          return res
-        })
-        .catch(() => caches.match('/index.html')),
+      fetch(req).catch(() =>
+        caches.match('/index.html').then((cached) => cached || Response.error()),
+      ),
     )
     return
   }
 
-  // 构建产物：缓存优先，后台刷新
+  // 构建产物：网络优先，失败再回退缓存（避免一直用旧 hash 文件）
   if (url.pathname.startsWith('/assets/')) {
     event.respondWith(
-      caches.match(req).then((cached) => {
-        const fetching = fetch(req)
-          .then((res) => {
-            if (res && res.ok) {
-              const copy = res.clone()
-              caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {})
-            }
-            return res
-          })
-          .catch(() => cached)
-        return cached || fetching
-      }),
+      fetch(req)
+        .then((res) => {
+          if (res && res.ok) {
+            const copy = res.clone()
+            caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {})
+          }
+          return res
+        })
+        .catch(() => caches.match(req)),
     )
     return
   }

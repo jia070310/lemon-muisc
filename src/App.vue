@@ -426,6 +426,20 @@
         </button>
         <div v-if="showMobileMore" class="mobile-more-sheet card" role="menu">
           <router-link
+            v-if="currentUser"
+            to="/settings?tab=account"
+            class="mobile-more-item mobile-more-account"
+            role="menuitem"
+            @click="closeMobileMore"
+            @touchstart.passive="onTabPrefetch('/settings')"
+          >
+            <span class="mobile-more-avatar" aria-hidden="true">{{ userInitial }}</span>
+            <span class="mobile-more-account-meta">
+              <span class="mobile-more-account-name">{{ currentUser.displayName || currentUser.username }}</span>
+              <span class="mobile-more-account-role">{{ currentUser.role === 'admin' ? '管理员' : '用户' }}</span>
+            </span>
+          </router-link>
+          <router-link
             to="/file-manager"
             class="mobile-more-item"
             :class="{ active: isFileManagerNav }"
@@ -459,6 +473,20 @@
             <span>关于</span>
             <span v-if="hasUpdate" class="mobile-more-badge">新</span>
           </router-link>
+          <button
+            v-if="currentUser"
+            type="button"
+            class="mobile-more-item mobile-more-logout"
+            role="menuitem"
+            @click="handleMobileLogout"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+              <polyline points="16 17 21 12 16 7"/>
+              <line x1="21" y1="12" x2="9" y2="12"/>
+            </svg>
+            <span>退出账号</span>
+          </button>
         </div>
       </div>
     </nav>
@@ -1130,6 +1158,11 @@ async function handleLogout() {
   resetLibraryUserData()
   await authLogout()
   router.replace('/login')
+}
+
+async function handleMobileLogout() {
+  closeMobileMore()
+  await handleLogout()
 }
 
 watch([isAuthReady, isSessionValid], ([ready, valid]) => {
@@ -1978,12 +2011,19 @@ onUnmounted(() => {
     display: flex;
     align-items: center;
     gap: 10px;
+    width: 100%;
+    margin: 0;
     padding: 10px 12px;
+    border: none;
     border-radius: 8px;
+    background: transparent;
     color: var(--text);
     text-decoration: none;
     font-size: 13px;
+    text-align: left;
+    cursor: pointer;
     -webkit-tap-highlight-color: transparent;
+    box-sizing: border-box;
   }
 
   .mobile-more-item svg {
@@ -2001,6 +2041,63 @@ onUnmounted(() => {
 
   .mobile-more-item.active svg {
     color: var(--accent);
+  }
+
+  .mobile-more-account {
+    margin-bottom: 2px;
+    border-bottom: 1px solid var(--border-light, rgba(255, 255, 255, 0.08));
+    border-radius: 8px 8px 0 0;
+    padding-bottom: 12px;
+  }
+
+  .mobile-more-avatar {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    background: var(--accent-muted, rgba(240, 112, 24, 0.18));
+    color: var(--accent);
+    font-size: 12px;
+    font-weight: 650;
+  }
+
+  .mobile-more-account-meta {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .mobile-more-account-name {
+    font-size: 13px;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .mobile-more-account-role {
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+
+  .mobile-more-logout {
+    margin-top: 2px;
+    border-top: 1px solid var(--border-light, rgba(255, 255, 255, 0.08));
+    border-radius: 0 0 8px 8px;
+    color: var(--error, #ef4444);
+  }
+
+  .mobile-more-logout svg {
+    color: var(--error, #ef4444);
+  }
+
+  .mobile-more-logout:active {
+    background: rgba(239, 68, 68, 0.1);
+    color: var(--error, #ef4444);
   }
 
   .mobile-more-badge {
