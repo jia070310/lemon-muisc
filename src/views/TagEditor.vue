@@ -135,12 +135,14 @@
         <div class="file-toolbar">
           <SearchInput
             ref="tagFilterRef"
+            class="filter-slot"
             v-model="filterText"
             :history-key="SEARCH_HISTORY_KEYS.tagFilter"
-            variant="plain"
+            variant="pill"
+            :show-search-icon="true"
             input-class="filter-input"
             input-wrap-class="filter-input-wrap"
-            placeholder="按文件名过滤..."
+            :placeholder="isCompactLayout ? '过滤文件名…' : '按文件名过滤...'"
             @enter="rememberTagFilter"
             @select="rememberTagFilter"
           />
@@ -407,7 +409,7 @@
         </template>
         <div v-else-if="scanning" class="empty">{{ browseMode === 'artist' ? '正在加载歌手歌曲...' : '正在加载文件夹...' }}</div>
         <div v-else-if="files.length && missingFilter !== 'all'" class="empty">当前筛选条件下没有缺失文件</div>
-        <div v-else class="empty">{{ browseMode === 'artist' ? '在左侧选择一位歌手，加载其全部歌曲进行编辑' : '在左侧选择文件夹，将递归加载该目录及子目录中的音频' }}</div>
+        <div v-else class="empty">{{ emptyFilesHint }}</div>
       </section>
 
       <div
@@ -1074,6 +1076,16 @@ const loadingDetail = ref(false)
 const metaProgress = ref({ done: 0, total: 0 })
 const metaLoadToken = ref(0)
 const isCompactLayout = ref(false)
+const emptyFilesHint = computed(() => {
+  if (browseMode.value === 'artist') {
+    return isCompactLayout.value
+      ? '在上方选择一位歌手，加载其全部歌曲进行编辑'
+      : '在左侧选择一位歌手，加载其全部歌曲进行编辑'
+  }
+  return isCompactLayout.value
+    ? '在上方选择文件夹，将递归加载该目录及子目录中的音频'
+    : '在左侧选择文件夹，将递归加载该目录及子目录中的音频'
+})
 const tagChecking = ref(false)
 const tagCheckPaused = ref(false)
 const tagCheckStopRequested = ref(false)
@@ -1635,7 +1647,9 @@ async function scanCurrentLevelOnly() {
     if (!files.value.length) {
       const subCount = (data.dirs || []).length
       showToast(subCount
-        ? '该文件夹没有音频，可点左侧子文件夹，或直接点目录名递归加载'
+        ? (isCompactLayout.value
+          ? '该文件夹没有音频，可点上方子文件夹，或直接点目录名递归加载'
+          : '该文件夹没有音频，可点左侧子文件夹，或直接点目录名递归加载')
         : '该文件夹为空', 'info')
       saveTagEditorSession({ mode: browseMode.value, activeDir: activeDir.value, activeArtist: activeArtist.value, files: files.value })
       return
@@ -3418,19 +3432,39 @@ function showToast(text, type = 'info') {
   flex-shrink: 0;
   min-width: 0;
 }
-.filter-input-wrap {
-  flex: 0 1 160px;
+/* SearchInput 根节点才是工具栏 flex 子项；勿只给内部 wrap 设宽度 */
+.file-toolbar > .filter-slot {
+  flex: 1 1 200px;
   width: auto;
-  min-width: 120px;
-  overflow: visible;
+  min-width: 160px;
+  max-width: 100%;
 }
-.filter-input {
+.file-toolbar > .filter-slot :deep(.filter-input-wrap),
+.file-toolbar > .filter-slot :deep(.clearable-input) {
+  width: 100%;
+  min-width: 0;
+  height: 36px;
+  padding: 0 10px 0 12px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-input, var(--bg-elevated));
+  border: 1px solid var(--border);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+.file-toolbar > .filter-slot :deep(.clearable-input:focus-within) {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-muted);
+}
+.file-toolbar > .filter-slot :deep(.filter-input),
+.file-toolbar > .filter-slot :deep(.clearable-input input) {
   width: 100%;
   min-width: 0;
   font-size: 13px;
-  border-radius: var(--radius-pill);
-  padding: 6px 14px;
-  text-overflow: clip;
+  text-overflow: ellipsis;
+}
+.file-toolbar > .filter-slot :deep(.clearable-input-icon) {
+  width: 16px;
+  height: 16px;
+  opacity: 0.85;
 }
 .file-toolbar-meta {
   display: flex;
@@ -4381,29 +4415,75 @@ tr.playing .play-btn,
   }
   .desktop-file-table { display: none; }
 
+  .page-subtitle,
+  .embed-toolbar-hint {
+    font-size: 12px;
+    line-height: 1.45;
+  }
+
   .file-toolbar {
     flex-wrap: wrap;
     align-items: stretch;
+    gap: 8px;
+  }
+  /* 过滤框独占一行，避免被「0/0 · 全部文件」挤成「按文」 */
+  .file-toolbar > .filter-slot {
+    flex: 1 1 100%;
+    width: 100%;
+    min-width: 0;
+    order: 1;
+  }
+  .file-toolbar-info {
+    flex: 1 1 100%;
+    order: 2;
+    justify-content: flex-start;
+    padding-right: 0;
+  }
+  .file-toolbar-meta {
+    flex: 1 1 100%;
+    width: 100%;
+    order: 3;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 10px;
+  }
+  .file-toolbar-meta .file-count {
+    flex: 0 0 auto;
+  }
+  .file-toolbar-meta :deep(.app-select) {
+    flex: 1 1 140px;
+    min-width: 120px;
+    max-width: 100%;
+  }
+  .file-toolbar-meta .check-all {
+    flex: 0 0 auto;
+    margin-left: auto;
+    white-space: nowrap;
   }
   .file-toolbar-actions {
     flex: 1 1 100%;
-    display: flex;
-    flex-wrap: wrap;
+    order: 4;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 6px;
     width: 100%;
+    justify-content: stretch;
   }
   .file-toolbar-actions .btn-ghost,
   .file-toolbar-actions .btn-primary,
-  .file-toolbar-actions :deep(.app-select),
-  .file-toolbar-meta .check-all,
-  .file-toolbar-meta :deep(.app-select),
   .file-toolbar-actions .organize-wrap {
-    flex: 1 1 calc(50% - 6px);
+    flex: unset;
+    width: 100%;
     min-width: 0;
-    max-width: 100%;
+    max-width: none;
+    justify-content: center;
   }
   .file-toolbar-actions .organize-wrap > .btn-ghost {
-    flex: 1 1 auto;
+    width: 100%;
+  }
+  .file-toolbar-actions :deep(.app-select) {
+    grid-column: 1 / -1;
     width: 100%;
     max-width: none;
   }
@@ -4414,6 +4494,7 @@ tr.playing .play-btn,
     padding: 24px 16px;
     text-align: center;
     min-height: 80px;
+    line-height: 1.55;
   }
 
   /* 窄屏：编辑区改为底部抽屉，避免滚到屏外「看不到」 */
@@ -4529,33 +4610,24 @@ tr.playing .play-btn,
     width: 100%;
   }
   .file-toolbar {
-    gap: 6px;
-  }
-  .filter-input-wrap {
-    flex: 1 1 100%;
-    min-width: 0;
-  }
-  .file-toolbar-info {
-    flex: 1 1 auto;
-    justify-content: flex-start;
-    order: 2;
-  }
-  .file-toolbar-meta {
-    flex: 1 1 auto;
-    order: 3;
-  }
-  .file-toolbar-actions {
-    order: 4;
+    gap: 8px;
   }
   .file-toolbar-actions .btn-ghost,
-  .file-toolbar-actions .organize-wrap {
-    flex: 1 1 calc(50% - 6px);
-    min-width: 0;
-    justify-content: center;
-  }
+  .file-toolbar-actions .btn-primary,
   .file-toolbar-actions .organize-wrap > .btn-ghost {
-    width: 100%;
-    flex: 1 1 auto;
+    min-height: 36px;
+    padding: 8px 10px;
+    font-size: 12px;
+  }
+  .file-panel {
+    padding: 12px;
+  }
+  .dir-panel {
+    padding: 12px;
+  }
+  .dir-hint {
+    font-size: 11px;
+    margin-bottom: 6px;
   }
   .edit-panel.sheet-open {
     bottom: calc(var(--player-height) + var(--mobile-nav-height));

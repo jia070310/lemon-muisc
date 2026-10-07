@@ -65,7 +65,7 @@
                 type="button"
                 class="btn-primary btn-sm fpk-btn fpk-btn-strong"
                 :disabled="!!fpkDownloading[asset.name]"
-                title="网络无法打开 GitHub 时使用：经国内加速源保存到 NAS"
+                title="依次尝试多个国内镜像，失败后再直连 GitHub 保存到 NAS"
                 @click="downloadFpkToNas(asset, true)"
               >
                 {{ fpkDownloading[asset.name] === 'mirror' ? '加速保存中…' : `${asset.label} 加速保存` }}
@@ -84,7 +84,7 @@
             </template>
           </div>
           <p v-if="fpkAssets.length" class="fpk-mirror-hint">
-            推荐优先点「加速保存」：当前网络打不开 GitHub 时，走国内镜像拉到 NAS。
+            「加速保存」会依次尝试多个国内镜像（不含 gh-proxy.com），都失败再回落 GitHub 直连；仍超时可改点「直连」或本机下载后拷到 NAS。
           </p>
           <p v-else class="update-install-line">
             暂未解析到 FPK 附件，请
@@ -97,7 +97,10 @@
           </p>
           <div v-if="fpkJob && fpkJob.status === 'downloading'" class="fpk-progress-card">
             <div class="fpk-progress-head">
-              <span>{{ fpkJob.label || '' }}{{ fpkJob.mirror ? ' 加速' : ' 直连' }}保存中</span>
+              <span>
+                {{ fpkJob.label || '' }}{{ fpkJob.mirror ? ' 加速' : ' 直连' }}保存中
+                <template v-if="fpkJob.mirrorHost">（{{ fpkJob.mirrorHost }}）</template>
+              </span>
               <span>{{ fpkProgressPct }}%</span>
             </div>
             <div class="fpk-progress-track" role="progressbar" :aria-valuenow="fpkProgressPct" aria-valuemin="0" aria-valuemax="100">

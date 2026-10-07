@@ -87,7 +87,10 @@ router.afterEach((to, from) => {
     finishRouteLoading()
     return
   }
-  requestAnimationFrame(() => finishRouteLoading())
+  // 双 rAF：等 keep-alive 激活/绘制后再关骨架，避免闪一下空壳
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => finishRouteLoading())
+  })
 })
 
 router.onError(() => {

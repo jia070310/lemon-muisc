@@ -134,6 +134,23 @@ function applyLibraryTrackCount(count) {
   libraryTrackTotal.value = n
 }
 
+/** 刷新侧栏全库歌曲总数（不受当前歌手/专辑筛选影响） */
+export async function refreshLibraryTrackTotal(api) {
+  if (!api?.library) return libraryTrackTotal.value
+  try {
+    if (api.library.tracksCount) {
+      const res = await api.library.tracksCount()
+      const n = Number(res?.total)
+      if (Number.isFinite(n) && n >= 0) applyLibraryTrackCount(n)
+      return libraryTrackTotal.value
+    }
+    const res = await api.library.tracks({ page: 1, limit: 1, sort: 'mtime' })
+    const n = Number(res?.total)
+    if (Number.isFinite(n) && n >= 0) applyLibraryTrackCount(n)
+  } catch {}
+  return libraryTrackTotal.value
+}
+
 function applyServerScanProgress(scan = {}) {
   if (scan?.trackCount != null) applyLibraryTrackCount(scan.trackCount)
   if (!scan?.phase) return
@@ -177,18 +194,27 @@ export async function fetchLibraryTracksPage(api, {
   albumArtist = '',
   genre = '',
   replace = true,
+  /** 是否同步侧栏「音乐库」角标（后台拼歌单/播放拉取应传 false，避免冲掉当前栏目数量） */
+  syncNavBadge = true,
 } = {}) {
   if (!api?.library?.tracks) return { items: [], total: 0, page, limit }
   const res = await api.library.tracks({ page, limit, q, sort, artist, album, albumArtist, genre })
   const items = (res.data || []).map(fileToLibraryTrack)
-  libraryTrackTotal.value = Number(res.total) || 0
+  const total = Number(res.total) || 0
   if (replace) libraryTracks.value = items
+  // 侧栏角标跟随当前可见列表：进歌手/专辑显示栏目数量；回首页再恢复全库总数
+  if (syncNavBadge) applyLibraryTrackCount(total)
   return {
     items,
-    total: Number(res.total) || 0,
+    total,
     page: Number(res.page) || page,
     limit: Number(res.limit) || limit,
   }
+}
+
+/** 页面确认拿到「无筛选全库 total」时同步侧栏角标 */
+export function setLibraryTrackTotal(count) {
+  applyLibraryTrackCount(count)
 }
 
 export async function fetchLibraryArtists(api, params = {}) {
@@ -286,7 +312,7 @@ export async function loadPlaylistCardsFromServer(api, { limit } = {}) {
   }
 
   const [recentRes, resolved] = await Promise.all([
-    fetchLibraryTracksPage(api, { page: 1, limit: 80, sort: 'mtime', replace: false }),
+    fetchLibraryTracksPage(api, { page: 1, limit: 80, sort: 'mtime', replace: false, syncNavBadge: false }),
     fetchLibraryTracksByPaths(api, [...pathSet].slice(0, 2000)),
   ])
 
@@ -311,6 +337,7 @@ export async function fetchAllLibraryTracks(api, filter = {}, { max = 2000 } = {
       page,
       limit,
       replace: false,
+      syncNavBadge: false,
     })
     total = res.total
     if (!res.items.length) break

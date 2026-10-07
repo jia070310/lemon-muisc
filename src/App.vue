@@ -173,12 +173,15 @@
 
     <main class="content" :class="{ 'content-fixed': isTagPage || isMoodPage || isSettingsPage, 'content-navigating': isRouteLoading }">
       <div v-if="isRouteLoading" class="route-loading-bar" aria-hidden="true" />
-      <PageSkeleton v-if="showRouteSkeleton" class="route-skeleton" :page="pendingRoutePage" />
-      <router-view v-slot="{ Component }">
-        <keep-alive :include="MAIN_TAB_NAMES">
-          <component :is="Component" v-show="!showRouteSkeleton" />
-        </keep-alive>
-      </router-view>
+      <div class="route-view-host">
+        <router-view v-slot="{ Component }">
+          <keep-alive :include="MAIN_TAB_NAMES">
+            <component :is="Component" />
+          </keep-alive>
+        </router-view>
+        <!-- 遮罩骨架，勿再 v-show 隐藏真实页面：触控预加载若未完成跳转会永久卡住 -->
+        <PageSkeleton v-if="showRouteSkeleton" class="route-skeleton" :page="pendingRoutePage" />
+      </div>
     </main>
 
     <PlayerBar />
@@ -507,6 +510,7 @@ import {
   playlistPickTarget, stopPlaylistPick,
   initLibraryHotReload, initLibraryUserData, resetLibraryUserData, libraryHotNotice, clearLibraryHotNotice,
   loadLibrarySongColumns, loadLibraryHotUpdateSetting, libraryTrackTotal,
+  refreshLibraryTrackTotal,
 } from './stores/library.js'
 import {
   tagMatchRunning, tagMatchProgress, tagMatchResult, clearTagMatchResult,
@@ -539,7 +543,7 @@ import {
 } from './stores/downloadGuard.js'
 import {
   isRouteLoading, pendingRoutePage, MAIN_TAB_NAMES,
-  prefetchRoute, startRouteLoading,
+  prefetchRoute,
 } from './stores/navigation.js'
 import { isMobileUiContext } from './utils/device.js'
 import { APP_ICON_URL } from './utils/appIcon.js'
@@ -603,14 +607,24 @@ function onMobileMorePointerDown(e) {
   if (root && !root.contains(e.target)) closeMobileMore()
 }
 
-watch(() => route.fullPath, () => {
+function isLibraryBrowsePath(path) {
+  const p = String(path || '').split('?')[0]
+  return p === '/library' || p === '/library/'
+}
+
+watch(() => route.fullPath, (to) => {
   closeMobileMore()
+  const toPath = String(to || '').split('?')[0]
+  // 返回音乐库首页时恢复全库实时总数（歌手/专辑页内角标为栏目歌曲数）
+  if (isLibraryBrowsePath(toPath)) {
+    refreshLibraryTrackTotal(api).catch(() => {})
+  }
 })
 
 function onTabPrefetch(path) {
   if (route.path === path) return
+  // 只预拉 chunk，勿在此打开骨架：touchstart 后若未真正导航会一直卡在刷新态
   prefetchRoute(path)
-  startRouteLoading(path)
 }
 
 const hasAppNotices = computed(() => Boolean(
@@ -1605,6 +1619,19 @@ onUnmounted(() => {
   position: relative;
   transition: margin-left 0.22s ease, width 0.22s ease, max-width 0.22s ease;
 }
+.route-view-host {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.route-view-host > :first-child {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
 .route-loading-bar {
   position: absolute;
   top: 0;
@@ -1617,8 +1644,12 @@ onUnmounted(() => {
   pointer-events: none;
 }
 .route-skeleton {
-  position: relative;
+  position: absolute;
+  inset: 0;
   z-index: 40;
+  overflow: auto;
+  background: var(--bg, var(--bg-page, #121212));
+  pointer-events: none;
 }
 @keyframes route-bar-slide {
   0% { transform: translateX(-100%); opacity: 0.4; }
@@ -1632,7 +1663,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
 }
-.content-fixed > * {
+.content-fixed > .route-view-host {
   flex: 1;
   min-height: 0;
 }
@@ -1828,7 +1859,7 @@ onUnmounted(() => {
     overflow: visible;
     display: block;
   }
-  .content-fixed > * {
+  .content-fixed > .route-view-host {
     flex: none;
     min-height: auto;
   }

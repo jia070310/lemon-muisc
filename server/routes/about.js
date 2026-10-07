@@ -17,9 +17,28 @@ export const aboutRouter = Router()
 
 const REPO = 'jia070310/lemon-muisc'
 const REPO_URL = `https://github.com/${REPO}`
-/** GitHub Release 资源加速（国内直链常不可用） */
-const GITHUB_ASSET_MIRROR_PREFIX = 'https://ghproxy.net/'
+/**
+ * GitHub Release 加速前缀（按优先级尝试）。
+ * 不使用 gh-proxy.com：大文件易超时/极慢。
+ */
+const GITHUB_ASSET_MIRROR_PREFIXES = [
+  'https://ghfast.top/',
+  'https://gh.llkk.cc/',
+  'https://mirror.ghproxy.com/',
+  'https://ghproxy.net/',
+]
 const FPK_UPDATE_SUBDIR = '柠檬音乐更新'
+
+function buildFpkDownloadUrls(githubUrl, wantMirror) {
+  const origin = String(githubUrl || '').trim()
+  if (!origin) return []
+  if (!wantMirror) return [origin]
+  // 多个镜像依次尝试，全部失败再回落 GitHub 直连
+  return [
+    ...GITHUB_ASSET_MIRROR_PREFIXES.map((p) => `${p}${origin}`),
+    origin,
+  ]
+}
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 /** 进行中的 FPK 下载（按架构互斥）；完成后保留一段时间便于轮询 */
@@ -35,6 +54,7 @@ function publicFpkJob(job) {
     label: job.label,
     name: job.name,
     mirror: job.mirror,
+    mirrorHost: job.mirrorHost || '',
     status: job.status,
     progress: job.progress,
     downloaded: job.downloaded,
@@ -63,97 +83,130 @@ function scheduleFpkJobCleanup(jobKey) {
   }, FPK_JOB_TTL_MS)
 }
 
-async function runFpkDownloadJob(job, url, dest, part, userId) {
-  try {
-    try { if (fs.existsSync(part)) fs.unlinkSync(part) } catch {}
+/** 单次拉取到 .partial；失败抛错，由上层换源重试 */
+async function downloadFpkToPartial(url, job, part, userId) {
+  try { if (fs.existsSync(part)) fs.unlinkSync(part) } catch {}
+  job.downloaded = 0
+  job.progress = 0
+  job.total = Number(job.expectedSize) || job.total || 0
+  emitFpkJob(userId, 'about:fpk-progress', job)
 
-    const stream = needle.get(url, {
-      follow_max: 5,
-      response_timeout: 60000,
-      read_timeout: 300000,
-      headers: { 'User-Agent': 'lemon-music-nas' },
-    })
+  const stream = needle.get(url, {
+    follow_max: 5,
+    open_timeout: 20000,
+    response_timeout: 90000,
+    read_timeout: 600000,
+    headers: { 'User-Agent': 'lemon-music-nas' },
+  })
 
-    await new Promise((resolve, reject) => {
-      let settled = false
-      let lastEmit = 0
-      const fail = (err) => {
-        if (settled) return
-        settled = true
-        reject(err instanceof Error ? err : new Error(String(err || '下载失败')))
+  await new Promise((resolve, reject) => {
+    let settled = false
+    let lastEmit = 0
+    const fail = (err) => {
+      if (settled) return
+      settled = true
+      reject(err instanceof Error ? err : new Error(String(err || '下载失败')))
+    }
+    stream.on('header', (code, headers) => {
+      if (code && code >= 400) {
+        fail(new Error(`下载失败 HTTP ${code}`))
+        return
       }
-      stream.on('header', (code, headers) => {
-        if (code && code >= 400) {
-          fail(new Error(`下载失败 HTTP ${code}`))
-          return
+      const len = Number(headers?.['content-length']) || 0
+      if (len > 0) {
+        job.total = len
+        emitFpkJob(userId, 'about:fpk-progress', job)
+      }
+    })
+    stream.on('err', fail)
+    stream.on('error', fail)
+
+    const counter = new Transform({
+      transform(chunk, _enc, cb) {
+        job.downloaded += chunk.length
+        if (job.total > 0) {
+          job.progress = Math.min(0.99, job.downloaded / job.total)
+        } else if (job.expectedSize > 0) {
+          job.total = job.expectedSize
+          job.progress = Math.min(0.99, job.downloaded / job.expectedSize)
+        } else {
+          job.progress = 0
         }
-        const len = Number(headers?.['content-length']) || 0
-        if (len > 0) {
-          job.total = len
+        const now = Date.now()
+        if (now - lastEmit >= 200 || job.progress >= 0.99) {
+          lastEmit = now
           emitFpkJob(userId, 'about:fpk-progress', job)
         }
-      })
-      stream.on('err', fail)
-      stream.on('error', fail)
-
-      const counter = new Transform({
-        transform(chunk, _enc, cb) {
-          job.downloaded += chunk.length
-          if (job.total > 0) {
-            job.progress = Math.min(0.99, job.downloaded / job.total)
-          } else if (job.expectedSize > 0) {
-            job.total = job.expectedSize
-            job.progress = Math.min(0.99, job.downloaded / job.expectedSize)
-          } else {
-            job.progress = 0
-          }
-          const now = Date.now()
-          if (now - lastEmit >= 200 || job.progress >= 0.99) {
-            lastEmit = now
-            emitFpkJob(userId, 'about:fpk-progress', job)
-          }
-          cb(null, chunk)
-        },
-      })
-
-      const writer = fs.createWriteStream(part)
-      writer.on('error', fail)
-      pipeline(stream, counter, writer).then(() => {
-        if (!settled) {
-          settled = true
-          resolve()
-        }
-      }).catch(fail)
+        cb(null, chunk)
+      },
     })
 
-    const st = fs.statSync(part)
-    if (!st.size || st.size < 1024) {
-      try { fs.unlinkSync(part) } catch {}
-      throw new Error('下载文件过小，可能失败，请改用加速或稍后重试')
-    }
-    // 落盘前再确认：若目标已存在则改名为 -1/-2…，绝不覆盖
-    let finalDest = dest
-    let finalName = job.fileName
-    if (fs.existsSync(finalDest)) {
-      const allocated = allocateUniqueFpkPath(path.dirname(dest), job.name || job.fileName)
-      finalDest = allocated.dest
-      finalName = allocated.fileName
-    }
-    fs.renameSync(part, finalDest)
+    const writer = fs.createWriteStream(part)
+    writer.on('error', fail)
+    pipeline(stream, counter, writer).then(() => {
+      if (!settled) {
+        settled = true
+        resolve()
+      }
+    }).catch(fail)
+  })
 
-    job.status = 'done'
-    job.progress = 1
-    job.downloaded = st.size
-    job.total = st.size
-    job.sizeLabel = formatAssetSize(st.size)
-    job.fileName = finalName
-    job.path = finalDest
-    job.finishedAt = Date.now()
-    emitFpkJob(userId, 'about:fpk-done', job)
+  const st = fs.statSync(part)
+  if (!st.size || st.size < 1024) {
+    try { fs.unlinkSync(part) } catch {}
+    throw new Error('下载文件过小，可能失败')
+  }
+  if (job.expectedSize > 0 && st.size < job.expectedSize * 0.5) {
+    try { fs.unlinkSync(part) } catch {}
+    throw new Error(`下载不完整（${formatAssetSize(st.size)} / ${formatAssetSize(job.expectedSize)}）`)
+  }
+  return st
+}
+
+async function runFpkDownloadJob(job, urls, dest, part, userId) {
+  const candidates = (Array.isArray(urls) ? urls : [urls]).filter(Boolean)
+  let lastErr = null
+  try {
+    for (let i = 0; i < candidates.length; i++) {
+      const url = candidates[i]
+      let host = ''
+      try { host = new URL(url).host } catch { host = '' }
+      job.mirrorHost = host
+      job.error = ''
+      try {
+        const st = await downloadFpkToPartial(url, job, part, userId)
+        let finalDest = dest
+        let finalName = job.fileName
+        if (fs.existsSync(finalDest)) {
+          const allocated = allocateUniqueFpkPath(path.dirname(dest), job.name || job.fileName)
+          finalDest = allocated.dest
+          finalName = allocated.fileName
+        }
+        fs.renameSync(part, finalDest)
+
+        job.status = 'done'
+        job.progress = 1
+        job.downloaded = st.size
+        job.total = st.size
+        job.sizeLabel = formatAssetSize(st.size)
+        job.fileName = finalName
+        job.path = finalDest
+        job.finishedAt = Date.now()
+        emitFpkJob(userId, 'about:fpk-done', job)
+        return
+      } catch (e) {
+        lastErr = e
+        try { if (fs.existsSync(part)) fs.unlinkSync(part) } catch {}
+        // 换下一个镜像继续
+      }
+    }
+    throw lastErr || new Error('所有下载源均失败')
   } catch (e) {
     try { if (fs.existsSync(part)) fs.unlinkSync(part) } catch {}
     job.status = 'error'
-    job.error = e?.message || 'FPK 下载失败'
+    job.error = e?.message
+      ? `${e.message}（已尝试 ${candidates.length} 个源）`
+      : 'FPK 下载失败'
     job.finishedAt = Date.now()
     emitFpkJob(userId, 'about:fpk-error', job)
   } finally {
@@ -220,7 +273,7 @@ function pickFpkAssets(assets = []) {
       arch,
       label: arch === 'arm' ? 'ARM' : arch === 'x86' ? 'x86' : name,
       url,
-      mirrorUrl: `${GITHUB_ASSET_MIRROR_PREFIX}${url}`,
+      mirrorUrl: `${GITHUB_ASSET_MIRROR_PREFIXES[0]}${url}`,
       size: Number(asset.size) || 0,
       sizeLabel: formatAssetSize(asset.size),
     })
@@ -233,7 +286,7 @@ function buildInstallHints(version, fpkAssets = []) {
   const ver = String(version || '').replace(/^v/i, '')
   if (!ver) return null
   return {
-    fpkHint: '点「加速保存」将 FPK 拉到 NAS「下载目录/柠檬音乐更新」（打不开 GitHub 时优先用加速）。完成后到飞牛「应用中心」→「手动安装」选择该文件覆盖安装。',
+    fpkHint: '点「加速保存」将 FPK 拉到 NAS「下载目录/柠檬音乐更新」（会依次尝试多个国内镜像，失败再直连 GitHub）。完成后到飞牛「应用中心」→「手动安装」选择该文件覆盖安装。',
     fpkAssets,
   }
 }
@@ -414,7 +467,7 @@ aboutRouter.post('/download-fpk', requireAdmin, async (req, res) => {
 
     const dir = getFpkUpdateDir(userId)
     const { fileName, dest, part } = allocateUniqueFpkPath(dir, asset.name)
-    const url = wantMirror ? asset.mirrorUrl : asset.url
+    const urls = buildFpkDownloadUrls(asset.url, wantMirror)
 
     const job = {
       jobKey,
@@ -423,6 +476,7 @@ aboutRouter.post('/download-fpk', requireAdmin, async (req, res) => {
       arch: asset.arch,
       label: asset.label,
       mirror: wantMirror,
+      mirrorHost: '',
       status: 'downloading',
       progress: 0,
       downloaded: 0,
@@ -441,7 +495,7 @@ aboutRouter.post('/download-fpk', requireAdmin, async (req, res) => {
 
     // 后台拉取，接口立即返回，前端靠 WS / 轮询看进度
     setImmediate(() => {
-      runFpkDownloadJob(job, url, dest, part, userId).catch(() => {})
+      runFpkDownloadJob(job, urls, dest, part, userId).catch(() => {})
     })
 
     res.json({ ok: true, data: publicFpkJob(job) })

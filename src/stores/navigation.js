@@ -3,6 +3,10 @@ import { ref } from 'vue'
 export const isRouteLoading = ref(false)
 export const pendingRoutePage = ref('default')
 
+/** 防止骨架一直不关（触控预加载后未真正跳转、导航中断等） */
+let safetyTimer = null
+const ROUTE_LOADING_SAFETY_MS = 3500
+
 const ROUTE_PAGE_MAP = {
   Search: 'search',
   Discover: 'discover',
@@ -68,9 +72,18 @@ function resolvePage(to) {
 export function startRouteLoading(to) {
   pendingRoutePage.value = resolvePage(to)
   isRouteLoading.value = true
+  if (safetyTimer) clearTimeout(safetyTimer)
+  safetyTimer = setTimeout(() => {
+    safetyTimer = null
+    isRouteLoading.value = false
+  }, ROUTE_LOADING_SAFETY_MS)
 }
 
 export function finishRouteLoading() {
+  if (safetyTimer) {
+    clearTimeout(safetyTimer)
+    safetyTimer = null
+  }
   isRouteLoading.value = false
 }
 

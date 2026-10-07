@@ -394,8 +394,8 @@
 
 <script setup>
 defineOptions({ name: 'Library' })
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, computed, watch, onMounted, onUnmounted, onActivated } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { api } from '../api.js'
 import PlaylistCover from '../components/PlaylistCover.vue'
 import CoverArt from '../components/CoverArt.vue'
@@ -421,6 +421,8 @@ import {
   fetchLibraryTracksPage, fetchLibraryArtists, fetchLibraryAlbums, fetchLibraryGenres,
   libraryBrowseRevision,
   loadPlaylistCardsFromServer,
+  refreshLibraryTrackTotal,
+  setLibraryTrackTotal,
 } from '../stores/library.js'
 import { dailyMix, dailyMixDesc, recoPlaylists, refreshLibraryMix, saveDailyMixPlaylist, loadNetworkPlaylistTracks } from '../stores/libraryMix.js'
 
@@ -437,6 +439,7 @@ const PLAYLIST_SORT_KEY = 'lemon-library-playlist-sort'
 const ALBUM_SORT_KEY = 'lemon-library-album-sort'
 const SONG_SORT_KEY = 'lemon-library-song-sort'
 
+const route = useRoute()
 const router = useRouter()
 const librarySearchRef = ref(null)
 const keyword = ref('')
@@ -560,8 +563,14 @@ async function loadSongPage() {
       limit: pageSize,
       sort: sortMap[songSort.value] || 'mtime',
       replace: true,
+      // 若已跳到歌手/专辑页，勿用全库 total 冲掉栏目角标
+      syncNavBadge: route.path === '/library' || route.path === '/library/',
     })
     songTotal.value = res.total
+    if (route.path === '/library' || route.path === '/library/') {
+      if (res.total > 0) setLibraryTrackTotal(res.total)
+      else refreshLibraryTrackTotal(api).catch(() => {})
+    }
   } catch {
     /* 保留已有工作集 */
   } finally {
@@ -674,6 +683,14 @@ onMounted(() => {
       notifyScanComplete(result, meta)
     },
   }).catch(() => {})
+})
+
+onActivated(() => {
+  // keep-alive 从歌手/专辑页返回：校正侧栏角标，并刷新首页歌曲总数展示
+  refreshLibraryTrackTotal(api).then((n) => {
+    if (n > 0) songTotal.value = n
+  }).catch(() => {})
+  loadSongPage()
 })
 
 onUnmounted(() => {
