@@ -20,7 +20,7 @@
 
 ### v1.2.17.1
 
-- **修复**：飞牛桌面点击仍打开 http（应用已是 HTTPS 时）；启动前同步协议并 TLS 探测
+- **飞牛桌面入口**：协议留空，跟随飞牛桌面当前 http/https（不再写死 http）
 
 ### v1.2.17
 
@@ -481,7 +481,7 @@ npm start
 
 | 部署 | 行为 |
 |------|------|
-| **飞牛 FPK** | 有系统证书则**自动** HTTPS（读飞牛「证书」），无需反代；`HTTPS=0` 可强制 HTTP |
+| **飞牛 FPK** | 有系统证书则应用内**自动** HTTPS；桌面入口协议留空，跟随飞牛桌面当前是 http 还是 https；`HTTPS=0` 可强制应用 HTTP |
 | **Docker / 服务器** | 默认 HTTP；挂载证书并设置 `SSL_CERT` / `SSL_KEY`（或 `HTTPS=1`）后同端口 HTTPS。步骤见 [docs/docker.md](docs/docker.md) |
 
 ### Docker 快速启动

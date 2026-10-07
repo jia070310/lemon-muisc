@@ -149,36 +149,19 @@ fix_desktop_db() {
   fi
 }
 
-# 探测本机端口是否已是 TLS（飞牛桌面入口协议用）
-probe_local_tls() {
-  local port="${1:-}"
-  [ -n "${port}" ] || return 1
-  if command -v python3 >/dev/null 2>&1; then
-    python3 - "${port}" <<'PY' 2>/dev/null && return 0
-import socket, ssl, sys
-port = int(sys.argv[1])
-ctx = ssl._create_unverified_context()
-try:
-    with socket.create_connection(("127.0.0.1", port), timeout=1.2) as raw:
-        with ctx.wrap_socket(raw, server_hostname="localhost") as s:
-            s.do_handshake()
-    sys.exit(0)
-except Exception:
-    sys.exit(1)
-PY
-  fi
-  if command -v openssl >/dev/null 2>&1; then
-    echo | openssl s_client -connect "127.0.0.1:${port}" -servername localhost 2>/dev/null \
-      | grep -q "BEGIN CERTIFICATE" && return 0
-  fi
-  return 1
-}
-
+# 桌面入口协议：空字符串 = 交给飞牛按当前桌面访问方式自适应（http/https）
+# 仅当用户显式写死 desktop-protocol / https.json 时才固定
 read_desktop_protocol() {
-  local conf forced port hint
+  local conf forced hint
   conf="$(resolve_config_path 2>/dev/null || true)"
   [ -n "${conf}" ] || conf="${TRIM_PKGVAR:-}/config"
-  forced=""
+  if [ -f "${conf}/desktop-protocol" ]; then
+    hint="$(tr -d ' \n\r' < "${conf}/desktop-protocol" 2>/dev/null)"
+    case "${hint}" in
+      http|https) echo "${hint}"; return 0 ;;
+      auto|"") ;;
+    esac
+  fi
   if [ -f "${conf}/https.json" ] && command -v python3 >/dev/null 2>&1; then
     forced="$(python3 - "${conf}/https.json" <<'PY' 2>/dev/null || true
 import json
@@ -196,51 +179,29 @@ except Exception:
     print("")
 PY
 )"
+    case "${forced}" in
+      http|https) echo "${forced}"; return 0 ;;
+    esac
   fi
-  # 用户显式关闭时不要探测成 https
-  if [ "${forced}" = "http" ]; then
-    echo http
-    return 0
-  fi
-  if [ "${forced}" = "https" ]; then
-    echo https
-    return 0
-  fi
-
-  port="${PORT:-}"
-  [ -n "${port}" ] || port="$(read_saved_service_port 2>/dev/null || true)"
-  [ -n "${port}" ] || port=7983
-  # 以实际监听为准，避免升级后仍沿用旧的 desktop-protocol=http
-  if probe_local_tls "${port}"; then
-    echo https
-    return 0
-  fi
-  if [ -f "${conf}/ssl/server.crt" ] && [ -f "${conf}/ssl/server.key" ]; then
-    echo https
-    return 0
-  fi
-  if [ -f "${conf}/desktop-protocol" ]; then
-    hint="$(tr -d ' \n\r' < "${conf}/desktop-protocol" 2>/dev/null)"
-    if [ "${hint}" = "https" ]; then
-      echo https
-      return 0
-    fi
-  fi
-  echo http
+  # 默认：自适应（空）
+  echo ""
 }
 
 patch_ui_config_port() {
-  local file="$1" port="$2" protocol="${3:-}"
+  local file="$1" port="$2" protocol="${3-}"
   [ -f "${file}" ] || return 0
   [ -n "${port}" ] || return 0
-  [ -n "${protocol}" ] || protocol="$(read_desktop_protocol)"
+  if [ "${#}" -lt 3 ]; then
+    protocol="$(read_desktop_protocol)"
+  fi
   if command -v python3 >/dev/null 2>&1; then
     python3 - "${file}" "${port}" "${protocol}" <<'PY' 2>/dev/null || true
 import json, sys
 from pathlib import Path
-path, port, protocol = Path(sys.argv[1]), str(sys.argv[2]), str(sys.argv[3] or "http")
-if protocol not in ("http", "https"):
-    protocol = "http"
+path, port, protocol = Path(sys.argv[1]), str(sys.argv[2]), str(sys.argv[3] if len(sys.argv) > 3 else "")
+# 空字符串 = 飞牛自适应；仅允许 http / https / ""
+if protocol not in ("http", "https", ""):
+    protocol = ""
 try:
     data = json.loads(path.read_text(encoding="utf-8"))
 except Exception:

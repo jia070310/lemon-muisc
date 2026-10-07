@@ -171,12 +171,19 @@ export function saveHttpsConfig(partial) {
   const dir = configRoot()
   fs.mkdirSync(dir, { recursive: true })
   fs.writeFileSync(httpsConfigPath(), `${JSON.stringify(out, null, 2)}\n`, 'utf8')
-  writeDesktopProtocolHint(out.enabled === false ? 'http' : 'https')
+  // 桌面入口默认交给飞牛自适应，不随应用 TLS 写死 http/https
+  writeDesktopProtocolHint('auto')
   return out
 }
 
+/**
+ * 桌面入口协议提示。
+ * - http / https：写死
+ * - auto / 空：交给飞牛按当前桌面访问方式自适应（推荐）
+ */
 export function writeDesktopProtocolHint(protocol) {
-  const p = protocol === 'https' ? 'https' : 'http'
+  const raw = String(protocol || '').trim().toLowerCase()
+  const p = raw === 'https' || raw === 'http' ? raw : 'auto'
   try {
     const dir = configRoot()
     fs.mkdirSync(dir, { recursive: true })
@@ -187,7 +194,8 @@ export function writeDesktopProtocolHint(protocol) {
 
 export function readDesktopProtocolHint() {
   const raw = safeRead(desktopProtocolPath()).trim().toLowerCase()
-  return raw === 'https' ? 'https' : 'http'
+  if (raw === 'https' || raw === 'http') return raw
+  return 'auto'
 }
 
 /** 从飞牛证书配置 / 目录扫描可用证书 */
@@ -397,10 +405,13 @@ export function resolveTlsListen() {
   }
 }
 
-/** 启动成功后尽量把飞牛桌面入口协议改成 https/http */
-export function syncNativeDesktopProtocol(protocol) {
-  const p = protocol === 'https' ? 'https' : 'http'
-  writeDesktopProtocolHint(p)
+/**
+ * 启动后把飞牛桌面入口 protocol 设为空（自适应）。
+ * 飞牛文档：protocol 可留空，按当前桌面是 http 还是 https 打开应用。
+ * 不再把入口写死成应用监听协议，避免 HTTPS 飞牛桌面却打开 http。
+ */
+export function syncNativeDesktopProtocol(_protocol) {
+  writeDesktopProtocolHint('auto')
   const appname = process.env.TRIM_APPNAME || 'lemon-music'
   const files = [
     path.join(process.env.TRIM_APPDEST || '', 'ui', 'config'),
@@ -416,9 +427,11 @@ export function syncNativeDesktopProtocol(protocol) {
       if (!root || typeof root !== 'object') continue
       let changed = false
       for (const item of Object.values(root)) {
-        if (item && typeof item === 'object' && item.protocol != null && item.protocol !== p) {
-          item.protocol = p
-          changed = true
+        if (item && typeof item === 'object' && Object.prototype.hasOwnProperty.call(item, 'protocol')) {
+          if (item.protocol !== '') {
+            item.protocol = ''
+            changed = true
+          }
         }
       }
       if (changed) {

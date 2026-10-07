@@ -160,13 +160,13 @@ server.requestTimeout = 0
 server.headersTimeout = 0
 server.keepAliveTimeout = 65000
 
-// 先于 listen 写入协议，避免飞牛 start 脚本在回调前把桌面入口写成 http
-const listenScheme = useHttps ? 'https' : 'http'
+// 桌面入口 protocol 留空，由飞牛按当前桌面 http/https 自适应（勿写死）
 try {
-  writeDesktopProtocolHint(listenScheme)
-  syncNativeDesktopProtocol(listenScheme)
+  writeDesktopProtocolHint('auto')
+  syncNativeDesktopProtocol('auto')
 } catch {}
 
+const listenScheme = useHttps ? 'https' : 'http'
 server.listen(PORT, '::', () => {
   console.log(`Lemon Music running at ${listenScheme}://[::]:${PORT} (IPv4+IPv6)`)
   if (useHttps) {
@@ -177,7 +177,7 @@ server.listen(PORT, '::', () => {
   console.log(`Download path: ${DATA_PATH}`)
   console.log(`Config path: ${CONFIG_PATH}`)
   try {
-    syncNativeDesktopProtocol(listenScheme)
+    syncNativeDesktopProtocol('auto')
   } catch {}
   startLibraryAutoWatch()
   // 启动后补跑未分析情绪（仅新/未完成文件）
