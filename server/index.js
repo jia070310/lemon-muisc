@@ -1,8 +1,5 @@
 import express from 'express'
 import cors from 'cors'
-import { WebSocketServer } from 'ws'
-import http from 'http'
-import https from 'https'
 import path from 'path'
 import fs from 'fs'
 import { fileURLToPath } from 'url'
@@ -24,6 +21,7 @@ import { startMemoryGuard } from './utils/memoryGuard.js'
 import { startLibraryAutoWatch, stopLibraryAutoWatch } from './utils/libraryAutoWatch.js'
 import { ensureDefaultAdmin } from './utils/auth.js'
 import { installServerRuntimeLog } from './utils/runtimeLog.js'
+import { createAppListenServer } from './utils/dualListen.js'
 import {
   listFeiniuCertificates,
   resolveTlsListen,
@@ -56,10 +54,16 @@ if (tls.enabled && tls.error) {
   console.log(`[https] 使用飞牛证书: ${tls.meta.certName}`)
 }
 const useHttps = Boolean(tls.enabled && tls.credentials && !tls.error)
-const server = useHttps
-  ? https.createServer(tls.credentials, app)
-  : http.createServer(app)
+// 有证书时同端口双协议：HTTP + HTTPS 均可，避免飞牛用 http 打开时空 502
+const listenBundle = createAppListenServer(
+  app,
+  useHttps ? tls.credentials : null,
+  { path: '/ws' },
+)
+const server = listenBundle.listenServer
+const wss = listenBundle.wss
 app.locals.httpsEnabled = useHttps
+app.locals.httpsDual = Boolean(listenBundle.dual)
 app.locals.httpsMeta = tls.meta || null
 
 app.use(cors({ origin: true, credentials: true }))
@@ -102,7 +106,6 @@ if (fs.existsSync(publicIndex)) {
   })
 }
 
-const wss = new WebSocketServer({ server, path: '/ws' })
 setupWebSocket(wss)
 
 /** 自动加载各用户激活音源的并集（故障音源跳过），须在对外服务前完成 */
@@ -145,7 +148,7 @@ function shutdown(signal) {
   console.log(`收到 ${signal}，正在关闭服务...`)
   stopLibraryAutoWatch()
   wss.close(() => {
-    server.close(() => process.exit(0))
+    listenBundle.close(() => process.exit(0))
   })
   setTimeout(() => process.exit(1), 3000).unref()
 }
@@ -163,25 +166,20 @@ server.on('error', (err) => {
   process.exit(1)
 })
 
-// 本地大 FLAC / 代理串流可能超过 2 分钟；0 = 不因空闲掐断连接
-server.timeout = 0
-server.requestTimeout = 0
-server.headersTimeout = 0
-server.keepAliveTimeout = 65000
-
 // 桌面入口 protocol 留空，由飞牛按当前桌面 http/https 自适应（勿写死）
 try {
   writeDesktopProtocolHint('auto')
   syncNativeDesktopProtocol('auto')
 } catch {}
 
-const listenScheme = useHttps ? 'https' : 'http'
 server.listen(PORT, '::', () => {
-  console.log(`Lemon Music running at ${listenScheme}://[::]:${PORT} (IPv4+IPv6)`)
-  if (useHttps) {
+  if (listenBundle.dual) {
+    console.log(`Lemon Music running at http://[::]:${PORT} and https://[::]:${PORT} (IPv4+IPv6, dual)`)
     const name = tls.meta?.certName || ''
     const certPath = tls.meta?.certPath || ''
-    console.log(`HTTPS enabled${name ? ` (${name})` : ''}${certPath ? `: ${certPath}` : ''}`)
+    console.log(`HTTPS enabled (HTTP also accepted)${name ? ` (${name})` : ''}${certPath ? `: ${certPath}` : ''}`)
+  } else {
+    console.log(`Lemon Music running at http://[::]:${PORT} (IPv4+IPv6)`)
   }
   console.log(`Download path: ${DATA_PATH}`)
   console.log(`Config path: ${CONFIG_PATH}`)
