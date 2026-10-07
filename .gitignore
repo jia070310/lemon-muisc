@@ -45,6 +45,8 @@ config/ADMIN_CREDENTIALS.txt
 config/desktop-protocol
 config/https.json
 config/ssl/
+certs/
+data/
 docs/forum-post*.md
 docs/feiniu-forum*.md
 

@@ -47,6 +47,19 @@
           </button>
           <button
             type="button"
+            class="daily-refresh-btn"
+            :disabled="dailyRefreshDisabled"
+            :aria-label="dailyRefreshLabel"
+            @click="onRefreshDailyMix"
+          >
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M21 12a9 9 0 1 1-2.6-6.2"/>
+              <polyline points="21 3 21 9 15 9"/>
+            </svg>
+            {{ dailyRefreshLabel }}
+          </button>
+          <button
+            type="button"
             class="daily-save-btn"
             :class="{ saved: !!dailyMix.savedId }"
             :disabled="!dailyMix.count"
@@ -389,6 +402,17 @@
       @added="onAddedToPlaylist"
     />
 
+    <ConfirmModal
+      :open="dailyRefreshTipOpen"
+      mode="alert"
+      title="每日推荐刷新次数"
+      message="每天最多可换一批 20 次。不喜欢当前推荐时可以更换；用完后将继续播放当前这一批。"
+      :hint="`本次确认后今日还剩 ${Math.max(0, dailyRefreshUi.remaining - 1)} 次。`"
+      confirm-text="知道了，换一批"
+      @confirm="confirmDailyRefreshTip"
+      @cancel="dailyRefreshTipOpen = false"
+    />
+
   </div>
 </template>
 
@@ -403,6 +427,7 @@ import MobileRowActions from '../components/MobileRowActions.vue'
 import TrackMetaLinks from '../components/TrackMetaLinks.vue'
 import CreatePlaylistModal from '../components/CreatePlaylistModal.vue'
 import PickPlaylistModal from '../components/PickPlaylistModal.vue'
+import ConfirmModal from '../components/ConfirmModal.vue'
 import AppSelect from '../components/AppSelect.vue'
 import SearchInput from '../components/SearchInput.vue'
 import { SEARCH_HISTORY_KEYS } from '../composables/useSearchHistory.js'
@@ -426,16 +451,99 @@ import {
   refreshLibraryTrackTotal,
   setLibraryTrackTotal,
 } from '../stores/library.js'
-import { dailyMix, dailyMixDesc, recoPlaylists, refreshLibraryMix, saveDailyMixPlaylist, loadNetworkPlaylistTracks } from '../stores/libraryMix.js'
+import {
+  dailyMix,
+  dailyMixDesc,
+  dailyRefreshUi,
+  recoPlaylists,
+  refreshLibraryMix,
+  saveDailyMixPlaylist,
+  loadNetworkPlaylistTracks,
+  regenerateDailyMix,
+  peekDailyRefreshGate,
+  markDailyRefreshWarned,
+  DAILY_REFRESH_COOLDOWN_SEC,
+} from '../stores/libraryMix.js'
 
 const dailyMixShort = computed(() => {
   const mix = dailyMix.value
-  if (!mix.count) return '根据收藏与最近播放生成'
+  if (!mix.count) return '本地 + 平台约各一半'
+  const onlineN = (mix.tracks || []).filter((t) => t?.source && t.source !== 'local' && !t.filePath && !t.localPath).length
   const bits = [`${mix.count} 首`]
-  if (mix.durationText) bits.push(mix.durationText.replace(/^约\s*/, ''))
-  if (mix.themeText) bits.push(mix.themeText.replace(/^今天/, ''))
+  if (onlineN) bits.push(`平台 ${onlineN}`)
+  bits.push(`还可换 ${dailyRefreshUi.value.remaining} 次`)
   return bits.join(' · ')
 })
+
+const dailyRefreshTipOpen = ref(false)
+let dailyRefreshCooldownTimer = 0
+
+const dailyRefreshLabel = computed(() => {
+  const ui = dailyRefreshUi.value
+  if (ui.busy) return '生成中…'
+  if (ui.cooldownLeft > 0) return `${ui.cooldownLeft}s`
+  if (ui.remaining <= 0) return '今日已用完'
+  return '换一批'
+})
+
+const dailyRefreshDisabled = computed(() => {
+  const ui = dailyRefreshUi.value
+  return !dailyMix.value.count || ui.busy || ui.cooldownLeft > 0 || ui.remaining <= 0
+})
+
+function startDailyRefreshCooldown(sec = DAILY_REFRESH_COOLDOWN_SEC) {
+  if (dailyRefreshCooldownTimer) {
+    clearInterval(dailyRefreshCooldownTimer)
+    dailyRefreshCooldownTimer = 0
+  }
+  dailyRefreshUi.value = { ...dailyRefreshUi.value, cooldownLeft: sec }
+  dailyRefreshCooldownTimer = window.setInterval(() => {
+    const left = Math.max(0, (dailyRefreshUi.value.cooldownLeft || 0) - 1)
+    dailyRefreshUi.value = { ...dailyRefreshUi.value, cooldownLeft: left }
+    if (left <= 0) {
+      clearInterval(dailyRefreshCooldownTimer)
+      dailyRefreshCooldownTimer = 0
+    }
+  }, 1000)
+}
+
+async function runDailyRefreshAndPlay() {
+  const res = await regenerateDailyMix()
+  if (!res.ok) {
+    if (res.reason === 'exhausted') {
+      showToast('今日刷新次数已用完，继续播放当前推荐', 'info')
+    } else {
+      showToast('暂时换不出新推荐，请稍后再试', 'info')
+    }
+    return
+  }
+  try {
+    await startPlayTracks(res.tracks, '', { dynamic: false })
+    showToast(`已换一批并播放（今日还可换 ${res.remaining} 次）`, 'success')
+  } catch (e) {
+    showToast(e?.message || '播放失败', 'error')
+  }
+  startDailyRefreshCooldown()
+}
+
+async function onRefreshDailyMix() {
+  const gate = peekDailyRefreshGate()
+  if (gate.exhausted) {
+    showToast('今日刷新次数已用完，继续播放当前推荐', 'info')
+    return
+  }
+  if (gate.needQuotaTip) {
+    dailyRefreshTipOpen.value = true
+    return
+  }
+  await runDailyRefreshAndPlay()
+}
+
+async function confirmDailyRefreshTip() {
+  dailyRefreshTipOpen.value = false
+  markDailyRefreshWarned()
+  await runDailyRefreshAndPlay()
+}
 
 const PLAYLIST_SORT_KEY = 'lemon-library-playlist-sort'
 const ALBUM_SORT_KEY = 'lemon-library-album-sort'
@@ -704,6 +812,10 @@ onUnmounted(() => {
   narrowMq?.removeEventListener('change', updateNarrow)
   playlistGridRo?.disconnect()
   playlistGridRo = null
+  if (dailyRefreshCooldownTimer) {
+    clearInterval(dailyRefreshCooldownTimer)
+    dailyRefreshCooldownTimer = 0
+  }
 })
 
 async function refreshLibrary() {
@@ -854,7 +966,7 @@ async function playDailyMix() {
     return
   }
   try {
-    await startPlayTracks(dailyMix.value.tracks, 'local', { dynamic: false })
+    await startPlayTracks(dailyMix.value.tracks, '', { dynamic: false })
     showToast(`正在播放每日推荐 ${dailyMix.value.count} 首`, 'success')
   } catch (e) {
     showToast(e?.message || '播放失败', 'error')
@@ -1044,6 +1156,7 @@ function showToast(text, type = 'info') {
 .daily-save-icon { display: none; }
 .daily-mix-actions { display: flex; flex-wrap: wrap; gap: 12px; }
 .daily-play-btn,
+.daily-refresh-btn,
 .daily-save-btn {
   display: inline-flex;
   align-items: center;
@@ -1061,6 +1174,17 @@ function showToast(text, type = 'info') {
   background: #e6392f;
 }
 .daily-play-btn:hover { background: #f0453c; }
+.daily-refresh-btn {
+  border: 1px solid #3a3a44;
+  color: #f2f2f6;
+  background: rgba(255, 255, 255, 0.06);
+  min-width: 7.5em;
+  justify-content: center;
+}
+.daily-refresh-btn:hover:not(:disabled) {
+  border-color: #50505c;
+  background: rgba(255, 255, 255, 0.1);
+}
 .daily-save-btn {
   border: 1px solid #2f2f38;
   color: #c8c8d2;
@@ -1073,6 +1197,7 @@ function showToast(text, type = 'info') {
 }
 .daily-save-btn.saved { color: #f0453c; border-color: #3d3d48; }
 .daily-play-btn:disabled,
+.daily-refresh-btn:disabled,
 .daily-save-btn:disabled { opacity: 0.45; cursor: default; }
 .daily-mix-bars {
   display: flex;

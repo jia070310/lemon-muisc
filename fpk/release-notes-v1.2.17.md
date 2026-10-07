@@ -10,7 +10,7 @@
 
 ### Docker
 
-- 恢复 Docker 部署（`Dockerfile` / Compose）；HTTPS 需自行挂载证书（`SSL_CERT` / `SSL_KEY`），说明见 [docs/docker.md](docs/docker.md)
+- 恢复 Docker 部署（`Dockerfile` / Compose）；HTTPS 需自行挂载证书（`SSL_CERT` / `SSL_KEY`），说明见仓库 `docs/docker.md`
 
 ### 音乐库推荐
 

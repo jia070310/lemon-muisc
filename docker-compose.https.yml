@@ -1,0 +1,16 @@
+# 在 HTTP compose 之上叠加应用内 HTTPS（需自行准备证书）
+#
+#   docker compose -f docker-compose.yml -f docker-compose.https.yml up -d
+#
+# 把 Let's Encrypt / 其它签发的 fullchain.pem、privkey.pem 放到 ./certs/
+# 详细步骤见 docs/docker.md
+
+services:
+  lemon-music:
+    environment:
+      # 挂载了 SSL_CERT / SSL_KEY 时也会自动开 HTTPS；显式写出更清晰
+      HTTPS: "1"
+      SSL_CERT: /certs/fullchain.pem
+      SSL_KEY: /certs/privkey.pem
+    volumes:
+      - ./certs:/certs:ro

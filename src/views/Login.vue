@@ -13,7 +13,10 @@
           <input v-model="username" type="text" autocomplete="username" :placeholder="defaultAdminPending ? 'admin123' : '用户名'" required />
         </label>
         <label class="field">
-          <span>密码</span>
+          <span class="field-label-row">
+            <span>密码</span>
+            <button type="button" class="forgot-link" @click="showForgot = true">忘记密码？</button>
+          </span>
           <input v-model="password" type="password" autocomplete="current-password" placeholder="请输入密码" required />
         </label>
         <label class="remember">
@@ -25,7 +28,6 @@
         <button class="btn-primary login-btn" type="submit" :disabled="loading">
           {{ loading ? '登录中…' : '登录' }}
         </button>
-        <button type="button" class="forgot-link" @click="showForgot = true">忘记密码？</button>
       </form>
     </div>
 
@@ -89,8 +91,11 @@
           </section>
 
           <section class="step">
-            <h3>自托管（不是飞牛、自己跑的项目）</h3>
-            <p>仅限自己在电脑上跑源码的情况。<b>飞牛 NAS 不要用下面两条</b>：</p>
+            <h3>Docker / 自己跑源码</h3>
+            <p>Docker：</p>
+            <pre class="cmd">docker compose exec lemon-music node scripts/reset-password.js --list
+docker compose exec lemon-music node scripts/reset-password.js 用户名 新密码</pre>
+            <p>电脑源码目录（<b>飞牛不要用 npm</b>）：</p>
             <pre class="cmd">npm run auth:reset-password -- --list
 npm run auth:reset-password -- 用户名 新密码</pre>
           </section>
@@ -191,6 +196,12 @@ async function submitLogin() {
 .login-sub { margin: 0 auto; max-width: 40ch; color: var(--text-secondary); font-size: 14px; line-height: 1.55; }
 .login-form { display: flex; flex-direction: column; gap: 14px; }
 .field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--text-secondary); }
+.field-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
 .field input { width: 100%; box-sizing: border-box; padding: 11px 12px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--bg-input); color: var(--text); font-size: 15px; }
 .field-hint { margin: -4px 0 0; font-size: 12px; line-height: 1.45; color: var(--text-muted); }
 .remember-hint { margin-top: 2px; }
@@ -198,16 +209,19 @@ async function submitLogin() {
 .login-error { margin: 0; color: var(--error); font-size: 13px; white-space: pre-line; }
 .login-btn { width: 100%; min-height: 44px; font-size: 15px; }
 .forgot-link {
-  align-self: center;
-  margin-top: -4px;
-  padding: 4px 8px;
+  margin: 0;
+  padding: 0;
   border: none;
   background: none;
-  color: var(--accent);
+  color: var(--accent, #f07018);
   font-size: 13px;
+  font-weight: 500;
+  line-height: 1.2;
   cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
-.forgot-link:hover { opacity: 0.85; text-decoration: underline; }
+.forgot-link:hover { opacity: 0.85; }
 
 .modal-overlay {
   position: fixed;

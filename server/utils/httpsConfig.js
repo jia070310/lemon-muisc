@@ -1,7 +1,10 @@
 /**
- * 应用内 HTTPS：默认自动开启——只要扫到飞牛系统证书就用 TLS。
- * 仅当 https.json 里显式 enabled:false，或环境变量 HTTPS=0 时关闭。
- * 不依赖反向代理；启用后同一 PORT 以 TLS 监听。
+ * 应用内 HTTPS（同一 PORT 直接 TLS，不依赖反向代理）。
+ *
+ * 飞牛原生 FPK：自动扫描系统证书目录，有证书则开。
+ * Docker / 自托管：容器内无飞牛证书，需挂载文件并设置
+ *   SSL_CERT + SSL_KEY（或 HTTPS=1），见 docs/docker.md。
+ * 关闭：HTTPS=0 或 https.json 里 enabled:false。
  */
 import fs from 'fs'
 import path from 'path'
@@ -81,13 +84,17 @@ export function loadHttpsConfig() {
       }
     } catch {}
   }
-  // 环境变量可覆盖：HTTPS=0 关闭；HTTPS=1 强制开
+  // 环境变量：HTTPS=0 关闭；HTTPS=1 强制开；挂载 SSL_CERT+SSL_KEY 则按手动证书（Docker）
   const envOn = String(process.env.HTTPS || process.env.LEMON_HTTPS || '').trim()
   if (envOn === '0' || /^false$/i.test(envOn)) cfg.enabled = false
   else if (envOn === '1' || /^true$/i.test(envOn)) cfg.enabled = true
   if (process.env.SSL_CERT) cfg.certPath = String(process.env.SSL_CERT).trim()
   if (process.env.SSL_KEY) cfg.keyPath = String(process.env.SSL_KEY).trim()
-  if (process.env.SSL_CERT && process.env.SSL_KEY) cfg.source = 'manual'
+  if (process.env.SSL_CERT && process.env.SSL_KEY) {
+    cfg.source = 'manual'
+    // Docker 常见：只挂证书不写 HTTPS=1，也视为要开
+    if (cfg.enabled == null) cfg.enabled = true
+  }
   if (process.env.LEMON_SSL_CERT_NAME) {
     cfg.certName = String(process.env.LEMON_SSL_CERT_NAME).trim()
     cfg.source = 'feiniu'

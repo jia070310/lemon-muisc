@@ -3,19 +3,27 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/jia070310/lemon-muisc)](https://github.com/jia070310/lemon-muisc/releases)
 
-面向飞牛 NAS 与自托管环境的 **Web 音乐工具**：多平台搜索、歌单发现、在线试听、批量下载、本地标签管理。兼容落雪音乐（LX Music）自定义音源脚本，在浏览器中即可完成「找歌 → 试听 → 下载 → 整理」全流程。基于落雪音乐修改
+面向飞牛 NAS、Docker 服务器与自托管环境的 **Web 音乐工具**：多平台搜索、歌单发现、在线试听、批量下载、本地标签管理。兼容落雪音乐（LX Music）自定义音源脚本，在浏览器中即可完成「找歌 → 试听 → 下载 → 整理」全流程。基于落雪音乐修改
 
-当前版本：**v1.2.16.19** · 开源协议：**[MIT](LICENSE)**  
+当前版本：**v1.2.17** · 开源协议：**[MIT](LICENSE)**  
 飞牛应用中心显示名：**柠檬音乐**（浏览器标题仍为「柠檬音乐下载」）  
 仓库：[https://github.com/jia070310/lemon-muisc](https://github.com/jia070310/lemon-muisc)
 
-飞牛 FPK 为**独立原生应用**，运行时使用应用中心 **Node.js v22**。
+- **飞牛 FPK**：独立原生应用，运行时使用应用中心 **Node.js v22**（有系统证书时自动 HTTPS）
+- **Docker / 服务器**：[docs/docker.md](docs/docker.md)（HTTPS 需自行挂载证书，与飞牛不同）
 
 **开放 API（第三方 / APP 客户端）**：[docs/open-api.md](docs/open-api.md) · 本机文档 `http://<主机>:7983/api/docs` · [OpenAPI](docs/openapi.yaml)
 
 -QQ 互动群「飞牛柠檬🍋muisc」（群号 1126326017）
 - ![群](docs/screenshots/QQ195632.png)
 
+
+### v1.2.17
+
+- **HTTPS（飞牛）**：有系统证书时默认应用内 HTTPS，无需反代
+- **Docker**：恢复镜像部署与证书挂载说明
+- **每日推荐**：一天最多换一批 20 次；本地 / 平台约各一半；深夜电台偏舒缓
+- **忘记密码**：登录页密码旁说明（飞牛 Node、`@appdata`、勿用 npm）
 
 ### v1.2.16.19
 
@@ -414,6 +422,7 @@
 | 标签 | node-id3、music-metadata |
 | 可视化 | Web Audio API + Canvas |
 | 飞牛部署 | 原生 FPK + 商店 Node.js v22 |
+| 服务器部署 | Docker（[docs/docker.md](docs/docker.md)）或 `npm start` |
 
 ---
 
@@ -464,9 +473,29 @@ npm start
 
 安装后自动创建默认管理员 **admin123 / admin123**。首次登录后必须修改用户名和密码，否则无法进入应用。
 
-### HTTPS（默认开启，无需反向代理）
+### HTTPS
 
-飞牛上若「系统设置 → 安全性 → 证书」里已有证书，应用启动时**自动**用同一端口提供 HTTPS（读取飞牛证书，无需反代）。没有证书时回退 HTTP。访问：`https://NAS的IP:7983` 或证书域名。强制 HTTP 可设环境变量 `HTTPS=0`。
+| 部署 | 行为 |
+|------|------|
+| **飞牛 FPK** | 有系统证书则**自动** HTTPS（读飞牛「证书」），无需反代；`HTTPS=0` 可强制 HTTP |
+| **Docker / 服务器** | 默认 HTTP；挂载证书并设置 `SSL_CERT` / `SSL_KEY`（或 `HTTPS=1`）后同端口 HTTPS。步骤见 [docs/docker.md](docs/docker.md) |
+
+### Docker 快速启动
+
+```bash
+mkdir -p data/music data/downloads data/config
+docker compose up -d --build
+# 浏览器 http://服务器IP:7983
+```
+
+启用 HTTPS（先把 `fullchain.pem`、`privkey.pem` 放到 `certs/`）：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.https.yml up -d
+# 浏览器 https://服务器IP或域名:7983
+```
+
+完整说明（目录、环境变量、证书续期、重置密码）：[docs/docker.md](docs/docker.md)
 
 ### 忘记密码
 
