@@ -2,6 +2,7 @@ import express from 'express'
 import cors from 'cors'
 import { WebSocketServer } from 'ws'
 import http from 'http'
+import https from 'https'
 import path from 'path'
 import fs from 'fs'
 import { fileURLToPath } from 'url'
@@ -23,6 +24,7 @@ import { startMemoryGuard } from './utils/memoryGuard.js'
 import { startLibraryAutoWatch, stopLibraryAutoWatch } from './utils/libraryAutoWatch.js'
 import { ensureDefaultAdmin } from './utils/auth.js'
 import { installServerRuntimeLog } from './utils/runtimeLog.js'
+import { resolveTlsListen, syncNativeDesktopProtocol } from './utils/httpsConfig.js'
 
 installServerRuntimeLog()
 installSourceFaultHandlers()
@@ -33,7 +35,19 @@ const DATA_PATH = process.env.DOWNLOAD_PATH || path.join(__dirname, '..', 'data'
 const CONFIG_PATH = process.env.CONFIG_PATH || path.join(__dirname, '..', 'config')
 
 const app = express()
-const server = http.createServer(app)
+const tls = resolveTlsListen()
+if (tls.enabled && tls.error) {
+  console.error(`[https] ${tls.error}`)
+  console.error('[https] 已回退为 HTTP。确认飞牛证书可读后重启应用即可。')
+} else if (!tls.enabled && tls.meta?.mode === 'auto-no-cert') {
+  console.log('[https] 未找到飞牛证书，当前使用 HTTP（有证书后将自动启用 HTTPS）')
+}
+const useHttps = Boolean(tls.enabled && tls.credentials && !tls.error)
+const server = useHttps
+  ? https.createServer(tls.credentials, app)
+  : http.createServer(app)
+app.locals.httpsEnabled = useHttps
+app.locals.httpsMeta = tls.meta || null
 
 app.use(cors({ origin: true, credentials: true }))
 app.use(express.json({ limit: '25mb' }))
@@ -143,9 +157,18 @@ server.headersTimeout = 0
 server.keepAliveTimeout = 65000
 
 server.listen(PORT, '::', () => {
-  console.log(`Lemon Music running at http://[::]:${PORT} (IPv4+IPv6)`)
+  const scheme = useHttps ? 'https' : 'http'
+  console.log(`Lemon Music running at ${scheme}://[::]:${PORT} (IPv4+IPv6)`)
+  if (useHttps) {
+    const name = tls.meta?.certName || ''
+    const certPath = tls.meta?.certPath || ''
+    console.log(`HTTPS enabled${name ? ` (${name})` : ''}${certPath ? `: ${certPath}` : ''}`)
+  }
   console.log(`Download path: ${DATA_PATH}`)
   console.log(`Config path: ${CONFIG_PATH}`)
+  try {
+    syncNativeDesktopProtocol(scheme)
+  } catch {}
   startLibraryAutoWatch()
   // 启动后补跑未分析情绪（仅新/未完成文件）
   setTimeout(() => {

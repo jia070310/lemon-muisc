@@ -25,7 +25,19 @@ export function getAuthCookieToken(req) {
   return String(cookies[AUTH_COOKIE] || '').trim()
 }
 
-/** Max-Age 秒；不设 Secure，兼容飞牛局域网 HTTP */
+function cookieSecureFlag(res) {
+  try {
+    const req = res?.req
+    if (!req) return false
+    if (req.secure) return true
+    const xf = String(req.headers?.['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase()
+    return xf === 'https'
+  } catch {
+    return false
+  }
+}
+
+/** Max-Age 秒；HTTPS 时加 Secure，HTTP 局域网不加 */
 export function setAuthCookie(res, token, maxAgeSec) {
   if (!res || !token) return
   const maxAge = Math.max(0, Math.floor(Number(maxAgeSec) || 0))
@@ -36,13 +48,13 @@ export function setAuthCookie(res, token, maxAgeSec) {
     'SameSite=Lax',
     `Max-Age=${maxAge}`,
   ]
+  if (cookieSecureFlag(res)) parts.push('Secure')
   res.append('Set-Cookie', parts.join('; '))
 }
 
 export function clearAuthCookie(res) {
   if (!res) return
-  res.append(
-    'Set-Cookie',
-    `${AUTH_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`,
-  )
+  const parts = [`${AUTH_COOKIE}=`, 'Path=/', 'HttpOnly', 'SameSite=Lax', 'Max-Age=0']
+  if (cookieSecureFlag(res)) parts.push('Secure')
+  res.append('Set-Cookie', parts.join('; '))
 }

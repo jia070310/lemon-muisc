@@ -149,15 +149,42 @@ fix_desktop_db() {
   fi
 }
 
-patch_ui_config_port() {
-  local file="$1" port="$2"
-  [ -f "${file}" ] || return 0
-  [ -n "${port}" ] || return 0
-  if command -v python3 >/dev/null 2>&1; then
-    python3 - "${file}" "${port}" <<'PY' 2>/dev/null || true
+read_desktop_protocol() {
+  local conf proto
+  conf="$(resolve_config_path 2>/dev/null || true)"
+  [ -n "${conf}" ] || conf="${TRIM_PKGVAR:-}/config"
+  if [ -f "${conf}/desktop-protocol" ]; then
+    proto="$(tr -d ' \n\r' < "${conf}/desktop-protocol" 2>/dev/null)"
+  elif [ -f "${conf}/https.json" ] && command -v python3 >/dev/null 2>&1; then
+    proto="$(python3 - "${conf}/https.json" <<'PY' 2>/dev/null || true
 import json, sys
 from pathlib import Path
-path, port = Path(sys.argv[1]), str(sys.argv[2])
+try:
+    data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+    print("https" if data.get("enabled") else "http")
+except Exception:
+    print("http")
+PY
+)"
+  fi
+  case "${proto}" in
+    https) echo https ;;
+    *) echo http ;;
+  esac
+}
+
+patch_ui_config_port() {
+  local file="$1" port="$2" protocol="${3:-}"
+  [ -f "${file}" ] || return 0
+  [ -n "${port}" ] || return 0
+  [ -n "${protocol}" ] || protocol="$(read_desktop_protocol)"
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "${file}" "${port}" "${protocol}" <<'PY' 2>/dev/null || true
+import json, sys
+from pathlib import Path
+path, port, protocol = Path(sys.argv[1]), str(sys.argv[2]), str(sys.argv[3] or "http")
+if protocol not in ("http", "https"):
+    protocol = "http"
 try:
     data = json.loads(path.read_text(encoding="utf-8"))
 except Exception:
@@ -165,13 +192,17 @@ except Exception:
 root = data.get(".url") if isinstance(data, dict) else None
 if isinstance(root, dict):
     for item in root.values():
-        if isinstance(item, dict) and "port" in item:
-            item["port"] = port
+        if isinstance(item, dict):
+            if "port" in item:
+                item["port"] = port
+            if "protocol" in item:
+                item["protocol"] = protocol
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 PY
     return 0
   fi
   sed -i -E "s/\"port\"[[:space:]]*:[[:space:]]*\"[^\"]*\"/\"port\": \"${port}\"/" "${file}" 2>/dev/null || true
+  sed -i -E "s/\"protocol\"[[:space:]]*:[[:space:]]*\"[^\"]*\"/\"protocol\": \"${protocol}\"/" "${file}" 2>/dev/null || true
 }
 
 sync_desktop_port() {
@@ -194,10 +225,19 @@ sync_desktop_port() {
 }
 
 ensure_desktop_entry() {
-  local port
+  local port protocol
   refresh_app_icons || true
   port="$(sync_desktop_port)"
+  protocol="$(read_desktop_protocol)"
   ensure_ui_symlink
   sync_desktop_port "${port}" >/dev/null
+  # 再写一遍协议，避免 sync 只改端口
+  for file in \
+    "${TRIM_APPDEST}/ui/config" \
+    "/var/apps_ui/${TRIM_APPNAME:-lemon-music}/config" \
+    "/var/apps/${TRIM_APPNAME:-lemon-music}/target/ui/config"
+  do
+    patch_ui_config_port "${file}" "${port}" "${protocol}"
+  done
   fix_desktop_db "${port}"
 }

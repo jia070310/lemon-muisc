@@ -42,6 +42,9 @@ config/*.db-wal
 config/*.sqlite
 config/*.sqlite3
 config/ADMIN_CREDENTIALS.txt
+config/desktop-protocol
+config/https.json
+config/ssl/
 docs/forum-post*.md
 docs/feiniu-forum*.md
 
