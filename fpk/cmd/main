@@ -172,11 +172,30 @@ start_service() {
     echo $! > "${PID_FILE}"
   )
 
-  # 短暂等待端口
+  # 短暂等待端口；协议文件可能略晚于端口就绪，多等几秒再写桌面入口
   local i=0
+  local conf_dir
+  conf_dir="$(resolve_config_path 2>/dev/null || true)"
+  [ -n "${conf_dir}" ] || conf_dir="${CONFIG_PATH:-}"
   while [ "${i}" -lt 20 ]; do
     if is_port_up "${listen_port}"; then
+      local j=0
+      while [ "${j}" -lt 8 ]; do
+        if [ -n "${conf_dir}" ] && [ -f "${conf_dir}/desktop-protocol" ]; then
+          break
+        fi
+        if declare -F probe_local_tls >/dev/null 2>&1 && probe_local_tls "${listen_port}"; then
+          break
+        fi
+        sleep 0.5
+        j=$((j + 1))
+      done
       ensure_desktop_entry || true
+      # 后台再刷一次，覆盖竞态仍写成 http 的情况
+      (
+        sleep 2
+        ensure_desktop_entry || true
+      ) >/dev/null 2>&1 &
       return 0
     fi
     # 进程已死：立刻失败并带上日志尾部

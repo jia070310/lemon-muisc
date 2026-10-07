@@ -24,7 +24,11 @@ import { startMemoryGuard } from './utils/memoryGuard.js'
 import { startLibraryAutoWatch, stopLibraryAutoWatch } from './utils/libraryAutoWatch.js'
 import { ensureDefaultAdmin } from './utils/auth.js'
 import { installServerRuntimeLog } from './utils/runtimeLog.js'
-import { resolveTlsListen, syncNativeDesktopProtocol } from './utils/httpsConfig.js'
+import {
+  resolveTlsListen,
+  syncNativeDesktopProtocol,
+  writeDesktopProtocolHint,
+} from './utils/httpsConfig.js'
 
 installServerRuntimeLog()
 installSourceFaultHandlers()
@@ -156,9 +160,15 @@ server.requestTimeout = 0
 server.headersTimeout = 0
 server.keepAliveTimeout = 65000
 
+// 先于 listen 写入协议，避免飞牛 start 脚本在回调前把桌面入口写成 http
+const listenScheme = useHttps ? 'https' : 'http'
+try {
+  writeDesktopProtocolHint(listenScheme)
+  syncNativeDesktopProtocol(listenScheme)
+} catch {}
+
 server.listen(PORT, '::', () => {
-  const scheme = useHttps ? 'https' : 'http'
-  console.log(`Lemon Music running at ${scheme}://[::]:${PORT} (IPv4+IPv6)`)
+  console.log(`Lemon Music running at ${listenScheme}://[::]:${PORT} (IPv4+IPv6)`)
   if (useHttps) {
     const name = tls.meta?.certName || ''
     const certPath = tls.meta?.certPath || ''
@@ -167,7 +177,7 @@ server.listen(PORT, '::', () => {
   console.log(`Download path: ${DATA_PATH}`)
   console.log(`Config path: ${CONFIG_PATH}`)
   try {
-    syncNativeDesktopProtocol(scheme)
+    syncNativeDesktopProtocol(listenScheme)
   } catch {}
   startLibraryAutoWatch()
   // 启动后补跑未分析情绪（仅新/未完成文件）

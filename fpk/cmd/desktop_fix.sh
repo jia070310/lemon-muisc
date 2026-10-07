@@ -149,28 +149,84 @@ fix_desktop_db() {
   fi
 }
 
+# 探测本机端口是否已是 TLS（飞牛桌面入口协议用）
+probe_local_tls() {
+  local port="${1:-}"
+  [ -n "${port}" ] || return 1
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "${port}" <<'PY' 2>/dev/null && return 0
+import socket, ssl, sys
+port = int(sys.argv[1])
+ctx = ssl._create_unverified_context()
+try:
+    with socket.create_connection(("127.0.0.1", port), timeout=1.2) as raw:
+        with ctx.wrap_socket(raw, server_hostname="localhost") as s:
+            s.do_handshake()
+    sys.exit(0)
+except Exception:
+    sys.exit(1)
+PY
+  fi
+  if command -v openssl >/dev/null 2>&1; then
+    echo | openssl s_client -connect "127.0.0.1:${port}" -servername localhost 2>/dev/null \
+      | grep -q "BEGIN CERTIFICATE" && return 0
+  fi
+  return 1
+}
+
 read_desktop_protocol() {
-  local conf proto
+  local conf forced port hint
   conf="$(resolve_config_path 2>/dev/null || true)"
   [ -n "${conf}" ] || conf="${TRIM_PKGVAR:-}/config"
-  if [ -f "${conf}/desktop-protocol" ]; then
-    proto="$(tr -d ' \n\r' < "${conf}/desktop-protocol" 2>/dev/null)"
-  elif [ -f "${conf}/https.json" ] && command -v python3 >/dev/null 2>&1; then
-    proto="$(python3 - "${conf}/https.json" <<'PY' 2>/dev/null || true
-import json, sys
+  forced=""
+  if [ -f "${conf}/https.json" ] && command -v python3 >/dev/null 2>&1; then
+    forced="$(python3 - "${conf}/https.json" <<'PY' 2>/dev/null || true
+import json
 from pathlib import Path
 try:
     data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-    print("https" if data.get("enabled") else "http")
+    en = data.get("enabled", None)
+    if en is False or en == 0 or en == "0" or str(en).lower() == "false":
+        print("http")
+    elif en is True or en == 1 or en == "1" or str(en).lower() == "true":
+        print("https")
+    else:
+        print("")
 except Exception:
-    print("http")
+    print("")
 PY
 )"
   fi
-  case "${proto}" in
-    https) echo https ;;
-    *) echo http ;;
-  esac
+  # 用户显式关闭时不要探测成 https
+  if [ "${forced}" = "http" ]; then
+    echo http
+    return 0
+  fi
+  if [ "${forced}" = "https" ]; then
+    echo https
+    return 0
+  fi
+
+  port="${PORT:-}"
+  [ -n "${port}" ] || port="$(read_saved_service_port 2>/dev/null || true)"
+  [ -n "${port}" ] || port=7983
+  # 以实际监听为准，避免升级后仍沿用旧的 desktop-protocol=http
+  if probe_local_tls "${port}"; then
+    echo https
+    return 0
+  fi
+  if [ -f "${conf}/ssl/server.crt" ] && [ -f "${conf}/ssl/server.key" ]; then
+    echo https
+    return 0
+  fi
+  if [ -f "${conf}/desktop-protocol" ]; then
+    hint="$(tr -d ' \n\r' < "${conf}/desktop-protocol" 2>/dev/null)"
+    if [ "${hint}" = "https" ]; then
+      echo https
+      return 0
+    fi
+  fi
+  echo http
 }
 
 patch_ui_config_port() {
