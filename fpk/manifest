@@ -1,7 +1,8 @@
 appname        = lemon-music
 version        = 1.2.17.1
-display_name   = 鏌犳闊充箰
-desc           = <b>涓嬭浇闊充箰銆佹挱鏀鹃煶涔愬簱銆佹爣绛炬壒閲忔暣鐞?/b>銆備篃鏀寔澶氶煶婧愭悳绱笌璇曞惉銆佸彂鐜版瓕鍗?/ 姒滃崟銆佹枃浠跺幓閲嶄笌鏁寸悊銆?br><br><b>閲嶇疆绠＄悊鍛樺瘑鐮?/b>锛堝彧鏀圭櫥褰曞瘑鐮侊紝<b>涓嶄細</b>娓呯┖姝屽崟銆佹敹钘忔垨闊充箰鏂囦欢锛夈€傛枃浠剁鐞嗗櫒鏀逛笉浜嗭紝闇€杩涘懡浠よ锛氱數鑴戞墦寮€椋炵墰 鈫?鎺у埗闈㈡澘寮€鍚?SSH 鈫?鎵撳紑銆岀粓绔€嶏紱鎴栫敤鐢佃剳缁堢 <code>ssh 椋炵墰鐢ㄦ埛鍚岪NAS鐨処P</code>銆係SH 鐢ㄩ鐗涚郴缁熻处鍙凤紱鍛戒护閲岀殑鐢ㄦ埛鍚嶆槸鏌犳闊充箰璐﹀彿銆傚厛鍒楀嚭璐﹀彿鍐嶉噸缃細<br><code>PATH=/var/apps/nodejs_v22/target/bin:$PATH CONFIG_PATH=/vol1/@appdata/lemon-music/config node /var/apps/lemon-music/target/scripts/reset-password.js --list</code><br><code>PATH=/var/apps/nodejs_v22/target/bin:$PATH CONFIG_PATH=/vol1/@appdata/lemon-music/config node /var/apps/lemon-music/target/scripts/reset-password.js 鐢ㄦ埛鍚?鏂板瘑鐮?/code><br>涓嶈鐢?npm锛堥鐗涙病鏈夛級銆傞厤缃湪 <code>@appdata</code> 涓嶆槸 <code>@appconf</code>锛涗笉鍦?vol1 鏃舵敼璺緞銆傜櫥褰曢〉銆屽繕璁板瘑鐮併€嶆湁閫愭璇存槑銆?br><br><b>渚濊禆</b>锛氬簲鐢ㄤ腑蹇?<b>Node.js v22</b>銆傜洰褰曞彲鍦ㄥ畨瑁呭悜瀵兼垨銆岃闂潈闄愩€嶄腑鎸囧畾銆傚嵏杞藉彲閫変繚鐣欓厤缃紝涓嶄細鍒犻櫎闊充箰搴?/ 涓嬭浇鐩綍涓殑闊抽銆?br><br><b>鍏嶈矗澹版槑</b>锛氫粎渚涗釜浜哄悎娉曚娇鐢ㄣ€傝纭繚瀵规墍绠＄悊闊充箰鎷ユ湁鐩稿簲鏉冨埄锛屽苟閬靛畧褰撳湴娉曞緥涓庡钩鍙版潯娆俱€傝繚瑙勫悗鏋滅敱鐢ㄦ埛鑷鎵挎媴銆?platform       = x86
+display_name   = 柠檬音乐
+desc           = <b>下载音乐、播放音乐库、标签批量整理</b>。也支持多音源搜索与试听、发现歌单 / 榜单、文件去重与整理。<br><br><b>重置管理员密码</b>（只改登录密码，<b>不会</b>清空歌单、收藏或音乐文件）。文件管理器改不了，需进命令行：电脑打开飞牛 → 控制面板开启 SSH → 打开「终端」；或用电脑终端 <code>ssh 飞牛用户名@NAS的IP</code>。SSH 用飞牛系统账号；命令里的用户名是柠檬音乐账号。先列出账号再重置：<br><code>PATH=/var/apps/nodejs_v22/target/bin:$PATH CONFIG_PATH=/vol1/@appdata/lemon-music/config node /var/apps/lemon-music/target/scripts/reset-password.js --list</code><br><code>PATH=/var/apps/nodejs_v22/target/bin:$PATH CONFIG_PATH=/vol1/@appdata/lemon-music/config node /var/apps/lemon-music/target/scripts/reset-password.js 用户名 新密码</code><br>不要用 npm（飞牛没有）。配置在 <code>@appdata</code> 不是 <code>@appconf</code>；不在 vol1 时改路径。登录页「忘记密码」有逐步说明。<br><br><b>依赖</b>：应用中心 <b>Node.js v22</b>。目录可在安装向导或「访问权限」中指定。卸载可选保留配置，不会删除音乐库 / 下载目录中的音频。<br><br><b>免责声明</b>：仅供个人合法使用。请确保对所管理音乐拥有相应权利，并遵守当地法律与平台条款。违规后果由用户自行承担。
+platform       = x86
 os_min_version = 1.1.8
 source         = thirdparty
 maintainer     = jia070310
