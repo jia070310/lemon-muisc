@@ -64,9 +64,24 @@ function truncateComment(text, max = 240) {
   return s.length > max ? `${s.slice(0, max - 1)}…` : s
 }
 
+/** 专辑类型 / 版本词等不是可写入的风格 */
+const NON_GENRE_LABEL = /^(single|ep|lp|album|ost|soundtrack|live|digital|demo|remix|instrumental|录音室专辑|录音室版|精选集|合辑|现场|演唱会|原声带|数字专辑|单曲|正式版|完整版)$/i
+
+function flattenGenreValue(value) {
+  if (value == null || value === '') return ''
+  if (typeof value === 'string' || typeof value === 'number') return String(value)
+  if (Array.isArray(value)) {
+    return value.map((item) => flattenGenreValue(item)).filter(Boolean).join('/')
+  }
+  if (typeof value === 'object') {
+    return flattenGenreValue(value.name || value.tagName || value.title || value.text || value.value || '')
+  }
+  return ''
+}
+
 function normalizeGenre(value) {
-  const s = cleanHtml(value)
-  if (!s) return ''
+  const s = cleanHtml(flattenGenreValue(value))
+  if (!s || NON_GENRE_LABEL.test(s)) return ''
   return s.split(/[,，/|、;；]/)[0].trim()
 }
 
@@ -79,9 +94,23 @@ function parseYearFromDesc(desc) {
 }
 
 function pickGenreFromInfo(info = {}) {
-  const primary = normalizeGenre(info.genre || info.genreNew || info.tags)
-  if (primary) return primary
-  return normalizeGenre(info.language || info.lang || info.albumType || info.subType)
+  const candidates = [
+    info.genre,
+    info.genreNew,
+    info.genre_name,
+    info.genreName,
+    info.tags,
+    info.tag,
+    info.style,
+    info.category,
+    info.language,
+    info.lang,
+  ]
+  for (const c of candidates) {
+    const g = normalizeGenre(c)
+    if (g) return g
+  }
+  return ''
 }
 
 function pickYearFromInfo(info = {}) {
@@ -100,10 +129,6 @@ function mergeAlbumExtras(extras, info = {}) {
   // 专辑详情的 author = Album Artist（整张专辑署名）
   if (info.author) extras.albumArtist = joinArtists(cleanHtml(info.author))
   if (info.img && !extras.picUrl) extras.picUrl = info.img
-  if (!extras.genre && info.language) {
-    const lang = normalizeGenre(info.language)
-    if (lang) extras.genre = lang
-  }
   return extras
 }
 
@@ -137,7 +162,11 @@ function scoreMatchForTag(item, parsed) {
   return score
 }
 
-async function fetchCrossSourceTagFallback(match, primarySource, { needCover = false } = {}) {
+async function fetchCrossSourceTagFallback(match, primarySource, {
+  needCover = false,
+  needGenre = false,
+  needYear = false,
+} = {}) {
   // 歌名与专辑同名时，用「歌名 歌手」更稳（QQ 等对「歌名 歌名」常搜不出封面）
   const title = String(match?.name || '').trim()
   const album = String(match?.album || match?.albumName || '').trim()
@@ -149,6 +178,7 @@ async function fetchCrossSourceTagFallback(match, primarySource, { needCover = f
   if (!keyword) return {}
 
   const trySources = ['tx', 'wy', 'kg', 'kw', 'mg'].filter(src => src !== primarySource)
+  const best = {}
   for (const src of trySources) {
     try {
       const result = await searchMusic(keyword, src, 1, 8)
@@ -165,13 +195,34 @@ async function fetchCrossSourceTagFallback(match, primarySource, { needCover = f
         .filter(row => row.score > 0)
         .sort((a, b) => b.score - a.score)[0]?.item
       if (!hit) continue
-      const extras = await fetchAlbumTagExtras(hit, src)
+      let extras = await fetchAlbumTagExtras(hit, src)
+      // 网易云歌曲标签常比专辑字段更全，专门补风格
+      if (src === 'wy' && (!extras.genre || !extras.year)) {
+        const wyExtras = await fetchWySongTagExtras({ ...hit, source: 'wy' })
+        extras = {
+          ...wyExtras,
+          ...extras,
+          genre: extras.genre || wyExtras.genre || '',
+          year: extras.year || wyExtras.year || '',
+        }
+      }
       const cover = extras.picUrl || resolveCoverUrl({ ...hit, source: src })
       if (cover) extras.picUrl = cover
-      if (extras.year || extras.genre || extras.comment || (needCover && extras.picUrl)) return extras
+      if (!best.year && extras.year) best.year = extras.year
+      if (!best.genre && extras.genre) best.genre = extras.genre
+      if (!best.comment && extras.comment) best.comment = extras.comment
+      if (!best.picUrl && extras.picUrl) best.picUrl = extras.picUrl
+      if (!best.album && extras.album) best.album = extras.album
+      if (!best.albumArtist && extras.albumArtist) best.albumArtist = extras.albumArtist
+      const genreOk = !needGenre || best.genre
+      const yearOk = !needYear || best.year
+      const coverOk = !needCover || best.picUrl
+      if (genreOk && yearOk && coverOk && (best.genre || best.year || best.comment || best.picUrl)) {
+        return best
+      }
     } catch {}
   }
-  return {}
+  return best
 }
 
 function pickAlbumId(match, source) {
@@ -227,7 +278,14 @@ async function fetchWySongTagExtras(match) {
       if (song.al?.name) extras.album = cleanHtml(song.al.name)
       if (song.al?.id) {
         const albumExtras = await fetchAlbumTagExtras({ ...match, albumId: String(song.al.id) }, 'wy')
-        return { ...extras, ...albumExtras }
+        return {
+          ...albumExtras,
+          ...extras,
+          genre: extras.genre || albumExtras.genre || '',
+          year: extras.year || albumExtras.year || '',
+          album: extras.album || albumExtras.album || '',
+          albumArtist: extras.albumArtist || albumExtras.albumArtist || '',
+        }
       }
     }
 
@@ -243,7 +301,14 @@ async function fetchWySongTagExtras(match) {
 
     if (al.id) {
       const albumExtras = await fetchAlbumTagExtras({ ...match, albumId: String(al.id) }, 'wy')
-      return { ...extras, ...albumExtras }
+      return {
+        ...albumExtras,
+        ...extras,
+        genre: extras.genre || albumExtras.genre || '',
+        year: extras.year || albumExtras.year || '',
+        album: extras.album || albumExtras.album || '',
+        albumArtist: extras.albumArtist || albumExtras.albumArtist || '',
+      }
     }
     return extras
   } catch {
@@ -256,17 +321,62 @@ async function fetchTagTextExtras(match, source) {
   let extras = await fetchAlbumTagExtras(match, sdkSource)
   if (sdkSource === 'wy' && (!extras.year || !extras.genre || !extras.comment)) {
     const wyExtras = await fetchWySongTagExtras(match)
-    extras = { ...wyExtras, ...extras }
+    extras = {
+      ...wyExtras,
+      ...extras,
+      genre: extras.genre || wyExtras.genre || '',
+      year: extras.year || wyExtras.year || '',
+    }
   }
   if (!extras.year && extras.comment) {
     const year = parseYearFromDesc(extras.comment)
     if (year) extras.year = year
   }
+  // 主源没有风格时：跨源继续找，直到拿到风格（不再因「只有年份」提前结束）
   if (!extras.genre || !extras.year) {
-    const fallback = await fetchCrossSourceTagFallback(match, sdkSource)
+    const fallback = await fetchCrossSourceTagFallback(match, sdkSource, {
+      needGenre: !extras.genre,
+      needYear: !extras.year,
+    })
     if (!extras.year && fallback.year) extras.year = fallback.year
     if (!extras.genre && fallback.genre) extras.genre = fallback.genre
     if (!extras.comment && fallback.comment) extras.comment = fallback.comment
+    if (!extras.picUrl && fallback.picUrl) extras.picUrl = fallback.picUrl
+    if (!extras.album && fallback.album) extras.album = fallback.album
+    if (!extras.albumArtist && fallback.albumArtist) extras.albumArtist = fallback.albumArtist
+  }
+  // 仍无风格：用网易云搜同曲取歌曲标签（QQ 专辑经常只有语种或为空）
+  if (!extras.genre && sdkSource !== 'wy') {
+    try {
+      const title = String(match?.name || '').trim()
+      const artist = String(match?.singer || '').trim()
+      const keyword = [title, artist].filter(Boolean).join(' ')
+      if (keyword) {
+        const result = await searchMusic(keyword, 'wy', 1, 8)
+        const hit = (result.list || [])
+          .map((item) => ({
+            item,
+            score: scoreMatchForTag(item, {
+              title: match.name,
+              artist: match.singer,
+              album: match.album || match.albumName || '',
+              keyword,
+            }),
+          }))
+          .filter((row) => row.score > 0)
+          .sort((a, b) => b.score - a.score)[0]?.item
+        if (hit) {
+          const wyExtras = await fetchWySongTagExtras({ ...hit, source: 'wy' })
+          if (!extras.genre && wyExtras.genre) extras.genre = wyExtras.genre
+          if (!extras.year && wyExtras.year) extras.year = wyExtras.year
+          if (!extras.genre) {
+            const albumExtras = await fetchAlbumTagExtras({ ...hit, source: 'wy' }, 'wy')
+            if (albumExtras.genre) extras.genre = albumExtras.genre
+            if (!extras.year && albumExtras.year) extras.year = albumExtras.year
+          }
+        }
+      }
+    } catch {}
   }
   return extras
 }

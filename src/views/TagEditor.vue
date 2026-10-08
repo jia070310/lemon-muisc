@@ -232,7 +232,7 @@
             <button
               class="btn-ghost btn-sm"
               :disabled="!missingFilesCount || matching || tagChecking"
-              title="不需要勾选。自动找出本目录里缺标题/歌手/专辑/封面/歌词的文件，只补空字段"
+              title="不需要勾选。自动找出本目录里缺专辑/风格/封面/歌词的文件，只补空字段"
               @click="autoMatchMissing"
             >
               {{ matching ? '匹配中...' : `补全缺失 (${missingMatchCount})` }}
@@ -293,6 +293,7 @@
                 <th>标题</th>
                 <th class="col-artist">歌手</th>
                 <th class="col-album">专辑</th>
+                <th class="col-genre">风格</th>
                 <th class="col-flag">封面</th>
                 <th class="col-flag">歌词</th>
                 <th class="col-play"></th>
@@ -323,6 +324,7 @@
                 <td class="cell-text" :class="{ 'cell-suspect': f._checkMismatch?.title }">{{ f.title || '-' }}</td>
                 <td class="cell-text col-artist" :class="{ 'cell-suspect': f._checkMismatch?.artist }">{{ f.artist || '-' }}</td>
                 <td class="cell-text col-album" :class="{ 'cell-missing': isTagFieldMissing(f, 'album'), 'cell-suspect': f._checkMismatch?.album }">{{ f.album || '-' }}</td>
+                <td class="cell-text col-genre" :class="{ 'cell-missing': isTagFieldMissing(f, 'genre') }">{{ f.genre || '-' }}</td>
                 <td class="col-flag" :class="{ 'cell-missing': isTagFieldMissing(f, 'cover') }">{{ f.hasPicture ? '✓' : '-' }}</td>
                 <td class="col-flag" :class="{ 'cell-missing': isTagFieldMissing(f, 'lyric') }">{{ f.hasLyrics ? '✓' : '-' }}</td>
                 <td class="col-play" @click.stop>
@@ -380,6 +382,7 @@
               </div>
               <div class="mobile-file-flags">
                 <span :class="{ miss: isTagFieldMissing(f, 'album') }">专辑{{ f.album ? '✓' : '—' }}</span>
+                <span :class="{ miss: isTagFieldMissing(f, 'genre') }">风格{{ f.genre ? '✓' : '—' }}</span>
                 <span :class="{ miss: isTagFieldMissing(f, 'cover') }">封面{{ f.hasPicture ? '✓' : '—' }}</span>
                 <span :class="{ miss: isTagFieldMissing(f, 'lyric') }">歌词{{ f.hasLyrics ? '✓' : '—' }}</span>
               </div>
@@ -706,7 +709,7 @@
         </div>
         <label class="organize-search-opt">
           <input v-model="rewriteUseExistingTags" type="checkbox" />
-          <span>同时用已有歌手/歌名搜索</span>
+          <span>同时用已有歌手/歌名搜索（推荐，与右侧网络获取一致）</span>
         </label>
         <div class="organize-pop-actions">
           <button type="button" class="btn-ghost btn-sm" @click="closeOrganizeMenu">取消</button>
@@ -905,6 +908,10 @@ const sourceOptions = [
 const missingFilterOptions = [
   { value: 'all', label: '全部文件' },
   { value: 'any', label: '缺失信息' },
+  { value: 'genre', label: '缺风格' },
+  { value: 'album', label: '缺专辑' },
+  { value: 'cover', label: '缺封面' },
+  { value: 'lyric', label: '缺歌词' },
 ]
 
 const matching = tagMatchRunning
@@ -943,7 +950,8 @@ const rewriteFieldFlags = reactive({
   lyric: false,
   cover: false,
 })
-const rewriteUseExistingTags = ref(false)
+/** 默认同时用已有歌手/歌名，与右侧网络获取一致，便于刮到风格 */
+const rewriteUseExistingTags = ref(true)
 const showOrganizeMenu = ref(false)
 const organizeAsSheet = ref(false)
 const organizeWrapRef = ref(null)
@@ -1319,12 +1327,13 @@ function hasTagText(value) {
   return Boolean(String(value ?? '').trim())
 }
 
-const MISSING_FIELDS = ['album', 'cover', 'lyric']
+const MISSING_FIELDS = ['album', 'genre', 'cover', 'lyric']
 
 function isTagFieldMissing(f, field) {
   if (!f) return false
   switch (field) {
     case 'album': return !hasTagText(f.album)
+    case 'genre': return !hasTagText(f.genre)
     case 'cover': return !f.hasPicture
     case 'lyric': return !f.hasLyrics
     default: return false
@@ -1333,7 +1342,7 @@ function isTagFieldMissing(f, field) {
 
 function isFileMissing(f, mode = missingFilter.value) {
   if (!f || mode === 'all') return false
-  if (mode === 'album' || mode === 'cover' || mode === 'lyric') {
+  if (mode === 'album' || mode === 'genre' || mode === 'cover' || mode === 'lyric') {
     return isTagFieldMissing(f, mode)
   }
   return MISSING_FIELDS.some(field => isTagFieldMissing(f, field))
@@ -1385,7 +1394,7 @@ const batchFieldOptions = [
   { key: 'albumArtist', label: '专辑艺术家' },
   { key: 'album', label: '专辑' },
   { key: 'year', label: '年份' },
-  { key: 'genre', label: '流派' },
+  { key: 'genre', label: '风格' },
   { key: 'comment', label: '备注' },
   { key: 'lyric', label: '歌词' },
   { key: 'cover', label: '封面' },
@@ -1688,11 +1697,12 @@ function applyMetaRow(file, item) {
   Object.assign(file, {
     title: item.title || file.parsedTitle || file.title,
     artist: item.artist || file.parsedArtist || file.artist,
-    albumArtist: item.albumArtist || '',
-    album: item.album || '',
-    year: item.year || '',
-    genre: item.genre || '',
-    comment: item.comment || '',
+    albumArtist: item.albumArtist || file.albumArtist || '',
+    album: item.album || file.album || '',
+    year: item.year || file.year || '',
+    // 勿用空串盖掉已整理出的风格（读盘偶发落后 / 未写入时）
+    genre: item.genre || file.genre || '',
+    comment: item.comment || file.comment || '',
   })
   file._metaLoaded = true
   if (item.hasPicture != null || item.pictureBase64) file.hasPicture = hasPicture
@@ -3856,6 +3866,7 @@ tr.playing .play-btn,
   white-space: nowrap;
 }
 .cell-text { max-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.col-genre { max-width: 88px; }
 
 .edit-form {
   display: flex;
@@ -4390,6 +4401,7 @@ tr.playing .play-btn,
   }
   .edit-panel { min-width: 0; }
   .col-album { display: none; }
+  .col-genre { display: none; }
   .file-toolbar-actions {
     flex: 1 1 100%;
     justify-content: flex-start;

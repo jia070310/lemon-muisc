@@ -143,18 +143,16 @@ export function clearTagMatchResult() {
 }
 
 function buildWriteMeta(meta) {
-  return {
-    title: meta.title,
-    artist: meta.artist,
-    albumArtist: meta.albumArtist,
-    album: meta.album,
-    year: meta.year,
-    genre: meta.genre,
-    comment: meta.comment,
-    lyric: meta.lyric,
+  const out = {
     pic: meta.pic || meta.pictureBase64 || undefined,
     picUrl: meta.picUrl || undefined,
   }
+  // 空字符串不写入，避免整理时把刮不到的风格等字段写成空白
+  for (const key of ['title', 'artist', 'albumArtist', 'album', 'year', 'genre', 'comment', 'lyric']) {
+    const v = meta[key]
+    if (v != null && String(v).trim()) out[key] = v
+  }
+  return out
 }
 
 async function saveMatchMetaToDisk(filePath, meta) {
@@ -225,6 +223,7 @@ export async function startTagMatchBatch(targets, source, options = {}) {
   let saveFail = 0
   let withCover = 0
   let withLyric = 0
+  let withGenre = 0
   let done = 0
   const savedLibraryFiles = []
   const matchOpts = {
@@ -304,6 +303,7 @@ export async function startTagMatchBatch(targets, source, options = {}) {
           } else saveFail++
           if (meta.pic || meta.picUrl) withCover++
           if (meta.lyric) withLyric++
+          if (meta.genre) withGenre++
           ok++
         } else {
           fail++
@@ -333,14 +333,14 @@ export async function startTagMatchBatch(targets, source, options = {}) {
       text = parts.join('，')
       type = 'info'
     } else if (ok && !fail && !saveFail) {
-      text = `自动匹配并保存 ${saved} 个文件（封面 ${withCover}，歌词 ${withLyric}，并行 ${workers} 路）`
+      text = `自动匹配并保存 ${saved} 个文件（风格 ${withGenre}，封面 ${withCover}，歌词 ${withLyric}，并行 ${workers} 路）`
       type = 'success'
     } else if (ok) {
       const parts = [`匹配 ${ok}`]
       if (saved) parts.push(`已保存 ${saved}`)
       if (fail) parts.push(`匹配失败 ${fail}`)
       if (saveFail) parts.push(`保存失败 ${saveFail}`)
-      parts.push(`封面 ${withCover}，歌词 ${withLyric}`)
+      parts.push(`风格 ${withGenre}，封面 ${withCover}，歌词 ${withLyric}`)
       text = `自动匹配完成：${parts.join('，')}`
       type = saveFail ? 'info' : 'success'
     } else {

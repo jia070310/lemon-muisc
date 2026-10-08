@@ -1,7 +1,7 @@
 /* 柠檬音乐：仅缓存前端壳，不缓存 /api、/ws 与音频流
  * 多域名各自独立注册 SW；导航与 assets 均网络优先，避免旧壳引用已失效的 hash 资源导致白屏。
  */
-const CACHE = 'lemon-shell-v1.2.17.2'
+const CACHE = 'lemon-shell-v1.2.17.3'
 
 const PRECACHE = [
   '/manifest.webmanifest',

@@ -585,7 +585,8 @@ export const api = {
     matchBatch: (files, source, options = {}) => request('/tag/match-batch', {
       method: 'POST',
       body: { files, source, ...options },
-      timeout: 60000,
+      // 整理时可能多候选补风格，单文件放宽超时
+      timeout: 120000,
     }),
   },
   about: {

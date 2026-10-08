@@ -1159,11 +1159,26 @@ async function txAlbum(id) {
       desc: cleanHtml(detail?.desc || detail?.description || basic.desc || ''),
       author,
       publishTime: basic.publishDate || basic.aDate || basic.pubTime || basic.time_public || '',
-      genre: cleanHtml(basic.genreNew || basic.genre || ''),
-      language: cleanHtml(basic.language || ''),
-      albumType: cleanHtml(basic.albumType || ''),
+      genre: cleanHtml(pickTxGenreText(basic)),
+      language: cleanHtml(basic.language || basic.lan || ''),
+      albumType: cleanHtml(basic.albumType || basic.type || ''),
     },
   }
+}
+
+/** QQ 专辑风格可能是字符串或 { name } / 数组 */
+function pickTxGenreText(basic = {}) {
+  const raw = basic.genreNew ?? basic.genre ?? basic.genre_name ?? basic.tags ?? basic.tagList
+  if (raw == null || raw === '') return ''
+  if (typeof raw === 'string' || typeof raw === 'number') return String(raw)
+  if (Array.isArray(raw)) {
+    return raw.map((item) => {
+      if (typeof item === 'string') return item
+      return item?.name || item?.tagName || item?.title || ''
+    }).filter(Boolean).join('/')
+  }
+  if (typeof raw === 'object') return raw.name || raw.tagName || raw.title || ''
+  return ''
 }
 
 async function kwAlbum(id) {

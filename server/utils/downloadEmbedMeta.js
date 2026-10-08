@@ -16,16 +16,44 @@ function cleanHtml(str) {
   return String(str).replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim()
 }
 
+/** 扁平化平台返回的风格字段（字符串 / 数组 / {name} 对象） */
+function flattenGenreValue(value) {
+  if (value == null || value === '') return ''
+  if (typeof value === 'string' || typeof value === 'number') return String(value)
+  if (Array.isArray(value)) {
+    return value.map((item) => flattenGenreValue(item)).filter(Boolean).join('/')
+  }
+  if (typeof value === 'object') {
+    return flattenGenreValue(value.name || value.tagName || value.title || value.text || value.value || '')
+  }
+  return ''
+}
+
+const NON_GENRE_LABEL = /^(single|ep|lp|album|ost|soundtrack|live|digital|录音室专辑|精选集|合辑|现场|演唱会|原声带|数字专辑|单曲)$/i
+
 function normalizeGenre(value) {
-  const s = cleanHtml(value)
-  if (!s) return ''
+  const s = cleanHtml(flattenGenreValue(value))
+  if (!s || NON_GENRE_LABEL.test(s)) return ''
   return s.split(/[,，/|、;；]/)[0].trim()
 }
 
 function pickGenreFromInfo(info = {}) {
-  const primary = normalizeGenre(info.genre || info.genreNew || info.tags)
-  if (primary) return primary
-  return normalizeGenre(info.language || info.lang || info.albumType || info.subType)
+  for (const c of [
+    info.genre,
+    info.genreNew,
+    info.genre_name,
+    info.genreName,
+    info.tags,
+    info.tag,
+    info.style,
+    info.category,
+    info.language,
+    info.lang,
+  ]) {
+    const g = normalizeGenre(c)
+    if (g) return g
+  }
+  return ''
 }
 
 /** 描述写入 COMMENT：过长截断，避免撑爆部分播放器标签面板 */
@@ -50,7 +78,7 @@ function pickComment(...candidates) {
 export async function resolveDownloadEmbedMeta(task, meta = {}, { timeoutMs = 8000 } = {}) {
   const m = meta && typeof meta === 'object' ? meta : {}
   let year = normalizeTagYear(m.year || task?.year || m.publishTime || task?.publishTime)
-  let genre = normalizeGenre(m.genre || task?.genre)
+  let genre = normalizeGenre(m.genre || task?.genre || m.genreNew || m.language || m.lang)
   let comment = pickComment(
     m.comment,
     task?.comment,
@@ -86,6 +114,11 @@ export async function resolveDownloadEmbedMeta(task, meta = {}, { timeoutMs = 80
     } catch {
       // 专辑详情失败不影响下载与已有标签写入
     }
+  }
+
+  // 仍无风格时：用语种兜底（多数华语曲目专辑详情有 language）
+  if (!genre) {
+    genre = normalizeGenre(m.language || m.lang || task?.language)
   }
 
   return { year, genre, comment, albumArtist, album }

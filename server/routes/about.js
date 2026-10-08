@@ -18,26 +18,184 @@ export const aboutRouter = Router()
 const REPO = 'jia070310/lemon-muisc'
 const REPO_URL = `https://github.com/${REPO}`
 /**
- * GitHub Release 加速前缀（按优先级尝试）。
- * 不使用 gh-proxy.com：大文件易超时/极慢。
+ * GitHub Release 加速节点（来自公共加速站聚合的贡献/测绘节点）。
+ * 每次加速下载前对节点做 Range 短测速，按实测吞吐排序后再拉取。
  */
-const GITHUB_ASSET_MIRROR_PREFIXES = [
-  'https://ghfast.top/',
-  'https://gh.llkk.cc/',
-  'https://mirror.ghproxy.com/',
-  'https://ghproxy.net/',
+const GITHUB_ASSET_MIRROR_HOSTS = [
+  // 贡献节点
+  'gh.dpik.top',
+  'github.tbap.top',
+  'ghfile.geekertao.top',
+  'ghproxy.net',
+  'cdn.gh-proxy.com',
+  'github.dpik.top',
+  'j.1lin.dpdns.org',
+  'github.starrlzy.cn',
+  'github-proxy.memory-echoes.cn',
+  'git.yylx.win',
+  'ghm.078465.xyz',
+  'gh.927223.xyz',
+  'ghf.无名氏.top',
+  'gh.felicity.ac.cn',
+  'gh.bugdey.us.kg',
+  'cdn.akaere.online',
+  'jiashu.1win.eu.org',
+  'tvv.tw',
+  'j.1win.ggff.net',
+  'gitproxy.127731.xyz',
+  'gh.inkchills.cn',
+  'gh.catmak.name',
+  'gh.b52m.cn',
+  'down.mxw.xx.kg',
+  'down.mxw.qzz.io',
+  'github.mxw.qzz.io',
+  'gh.acmsz.top',
+  'gh.jjj.gv.uy',
+  'githubdog.com',
+  'gh.meali.top',
+  'js.jiangss.shop',
+  'gap.andyjin.website',
+  'github.ikgy.top',
+  'gh.07150721.xyz',
+  'gh.ruan.dpdns.org',
+  'ghproxy.felicity.land',
+  'github.nswrz.cn',
+  'github-cf.947563.xyz',
+  'github.gohj99.site',
+  'githubproxy.gohj99.site',
+  'ghproxy.icu',
+  // 测绘/常用
+  'ghfast.top',
+  'gh.llkk.cc',
+  'mirror.ghproxy.com',
+  'gh.ddlc.top',
+  'gh.sixyin.com',
+  'gh.monlor.com',
+  'git.669966.xyz',
+  'ghpr.cc',
+  'gh.tryxd.cn',
+  'github.geekery.cn',
+  'gh.idayer.com',
+  'ghp.keleyaa.com',
 ]
+/** @deprecated 仅用于前端展示示例加速链 */
+const GITHUB_ASSET_MIRROR_PREFIXES = GITHUB_ASSET_MIRROR_HOSTS.map((h) => `https://${h}/`)
 const FPK_UPDATE_SUBDIR = '柠檬音乐更新'
+const MIRROR_PROBE_BYTES = 256 * 1024
+const MIRROR_PROBE_TIMEOUT_MS = 4500
+const MIRROR_PROBE_CONCURRENCY = 12
+const MIRROR_PROBE_CACHE_TTL_MS = 45 * 60 * 1000
+/** @type {{ at: number, rankedHosts: string[] } | null} */
+let mirrorProbeCache = null
 
-function buildFpkDownloadUrls(githubUrl, wantMirror) {
+function mirrorUrlForHost(host, githubUrl) {
+  return `https://${host}/${githubUrl}`
+}
+
+function probeMirrorHost(host, githubUrl) {
+  const url = mirrorUrlForHost(host, githubUrl)
+  const end = MIRROR_PROBE_BYTES - 1
+  const started = Date.now()
+  return new Promise((resolve) => {
+    let settled = false
+    let received = 0
+    const finish = (bps) => {
+      if (settled) return
+      settled = true
+      try { stream.destroy() } catch {}
+      resolve({ host, bps: bps || 0, received })
+    }
+    const timer = setTimeout(() => finish(0), MIRROR_PROBE_TIMEOUT_MS)
+    const stream = needle.get(url, {
+      follow_max: 3,
+      open_timeout: MIRROR_PROBE_TIMEOUT_MS,
+      response_timeout: MIRROR_PROBE_TIMEOUT_MS,
+      read_timeout: MIRROR_PROBE_TIMEOUT_MS,
+      headers: {
+        'User-Agent': 'lemon-music-nas',
+        Range: `bytes=0-${end}`,
+      },
+    })
+    stream.on('header', (code) => {
+      if (code && code >= 400) {
+        clearTimeout(timer)
+        finish(0)
+      }
+    })
+    const onFail = () => {
+      clearTimeout(timer)
+      finish(0)
+    }
+    stream.on('err', onFail)
+    stream.on('error', onFail)
+    stream.on('data', (chunk) => {
+      received += chunk.length
+      if (received >= Math.min(64 * 1024, MIRROR_PROBE_BYTES)) {
+        const ms = Math.max(1, Date.now() - started)
+        const bps = (received * 1000) / ms
+        clearTimeout(timer)
+        finish(bps)
+      }
+    })
+    stream.on('end', () => {
+      if (received > 0) {
+        const ms = Math.max(1, Date.now() - started)
+        clearTimeout(timer)
+        finish((received * 1000) / ms)
+      } else {
+        clearTimeout(timer)
+        finish(0)
+      }
+    })
+  })
+}
+
+async function mapPool(items, concurrency, worker) {
+  const results = new Array(items.length)
+  let next = 0
+  async function run() {
+    while (next < items.length) {
+      const i = next++
+      results[i] = await worker(items[i], i)
+    }
+  }
+  const n = Math.min(concurrency, items.length)
+  await Promise.all(Array.from({ length: n }, () => run()))
+  return results
+}
+
+/** 对节点做短测速，返回按吞吐降序的 host 列表（缓存一段时间内复用） */
+async function rankMirrorHosts(githubUrl, onProgress) {
+  const origin = String(githubUrl || '').trim()
+  if (!origin) return []
+  if (mirrorProbeCache && Date.now() - mirrorProbeCache.at < MIRROR_PROBE_CACHE_TTL_MS) {
+    return mirrorProbeCache.rankedHosts
+  }
+  onProgress?.('节点测速中…')
+  const hosts = [...new Set(GITHUB_ASSET_MIRROR_HOSTS.filter(Boolean))]
+  const probed = await mapPool(hosts, MIRROR_PROBE_CONCURRENCY, (host) => probeMirrorHost(host, origin))
+  const rankedHosts = probed
+    .filter((p) => p && p.bps > 0 && p.received >= 16 * 1024)
+    .sort((a, b) => b.bps - a.bps)
+    .map((p) => p.host)
+  // 测速成功的按速度优先；其余节点垫后兜底，避免短测误判
+  const fallback = hosts.filter((h) => !rankedHosts.includes(h))
+  const finalHosts = [...rankedHosts, ...fallback]
+  mirrorProbeCache = { at: Date.now(), rankedHosts: finalHosts }
+  if (rankedHosts[0]) {
+    const best = probed.find((p) => p.host === rankedHosts[0])
+    const mbps = best ? ((best.bps * 8) / 1e6).toFixed(1) : '?'
+    onProgress?.(`最快 ${rankedHosts[0]}（约 ${mbps} Mbps）`)
+  }
+  return finalHosts
+}
+
+async function buildFpkDownloadUrls(githubUrl, wantMirror, onProgress) {
   const origin = String(githubUrl || '').trim()
   if (!origin) return []
   if (!wantMirror) return [origin]
-  // 多个镜像依次尝试，全部失败再回落 GitHub 直连
-  return [
-    ...GITHUB_ASSET_MIRROR_PREFIXES.map((p) => `${p}${origin}`),
-    origin,
-  ]
+  const hosts = await rankMirrorHosts(origin, onProgress)
+  return [...hosts.map((h) => mirrorUrlForHost(h, origin)), origin]
 }
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -286,7 +444,7 @@ function buildInstallHints(version, fpkAssets = []) {
   const ver = String(version || '').replace(/^v/i, '')
   if (!ver) return null
   return {
-    fpkHint: '点「加速保存」将 FPK 拉到 NAS「下载目录/柠檬音乐更新」（会依次尝试多个国内镜像，失败再直连 GitHub）。完成后到飞牛「应用中心」→「手动安装」选择该文件覆盖安装。',
+    fpkHint: '点「加速保存」将先对各加速节点短测速，再按最快源把 FPK 拉到 NAS「下载目录/柠檬音乐更新」（失败自动换源，最后回落 GitHub 直连）。完成后到飞牛「应用中心」→「手动安装」选择该文件覆盖安装。',
     fpkAssets,
   }
 }
@@ -467,7 +625,6 @@ aboutRouter.post('/download-fpk', requireAdmin, async (req, res) => {
 
     const dir = getFpkUpdateDir(userId)
     const { fileName, dest, part } = allocateUniqueFpkPath(dir, asset.name)
-    const urls = buildFpkDownloadUrls(asset.url, wantMirror)
 
     const job = {
       jobKey,
@@ -476,7 +633,7 @@ aboutRouter.post('/download-fpk', requireAdmin, async (req, res) => {
       arch: asset.arch,
       label: asset.label,
       mirror: wantMirror,
-      mirrorHost: '',
+      mirrorHost: wantMirror ? '节点测速中…' : '',
       status: 'downloading',
       progress: 0,
       downloaded: 0,
@@ -493,9 +650,15 @@ aboutRouter.post('/download-fpk', requireAdmin, async (req, res) => {
     fpkDownloadJobs.set(jobKey, job)
     emitFpkJob(userId, 'about:fpk-progress', job)
 
-    // 后台拉取，接口立即返回，前端靠 WS / 轮询看进度
+    // 后台：先测速排序，再拉取；接口立即返回，前端靠 WS / 轮询看进度
     setImmediate(() => {
-      runFpkDownloadJob(job, urls, dest, part, userId).catch(() => {})
+      ;(async () => {
+        const urls = await buildFpkDownloadUrls(asset.url, wantMirror, (msg) => {
+          job.mirrorHost = msg
+          emitFpkJob(userId, 'about:fpk-progress', job)
+        })
+        await runFpkDownloadJob(job, urls, dest, part, userId)
+      })().catch(() => {})
     })
 
     res.json({ ok: true, data: publicFpkJob(job) })

@@ -6,6 +6,7 @@ import { broadcast } from '../ws.js'
 import { requestSourceWithMeta, hasActiveSource } from '../sourceManager.js'
 import { getStoredActiveSourceIds } from '../utils/activeSources.js'
 import { writeMeta } from '../meta.js'
+import { canWriteM4aExt } from '../utils/m4aTag.js'
 import { joinArtists } from '../utils/artistTag.js'
 import { buildMusicInfoFromTask } from '../utils/musicInfo.js'
 import { buildEmbedLyrics } from '../utils/lyric.js'
@@ -2046,7 +2047,7 @@ async function writeMetaIfNeeded(task, meta, filePath, ext, settings) {
   const wantEmbedPic = on('download.isEmbedPic')
   const wantEmbedLyric = on('download.isEmbedLyric')
   const wantLrcFile = on('download.isDownloadLrc')
-  const canEmbed = ['.mp3', '.flac', '.wav', '.ape'].includes(ext)
+  const canEmbed = ['.mp3', '.flac', '.wav', '.ape'].includes(ext) || canWriteM4aExt(ext)
   const artist = joinArtists(task.singer || meta.albumArtist || '')
   const albumHint = task.album || meta.album || ''
   // 有歌名/歌手时始终写入基础标签，避免文件名落成 Unknown 且内置标签空白
@@ -2108,6 +2109,11 @@ async function writeMetaIfNeeded(task, meta, filePath, ext, settings) {
       year = enriched.year || ''
       genre = enriched.genre || ''
       comment = enriched.comment || ''
+      if (year && !String(task.year || '').trim()) task.year = year
+      if (genre && !String(task.genre || '').trim()) task.genre = genre
+      if (comment && !String(task.comment || '').trim()) task.comment = comment
+      if (album && !String(task.album || '').trim()) task.album = album
+      if (albumArtist && !String(task.albumArtist || '').trim()) task.albumArtist = albumArtist
     } catch (e) {
       console.warn('补全专辑标签失败:', task.name, e.message)
     }

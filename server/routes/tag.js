@@ -52,6 +52,14 @@ function keepRewriteFields(meta, fields) {
   if (!set.has('year')) delete out.year
   if (!set.has('genre')) delete out.genre
   if (!set.has('comment')) delete out.comment
+  // 勾选了字段但平台没刮到时不要写空串，避免「整理完仍空白」且误清标签
+  for (const key of ['title', 'artist', 'albumArtist', 'album', 'year', 'genre', 'comment', 'lyric']) {
+    if (set.has(key) && !String(out[key] || '').trim()) delete out[key]
+  }
+  if (set.has('cover') && !out.pic && !out.picUrl) {
+    delete out.pic
+    delete out.picUrl
+  }
   return out
 }
 
@@ -396,23 +404,25 @@ tagRouter.post('/match-batch', async (req, res) => {
         const parsedArtist = String(parsedName.artist || '').trim()
         const parsedTitle = String(parsedName.title || '').trim()
         const folderAlbum = preferFolderAlbum ? albumHintFromFilePath(file.filePath) : ''
+        // 整理标签：与右侧「网络获取」一致——文件名与已有歌名/歌手合并搜索，避免只认文件名点到无风格条目
         const artist = rewriteAll
-          ? (useExistingTags ? (parsedArtist || existArtist) : parsedArtist)
+          ? (useExistingTags ? (existArtist || parsedArtist) : (parsedArtist || existArtist))
           : existArtist
         const title = rewriteAll
-          ? (useExistingTags ? (parsedTitle || existTitle) : parsedTitle)
+          ? (useExistingTags ? (existTitle || parsedTitle) : (parsedTitle || existTitle))
           : existTitle
-        const taggedAlbum = rewriteAll
-          ? (useExistingTags ? existAlbum : '')
-          : existAlbum
+        const taggedAlbum = rewriteAll ? (existAlbum || '') : existAlbum
         const album = taggedAlbum || folderAlbum
         let matches
         if (rewriteAll) {
           const byName = await matchByFilename(file.fileName, sdkSource, 8, taggedAlbum, folderAlbum)
-          if (useExistingTags && (existArtist || existTitle)) {
+          const tagArtist = existArtist || parsedArtist
+          const tagTitle = existTitle || parsedTitle
+          // 只要本地已有歌名/歌手，就并入标签搜索（与右侧手动检测同源）
+          if (tagArtist || tagTitle) {
             const byTags = await matchByArtistTitle(
-              existArtist || parsedArtist,
-              existTitle || parsedTitle,
+              tagArtist,
+              tagTitle,
               sdkSource,
               8,
               null,
@@ -440,8 +450,33 @@ tagRouter.post('/match-batch', async (req, res) => {
           }
           picked = acceptable
         }
-        const fetchFields = rewriteAll && rewriteFields.length ? rewriteFields : null
-        let meta = await fetchMatchMeta(picked, sdkSource, fetchFields, { title, artist })
+        const wantGenre = !rewriteFields.length || rewriteFields.includes('genre')
+        // 与 match-apply（右侧预览）相同：拉全量标签字段，再按勾选过滤写入
+        let meta = await fetchMatchMeta(picked, sdkSource, null, { title, artist })
+        // 勾了风格但首条结果没有：换候选再取（右侧手动常点到有风格的那条）
+        if (wantGenre && !String(meta.genre || '').trim()) {
+          const pickedKey = matchSongKey(picked)
+          const rest = matches.filter((m) => matchSongKey(m) !== pickedKey).slice(0, 4)
+          for (const candidate of rest) {
+            if (rejectForeignArtist) {
+              const filterArtist = artist || existArtist || parsedArtist
+              if (!isMatchArtistAcceptable(candidate.singer, filterArtist, file.filePath)) continue
+            }
+            const alt = await fetchMatchMeta(candidate, sdkSource, null, { title, artist })
+            if (String(alt.genre || '').trim()) {
+              meta = {
+                ...meta,
+                genre: alt.genre,
+                year: meta.year || alt.year,
+                comment: meta.comment || alt.comment,
+                album: meta.album || alt.album,
+                albumArtist: meta.albumArtist || alt.albumArtist,
+              }
+              picked = candidate
+              break
+            }
+          }
+        }
         if (fillMissingOnly) {
           meta = mergeMatchMetaFillMissing({
             title: cached.title || title,
@@ -470,7 +505,7 @@ tagRouter.post('/match-batch', async (req, res) => {
             folderAlbum: folderAlbum || undefined,
             fillMissingOnly,
             rewriteAll,
-            useExistingTags: rewriteAll ? useExistingTags : undefined,
+            useExistingTags: rewriteAll ? true : undefined,
             rewriteFields: rewriteAll && rewriteFields.length ? rewriteFields : undefined,
           },
         }

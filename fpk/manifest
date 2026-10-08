@@ -1,5 +1,5 @@
 appname        = lemon-music
-version        = 1.2.17.2
+version        = 1.2.17.3
 display_name   = 柠檬音乐
 desc           = <b>下载音乐、播放音乐库、标签批量整理</b>。也支持多音源搜索与试听、发现歌单 / 榜单、文件去重与整理。<br><br><b>重置管理员密码</b>（只改登录密码，<b>不会</b>清空歌单、收藏或音乐文件）。文件管理器改不了，需进命令行：电脑打开飞牛 → 控制面板开启 SSH → 打开「终端」；或用电脑终端 <code>ssh 飞牛用户名@NAS的IP</code>。SSH 用飞牛系统账号；命令里的用户名是柠檬音乐账号。先列出账号再重置：<br><code>PATH=/var/apps/nodejs_v22/target/bin:$PATH CONFIG_PATH=/vol1/@appdata/lemon-music/config node /var/apps/lemon-music/target/scripts/reset-password.js --list</code><br><code>PATH=/var/apps/nodejs_v22/target/bin:$PATH CONFIG_PATH=/vol1/@appdata/lemon-music/config node /var/apps/lemon-music/target/scripts/reset-password.js 用户名 新密码</code><br>不要用 npm（飞牛没有）。配置在 <code>@appdata</code> 不是 <code>@appconf</code>；不在 vol1 时改路径。登录页「忘记密码」有逐步说明。<br><br><b>依赖</b>：应用中心 <b>Node.js v22</b>。目录可在安装向导或「访问权限」中指定。卸载可选保留配置，不会删除音乐库 / 下载目录中的音频。<br><br><b>免责声明</b>：仅供个人合法使用。请确保对所管理音乐拥有相应权利，并遵守当地法律与平台条款。违规后果由用户自行承担。
 platform       = x86
