@@ -230,35 +230,52 @@
     <section v-if="isAdminUser" class="about-admin">
       <h2 class="section-title about-admin-heading">账号恢复</h2>
       <p class="account-info-text account-intro">
-        忘记管理员密码时，要在 <b>NAS 命令行</b>里执行，<b>只改登录密码</b>，不会清空歌单、收藏或音乐文件。
-        文件管理器改不了这个密码。仍记得密码时，直接去「设置 → 账号管理」改即可。
+        忘记登录密码时，在命令行重置即可，<b>只改密码</b>，不会清空歌单、收藏或音乐文件。
+        记得密码时直接去「设置 → 账号管理」。文件管理器改不了这个密码。
       </p>
+
       <div class="account-actions">
         <div class="account-action card">
-          <h3 class="action-title">怎么打开命令行</h3>
-          <p class="action-desc"><b>飞牛网页（推荐）</b>：电脑打开飞牛 → 控制面板开启 SSH → 打开「终端」应用，用<b>飞牛系统账号</b>登录。</p>
-          <p class="action-desc"><b>电脑外部终端</b>：Windows 用「终端 / PowerShell」，Mac / Linux 用自带「终端」，执行 <code>ssh 飞牛用户名@NAS的IP</code>，密码是飞牛系统密码。</p>
-          <p class="action-desc">飞牛终端里<b>不要用 npm</b>。配置一般在 <code>@appdata</code>（不是 <code>@appconf</code>）。先列出柠檬音乐账号，再把 <code>用户名</code>、<code>新密码</code> 换成柠檬音乐账号。不在 vol1 时改路径。需已安装应用中心 <b>Node.js v22</b>。</p>
+          <h3 class="action-title">飞牛 NAS</h3>
+          <ol class="action-steps">
+            <li>控制面板开启 SSH → 打开「终端」，用<b>飞牛系统账号</b>登录（也可用电脑 <code>ssh 飞牛用户名@NAS的IP</code>）。</li>
+            <li>需已安装应用中心 <b>Node.js v22</b>。飞牛终端里<b>不要用 npm</b>（会报 command not found）。</li>
+            <li>配置在 <code>@appdata</code>，不是 <code>@appconf</code>。不在 vol1 时把命令里的路径改成实际卷。</li>
+          </ol>
           <div class="cmd-wrap">
-            <span class="cmd-label">列出账号</span>
+            <span class="cmd-label">1. 列出柠檬音乐账号</span>
             <pre class="cmd-block">PATH=/var/apps/nodejs_v22/target/bin:$PATH CONFIG_PATH=/vol1/@appdata/lemon-music/config node /var/apps/lemon-music/target/scripts/reset-password.js --list</pre>
           </div>
           <div class="cmd-wrap">
-            <span class="cmd-label">重置密码</span>
+            <span class="cmd-label">2. 重置密码（换成你的用户名和新密码）</span>
             <pre class="cmd-block">PATH=/var/apps/nodejs_v22/target/bin:$PATH CONFIG_PATH=/vol1/@appdata/lemon-music/config node /var/apps/lemon-music/target/scripts/reset-password.js 用户名 新密码</pre>
           </div>
-          <p class="action-desc">自托管（电脑项目目录；<b>飞牛不要用 npm</b>，会提示 command not found）：</p>
+        </div>
+
+        <div class="account-action card">
+          <h3 class="action-title">本地测试端 / Docker</h3>
+          <p class="action-desc">仅在本地测试端或 Docker 容器内使用；飞牛请用上面的命令。</p>
           <div class="cmd-wrap">
-            <span class="cmd-label">终端命令</span>
+            <span class="cmd-label">本地测试端</span>
             <pre class="cmd-block">npm run auth:reset-password -- --list
 npm run auth:reset-password -- 用户名 新密码</pre>
           </div>
+          <div class="cmd-wrap">
+            <span class="cmd-label">Docker Compose</span>
+            <pre class="cmd-block">docker compose exec lemon-music node scripts/reset-password.js --list
+docker compose exec lemon-music node scripts/reset-password.js 用户名 新密码</pre>
+          </div>
         </div>
       </div>
-      <p class="account-tip">
+
+      <div class="account-tip">
         <span class="account-tip-icon" aria-hidden="true">ℹ</span>
-        账号在 <code>lx-music.db</code>（飞牛默认 <code>/vol1/@appdata/lemon-music/config/</code>，不是 <code>@appconf</code>）。若提示没有任何用户，请用 <code>find /vol1 /vol2 -name "lx-music.db"</code> 找对目录。执行后刷新登录页；若仍自动登录，清除本站 Cookie 或用无痕窗口。
-      </p>
+        <ul class="account-tip-list">
+          <li>账号库：<code>lx-music.db</code>，飞牛默认 <code>/vol1/@appdata/lemon-music/config/</code>。</li>
+          <li>提示「没有任何用户」时执行：<code>find /vol1 /vol2 -name "lx-music.db"</code>，把找到的目录填进 <code>CONFIG_PATH</code>。</li>
+          <li>重置后刷新登录页；若仍自动登录，清除本站 Cookie 或改用无痕窗口。</li>
+        </ul>
+      </div>
     </section>
 
     <p class="about-export-hint">
@@ -1030,6 +1047,9 @@ function formatDate(iso) {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .about-admin-heading {
@@ -1177,6 +1197,8 @@ function formatDate(iso) {
   grid-template-columns: 1fr;
   gap: 14px;
   align-items: stretch;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .account-action {
@@ -1184,6 +1206,9 @@ function formatDate(iso) {
   display: flex;
   flex-direction: column;
   gap: 0;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .action-title {
@@ -1202,7 +1227,7 @@ function formatDate(iso) {
 
 .action-steps,
 .action-notes {
-  margin: 0 0 14px;
+  margin: 0 0 12px;
   padding-left: 1.2em;
   font-size: 13px;
   line-height: 1.65;
@@ -1211,14 +1236,20 @@ function formatDate(iso) {
 
 .action-steps li + li,
 .action-notes li + li {
-  margin-top: 8px;
+  margin-top: 6px;
 }
 
 .cmd-wrap {
-  margin-top: auto;
+  margin-top: 10px;
   display: flex;
   flex-direction: column;
   gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.cmd-wrap + .cmd-wrap {
+  margin-top: 12px;
 }
 
 .cmd-label {
@@ -1242,7 +1273,11 @@ function formatDate(iso) {
   border: 1px solid var(--border-light);
   font-size: 12px;
   line-height: 1.5;
+  max-width: 100%;
   overflow-x: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-all;
   color: var(--text);
   font-family: ui-monospace, 'Cascadia Code', 'Consolas', monospace;
 }
@@ -1265,6 +1300,7 @@ function formatDate(iso) {
   flex-shrink: 0;
   width: 16px;
   height: 16px;
+  margin-top: 2px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1272,6 +1308,15 @@ function formatDate(iso) {
   border-radius: 50%;
   background: var(--accent-muted);
   color: var(--accent);
+}
+
+.account-tip-list {
+  margin: 0;
+  padding-left: 1.1em;
+}
+
+.account-tip-list li + li {
+  margin-top: 4px;
 }
 
 .text-muted { color: var(--text-muted); font-size: 13px; }
