@@ -1,0 +1,88 @@
+{
+  "schema_version": "2",
+  "source_info": {
+    "name": "柠檬音乐",
+    "author": "jia070310",
+    "homepage": "https://github.com/jia070310/lemon-muisc",
+    "description": "柠檬音乐官方外部应用源：飞牛 NAS 原生 FPK，支持自动检查更新。"
+  },
+  "apps": {
+    "lemon-music": {
+      "display_name": "柠檬音乐",
+      "desc": "<b>多平台搜歌、本地音乐库、标签整理与高品质下载</b>。兼容落雪、澜音、MusicFree、BakaMusic 音源插件，浏览器内完成找歌 → 试听 → 下载 → 整理。<br><br><b>亮点</b><br>· 搜索：酷我 / 酷狗 / QQ / 网易云 / 咪咕等（依导入脚本）；FLAC · Hi-Res · 母带，支持批量下载<br>· 音乐库：每日推荐（本地+平台混搭）、推荐歌单、漫游播放<br>· 文件管理：标签编辑、清理（重复/小文件）、伪 FLAC 检测、按歌手整理<br>· 播放：全屏逐字歌词、频谱与风格配色<br><br><b>依赖</b>：应用中心 <b>Node.js v22</b>。目录可在安装向导或「访问权限」中指定；卸载可选保留配置。<br><br><b>免责声明</b>：仅供个人合法使用，请遵守当地法律与平台条款。",
+      "platform": ["x86", "arm"],
+      "categories": ["影音娱乐"],
+      "icon_url": "./icon.png",
+      "preview_urls": [
+        "./docs/screenshots/intro-search-v1.2.17.png",
+        "./docs/screenshots/intro-daily-mix-v1.2.17.png",
+        "./docs/screenshots/intro-player-lyrics-v1.2.17.png",
+        "./docs/screenshots/intro-file-manager-v1.2.17.png",
+        "./docs/screenshots/intro-appearance-v1.2.17.png"
+      ],
+      "readme_url": "./README.md",
+      "bug_report_url": "https://github.com/jia070310/lemon-muisc/issues",
+      "maintainer": "jia070310",
+      "maintainer_url": "https://github.com/jia070310/lemon-muisc",
+      "distributor": "jia070310",
+      "distributor_url": "https://github.com/jia070310/lemon-muisc",
+      "run_as": "package",
+      "install_type": "",
+      "is_docker": false,
+      "service_port": "7983",
+      "releases": {
+        "1.2.17.19": {
+          "changelog": "恢复关于页 FPK 下载到「下载目录/柠檬音乐更新」；修复创建/编辑歌单弹窗内下拉菜单点不开。",
+          "updated_at": "2026-10-27T20:00:45+08:00",
+          "os_min_version": "1.1.8",
+          "packages": {
+            "x86": {
+              "download_url": "https://github.com/jia070310/lemon-muisc/releases/download/v1.2.17.19/lemon-music-1.2.17.19-x86.fpk",
+              "sha256": "1558240519b1166a25c32c6d851d5b1e06a80e1cf1c6c9af584bbe36ca9c997c",
+              "size": 5612250
+            },
+            "arm": {
+              "download_url": "https://github.com/jia070310/lemon-muisc/releases/download/v1.2.17.19/lemon-music-1.2.17.19-arm.fpk",
+              "sha256": "7bfd751ba47c3180004f93d5de719c7f81ec3f06dfc2045181624c850445d0c9",
+              "size": 5612243
+            }
+          }
+        },
+        "1.2.17.18": {
+          "changelog": "启动加速与缓存隔离；关于页安装包与下拉相关修复预告。",
+          "updated_at": "2026-10-27T16:46:55+08:00",
+          "os_min_version": "1.1.8",
+          "packages": {
+            "x86": {
+              "download_url": "https://github.com/jia070310/lemon-muisc/releases/download/v1.2.17.18/lemon-music-1.2.17.18-x86.fpk",
+              "sha256": "34d38b12ff7a8e4dcff52391736e7806b97e634a4be69caf1705f5c9710ef561",
+              "size": 5605086
+            },
+            "arm": {
+              "download_url": "https://github.com/jia070310/lemon-muisc/releases/download/v1.2.17.18/lemon-music-1.2.17.18-arm.fpk",
+              "sha256": "3b6b58f30ce396bb939de2feeb675198448528d708058cb1bc69edbd5ce6167d",
+              "size": 5605109
+            }
+          }
+        },
+        "1.2.17.17": {
+          "changelog": "MusicFree 合集、听书与简介等能力完善。",
+          "updated_at": "2026-10-24T16:23:19+08:00",
+          "os_min_version": "1.1.8",
+          "packages": {
+            "x86": {
+              "download_url": "https://github.com/jia070310/lemon-muisc/releases/download/v1.2.17.17/lemon-music-1.2.17.17-x86.fpk",
+              "sha256": "6cab42e9424cfa14d5b6f4189934b58dbea4b6df71c52d48ff43aca941b3aa28",
+              "size": 5603380
+            },
+            "arm": {
+              "download_url": "https://github.com/jia070310/lemon-muisc/releases/download/v1.2.17.17/lemon-music-1.2.17.17-arm.fpk",
+              "sha256": "615e5b4a4d5e7f2a10c139af882a7435e9027683c55faeac6cca6c1b2160be9c",
+              "size": 5603210
+            }
+          }
+        }
+      }
+    }
+  }
+}

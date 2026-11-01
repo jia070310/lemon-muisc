@@ -72,4 +72,20 @@ if ($LASTEXITCODE -eq 0) {
 }
 
 gh release upload $tag $x86 $arm --clobber --repo $repo
+
+Write-Host ">>> update fnpack.json (FnDepot V2)" -ForegroundColor Cyan
+node (Join-Path $PSScriptRoot "update-fnpack-json.mjs") --version $version --x86 $x86 --arm $arm
+if ($LASTEXITCODE -ne 0) { throw "update-fnpack-json failed" }
+git add fnpack.json
+git diff --cached --quiet
+if ($LASTEXITCODE -ne 0) {
+  git commit -m "chore: update fnpack.json for v$version"
+  if ($LASTEXITCODE -ne 0) { throw "git commit fnpack.json failed" }
+  git push origin HEAD
+  if ($LASTEXITCODE -ne 0) { throw "git push fnpack.json failed" }
+} else {
+  Write-Host ">>> fnpack.json unchanged"
+}
+
 Write-Host "Done: https://github.com/jia070310/lemon-muisc/releases/tag/$tag" -ForegroundColor Green
+Write-Host "FnDepot source: https://github.com/jia070310/lemon-muisc" -ForegroundColor Green

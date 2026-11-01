@@ -173,3 +173,21 @@ jobs:
             "lemon-music-${VERSION}-x86.fpk" \
             "lemon-music-${VERSION}-arm.fpk" \
             --clobber --repo "${{ github.repository }}"
+
+      - name: Update fnpack.json (FnDepot V2)
+        if: steps.guard.outputs.exists != 'true'
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          node scripts/update-fnpack-json.mjs \
+            --version "$VERSION" \
+            --x86 "lemon-music-${VERSION}-x86.fpk" \
+            --arm "lemon-music-${VERSION}-arm.fpk"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add fnpack.json
+          if git diff --cached --quiet; then
+            echo "fnpack.json unchanged"
+          else
+            git commit -m "chore: update fnpack.json for v${VERSION}"
+            git push origin HEAD:${{ github.ref_name }}
+          fi

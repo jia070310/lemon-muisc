@@ -15,6 +15,7 @@
 | 部署方式 | 说明 |
 |----------|------|
 | **飞牛 FPK** | 原生应用，运行时依赖应用中心 **Node.js v22**（有系统证书时自动 HTTPS） |
+| **FnDepot 外部源** | 添加仓库地址即可安装/自动更新：`https://github.com/jia070310/lemon-muisc`（需 FnDepot ≥ 0.0.7） |
 | **Docker / 服务器** | 拉镜像即可，见 [docs/docker.md](docs/docker.md) |
 | **开放 API** | [docs/open-api.md](docs/open-api.md) · 本机 `http://<主机>:7983/api/docs` · [OpenAPI](docs/openapi.yaml) |
 | **上架介绍文案** | [docs/store-app-intro.md](docs/store-app-intro.md) |
@@ -287,6 +288,14 @@ npm run fpk:build
 ```powershell
 npm run fpk:publish
 ```
+
+发布成功后会同步更新仓库根目录 [`fnpack.json`](fnpack.json)（FnDepot V2）。飞牛侧用 **FnDepot ≥ 0.0.7** 添加外部源：
+
+```
+https://github.com/jia070310/lemon-muisc
+```
+
+即可在应用源中安装 **柠檬音乐**，并随 Releases 自动检查更新（x86 / arm 分架构包）。
 
 ---
 
