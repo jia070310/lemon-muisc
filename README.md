@@ -20,6 +20,15 @@
 | **开放 API** | [docs/open-api.md](docs/open-api.md) · 本机 `http://<主机>:7983/api/docs` · [OpenAPI](docs/openapi.yaml) |
 | **上架介绍文案** | [docs/store-app-intro.md](docs/store-app-intro.md) |
 
+### 配套客户端（社区）
+
+本仓库是 **服务端 / Web**；以下客户端以柠檬音乐为后台（`/api/v1`），由社区维护，安装与问题请到对应仓库查看：
+
+| 平台 | 项目 | 说明 |
+|------|------|------|
+| **iOS** | [liangddyy/lemon-music-ios](https://github.com/liangddyy/lemon-music-ios) | 原生 iPhone 客户端：音乐库、搜索与发现、收藏/歌单、后台播放与歌词；支持 **CarPlay** |
+| **Android** | [zyhub/LMplayer](https://github.com/zyhub/LMplayer) | 高保真无损播放器：手机 / 平板大屏，并面向车机、TV 等 Android 设备；对接柠檬云端曲库与在线检索 |
+
 QQ 互动群「飞牛柠檬🍋muisc」（群号 **1126326017**）  
 ![群](docs/screenshots/QQ195632.png)
 
