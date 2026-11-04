@@ -1,5 +1,6 @@
 /**
  * 封面磁盘缓存：远程代理图 + 本地内嵌图，避免重复拉 CDN / 反复解文件。
+ * 本地封面用「路径稳定键」（不含 mtime），命中时只读 CONFIG 缓存，不碰音乐盘（对齐 Navidrome ImageCache）。
  */
 import fs from 'fs'
 import path from 'path'
@@ -8,6 +9,8 @@ import { getAppCacheSubdir } from './appPaths.js'
 
 const MAX_ENTRIES = 800
 const DEFAULT_TTL_MS = 7 * 24 * 60 * 60 * 1000
+const MEM_MAX = 64
+const memCover = new Map()
 
 function cacheRoot() {
   const base = process.env.CONFIG_PATH || path.join(process.cwd(), 'config')
@@ -28,6 +31,24 @@ function filePaths(key) {
     dir,
     bin: path.join(dir, `${key}.bin`),
     meta: path.join(dir, `${key}.json`),
+  }
+}
+
+function memGet(key) {
+  if (!key || !memCover.has(key)) return null
+  const hit = memCover.get(key)
+  memCover.delete(key)
+  memCover.set(key, hit)
+  return hit
+}
+
+function memSet(key, value) {
+  if (!key || !value?.buffer?.length) return
+  if (memCover.has(key)) memCover.delete(key)
+  memCover.set(key, value)
+  while (memCover.size > MEM_MAX) {
+    const oldest = memCover.keys().next().value
+    memCover.delete(oldest)
   }
 }
 
@@ -61,12 +82,15 @@ export function buildRemoteCoverCacheKey(url, size = 0) {
   return hashKey(['remote', String(url || ''), String(size || 0)])
 }
 
-export function buildLocalCoverCacheKey(filePath, mtimeMs = 0, size = 0) {
-  return hashKey(['local', path.resolve(String(filePath || '')), String(mtimeMs || 0), String(size || 0)])
+/** 稳定键：同一文件路径复用缓存，打开网页时无需再 stat 音乐文件 */
+export function buildLocalCoverCacheKey(filePath, _mtimeMs = 0, size = 0) {
+  return hashKey(['local-v2', path.resolve(String(filePath || '')), String(size || 0)])
 }
 
 export function getCachedCover(key) {
   if (!key) return null
+  const mem = memGet(key)
+  if (mem?.buffer?.length) return mem
   const { bin, meta } = filePaths(key)
   try {
     if (!fs.existsSync(bin) || !fs.existsSync(meta)) return null
@@ -78,15 +102,17 @@ export function getCachedCover(key) {
     }
     const buffer = fs.readFileSync(bin)
     if (!buffer?.length) return null
-    // 刷新 mtime，便于 LRU trim
+    // 刷新 mtime，便于 LRU trim（仅 CONFIG 盘）
     try { fs.utimesSync(bin, new Date(), new Date()) } catch {}
-    return { buffer, mime: info.mime || 'image/jpeg' }
+    const hit = { buffer, mime: info.mime || 'image/jpeg' }
+    memSet(key, hit)
+    return hit
   } catch {
     return null
   }
 }
 
-export function setCachedCover(key, buffer, mime = 'image/jpeg', ttlMs = DEFAULT_TTL_MS) {
+export function setCachedCover(key, buffer, mime = 'image/jpeg', ttlMs = DEFAULT_TTL_MS, extra = {}) {
   if (!key || !buffer?.length) return
   const { dir, bin, meta } = filePaths(key)
   try {
@@ -99,7 +125,9 @@ export function setCachedCover(key, buffer, mime = 'image/jpeg', ttlMs = DEFAULT
       size: buffer.length,
       expiresAt: Date.now() + ttlMs,
       at: Date.now(),
+      ...(extra && typeof extra === 'object' ? extra : {}),
     }))
+    memSet(key, { buffer, mime: mime || 'image/jpeg' })
     touchAndTrim(key)
   } catch {}
 }

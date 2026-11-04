@@ -28,18 +28,26 @@ function pathsPayload(userId) {
   return getPathsAccessInfo(userId)
 }
 
-function getMusicLibraryStats(roots) {
+const STATS_CACHE_TTL_MS = 60_000
+/** @type {Map<string, { at: number, data: object }>} */
+const statsCache = new Map()
+
+function getMusicLibraryStats(roots, { probeDisk = false } = {}) {
   const musicPaths = roots || getSharedMusicPaths()
   const dirs = []
   let totalTracks = 0
 
   for (const dir of musicPaths) {
-    let readable = false
+    let readable = true
     let error = ''
-    try {
-      readable = fs.existsSync(dir) && fs.statSync(dir).isDirectory()
-    } catch (e) {
-      error = e.message || '不可读'
+    // 默认不每次打开页面都 stat 音乐根目录（索引计数已够用）；probeDisk 才碰盘
+    if (probeDisk) {
+      try {
+        readable = fs.existsSync(dir) && fs.statSync(dir).isDirectory()
+      } catch (e) {
+        readable = false
+        error = e.message || '不可读'
+      }
     }
     const count = countCachedTracks([dir])
     totalTracks += count
@@ -63,7 +71,15 @@ pathsRouter.get('/stats', (req, res) => {
   const info = pathsPayload(req.user?.id)
   // 管理员设置页统计共用库；普通用户统计当前生效库
   const roots = req.user?.role === 'admin' ? info.sharedMusicPaths : info.musicPaths
-  res.json({ ok: true, data: getMusicLibraryStats(roots) })
+  const probeDisk = String(req.query.probe || '') === '1'
+  const cacheKey = `${req.user?.id || 'anon'}:${(roots || []).join('|')}:${probeDisk ? '1' : '0'}`
+  const hit = statsCache.get(cacheKey)
+  if (hit && Date.now() - hit.at < STATS_CACHE_TTL_MS) {
+    return res.json({ ok: true, data: hit.data })
+  }
+  const data = getMusicLibraryStats(roots, { probeDisk })
+  statsCache.set(cacheKey, { at: Date.now(), data })
+  res.json({ ok: true, data })
 })
 
 pathsRouter.get('/', (req, res) => {

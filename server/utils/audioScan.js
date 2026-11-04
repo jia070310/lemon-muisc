@@ -22,7 +22,7 @@ const SKIP_DIR_NAMES = new Set([
   'System Volume Information',
 ])
 
-function isAudioName(name) {
+export function isAudioName(name) {
   return AUDIO_EXTS.includes(path.extname(name).toLowerCase())
 }
 

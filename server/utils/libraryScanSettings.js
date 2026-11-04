@@ -7,8 +7,9 @@ const AUTO_SCAN_DIRS_KEY = 'library.scan.autoDirs'
 const WATCH_ENABLED_KEY = 'library.scan.watchEnabled'
 const WATCH_INTERVAL_KEY = 'library.scan.watchIntervalSec'
 
-const DEFAULT_WATCH_INTERVAL_SEC = 120
-const MIN_WATCH_INTERVAL_SEC = 30
+/** 默认 5 分钟：空闲 NAS 少被无意义全量 stat 唤醒（有变化才深扫） */
+const DEFAULT_WATCH_INTERVAL_SEC = 300
+const MIN_WATCH_INTERVAL_SEC = 60
 const MAX_WATCH_INTERVAL_SEC = 3600
 
 function getSetting(key) {

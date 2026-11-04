@@ -112,16 +112,40 @@ function assertMusicDirAccess(dirPath, userId = null) {
   return { ok: true, probe }
 }
 
-/** 读取本地音频内嵌封面 */
+/** 并发解封面上限，避免首屏专辑墙同时砸开大量音乐文件 */
+let coverExtractInFlight = 0
+const COVER_EXTRACT_MAX = 2
+const coverExtractWaiters = []
+
+function acquireCoverExtract() {
+  if (coverExtractInFlight < COVER_EXTRACT_MAX) {
+    coverExtractInFlight += 1
+    return Promise.resolve()
+  }
+  return new Promise((resolve) => {
+    coverExtractWaiters.push(resolve)
+  }).then(() => {
+    coverExtractInFlight += 1
+  })
+}
+
+function releaseCoverExtract() {
+  coverExtractInFlight = Math.max(0, coverExtractInFlight - 1)
+  const next = coverExtractWaiters.shift()
+  if (next) next()
+}
+
+/**
+ * 读取本地音频内嵌封面。
+ * 缓存命中只读 CONFIG 盘（内存/cover-cache），不 stat、不打开音乐文件。
+ */
 tagRouter.get('/cover', async (req, res) => {
   try {
     const filePath = String(req.query.path || '').trim()
     if (!filePath || !isAllowedMediaPath(filePath, { userId: req.user?.id })) {
       return res.status(403).json({ error: '无权访问该文件' })
     }
-    let mtimeMs = 0
-    try { mtimeMs = fs.statSync(filePath).mtimeMs || 0 } catch {}
-    const cacheKey = buildLocalCoverCacheKey(filePath, mtimeMs)
+    const cacheKey = buildLocalCoverCacheKey(filePath)
     const cached = getCachedCover(cacheKey)
     if (cached?.buffer?.length) {
       res.set('Cache-Control', 'private, max-age=604800')
@@ -129,14 +153,30 @@ tagRouter.get('/cover', async (req, res) => {
       res.type(cached.mime || detectImageMime(cached.buffer))
       return res.send(cached.buffer)
     }
-    const cover = await readEmbeddedCover(filePath)
-    if (!cover?.buffer?.length) return res.status(404).end()
-    const mime = cover.mime || detectImageMime(cover.buffer)
-    setCachedCover(cacheKey, cover.buffer, mime)
-    res.set('Cache-Control', 'private, max-age=604800')
-    res.set('X-Cover-Cache', 'MISS')
-    res.type(mime)
-    res.send(cover.buffer)
+
+    await acquireCoverExtract()
+    try {
+      // 二次检查：排队期间可能已被其它请求写入
+      const again = getCachedCover(cacheKey)
+      if (again?.buffer?.length) {
+        res.set('Cache-Control', 'private, max-age=604800')
+        res.set('X-Cover-Cache', 'HIT')
+        res.type(again.mime || detectImageMime(again.buffer))
+        return res.send(again.buffer)
+      }
+      let mtimeMs = 0
+      try { mtimeMs = fs.statSync(filePath).mtimeMs || 0 } catch {}
+      const cover = await readEmbeddedCover(filePath)
+      if (!cover?.buffer?.length) return res.status(404).end()
+      const mime = cover.mime || detectImageMime(cover.buffer)
+      setCachedCover(cacheKey, cover.buffer, mime, undefined, { sourceMtime: mtimeMs })
+      res.set('Cache-Control', 'private, max-age=604800')
+      res.set('X-Cover-Cache', 'MISS')
+      res.type(mime)
+      res.send(cover.buffer)
+    } finally {
+      releaseCoverExtract()
+    }
   } catch (e) {
     res.status(500).json({ error: e.message })
   }

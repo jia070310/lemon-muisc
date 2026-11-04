@@ -231,7 +231,7 @@ server.listen(PORT, '::', () => {
   // 3) 音乐库监测：再延后，避开用户刚打开时的 IO
   setTimeout(() => {
     startLibraryAutoWatch()
-  }, 25000).unref?.()
+  }, 45000).unref?.()
 
   // 4) 发现页预热：用户打开后再慢慢打音源
   setTimeout(() => {

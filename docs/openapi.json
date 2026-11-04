@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Lemon Music Open API",
-    "version": "1.2.17.19",
+    "version": "1.2.17.20",
     "description": "柠檬音乐自托管开放 API。路径同时挂载在 `/api` 与 `/api/v1`（推荐客户端使用 `/api/v1`）。\n\n鉴权：`Authorization: Bearer <sessionToken>`；音频流可用 `?ticket=` 短时效媒体票（也可兼容 `?token=` 会话 JWT）。\n\n曲目稳定 ID：库内 `id` / `trackId` 为 UUID；在线曲目请用 `songId`+`source`，勿把平台 id 当作 trackId。\n\n播放换源：同一次 `/play/url` 内可用 `sourceApiId` / `skipSourceIds` 控制音源脚本；跨平台搜曲由客户端自行完成后再调本接口。\n\n本地转码：`smooth=true` 请求 AAC 流；关闭用户设置「本地转码」时客户端应直出 `/play/local`（APE / DSF / DFF 除外，始终转码）。\n\n稳定性：已公开路径与字段尽量固定；新功能新开路由或可选字段，避免破坏第三方客户端（详见 docs/open-api.md）。\n\n人读文档见 docs/open-api.md；交互文档 `GET /api/docs`。",
     "license": {
       "name": "MIT"

@@ -378,8 +378,8 @@
                     <span class="setting-item-label-hint">（低性能设备建议关闭）</span>
                   </div>
                   <div class="setting-item-desc">
-                    开启后：后台定时比对磁盘，进入音乐库时也会增量检查外部新增/删除并热更新列表。
-                    关闭后仅保留缓存与手动扫描，可明显减轻 NAS / 弱设备持续 IO 压力。
+                    开启后：后台定时轻量比对目录列表，发现增减才扫标签并热更新；打开网页只读索引，不触发全盘扫描。
+                    关闭后仅保留缓存与手动扫描，可进一步减轻 NAS / 弱设备 IO。
                   </div>
                 </div>
                 <div class="setting-item-action">
@@ -393,7 +393,7 @@
               <div class="setting-item setting-item-path-row">
                 <div class="setting-item-info">
                   <div class="setting-item-label">热更新间隔</div>
-                  <div class="setting-item-desc">仅后台定时监测生效。间隔越短越及时，大曲库或低性能设备建议 5 分钟及以上。</div>
+                  <div class="setting-item-desc">仅后台定时监测生效。默认 5 分钟；无变化时只比对文件名列表，不逐个 stat 音频。大曲库可再加大。</div>
                 </div>
                 <div class="setting-item-action">
                   <AppSelect
@@ -2179,15 +2179,15 @@ const libraryStatsLoading = ref(false)
 const scanAutoMode = ref('all')
 const autoScanDirs = ref([])
 const scanWatchEnabled = ref(true)
-const scanWatchIntervalSec = ref(120)
+const scanWatchIntervalSec = ref(300)
 const scanWatchIntervalOptions = [
-  { value: 30, label: '30 秒' },
   { value: 60, label: '1 分钟' },
   { value: 120, label: '2 分钟' },
-  { value: 300, label: '5 分钟' },
+  { value: 300, label: '5 分钟（推荐）' },
   { value: 600, label: '10 分钟' },
   { value: 900, label: '15 分钟' },
   { value: 1800, label: '30 分钟' },
+  { value: 3600, label: '60 分钟' },
 ]
 const manualScanDirs = ref([])
 const scanTreeCache = ref({})
@@ -2778,7 +2778,7 @@ async function loadScanSettings() {
     scanWatchEnabled.value = res.data?.watchEnabled !== false
     setLibraryHotUpdateEnabled(scanWatchEnabled.value)
     const interval = Number(res.data?.watchIntervalSec)
-    scanWatchIntervalSec.value = Number.isFinite(interval) ? interval : 120
+    scanWatchIntervalSec.value = Number.isFinite(interval) ? interval : 300
   } catch {}
 }
 
@@ -2788,7 +2788,7 @@ async function saveScanSettings() {
       autoMode: scanAutoMode.value,
       autoDirs: autoScanDirs.value,
       watchEnabled: scanWatchEnabled.value,
-      watchIntervalSec: Number(scanWatchIntervalSec.value) || 120,
+      watchIntervalSec: Number(scanWatchIntervalSec.value) || 300,
     })
     autoScanDirs.value = res.data?.autoDirs || []
     scanWatchEnabled.value = res.data?.watchEnabled !== false
