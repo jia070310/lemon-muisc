@@ -10,8 +10,13 @@
     "lemon-music": {
       "display_name": "柠檬音乐",
       "desc": "<b>多平台搜歌、本地音乐库、标签整理与高品质下载</b>。兼容落雪、澜音、MusicFree、BakaMusic 音源插件，浏览器内完成找歌 → 试听 → 下载 → 整理。<br><br><b>亮点</b><br>· 搜索：酷我 / 酷狗 / QQ / 网易云 / 咪咕等（依导入脚本）；FLAC · Hi-Res · 母带，支持批量下载<br>· 音乐库：每日推荐（本地+平台混搭）、推荐歌单、漫游播放<br>· 文件管理：标签编辑、清理（重复/小文件）、伪 FLAC 检测、按歌手整理<br>· 播放：全屏逐字歌词、频谱与风格配色<br><br><b>依赖</b>：应用中心 <b>Node.js v22</b>。目录可在安装向导或「访问权限」中指定；卸载可选保留配置。<br><br><b>免责声明</b>：仅供个人合法使用，请遵守当地法律与平台条款。",
-      "platform": ["x86", "arm"],
-      "categories": ["影音娱乐"],
+      "platform": [
+        "x86",
+        "arm"
+      ],
+      "categories": [
+        "影音娱乐"
+      ],
       "icon_url": "./icon.png",
       "preview_urls": [
         "./docs/screenshots/intro-search-v1.2.17.png",
@@ -79,6 +84,23 @@
               "download_url": "https://github.com/jia070310/lemon-muisc/releases/download/v1.2.17.17/lemon-music-1.2.17.17-arm.fpk",
               "sha256": "615e5b4a4d5e7f2a10c139af882a7435e9027683c55faeac6cca6c1b2160be9c",
               "size": 5603210
+            }
+          }
+        },
+        "1.2.17.20": {
+          "changelog": "音乐库 · 减少 NAS 空闲盘唤醒（参考 Navidrome）；**打开网页不再触发全盘扫库**：列表仍读 SQLite 索引；软同步只问版本，不扫盘；**封面缓存命中只读配置盘**：不再每次 `stat`/打开音乐文件解内嵌图；未命中时限制并发解图；**后台热更新更省 IO**：先比对目录/文件名列表签名，无变化跳过全量 `stat`；约每小时兜底深比对一次；默认监测间隔改为 **5 分钟**；冷启动先建签名，避免一开机就狂转硬盘；路径统计默认读索引并短缓存，打开音乐库不再反复探测音乐根目录",
+          "updated_at": "2026-11-04T09:56:37+08:00",
+          "os_min_version": "1.1.8",
+          "packages": {
+            "x86": {
+              "download_url": "https://github.com/jia070310/lemon-muisc/releases/download/v1.2.17.20/lemon-music-1.2.17.20-x86.fpk",
+              "sha256": "755469dd6cab03113ae7118576f515493af41cad370f73c357030ae657906b6d",
+              "size": 5610345
+            },
+            "arm": {
+              "download_url": "https://github.com/jia070310/lemon-muisc/releases/download/v1.2.17.20/lemon-music-1.2.17.20-arm.fpk",
+              "sha256": "dadacf4ecde38980fc146a8a73cdcdd71241a10352b258d5036db97121321d99",
+              "size": 5610349
             }
           }
         }
