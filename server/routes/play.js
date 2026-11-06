@@ -7,7 +7,8 @@ import { getStoredActiveSourceIds } from '../utils/activeSources.js'
 import { buildMusicInfo } from '../utils/musicInfo.js'
 import { fetchTrackLyric, fetchTrackCover } from '../utils/trackMeta.js'
 import { resolveCoverUrl } from '../utils/cover.js'
-import { detectImageMime, fetchPicBuffer } from '../utils/fetchPic.js'
+import { detectImageMime, fetchPicBuffer, isImageBuffer } from '../utils/fetchPic.js'
+import { parseByteRange } from '../utils/range.js'
 import {
   buildRemoteCoverCacheKey,
   getCachedCover,
@@ -112,10 +113,12 @@ function signPlayStreamUrl(url, req) {
   })
 }
 
-function wrapPlayUrl(url, source) {
+function wrapPlayUrl(url, source, cacheKey = '') {
   if (!url || url.startsWith('/api/play/') || url.startsWith('/api/v1/play/')) return url
   if (!/^https?:\/\//i.test(url)) return url
-  return `/api/play/proxy?url=${encodeURIComponent(url)}&source=${encodeURIComponent(source || '')}`
+  const base = `/api/play/proxy?url=${encodeURIComponent(url)}&source=${encodeURIComponent(source || '')}`
+  // 带上服务端取链缓存键：代理失败时可精确失效，避免把死链继续复用 8 分钟
+  return cacheKey ? `${base}&ck=${encodeURIComponent(cacheKey)}` : base
 }
 
 function httpError(status, message, extra = {}) {
@@ -224,7 +227,7 @@ export async function resolvePlayStreamRel(req) {
     const url = extractMusicUrl(result.data)
     if (!url) throw new Error('获取播放链接失败')
     wrappedSourceInfo = buildSourceInfoPayload(result)
-    return wrapPlayUrl(url, source)
+    return wrapPlayUrl(url, source, cacheKey)
   }))
 
   return {
@@ -414,16 +417,12 @@ function applyRangeOrFull(res, req, filePath, mime) {
   }
 
   if (range) {
-    const m = /^bytes=(\d*)-(\d*)$/.exec(range)
-    if (!m) return res.status(416).end()
-    const start = m[1] ? parseInt(m[1], 10) : 0
-    let end = m[2] ? parseInt(m[2], 10) : total - 1
-    if (Number.isNaN(start) || Number.isNaN(end)) return res.status(416).end()
-    end = Math.min(end, total - 1)
-    if (start >= total || start > end || end < 0) {
+    const parsed = parseByteRange(range, total)
+    if (!parsed) {
       res.setHeader('Content-Range', `bytes */${total}`)
       return res.status(416).end()
     }
+    const { start, end } = parsed
     res.status(206)
     res.setHeader('Content-Range', `bytes ${start}-${end}/${total}`)
     res.setHeader('Content-Length', end - start + 1)
@@ -456,10 +455,10 @@ function localPlayHandler(req, res) {
   try {
     const filePath = resolveStreamLocalFile(req)
     if (!filePath) {
-      logPlayError('local', req, '缺少文件路径', { status: 400 })
-      return res.status(400).json({ error: '缺少文件路径' })
+      logPlayError('local', req, '缺少文件路径', { status: 404 })
+      return res.status(404).json({ error: '未找到对应文件', code: 'FILE_NOT_FOUND' })
     }
-    if (!isAllowedMediaPath(filePath, { userId: req.user?.id })) {
+    if (!isAllowedMediaPath(filePath, { userId: req.user?.id, allowMissing: true })) {
       logPlayError('local', req, '无权访问该文件', { status: 403, filePath })
       return res.status(403).json({ error: '无权访问该文件' })
     }
@@ -481,7 +480,7 @@ function localPlayHandler(req, res) {
     }
     if (!fs.existsSync(exists)) {
       logPlayError('local', req, '本地文件不存在', { status: 404, filePath: exists, ext, exists: false })
-      return res.status(404).json({ error: '本地文件不存在' })
+      return res.status(404).json({ error: '本地文件不存在', code: 'FILE_NOT_FOUND' })
     }
 
     const mime = AUDIO_MIME[ext] || 'application/octet-stream'
@@ -501,7 +500,7 @@ async function localApeHandler(req, res) {
   try {
     const filePath = resolveStreamLocalFile(req)
     if (!filePath) {
-      return res.status(400).json({ error: '缺少文件路径' })
+      return res.status(404).json({ error: '未找到对应文件', code: 'FILE_NOT_FOUND' })
     }
     if (!isAllowedMediaPath(filePath, { userId: req.user?.id })) {
       return res.status(403).json({ error: '无权访问该文件' })
@@ -534,7 +533,7 @@ async function localSmoothHandler(req, res) {
   try {
     const filePath = resolveStreamLocalFile(req)
     if (!filePath) {
-      return res.status(400).json({ error: '缺少文件路径' })
+      return res.status(404).json({ error: '未找到对应文件', code: 'FILE_NOT_FOUND' })
     }
     if (!isAllowedMediaPath(filePath, { userId: req.user?.id })) {
       return res.status(403).json({ error: '无权访问该文件' })
@@ -563,7 +562,7 @@ playRouter.head('/local-smooth', localSmoothHandler)
 async function localDlnaMp3Handler(req, res) {
   try {
     const filePath = resolveStreamLocalFile(req)
-    if (!filePath) return res.status(400).json({ error: '缺少文件路径' })
+    if (!filePath) return res.status(404).json({ error: '未找到对应文件', code: 'FILE_NOT_FOUND' })
     if (!isAllowedMediaPath(filePath, { userId: req.user?.id })) {
       return res.status(403).json({ error: '无权访问该文件' })
     }
@@ -613,6 +612,16 @@ playRouter.post('/smooth-warmup', async (req, res) => {
 const MAX_PLAY_PROXIES = 8
 let activePlayProxies = 0
 
+const PLAY_PROXY_OPEN_TIMEOUT_MS = 8000
+const PLAY_PROXY_RESPONSE_TIMEOUT_MS = 15000
+const PLAY_PROXY_READ_TIMEOUT_MS = 30000
+const NON_AUDIO_CONTENT_TYPE_RE = /^(text\/html|text\/plain|application\/json|application\/xml|text\/xml)$/i
+
+/** 上游返回 HTML/JSON 等错误页时视为不可播放，避免把错误页 pipe 给播放器 */
+function isNonAudioContentType(contentType) {
+  return NON_AUDIO_CONTENT_TYPE_RE.test(String(contentType || '').split(';')[0].trim())
+}
+
 function playProxyHandler(req, res) {
   if (activePlayProxies >= MAX_PLAY_PROXIES) {
     return res.status(503).json({ error: '播放服务繁忙，请稍后重试' })
@@ -620,6 +629,7 @@ function playProxyHandler(req, res) {
 
   const url = req.query.url
   const source = typeof req.query.source === 'string' ? req.query.source : ''
+  const cacheKey = typeof req.query.ck === 'string' ? req.query.ck : ''
   if (!url || typeof url !== 'string' || !isAllowedRemoteUrl(url)) {
     return res.status(400).json({ error: '无效播放链接' })
   }
@@ -634,7 +644,14 @@ function playProxyHandler(req, res) {
 
   const headers = buildMusicCdnHeaders(source, req.headers.range ? { Range: req.headers.range } : {})
 
-  const upstream = needle.get(url, { follow_max: 5, headers, parse_response: false })
+  const upstream = needle.get(url, {
+    follow_max: 5,
+    headers,
+    parse_response: false,
+    open_timeout: PLAY_PROXY_OPEN_TIMEOUT_MS,
+    response_timeout: PLAY_PROXY_RESPONSE_TIMEOUT_MS,
+    read_timeout: PLAY_PROXY_READ_TIMEOUT_MS,
+  })
   let aborted = false
   const abortUpstream = () => {
     if (aborted) return
@@ -643,17 +660,28 @@ function playProxyHandler(req, res) {
     releaseProxy()
   }
 
+  /** 上游异常：失效服务端取链缓存，让前端重试时重新取链，而不是复用死链 */
+  const failProxy = (status, message) => {
+    if (cacheKey) clearCachedPlayUrl(cacheKey)
+    if (!res.headersSent) res.status(status).json({ error: message })
+    abortUpstream()
+  }
+
   req.on('close', abortUpstream)
   res.on('close', abortUpstream)
 
   upstream.on('header', (statusCode, respHeaders) => {
     if (aborted) return
     if (statusCode >= 400) {
-      if (!res.headersSent) res.status(statusCode).json({ error: '远程音频不可用' })
-      abortUpstream()
+      failProxy(statusCode, '远程音频不可用')
       return
     }
-    const mime = respHeaders['content-type']?.split(';')[0]?.trim() || guessMimeFromUrl(url)
+    const rawMime = respHeaders['content-type']?.split(';')[0]?.trim() || ''
+    if (isNonAudioContentType(rawMime)) {
+      failProxy(502, '远程音频返回了非音频内容')
+      return
+    }
+    const mime = rawMime || guessMimeFromUrl(url)
     const outMime = /proxy\.mp3/i.test(String(req.originalUrl || req.url || '')) ? 'audio/mpeg' : mime
     res.setHeader('Content-Type', outMime)
     res.setHeader('Accept-Ranges', 'bytes')
@@ -672,6 +700,7 @@ function playProxyHandler(req, res) {
   })
 
   upstream.on('err', (err) => {
+    if (cacheKey) clearCachedPlayUrl(cacheKey)
     if (!res.headersSent && !aborted) res.status(502).json({ error: formatUserError(err, '音频流传输失败') })
     abortUpstream()
   })
@@ -774,11 +803,11 @@ playRouter.get('/cover-img', async (req, res) => {
       return res.send(cached.buffer)
     }
     const buf = await playMetaLimiter(() => withTimeout(
-      fetchPicBuffer(url, { size }),
-      PLAY_META_TIMEOUT_MS,
+      fetchPicBuffer(url, { size, deadlineMs: 12000 }),
+      15000,
       '获取封面超时，请稍后重试',
     ))
-    if (!buf?.length) return res.status(404).json({ error: '封面不可用' })
+    if (!buf?.length || !isImageBuffer(buf)) return res.status(404).json({ error: '封面不可用' })
     const mime = detectImageMime(buf)
     setCachedCover(cacheKey, buf, mime)
     res.setHeader('Content-Type', mime)
