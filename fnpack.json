@@ -103,6 +103,23 @@
               "size": 5610349
             }
           }
+        },
+        "1.2.17.21": {
+          "changelog": "网络封面与试听稳定性；封面抓取增加总耗时上限，超时快速失败，不再长时间转圈；校验响应真实图片格式，HTML/JSON 错误页、空响应直接判失败；酷狗等防盗链平台先带 Referer 抓取，失败后自动去掉 Referer 兜底；网络试听代理补齐超时控制；上游返回非音频内容时不再当作成功；取链缓存遇到失效链接自动清除并重新取链，减少「点了没反应」",
+          "updated_at": "2026-11-06T20:50:06+08:00",
+          "os_min_version": "1.1.8",
+          "packages": {
+            "x86": {
+              "download_url": "https://github.com/jia070310/lemon-muisc/releases/download/v1.2.17.21/lemon-music-1.2.17.21-x86.fpk",
+              "sha256": "c7bed3dc9285393764bb530930516263e5e55f125812fb316c85d311265e9caa",
+              "size": 5616157
+            },
+            "arm": {
+              "download_url": "https://github.com/jia070310/lemon-muisc/releases/download/v1.2.17.21/lemon-music-1.2.17.21-arm.fpk",
+              "sha256": "a473ffb98ad4b35dbc5bd1fc10707943590dfc7cf0e7cad6d5431ac6a3633e95",
+              "size": 5616156
+            }
+          }
         }
       }
     }
