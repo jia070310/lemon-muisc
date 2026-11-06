@@ -1,30 +1,60 @@
-export async function fetchPicBuffer(picUrl, { size = 0 } = {}) {
+const IMAGE_ACCEPT = 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8'
+const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+
+/**
+ * 按魔数判断是否为常见位图，避免把 CDN 的 HTML 错误页当成图片缓存。
+ * @param {Buffer} buffer
+ */
+export function isImageBuffer(buffer) {
+  if (!buffer?.length || buffer.length < 1024) return false
+  if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return true
+  if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) return true
+  if (buffer.slice(0, 4).toString('ascii') === 'GIF8') return true
+  if (buffer.slice(0, 4).toString('ascii') === 'RIFF' && buffer.slice(8, 12).toString('ascii') === 'WEBP') return true
+  if (buffer[0] === 0x42 && buffer[1] === 0x4d) return true
+  return false
+}
+
+/**
+ * 拉取远程封面。整体耗时受 deadlineMs 约束，避免外层超时后仍长期占用并发槽。
+ * @param {string} picUrl
+ * @param {{ size?: number, deadlineMs?: number }} [opts]
+ */
+export async function fetchPicBuffer(picUrl, { size = 0, deadlineMs = 12000 } = {}) {
   if (!picUrl || !/^https?:\/\//i.test(picUrl)) return null
 
   const prefer = Number(size) > 0 ? Math.min(500, Math.max(120, Number(size))) : 0
   const candidates = expandPicCandidates(picUrl, prefer)
-
   const { default: needle } = await import('needle')
+  const deadline = Date.now() + Math.max(1000, Number(deadlineMs) || 12000)
+
   for (let url of candidates) {
     if (url.includes('music.126.net') && !/[?&]param=\d+y\d+/i.test(url)) {
       const dim = prefer || 500
       url += `${url.includes('?') ? '&' : '?'}param=${dim}y${dim}`
     }
-    try {
-      const resp = await needle('get', url, {
-        headers: {
-          Referer: pickReferer(url),
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        },
-        follow_max: 5,
-        parse_response: false,
-        timeout: 15000,
-      })
-      if (resp.statusCode === 200 && resp.body?.length) {
-        return Buffer.isBuffer(resp.body) ? resp.body : Buffer.from(resp.body)
+    // 先带平台 Referer；失败后再用无 Referer 尝试一次（酷狗/酷我防盗链兜底）
+    for (const withReferer of [true, false]) {
+      const remaining = deadline - Date.now()
+      if (remaining < 500) return null
+      const timeout = Math.min(6000, remaining)
+      try {
+        const headers = { 'User-Agent': USER_AGENT, Accept: IMAGE_ACCEPT }
+        if (withReferer) headers.Referer = pickReferer(url)
+        const resp = await needle('get', url, {
+          headers,
+          follow_max: 5,
+          parse_response: false,
+          timeout,
+          open_timeout: Math.min(4000, timeout),
+        })
+        const status = resp?.statusCode
+        const body = Buffer.isBuffer(resp?.body) ? resp.body : Buffer.from(resp?.body || [])
+        // 魔数通过即可信：部分 CDN 会返回 octet-stream，mime 由调用方再探测
+        if ((status === 200 || status === 206) && isImageBuffer(body)) return body
+      } catch {
+        // 网络异常：继续下一次尝试
       }
-    } catch {
-      // try next candidate
     }
   }
   return null
@@ -34,7 +64,7 @@ function pickReferer(url) {
   if (/kuwo\.cn/i.test(url)) return 'https://www.kuwo.cn/'
   if (/kugou\.com|kgimg\.com/i.test(url)) return 'https://www.kugou.com/'
   if (/music\.126\.net|netease/i.test(url)) return 'https://music.163.com/'
-  if (/migu\.cn/i.test(url)) return 'https://music.migu.cn/'
+  if (/migu\.cn/i.test(url)) return 'https://www.migu.cn/'
   return 'https://y.qq.com/'
 }
 
