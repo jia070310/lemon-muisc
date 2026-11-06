@@ -2,7 +2,7 @@ import { Router } from 'express'
 import { getLibraryUserData, setLibraryUserData } from '../utils/libraryUserData.js'
 import { setUserSettings, USER_SETTING_KEYS } from '../utils/userSettings.js'
 import { notifyLibraryUserDataChanged } from '../utils/libraryNotify.js'
-import { buildUserBackupPayload, EXPORTABLE_USER_KEYS } from '../utils/autoUserBackup.js'
+import { buildUserBackupPayload, EXPORTABLE_USER_KEYS, restorePodcastFeeds, restoreSourceScripts } from '../utils/autoUserBackup.js'
 
 export const backupRouter = Router()
 
@@ -18,10 +18,25 @@ backupRouter.get('/export', (req, res) => {
 backupRouter.post('/import', (req, res) => {
   try {
     const body = req.body || {}
-    const root = body.data && typeof body.data === 'object' ? body : body
-    const data = root.data || root
+    let data = body.data && typeof body.data === 'object' ? body.data : body
     if (!data || typeof data !== 'object') {
       return res.status(400).json({ error: '备份内容无效' })
+    }
+
+    // 音源脚本在两种格式中都位于 data.sources（v2 与 users 同级），需先于 users 解包取出
+    const sourcesIn = Array.isArray(data.sources) ? data.sources : null
+
+    // 兼容 v2 自动升级备份：data = { sources, users }，取当前登录用户的条目
+    if (Array.isArray(data.users)) {
+      const users = data.users.filter((u) => u && typeof u === 'object')
+      const mine =
+        users.find((u) => String(u.id) === String(req.user.id)) ||
+        users.find((u) => u.username && u.username === req.user.username) ||
+        (users.length === 1 ? users[0] : null)
+      if (!mine) {
+        return res.status(400).json({ error: '备份中没有当前用户的数据' })
+      }
+      data = mine
     }
 
     const playlists = Array.isArray(data.playlists) ? data.playlists : null
@@ -31,8 +46,13 @@ backupRouter.post('/import', (req, res) => {
     const recentPlays = Array.isArray(data.recentPlays) ? data.recentPlays : null
     const playStats = Array.isArray(data.playStats) ? data.playStats : null
     const settingsIn = data.settings && typeof data.settings === 'object' ? data.settings : {}
+    const podcastFeedsIn = Array.isArray(data.podcastFeeds) ? data.podcastFeeds : null
 
-    if (!playlists && !favorites && !favoriteAlbums && !favoriteArtists && !recentPlays && !playStats && !Object.keys(settingsIn).length) {
+    // 音源是全局数据，仅管理员可恢复；播客按当前用户恢复
+    const canRestoreSources = req.user.role === 'admin' && Boolean(sourcesIn?.length)
+    const hasPodcastFeeds = Boolean(podcastFeedsIn?.length)
+
+    if (!playlists && !favorites && !favoriteAlbums && !favoriteArtists && !recentPlays && !playStats && !Object.keys(settingsIn).length && !canRestoreSources && !hasPodcastFeeds) {
       return res.status(400).json({ error: '备份中没有可导入的数据' })
     }
 
@@ -117,6 +137,10 @@ backupRouter.post('/import', (req, res) => {
     }
     if (Object.keys(toSet).length) setUserSettings(req.user.id, toSet)
 
+    // replace：用备份覆盖同 id 音源；merge：保留现有，仅补新增
+    const sourcesRestored = canRestoreSources ? restoreSourceScripts(sourcesIn, { mode }) : null
+    const podcastsRestored = hasPodcastFeeds ? restorePodcastFeeds(req.user.id, podcastFeedsIn) : null
+
     notifyLibraryUserDataChanged(req.user.id)
     res.json({
       ok: true,
@@ -128,6 +152,8 @@ backupRouter.post('/import', (req, res) => {
         recentPlays: recentPlays?.length || 0,
         playStats: playStats?.length || 0,
         settings: Object.keys(toSet).length,
+        sources: sourcesRestored ? sourcesRestored.added + sourcesRestored.updated : 0,
+        podcasts: podcastsRestored?.added || 0,
         mode,
       },
     })

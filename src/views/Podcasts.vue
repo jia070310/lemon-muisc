@@ -22,6 +22,12 @@
       </button>
     </form>
 
+    <div v-if="feeds.length" class="podcast-toolbar">
+      <button type="button" class="btn-ghost btn-sm" :disabled="exporting" @click="onExport">
+        {{ exporting ? '导出中…' : '导出订阅' }}
+      </button>
+    </div>
+
     <p v-if="error" class="form-error">{{ error }}</p>
     <p v-if="toast" class="form-toast" :class="toast.type">{{ toast.text }}</p>
 
@@ -104,6 +110,7 @@ const subscribing = ref(false)
 const error = ref('')
 const toast = ref(null)
 const busyId = ref('')
+const exporting = ref(false)
 const swipeOpenId = ref('')
 const swipeOffset = reactive({})
 const ctxMenu = ref(null)
@@ -223,6 +230,31 @@ function onCardClick(feed) {
     return
   }
   router.push(`/podcasts/${encodeURIComponent(feed.id)}`)
+}
+
+async function onExport() {
+  if (exporting.value) return
+  exporting.value = true
+  try {
+    const res = await api.podcasts.exportAll()
+    const count = res?.payload?.data?.podcastFeeds?.length || 0
+    if (!count) {
+      showToast('暂无可导出的订阅', 'info')
+      return
+    }
+    const blob = new Blob([JSON.stringify(res.payload, null, 2)], { type: 'application/json' })
+    const objectUrl = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = objectUrl
+    a.download = res?.filename || 'lemon-podcasts.json'
+    a.click()
+    URL.revokeObjectURL(objectUrl)
+    showToast(`已导出 ${count} 个订阅`, 'success')
+  } catch (e) {
+    showToast(e.message || '导出失败', 'error')
+  } finally {
+    exporting.value = false
+  }
 }
 
 async function loadFeeds() {
@@ -353,6 +385,11 @@ onUnmounted(() => {
   gap: 8px;
   align-items: center;
   margin-bottom: 14px;
+}
+.podcast-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin: -6px 0 12px;
 }
 .subscribe-input {
   flex: 1;

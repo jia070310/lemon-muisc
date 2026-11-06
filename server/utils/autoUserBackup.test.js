@@ -10,11 +10,14 @@ import { setUserSettings } from './userSettings.js'
 import {
   buildAutoBackupPayload,
   maybeAutoBackupOnUpdate,
+  maybeAutoBackupAfterUserDataChange,
   shouldAutoBackup,
   getAutoBackupDecision,
   computeUserDataFingerprint,
   writeAutoBackupFile,
+  pruneAutoBackupFiles,
   _resetAutoBackupStampForTests,
+  MAX_AUTO_BACKUP_FILES,
   BACKUP_SUBDIR,
 } from './autoUserBackup.js'
 import { compareVersion } from './version.js'
@@ -156,6 +159,64 @@ test('maybeAutoBackupOnUpdate writes once; content change triggers again', () =>
   })
   assert.equal(fifth.ok, true)
   assert.equal(fifth.reason, 'version')
+})
+
+test('maybeAutoBackupAfterUserDataChange backs up without any new version', () => {
+  _resetAutoBackupStampForTests()
+  const first = maybeAutoBackupAfterUserDataChange({ downloadRoot: downloadDir })
+  assert.equal(first.ok, true)
+  assert.equal(first.reason, 'content-changed')
+  assert.match(first.fileName, /-upd-/)
+
+  const second = maybeAutoBackupAfterUserDataChange({ downloadRoot: downloadDir })
+  assert.equal(second.ok, false)
+  assert.equal(second.reason, 'already-backed-up')
+
+  // 仅播放历史变化不触发备份
+  const before = getLibraryUserData(testerId)
+  setLibraryUserData(testerId, {
+    ...before,
+    recentPlays: [{ name: '随便听听' }],
+    playStats: [...(before.playStats || []), { key: 'k1', count: 1 }],
+    revision: (before.revision || 0) + 1,
+  })
+  const playbackOnly = maybeAutoBackupAfterUserDataChange({ downloadRoot: downloadDir })
+  assert.equal(playbackOnly.ok, false)
+
+  // 新增收藏 → 触发备份
+  const mid = getLibraryUserData(testerId)
+  setLibraryUserData(testerId, {
+    ...mid,
+    favorites: [...(mid.favorites || []), { name: '新收藏', singer: 'B' }],
+    revision: (mid.revision || 0) + 1,
+  })
+  const third = maybeAutoBackupAfterUserDataChange({ downloadRoot: downloadDir })
+  assert.equal(third.ok, true)
+  assert.equal(third.reason, 'content-changed')
+  const parsed = JSON.parse(fs.readFileSync(third.filePath, 'utf8'))
+  assert.ok(parsed.data.users.some((u) => u.username === 'backup_tester' && u.favorites.length === 2))
+})
+
+test('pruneAutoBackupFiles keeps newest MAX_AUTO_BACKUP_FILES', () => {
+  const root = path.join(tmpRoot, 'retention')
+  const dir = path.join(root, BACKUP_SUBDIR)
+  fs.mkdirSync(dir, { recursive: true })
+  const total = MAX_AUTO_BACKUP_FILES + 5
+  const baseMs = Date.now() - total * 1000
+  for (let i = 0; i < total; i += 1) {
+    const name = `lemon-music-backup-1.0.0-old-${String(i).padStart(2, '0')}.json`
+    const filePath = path.join(dir, name)
+    fs.writeFileSync(filePath, '{}', 'utf8')
+    const t = new Date(baseMs + i * 1000)
+    fs.utimesSync(filePath, t, t)
+  }
+  fs.writeFileSync(path.join(dir, 'keep-me.txt'), 'x', 'utf8')
+  const removed = pruneAutoBackupFiles(dir)
+  assert.equal(removed, 5)
+  const left = fs.readdirSync(dir).filter((n) => /^lemon-music-backup-.*\.json$/i.test(n))
+  assert.equal(left.length, MAX_AUTO_BACKUP_FILES)
+  assert.ok(!left.includes('lemon-music-backup-1.0.0-old-00.json'))
+  assert.ok(fs.existsSync(path.join(dir, 'keep-me.txt')))
 })
 
 test('writeAutoBackupFile creates lemon-backups subdir', () => {

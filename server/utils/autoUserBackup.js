@@ -1,9 +1,12 @@
 /**
- * 检测到 GitHub 有新版本时，自动把音源 / 歌单等用户数据备份到下载目录。
+ * 自动把音源 / 歌单 / 收藏等用户数据备份到下载目录。
  *
- * 触发条件（需同时：latest > current）：
- * 1) 尚未为该 latestVersion 备份过；或
- * 2) 已备份过，但用户数据指纹相对上次备份有变化（新增音源/歌单等）→ 再写一份完整快照
+ * 触发条件：
+ * 1) 检测到 GitHub 有新版本（latest > current）且尚未备份过该版本；
+ * 2) 新版本窗口内用户数据（音源/歌单/收藏等）有变化 → 追加完整快照；
+ * 3) 没有新版本时，用户数据新增或变更也直接备份（不再依赖版本检查）。
+ *
+ * 备份文件最多保留 MAX_AUTO_BACKUP_FILES 份，超出时删除最早的。
  */
 import fs from 'fs'
 import path from 'path'
@@ -21,6 +24,8 @@ const REPO = 'jia070310/lemon-muisc'
 const STAMP_KEY = 'backup.autoForLatestVersion'
 const FINGERPRINT_KEY = 'backup.autoContentFingerprint'
 const BACKUP_SUBDIR = 'lemon-backups'
+/** 自动备份最多保留份数，超出后删除最早的文件 */
+export const MAX_AUTO_BACKUP_FILES = 20
 
 /** 与设置页「导出备份」一致的用户设置键 */
 export const EXPORTABLE_USER_KEYS = [
@@ -62,6 +67,11 @@ function writeBackupMeta(latestVersion, fingerprint) {
     [STAMP_KEY]: String(latestVersion || ''),
     [FINGERPRINT_KEY]: String(fingerprint || ''),
   })
+}
+
+/** 仅更新指纹，不动待升级版本标记 */
+function writeFingerprint(fingerprint) {
+  setGlobalSettings({ [FINGERPRINT_KEY]: String(fingerprint || '') })
 }
 
 function pickUserSettings(userId) {
@@ -123,6 +133,7 @@ function listUserPodcastFeeds(userId) {
 
 /**
  * 用户数据内容指纹：音源增删改、歌单/收藏/播客/相关设置变化都会变。
+ * 不包含播放历史（recentPlays/playStats）与 revision，避免听歌产生的同步频繁触发备份。
  * 不依赖完整 payload 序列化，避免 exportedAt 等噪声。
  */
 export function computeUserDataFingerprint() {
@@ -141,13 +152,10 @@ export function computeUserDataFingerprint() {
     const feeds = listUserPodcastFeeds(u.id)
     return {
       id: u.id,
-      revision: userData.revision || 0,
       playlists: userData.playlists || [],
       favorites: userData.favorites || [],
       favoriteAlbums: userData.favoriteAlbums || [],
       favoriteArtists: userData.favoriteArtists || [],
-      recentPlays: userData.recentPlays || [],
-      playStats: userData.playStats || [],
       settings,
       podcastFeeds: feeds.map((f) => ({ id: f.id, url: f.url })),
     }
@@ -174,6 +182,7 @@ export function buildUserBackupPayload(user, { includeSources = false } = {}) {
       recentPlays: userData.recentPlays || [],
       playStats: userData.playStats || [],
       settings: pickUserSettings(user.id),
+      podcastFeeds: listUserPodcastFeeds(user.id),
     },
   }
   if (includeSources) {
@@ -218,6 +227,97 @@ export function buildAutoBackupPayload({ currentVersion, latestVersion, reason =
 }
 
 /**
+ * 从备份恢复音源脚本（全局 user_apis）。
+ * 保留备份中的原 id，使 source.active 等设置引用不失效；
+ * merge 跳过已存在的同 id 行，replace 用备份内容覆盖。
+ */
+export function restoreSourceScripts(sources, { mode = 'replace' } = {}) {
+  const result = { added: 0, updated: 0, skipped: 0 }
+  if (!Array.isArray(sources) || !sources.length) return result
+  const db = getDB()
+  if (!db) return result
+  const getById = db.prepare('SELECT id FROM user_apis WHERE id = ?')
+  const insert = db.prepare(`
+    INSERT INTO user_apis (id, name, description, script, author, version, homepage, sources, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, unixepoch())
+  `)
+  const update = db.prepare(`
+    UPDATE user_apis
+    SET name = ?, description = ?, script = ?, author = ?, version = ?, homepage = ?, sources = ?, updated_at = unixepoch()
+    WHERE id = ?
+  `)
+  const tx = db.transaction((list) => {
+    for (const s of list) {
+      const script = String(s?.script || '')
+      if (!script.trim()) {
+        result.skipped += 1
+        continue
+      }
+      const fields = [
+        String(s?.name || ''),
+        String(s?.description || ''),
+        script,
+        String(s?.author || ''),
+        String(s?.version || ''),
+        String(s?.homepage || ''),
+        typeof s?.sources === 'string' ? s.sources : JSON.stringify(s?.sources || {}),
+      ]
+      const id = String(s?.id || '')
+      const exists = id ? getById.get(id) : null
+      if (exists) {
+        if (mode === 'merge') {
+          result.skipped += 1
+          continue
+        }
+        update.run(...fields, id)
+        result.updated += 1
+      } else {
+        const newId = id || `user_api_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+        insert.run(newId, ...fields)
+        result.added += 1
+      }
+    }
+  })
+  tx(sources)
+  return result
+}
+
+/** 从备份恢复播客订阅：按 user_id + url 去重，仅写入元数据，不联网拉取 */
+export function restorePodcastFeeds(userId, feeds) {
+  const result = { added: 0, skipped: 0 }
+  if (!Array.isArray(feeds) || !feeds.length) return result
+  const db = getDB()
+  if (!db) return result
+  ensurePodcastTables()
+  const exists = db.prepare('SELECT 1 FROM podcast_feeds WHERE user_id = ? AND url = ?')
+  const insert = db.prepare(`
+    INSERT INTO podcast_feeds (id, user_id, url, title, author, description, image_url, site_url, last_error, last_fetched_at)
+    VALUES (?, ?, ?, ?, ?, '', ?, ?, '', 0)
+  `)
+  const tx = db.transaction((list) => {
+    for (const f of list) {
+      const url = String(f?.url || '').trim()
+      if (!/^https?:\/\//i.test(url) || exists.get(userId, url)) {
+        result.skipped += 1
+        continue
+      }
+      insert.run(
+        crypto.randomUUID(),
+        userId,
+        url,
+        String(f?.title || ''),
+        String(f?.author || ''),
+        String(f?.imageUrl || ''),
+        String(f?.siteUrl || ''),
+      )
+      result.added += 1
+    }
+  })
+  tx(feeds)
+  return result
+}
+
+/**
  * @returns {{ should: boolean, reason: string }}
  * reason: no-update | already-backed-up | version | content-changed
  */
@@ -241,21 +341,55 @@ function safeFilePart(v) {
   return String(v || 'unknown').replace(/[^\w.-]+/g, '_').slice(0, 32)
 }
 
+/** 仅保留最新的 max 份自动备份，删除最早的文件 */
+export function pruneAutoBackupFiles(dir, max = MAX_AUTO_BACKUP_FILES) {
+  try {
+    const names = fs.readdirSync(dir)
+      .filter((name) => /^lemon-music-backup-.*\.json$/i.test(name))
+    if (names.length <= max) return 0
+    const entries = names.map((name) => {
+      const filePath = path.join(dir, name)
+      let mtimeMs = 0
+      try {
+        mtimeMs = fs.statSync(filePath).mtimeMs
+      } catch {}
+      return { name, filePath, mtimeMs }
+    })
+    entries.sort((a, b) => a.mtimeMs - b.mtimeMs || a.name.localeCompare(b.name))
+    const overflow = entries.length - max
+    let removed = 0
+    for (let i = 0; i < overflow; i += 1) {
+      try {
+        fs.unlinkSync(entries[i].filePath)
+        removed += 1
+      } catch {}
+    }
+    return removed
+  } catch {
+    return 0
+  }
+}
+
 /**
  * 写入下载目录下 lemon-backups/
- * @returns {{ filePath: string, fileName: string, dir: string }}
+ * @returns {{ filePath: string, fileName: string, dir: string, pruned: number }}
  */
 export function writeAutoBackupFile(payload, downloadRoot) {
   const root = String(downloadRoot || '').trim()
   if (!root) throw new Error('下载目录未配置')
   const dir = path.join(root, BACKUP_SUBDIR)
   fs.mkdirSync(dir, { recursive: true })
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
-  const tag = payload.reason === 'content-changed' ? 'upd' : 'ver'
-  const fileName = `lemon-music-backup-${safeFilePart(payload.currentVersion)}-to-${safeFilePart(payload.latestVersion)}-${tag}-${stamp}.json`
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 23)
+  const isContent = payload.reason === 'content-changed'
+  const tag = isContent ? 'upd' : 'ver'
+  const current = safeFilePart(payload.currentVersion)
+  const latest = safeFilePart(payload.latestVersion)
+  const versionPart = latest && latest !== current ? `${current}-to-${latest}` : current
+  const fileName = `lemon-music-backup-${versionPart}-${tag}-${stamp}.json`
   const filePath = path.join(dir, fileName)
   fs.writeFileSync(filePath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8')
-  return { filePath, fileName, dir }
+  const pruned = pruneAutoBackupFiles(dir)
+  return { filePath, fileName, dir, pruned }
 }
 
 /**
@@ -339,8 +473,9 @@ export async function runAutoBackupVersionCheck() {
 }
 
 /**
- * 用户数据变更后调用：若此前已因「有新版本」备份过（stamp 仍高于当前版），
- * 且内容指纹变了，则再写一份快照（含新增音源/歌单）。
+ * 用户数据变更后调用：
+ * - 若存在待升级版本（stamp > current），沿用版本窗口逻辑，数据有变化则追加快照；
+ * - 没有待升级版本时，只要内容指纹有变化就直接备份（源/歌单/收藏等新增或变更）。
  * 防抖，避免批量导入连写多次。
  */
 let _userDataBackupTimer = null
@@ -357,16 +492,40 @@ export function scheduleAutoBackupAfterUserDataChange(delayMs = 2500) {
   _userDataBackupTimer.unref?.()
 }
 
-export function maybeAutoBackupAfterUserDataChange() {
-  const latest = readStamp()
-  if (!latest) {
-    return { ok: false, skipped: true, reason: 'no-pending-update' }
-  }
+export function maybeAutoBackupAfterUserDataChange({ downloadRoot } = {}) {
   const current = getAppVersion()
-  if (compareVersion(latest, current) <= 0) {
-    return { ok: false, skipped: true, reason: 'no-update' }
+  const latest = readStamp()
+  if (latest && compareVersion(latest, current) > 0) {
+    return maybeAutoBackupOnUpdate({ currentVersion: current, latestVersion: latest, downloadRoot })
   }
-  return maybeAutoBackupOnUpdate({ currentVersion: current, latestVersion: latest })
+
+  const fingerprint = computeUserDataFingerprint()
+  if (fingerprint === readSavedFingerprint()) {
+    return { ok: false, skipped: true, reason: 'already-backed-up' }
+  }
+  const root = downloadRoot || getSharedDownloadSavePath()
+  if (!root) {
+    return { ok: false, skipped: true, reason: 'no-download-path' }
+  }
+  const payload = buildAutoBackupPayload({
+    currentVersion: current,
+    latestVersion: current,
+    reason: 'content-changed',
+  })
+  const written = writeAutoBackupFile(payload, root)
+  writeFingerprint(fingerprint)
+  console.log(`[backup] 用户数据有新增/变更（当前版本 ${current}），已自动备份 → ${written.filePath}`)
+  return {
+    ok: true,
+    skipped: false,
+    reason: 'content-changed',
+    currentVersion: current,
+    latestVersion: current,
+    fingerprint,
+    ...written,
+    sourceCount: payload.data.sources?.length || 0,
+    userCount: payload.data.users?.length || 0,
+  }
 }
 
 /** 供测试重置 stamp + fingerprint */
