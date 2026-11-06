@@ -8,8 +8,15 @@ import {
   unsubscribeFeed,
   episodeToTrack,
 } from '../utils/podcastStore.js'
+import { buildPodcastExportPayload } from '../utils/backupExport.js'
 
 export const podcastRouter = Router()
+
+function scheduleBackupAfterChange() {
+  import('../utils/autoUserBackup.js')
+    .then(({ scheduleAutoBackupAfterUserDataChange }) => scheduleAutoBackupAfterUserDataChange())
+    .catch(() => {})
+}
 
 podcastRouter.get('/', (req, res) => {
   try {
@@ -24,9 +31,19 @@ podcastRouter.post('/', async (req, res) => {
     const url = String(req.body?.url || '').trim()
     if (!url) return res.status(400).json({ error: '请填写 RSS 地址' })
     const feed = await subscribeFeed(req.user.id, url)
+    scheduleBackupAfterChange()
     res.json({ ok: true, data: feed })
   } catch (e) {
     res.status(400).json({ error: e.message || '订阅失败' })
+  }
+})
+
+/** 导出当前用户的播客订阅，格式与备份导入兼容 */
+podcastRouter.get('/export', (req, res) => {
+  try {
+    res.json({ ok: true, ...buildPodcastExportPayload(req.user.id) })
+  } catch (e) {
+    res.status(500).json({ error: e.message || '导出失败' })
   }
 })
 
@@ -73,6 +90,7 @@ podcastRouter.delete('/:id', (req, res) => {
   try {
     const ok = unsubscribeFeed(req.user.id, req.params.id)
     if (!ok) return res.status(404).json({ error: '订阅不存在' })
+    scheduleBackupAfterChange()
     res.json({ ok: true })
   } catch (e) {
     res.status(500).json({ error: e.message })

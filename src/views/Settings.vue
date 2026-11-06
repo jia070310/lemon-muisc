@@ -730,6 +730,13 @@
             @click="checkSourceUpdates"
           >{{ checkingSourceUpdates ? '检查中…' : '检查音源更新' }}</button>
           <button
+            v-if="isAdminUser"
+            class="btn-ghost btn-sm"
+            type="button"
+            :disabled="exportingAllSources || !sourceList.length"
+            @click="exportAllSources"
+          >{{ exportingAllSources ? '导出中…' : '导出全部音源' }}</button>
+          <button
             v-if="outdatedSourceCount"
             class="btn-primary btn-sm"
             type="button"
@@ -1728,6 +1735,7 @@ function toggleSelectAllSources(ev) {
 /** 正在激活/停用的音源 id，避免无反馈空等像卡死 */
 const sourceBusyId = ref('')
 const exportingSourceId = ref('')
+const exportingAllSources = ref(false)
 const PLATFORM_SHORT = {
   tx: 'QQ', wy: '云', kw: '酷', kg: '狗', mg: '咪',
   qs: '汽', bili: 'B', ytb: 'YT', xm: '喜',
@@ -2563,10 +2571,18 @@ async function onImportBackupFile(ev) {
     const mode = backupMerge.value ? 'merge' : 'replace'
     const res = await api.backup.import(parsed, mode)
     const imported = res?.imported || {}
-    showToast(
-      `导入完成：歌单 ${imported.playlists || 0}、收藏 ${imported.favorites || 0}、设置 ${imported.settings || 0}`,
-      'success',
-    )
+    const parts = [
+      `歌单 ${imported.playlists || 0}`,
+      `收藏 ${imported.favorites || 0}`,
+      `设置 ${imported.settings || 0}`,
+    ]
+    if (imported.sources) parts.push(`音源 ${imported.sources}`)
+    if (imported.podcasts) parts.push(`播客 ${imported.podcasts}`)
+    showToast(`导入完成：${parts.join('、')}`, 'success')
+    if (imported.sources) {
+      reloadSearchSources()
+      reloadDiscoverSources()
+    }
   } catch (e) {
     showToast(e.message || '导入失败', 'error')
   } finally {
@@ -4291,6 +4307,35 @@ async function deactivateSource(id) {
     sourceBusyId.value = ''
   }
   refreshPlatformTabsLater()
+}
+
+async function exportAllSources() {
+  if (exportingAllSources.value) return
+  exportingAllSources.value = true
+  try {
+    const res = await api.source.exportAll()
+    const count = res?.payload?.data?.sources?.length || 0
+    if (!count) {
+      showToast('暂无可导出的音源', 'info')
+      return
+    }
+    downloadJsonFile(res?.filename || 'lemon-sources.json', res.payload)
+    showToast(`已导出 ${count} 个音源`, 'success')
+  } catch (e) {
+    showToast(e.message || '导出失败', 'error')
+  } finally {
+    exportingAllSources.value = false
+  }
+}
+
+function downloadJsonFile(filename, payload) {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
 }
 
 async function exportOneSourceScript(sourceId) {

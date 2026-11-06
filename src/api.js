@@ -223,6 +223,7 @@ export const api = {
       timeout: 90000,
     }),
     exportScript: (id) => request(`/source/${encodeURIComponent(id)}/export`),
+    exportAll: () => request('/source/export-all', { timeout: 60000 }),
     remove: (id) => request(`/source/${id}`, { method: 'DELETE' }),
     activate: (id) => request(`/source/activate/${id}`, { method: 'POST', timeout: 25000 }),
     activateBatch: (ids) => request('/source/batch/activate', {
@@ -387,6 +388,7 @@ export const api = {
     },
     refresh: (id) => request(`/podcasts/${encodeURIComponent(id)}/refresh`, { method: 'POST', timeout: 90000 }),
     unsubscribe: (id) => request(`/podcasts/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    exportAll: () => request('/podcasts/export', { timeout: 60000 }),
   },
   dlna: {
     devices: (refresh = false) => request(`/dlna/devices${refresh ? '?refresh=1' : ''}`, { timeout: 15000 }),

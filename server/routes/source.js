@@ -35,6 +35,7 @@ import { fetchSourceScriptFromUrl } from '../utils/fetchSourceScript.js'
 import { compareVersion } from '../utils/version.js'
 import { requireAdmin } from '../middleware/auth.js'
 import { getDownloadPathInfo, getMusicPathsForUser, isNativeHostMode } from '../utils/filePaths.js'
+import { buildSourcesExportPayload } from '../utils/backupExport.js'
 import {
   getAutoClosedPlatformsPublic,
   dismissAutoClosedPlatforms,
@@ -486,6 +487,15 @@ function saveSourceExportToDownloadDir(userId, filename, script) {
   err.code = 'NO_DOWNLOAD_DIR'
   throw err
 }
+
+/** 导出全部音源脚本，格式与备份导入兼容 */
+sourceRouter.get('/export-all', requireAdmin, (_req, res) => {
+  try {
+    res.json({ ok: true, ...buildSourcesExportPayload() })
+  } catch (e) {
+    res.status(500).json({ error: e.message || '导出失败' })
+  }
+})
 
 sourceRouter.get('/:id/export', requireAdmin, (req, res) => {
   try {
