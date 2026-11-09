@@ -673,6 +673,12 @@ export const api = {
       const q = qs.toString()
       return request(`/about/download-fpk/status${q ? `?${q}` : ''}`)
     },
+    installUpdate: (payload = {}) => request('/about/install-update', {
+      method: 'POST',
+      body: payload,
+      timeout: 60000,
+    }),
+    installUpdateStatus: () => request('/about/install-update/status', { timeout: 15000 }),
     diagnostics: () => request('/about/diagnostics', { timeout: 15000 }),
   },
   auth: {

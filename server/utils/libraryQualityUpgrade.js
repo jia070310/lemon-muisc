@@ -582,6 +582,7 @@ export function buildUpgradeDownloadTasks(matchedRows, {
   preferredQuality = 'flac',
   strategy = 'none',
   floorQuality = '',
+  keepOriginal = false,
 } = {}) {
   const preferred = String(preferredQuality || 'flac').trim() || 'flac'
   const policy = strategy === 'cascade' || strategy === 'floor' ? 'cascade' : 'none'
@@ -626,6 +627,7 @@ export function buildUpgradeDownloadTasks(matchedRows, {
       sourceApiId: row.sourceApiId || '',
       replacePath: row.filePath,
       forceOverwrite: true,
+      keepOriginal: keepOriginal === true,
       listName: '音质升级',
     })
   }

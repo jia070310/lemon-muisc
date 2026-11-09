@@ -8,6 +8,7 @@ import {
   addTracksToPlaylist,
   createPlaylist,
   customPlaylists,
+  favoriteArtists,
   favorites,
   fileToLibraryTrack,
   getLibraryTrackKey,
@@ -157,7 +158,7 @@ function themeLine(tracks) {
   }
   const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 2).map(([n]) => n)
   if (!top.length && remix) return '今天偏流行与 Remix'
-  if (!top.length) return isMandarinTrack(tracks[0] || {}) ? '今天偏华语流行' : '根据你的收藏与最近播放生成'
+  if (!top.length) return isMandarinTrack(tracks[0] || {}) ? '今天偏华语流行' : '根据试听时长、收藏与歌单偏好生成'
   if (remix) return `今天偏${top[0]}与 Remix`
   return `今天偏${top.join(' / ')}`
 }
@@ -259,50 +260,123 @@ function normalizeArtistToken(name) {
   return String(name || '').trim().toLowerCase()
 }
 
-/** 从收藏 / 听歌排行 / 最近播放提炼口味：歌手、风格、已听过的曲 */
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000
+const DAY_MS = 24 * 60 * 60 * 1000
+/** 综合口味权重：试听时长最重要，其次收藏 / 加入歌单，再看播放次数与最近播放 */
+const TASTE_W = {
+  favorite: 15,
+  favoriteArtist: 25,
+  playlistAdd: 10,
+  playedSecPerMin: 1,
+  playCount: 1,
+  recentWeek: 2,
+  recentPlay: 2,
+  recentPlayToday: 3,
+  artistShare: 0.5,
+  genreShare: 0.3,
+}
+const TASTE_PLAY_MINUTE_CAP = 240
+const TASTE_PLAY_COUNT_CAP = 60
+const TASTE_WEEK_HITS_CAP = 20
+const TASTE_ARTIST_CAP = 40
+const TASTE_GENRE_CAP = 20
+const TASTE_TOP_LIKED = 80
+
+function bumpScore(map, key, delta) {
+  if (!key || !delta) return
+  map.set(key, (map.get(key) || 0) + delta)
+}
+
+/**
+ * 从收藏 / 收藏歌手 / 用户歌单 / 试听时长 / 播放次数 / 最近播放提炼加权口味。
+ * artists、genres、trackScores 均为「分越高越偏好」的 Map。
+ */
 function collectTasteProfile() {
-  const artists = new Set()
-  const genres = new Set()
+  const artists = new Map()
+  const genres = new Map()
+  const trackScores = new Map()
   const likedKeys = new Set()
   const heardKeys = new Set()
+  const now = Date.now()
 
-  const absorb = (row, { like = false } = {}) => {
+  const absorb = (row, extraScore = 0) => {
     if (!row) return
     const t = row.key ? row : fromSnapshot(row)
     const k = trackKey(t)
-    if (k) {
-      heardKeys.add(k)
-      if (like) likedKeys.add(k)
-    }
+    if (!k) return
+    const playedSec = Math.min(TASTE_PLAY_MINUTE_CAP * 60, Math.max(0, Number(t.playedSec) || 0))
+    const count = Math.min(TASTE_PLAY_COUNT_CAP, Math.max(0, Number(t.count) || 0))
+    const weekHits = Math.min(
+      TASTE_WEEK_HITS_CAP,
+      (Array.isArray(t.recentAts) ? t.recentAts : []).filter((at) => now - Number(at) <= WEEK_MS).length,
+    )
+    const score = extraScore
+      + (playedSec / 60) * TASTE_W.playedSecPerMin
+      + count * TASTE_W.playCount
+      + weekHits * TASTE_W.recentWeek
+    heardKeys.add(k)
+    if (score <= 0) return
+    trackScores.set(k, (trackScores.get(k) || 0) + score)
     for (const a of splitArtists(t?.singer || t?.artist || '')) {
-      const token = normalizeArtistToken(a)
-      if (token) artists.add(token)
+      bumpScore(artists, normalizeArtistToken(a), score * TASTE_W.artistShare)
     }
-    for (const g of genreTags(t)) genres.add(g.toLowerCase())
+    for (const g of genreTags(t)) {
+      bumpScore(genres, g.toLowerCase(), score * TASTE_W.genreShare)
+    }
   }
 
-  for (const s of favorites.value || []) absorb(s, { like: true })
-  // 听得多的算强偏好
-  const ranked = [...(playStats.value || [])]
-    .filter((s) => (Number(s.count) || 0) > 0 || (s.recentAts || []).length)
-    .sort((a, b) => (Number(b.count) || 0) - (Number(a.count) || 0))
-  for (const s of ranked.slice(0, 80)) absorb(s, { like: true })
-  for (const s of (recentPlays.value || []).slice(0, 40)) absorb(s, { like: false })
+  for (const s of favorites.value || []) {
+    absorb(s, TASTE_W.favorite)
+    const k = trackKey(s?.key ? s : fromSnapshot(s))
+    if (k) likedKeys.add(k)
+  }
 
-  return { artists, genres, likedKeys, heardKeys }
+  // 加入歌单：每进一个用户歌单都算一次强偏好（跳过自动生成的推荐歌单）
+  for (const pl of customPlaylists.value || []) {
+    if (!pl) continue
+    const id = String(pl.id || '')
+    if (pl.playlistType === 'generated' || id.startsWith('mix_daily_')) continue
+    const snaps = pl.trackSnapshots && typeof pl.trackSnapshots === 'object' ? pl.trackSnapshots : {}
+    for (const key of pl.trackKeys || []) {
+      const row = snaps[key] || { key }
+      absorb(row, TASTE_W.playlistAdd)
+      const k = trackKey(row) || String(key || '')
+      if (k) likedKeys.add(k)
+    }
+  }
+
+  // 试听时长（主信号）+ 播放次数 + 近 7 天热度
+  for (const s of playStats.value || []) absorb(s)
+
+  // 最近播放：轻度加权，最近 24 小时再高一点
+  for (const s of (recentPlays.value || []).slice(0, 40)) {
+    const playedAt = Number(s?.playedAt) || 0
+    absorb(s, TASTE_W.recentPlay + (now - playedAt <= DAY_MS ? TASTE_W.recentPlayToday : 0))
+  }
+
+  for (const a of favoriteArtists.value || []) {
+    bumpScore(artists, normalizeArtistToken(a?.name || a?.artist || ''), TASTE_W.favoriteArtist)
+  }
+
+  // 加权分最高的曲目视为「喜欢」，探索侧会避开
+  const topTracks = [...trackScores.entries()].sort((a, b) => b[1] - a[1]).slice(0, TASTE_TOP_LIKED)
+  for (const [k] of topTracks) likedKeys.add(k)
+
+  return { artists, genres, trackScores, likedKeys, heardKeys }
 }
 
-function trackMatchesTaste(t, taste) {
-  if (!t || !taste) return false
+/** 口味打分：曲目直分 + 歌手亲和 + 风格亲和 */
+function trackTasteScore(t, taste) {
+  if (!t || !taste) return 0
   const k = trackKey(t)
-  if (k && taste.likedKeys.has(k)) return true
+  let score = k ? (taste.trackScores.get(k) || 0) : 0
   for (const a of splitArtists(t?.singer || t?.artist || '')) {
-    if (taste.artists.has(normalizeArtistToken(a))) return true
+    score += Math.min(TASTE_ARTIST_CAP, taste.artists.get(normalizeArtistToken(a)) || 0)
   }
   for (const g of genreTags(t)) {
-    if (taste.genres.has(g.toLowerCase())) return true
+    score += Math.min(TASTE_GENRE_CAP, taste.genres.get(g.toLowerCase()) || 0)
   }
-  return false
+  return score
 }
 
 /**
@@ -329,12 +403,18 @@ function pickHalfTasteHalfExplore(pool, size, seed, {
   const tasteHalf = Math.ceil(target / 2)
   const exploreHalf = target - tasteHalf
 
-  const tastePool = base.filter((t) => trackMatchesTaste(t, taste) && !recentBlock.has(trackKey(t)))
+  // 口味半边按加权分排序（时长 > 收藏/歌单 > 次数/最近），取前 3 倍再洗牌，保留每日变化
+  const rankTaste = (allowRecent) => base
+    .filter((t) => allowRecent || !recentBlock.has(trackKey(t)))
+    .map((t) => ({ t, score: trackTasteScore(t, taste) }))
+    .filter((x) => x.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .map((x) => x.t)
+  let tasteBase = rankTaste(false)
   // 口味池不足时放宽：允许刚听过的偏好曲
-  const tasteBase = tastePool.length >= Math.min(4, tasteHalf)
-    ? tastePool
-    : base.filter((t) => trackMatchesTaste(t, taste))
-  const tastePick = shufflePick(tasteBase, Math.min(tasteHalf, tasteBase.length), `${seed}-taste`)
+  if (tasteBase.length < Math.min(4, tasteHalf)) tasteBase = rankTaste(true)
+  const tastePool = tasteBase.slice(0, Math.max(tasteHalf, tasteHalf * 3))
+  const tastePick = shufflePick(tastePool, Math.min(tasteHalf, tastePool.length), `${seed}-taste`)
 
   const used = new Set(tastePick.map(trackKey))
   const explorePool = base.filter((t) => {
@@ -907,7 +987,7 @@ export const dailyMixDesc = computed(() => {
   const onlineN = tracks.filter((t) => !isLocalLikeTrack(t)).length
   const localN = tracks.length - onlineN
   if (!mix.count) {
-    return '一半按你的喜欢与常听，一半探索新歌；本地与激活音源约各一半。'
+    return '一半按试听时长、收藏与歌单偏好，一半探索新歌；本地与激活音源约各一半。'
   }
   const bits = [`共 ${mix.count} 首`]
   if (localN || onlineN) bits.push(`本地 ${localN} / 平台 ${onlineN}`)
