@@ -120,6 +120,23 @@
               "size": 5616156
             }
           }
+        },
+        "1.2.17.22": {
+          "changelog": "应用内一键更新；关于页检测到新版本后，右上角「检测更新」自动变为「立即更新」；点击「立即更新」弹窗展示本次更新内容，底部提供「关闭」与「立即更新」；更新时自动识别当前系统架构（x86 / ARM）选择安装包，优先测速加速节点下载；下载完成后调用飞牛应用中心在后台覆盖安装并自动重启，无需手动导入安装包；音质升级",
+          "updated_at": "2026-11-09T22:50:19+08:00",
+          "os_min_version": "1.1.8",
+          "packages": {
+            "x86": {
+              "download_url": "https://github.com/jia070310/lemon-muisc/releases/download/v1.2.17.22/lemon-music-1.2.17.22-x86.fpk",
+              "sha256": "7d4d526f6449191b47408527907dbeea6ec43c6f5106dc81224a02c52b64ec88",
+              "size": 5627619
+            },
+            "arm": {
+              "download_url": "https://github.com/jia070310/lemon-muisc/releases/download/v1.2.17.22/lemon-music-1.2.17.22-arm.fpk",
+              "sha256": "7e6e3b1cb1c977ca09053313ab4a1c4960192a1690adb4011ce32df676eed0e1",
+              "size": 5627597
+            }
+          }
         }
       }
     }
