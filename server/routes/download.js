@@ -10,7 +10,7 @@ import { canWriteM4aExt } from '../utils/m4aTag.js'
 import { joinArtists } from '../utils/artistTag.js'
 import { buildMusicInfoFromTask } from '../utils/musicInfo.js'
 import { buildEmbedLyrics } from '../utils/lyric.js'
-import { getDownloadSavePath, isAllowedMediaPath } from '../utils/filePaths.js'
+import { getDownloadSavePath, isAllowedMediaPath, getMusicPathsForUser } from '../utils/filePaths.js'
 import { getAppCacheSubdir } from '../utils/appPaths.js'
 import { getMergedSettings } from '../utils/userSettings.js'
 import { fetchTrackLyric, fetchTrackCover } from '../utils/trackMeta.js'
@@ -232,6 +232,7 @@ export function enqueueDownloadTasks(userId, tasks, { broadcastAdded = true } = 
         album: t.album || '',
         replacePath,
         forceOverwrite: Boolean(t.forceOverwrite || replacePath),
+        keepOriginal: t.keepOriginal === true,
         sourceApiId: String(t.sourceApiId || '').trim(),
       })
       insert.run(id, t.name, t.singer || t.albumArtist || '', t.source || '', t.album || '', t.interval || '', quality, meta, userId)
@@ -1833,6 +1834,47 @@ function prepareTaskForRetry(taskRow, { cleanupFiles = true, forceRedownload = f
   return { meta, settings }
 }
 
+/** 音质升级保留原文件时的归档子目录（位于下载目录下） */
+const ORIGINAL_ARCHIVE_SUBDIR = 'lemon-originals'
+
+/** 归档路径：<下载目录>/lemon-originals/<相对音乐库目录>/<原文件名>，重名时加序号 */
+function resolveOriginalArchivePath(sourcePath, userId) {
+  const downloadRoot = getDownloadSavePath(userId)
+  if (!downloadRoot) throw new Error('未配置下载目录，无法保留原文件')
+  let relDir = ''
+  for (const root of getMusicPathsForUser(userId)) {
+    if (!root) continue
+    const rel = path.relative(root, path.dirname(sourcePath))
+    if (!rel || (!rel.startsWith('..') && !path.isAbsolute(rel))) {
+      relDir = rel || ''
+      break
+    }
+  }
+  const dir = path.join(downloadRoot, ORIGINAL_ARCHIVE_SUBDIR, relDir)
+  fs.mkdirSync(dir, { recursive: true })
+  const ext = path.extname(sourcePath)
+  const base = path.basename(sourcePath, ext) || 'track'
+  let target = path.join(dir, `${base}${ext}`)
+  let seq = 1
+  while (fs.existsSync(target)) {
+    target = path.join(dir, `${base} (${seq})${ext}`)
+    seq += 1
+  }
+  return target
+}
+
+/** 把原文件移动到归档目录；跨盘 rename 失败时退回复制 + 删除 */
+function moveOriginalToArchive(sourcePath, userId) {
+  const target = resolveOriginalArchivePath(sourcePath, userId)
+  try {
+    fs.renameSync(sourcePath, target)
+  } catch {
+    fs.copyFileSync(sourcePath, target)
+    fs.unlinkSync(sourcePath)
+  }
+  return target
+}
+
 function resolveTaskFilePath(task, settings, ext) {
   const meta = typeof task.meta === 'string'
     ? (() => { try { return JSON.parse(task.meta || '{}') } catch { return {} } })()
@@ -2178,23 +2220,34 @@ async function downloadTask(task, settings, abortSignal = null) {
               throw formatErr
             }
 
+            const replacePath = String(meta.replacePath || '').trim()
+            const keepOriginal = meta.keepOriginal === true
+            // 保留原文件：必须在发布新文件前移走，避免同扩展名时被直接覆盖
+            if (replacePath && keepOriginal && fs.existsSync(replacePath)) {
+              moveOriginalToArchive(replacePath, task.user_id)
+            }
+
             await writeMetaIfNeeded(task, meta, stagedPath, ext, settings)
             publishStagedDownload(stagedPath, filePath)
             publishedDest = true
 
-            const replacePath = String(meta.replacePath || '').trim()
             if (replacePath) {
               try {
                 const oldResolved = path.resolve(replacePath)
                 const newResolved = path.resolve(filePath)
-                if (oldResolved !== newResolved && fs.existsSync(replacePath)) {
-                  fs.unlinkSync(replacePath)
+                if (oldResolved !== newResolved) {
+                  if (!keepOriginal) {
+                    try { if (fs.existsSync(replacePath)) fs.unlinkSync(replacePath) } catch {}
+                  }
                   try { removeCachePaths([replacePath]) } catch {}
                   try { notifyLibraryRemoved([replacePath], { reason: 'album-sync-upgrade' }) } catch {}
+                } else {
+                  try { removeCachePaths([replacePath]) } catch {}
                 }
               } catch {}
               delete meta.replacePath
               delete meta.forceOverwrite
+              delete meta.keepOriginal
             }
 
             if (meta.sourceApiId) recordSourceHealthOutcome(meta.sourceApiId, false, source, task.user_id)

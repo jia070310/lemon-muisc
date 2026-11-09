@@ -9,6 +9,14 @@ import { compareVersion, getAppVersion } from '../utils/version.js'
 import { getAppLogInfo, readLogTail } from '../utils/appPaths.js'
 import { peekFpkUpdateDir, getFpkUpdateDir } from '../utils/fpkUpdatePath.js'
 import { maybeAutoBackupOnUpdate } from '../utils/autoUserBackup.js'
+import {
+  detectHostArch,
+  getBootId,
+  installFpkInApp,
+  isFnOSHost,
+  readLastUpdateState,
+  writeLastUpdateState,
+} from '../utils/fnosUpdater.js'
 import { requireAdmin } from '../middleware/auth.js'
 import { broadcast } from '../ws.js'
 import os from 'os'
@@ -212,6 +220,9 @@ function publicFpkJob(job) {
     label: job.label,
     name: job.name,
     mirror: job.mirror,
+    action: job.action || 'download',
+    targetVersion: job.targetVersion || '',
+    installStep: job.installStep || '',
     mirrorHost: job.mirrorHost || '',
     status: job.status,
     progress: job.progress,
@@ -237,7 +248,7 @@ function emitFpkJob(userId, type, job) {
 function scheduleFpkJobCleanup(jobKey) {
   setTimeout(() => {
     const job = fpkDownloadJobs.get(jobKey)
-    if (job && job.status !== 'downloading') fpkDownloadJobs.delete(jobKey)
+    if (job && job.status !== 'downloading' && job.status !== 'installing') fpkDownloadJobs.delete(jobKey)
   }, FPK_JOB_TTL_MS)
 }
 
@@ -321,6 +332,40 @@ async function downloadFpkToPartial(url, job, part, userId) {
   return st
 }
 
+/** 下载完成后交给飞牛应用中心就地升级；守护进程会结束本进程 */
+async function runInAppInstall(job, userId) {
+  job.status = 'installing'
+  job.installStep = '正在暂存安装包…'
+  emitFpkJob(userId, 'about:fpk-progress', job)
+  try {
+    const result = await installFpkInApp({
+      fpkPath: job.path,
+      version: job.targetVersion,
+      onStep: (step) => {
+        job.installStep = step
+        emitFpkJob(userId, 'about:fpk-progress', job)
+      },
+    })
+    job.taskId = result.taskId
+    job.installStep = '应用即将重启…'
+    emitFpkJob(userId, 'about:fpk-progress', job)
+    // 守护进程随后会停止并替换本应用；升级结果由重启后的版本号确认
+  } catch (e) {
+    job.status = 'error'
+    job.error = e?.message || '应用内升级失败'
+    job.finishedAt = Date.now()
+    writeLastUpdateState({
+      status: 'error',
+      version: job.targetVersion,
+      message: job.error,
+      finishedAt: Date.now(),
+    })
+    emitFpkJob(userId, 'about:fpk-error', job)
+  } finally {
+    scheduleFpkJobCleanup(job.jobKey)
+  }
+}
+
 async function runFpkDownloadJob(job, urls, dest, part, userId) {
   const candidates = (Array.isArray(urls) ? urls : [urls]).filter(Boolean)
   let lastErr = null
@@ -342,13 +387,20 @@ async function runFpkDownloadJob(job, urls, dest, part, userId) {
         }
         fs.renameSync(part, finalDest)
 
-        job.status = 'done'
+        job.status = 'downloading'
         job.progress = 1
         job.downloaded = st.size
         job.total = st.size
         job.sizeLabel = formatAssetSize(st.size)
         job.fileName = finalName
         job.path = finalDest
+
+        if (job.action === 'install') {
+          await runInAppInstall(job, userId)
+          return
+        }
+
+        job.status = 'done'
         job.finishedAt = Date.now()
         emitFpkJob(userId, 'about:fpk-done', job)
         return
@@ -366,6 +418,14 @@ async function runFpkDownloadJob(job, urls, dest, part, userId) {
       ? `${e.message}（已尝试 ${candidates.length} 个源）`
       : 'FPK 下载失败'
     job.finishedAt = Date.now()
+    if (job.action === 'install') {
+      writeLastUpdateState({
+        status: 'error',
+        version: job.targetVersion,
+        message: job.error,
+        finishedAt: job.finishedAt,
+      })
+    }
     emitFpkJob(userId, 'about:fpk-error', job)
   } finally {
     scheduleFpkJobCleanup(job.jobKey)
@@ -477,6 +537,31 @@ async function resolveLatestFpkAssets() {
   return { release, assets: list }
 }
 
+/** 读取应用内升级状态；重启后按实际版本确认结果 */
+function readAutoUpdateState() {
+  const last = readLastUpdateState()
+  if (!last) return null
+  if (last.status === 'installing') {
+    if (getCurrentVersion() === last.version) {
+      const next = { ...last, status: 'success', finishedAt: Date.now() }
+      writeLastUpdateState(next)
+      return next
+    }
+    // 进程已重启但版本未变：说明升级没有生效
+    if (last.bootId && last.bootId !== getBootId()) {
+      const next = { ...last, status: 'error', message: '升级未生效，请重试或到应用中心手动安装' }
+      writeLastUpdateState(next)
+      return next
+    }
+    if (Date.now() - (Number(last.startedAt) || 0) > 30 * 60 * 1000) {
+      const next = { ...last, status: 'unknown' }
+      writeLastUpdateState(next)
+      return next
+    }
+  }
+  return last
+}
+
 aboutRouter.get('/', async (_req, res) => {
   const currentVersion = getCurrentVersion()
   let latestVersion = null
@@ -554,6 +639,9 @@ aboutRouter.get('/', async (_req, res) => {
     releaseNotes,
     fpkAssets,
     fpkUpdateDir,
+    hostArch: detectHostArch(),
+    canAutoUpdate: isFnOSHost(),
+    lastAutoUpdate: readAutoUpdateState(),
     installHints: latestVersion ? buildInstallHints(latestVersion, fpkAssets) : null,
     publishedAt,
     checkError,
@@ -680,4 +768,102 @@ aboutRouter.get('/download-fpk/status', requireAdmin, (req, res) => {
   }
   if (!job) return res.json({ ok: true, data: null })
   res.json({ ok: true, data: publicFpkJob(job) })
+})
+
+/**
+ * 应用内一键更新：按当前架构自动选包 → 下载 → 交给飞牛应用中心就地升级。
+ * body: { mirror?: boolean }
+ */
+aboutRouter.post('/install-update', requireAdmin, async (req, res) => {
+  try {
+    if (!isFnOSHost()) {
+      return res.status(400).json({ error: '当前环境不支持应用内升级，请保存安装包后到应用中心手动安装' })
+    }
+    const arch = detectHostArch()
+    if (arch === 'other') return res.status(400).json({ error: '无法识别当前系统架构' })
+
+    const userId = req.user?.id || null
+    const wantMirror = req.body?.mirror !== false
+    const currentVersion = getCurrentVersion()
+    const { release, assets } = await resolveLatestFpkAssets()
+    const latestVersion = String(release?.tag_name || '').replace(/^v/i, '')
+    if (!latestVersion || compareVersion(latestVersion, currentVersion) <= 0) {
+      return res.status(400).json({ error: '当前已是最新版本' })
+    }
+    const asset = assets.find((a) => a.arch === arch) || null
+    if (!asset) return res.status(404).json({ error: `最新版本没有 ${arch} 安装包` })
+
+    const jobKey = `install:${arch}`
+    const existing = fpkDownloadJobs.get(jobKey)
+    if (existing && (existing.status === 'downloading' || existing.status === 'installing')) {
+      return res.status(409).json({ error: '正在更新，请稍候', data: publicFpkJob(existing) })
+    }
+
+    const dir = getFpkUpdateDir()
+    const { fileName, dest, part } = allocateUniqueFpkPath(dir, asset.name)
+
+    const job = {
+      jobKey,
+      name: asset.name,
+      fileName,
+      arch: asset.arch,
+      label: asset.label,
+      mirror: wantMirror,
+      mirrorHost: wantMirror ? '节点测速中…' : '',
+      action: 'install',
+      targetVersion: latestVersion,
+      installStep: '',
+      status: 'downloading',
+      progress: 0,
+      downloaded: 0,
+      total: Number(asset.size) || 0,
+      expectedSize: Number(asset.size) || 0,
+      sizeLabel: '',
+      path: '',
+      dir,
+      error: '',
+      startedAt: Date.now(),
+      finishedAt: null,
+      userId,
+    }
+    fpkDownloadJobs.set(jobKey, job)
+    writeLastUpdateState({
+      status: 'downloading',
+      version: latestVersion,
+      fileName: asset.name,
+      startedAt: job.startedAt,
+    })
+    emitFpkJob(userId, 'about:fpk-progress', job)
+
+    setImmediate(() => {
+      ;(async () => {
+        const urls = await buildFpkDownloadUrls(asset.url, wantMirror, (msg) => {
+          job.mirrorHost = msg
+          emitFpkJob(userId, 'about:fpk-progress', job)
+        })
+        await runFpkDownloadJob(job, urls, dest, part, userId)
+      })().catch((e) => {
+        job.status = 'error'
+        job.error = e?.message || '更新任务启动失败'
+        job.finishedAt = Date.now()
+        writeLastUpdateState({
+          status: 'error',
+          version: latestVersion,
+          message: job.error,
+          finishedAt: job.finishedAt,
+        })
+        emitFpkJob(userId, 'about:fpk-error', job)
+      })
+    })
+
+    res.json({ ok: true, data: publicFpkJob(job) })
+  } catch (e) {
+    res.status(500).json({ error: e.message || '应用内更新启动失败' })
+  }
+})
+
+/** 应用内更新进度；重启后任务消失，用 last 字段确认结果 */
+aboutRouter.get('/install-update/status', requireAdmin, (_req, res) => {
+  const job = fpkDownloadJobs.get(`install:${detectHostArch()}`) || null
+  res.json({ ok: true, data: job ? publicFpkJob(job) : null, last: readAutoUpdateState() })
 })

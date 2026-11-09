@@ -4390,6 +4390,14 @@ async function exportDisplayRow(row) {
 }
 
 async function removeSource(id) {
+  const target = sourceList.value.find((s) => s.id === id)
+  const ok = await appConfirm({
+    title: '删除音源',
+    message: `确定删除「${target?.name || '该音源'}」？此操作不可恢复。`,
+    confirmText: '删除',
+    danger: true,
+  })
+  if (!ok) return
   try {
     await api.source.remove(id)
     sourceList.value = sourceList.value.filter(s => s.id !== id)

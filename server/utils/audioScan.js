@@ -14,6 +14,7 @@ const SKIP_DIR_NAMES = new Set([
   'lemon-smooth-play-cache',
   'lemon-ape-play-cache',
   'lemon-dlna-mp3-cache',
+  'lemon-originals',
   '.git',
   'node_modules',
   '@eaDir',

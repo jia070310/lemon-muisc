@@ -17,6 +17,8 @@ const RECENT_LIMIT = 200
 const PLAY_STATS_LIMIT = 500
 const PLAY_STATS_WEEK_MS = 7 * 24 * 60 * 60 * 1000
 const PLAY_STATS_RECENT_CAP = 200
+/** 单曲累计试听秒数上限（约 277 小时，仅防异常数据） */
+const PLAY_SEC_MAX = 1_000_000
 const SESSION_TRACKS_KEY_BASE = 'lemon-library-tracks-v1'
 const SESSION_TRACKS_LIMIT = 8000
 const LIBRARY_SNAPSHOT_KEY_BASE = 'lemon-library-snapshot-v1'
@@ -1232,6 +1234,7 @@ function normalizePlayStatsList(list = []) {
       ...row,
       key,
       count: Math.max(count, recentAts.length),
+      playedSec: Math.min(PLAY_SEC_MAX, Math.max(0, Number(row.playedSec) || 0)),
       recentAts,
       updatedAt: Number(row.updatedAt) || recentAts[recentAts.length - 1] || 0,
     })
@@ -1262,6 +1265,7 @@ function mergePlayStatsLists(primary = [], secondary = []) {
       ...row,
       key,
       count: Math.max(Number(prev.count) || 0, Number(row.count) || 0, recentAts.length),
+      playedSec: Math.min(PLAY_SEC_MAX, Math.max(Number(prev.playedSec) || 0, Number(row.playedSec) || 0)),
       recentAts,
       updatedAt: Math.max(Number(prev.updatedAt) || 0, Number(row.updatedAt) || 0),
     })
@@ -1273,7 +1277,7 @@ function mergePlayStatsLists(primary = [], secondary = []) {
 
 function playStatsSignature(list = []) {
   return normalizePlayStatsList(list)
-    .map((r) => `${r.key}:${r.count}:${(r.recentAts || []).length}:${r.updatedAt || 0}`)
+    .map((r) => `${r.key}:${r.count}:${r.playedSec || 0}:${(r.recentAts || []).length}:${r.updatedAt || 0}`)
     .sort()
     .join('|')
 }
@@ -1341,11 +1345,12 @@ export function resolvePlayRankTrack(row, allTracks = libraryTracks.value) {
   return { ...base, key: row.key, playCount: row.playCount }
 }
 
-/** 听歌排行计数：由播放器在实际听满约 20 秒后调用（短播不计） */
-export function recordPlayStat(track) {
+/** 听歌排行计数：由播放器在实际听满约 20 秒后调用（短播不计），并累计试听时长 */
+export function recordPlayStat(track, { playedSec = 0 } = {}) {
   const snapshot = trackToSnapshot(track)
   if (!snapshot) return
   const now = Date.now()
+  const sec = Math.min(PLAY_SEC_MAX, Math.max(0, Number(playedSec) || 0))
   const list = [...playStats.value]
   const idx = list.findIndex((s) => s.key === snapshot.key)
   if (idx >= 0) {
@@ -1355,6 +1360,7 @@ export function recordPlayStat(track) {
       ...prev,
       ...snapshot,
       count: Math.max(0, Number(prev.count) || 0) + 1,
+      playedSec: Math.min(PLAY_SEC_MAX, (Number(prev.playedSec) || 0) + sec),
       recentAts,
       updatedAt: now,
     }
@@ -1364,11 +1370,28 @@ export function recordPlayStat(track) {
     list.unshift({
       ...snapshot,
       count: 1,
+      playedSec: sec,
       recentAts: [now],
       updatedAt: now,
     })
   }
   playStats.value = list.slice(0, PLAY_STATS_LIMIT)
+  persistPlayStats()
+}
+
+/** 本次播放已计数后，补记剩余试听时长（只累加 playedSec，不增加播放次数） */
+export function recordPlayedSeconds(track, deltaSec) {
+  const snapshot = trackToSnapshot(track)
+  const sec = Math.min(PLAY_SEC_MAX, Math.max(0, Number(deltaSec) || 0))
+  if (!snapshot || sec <= 0) return
+  const list = [...playStats.value]
+  const idx = list.findIndex((s) => s.key === snapshot.key)
+  if (idx < 0) return
+  list[idx] = {
+    ...list[idx],
+    playedSec: Math.min(PLAY_SEC_MAX, (Number(list[idx].playedSec) || 0) + sec),
+  }
+  playStats.value = list
   persistPlayStats()
 }
 

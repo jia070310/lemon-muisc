@@ -164,6 +164,41 @@
         </button>
       </div>
     </div>
+
+    <div v-if="confirmOpen" class="qu-confirm-overlay" @click.self="confirmOpen = false">
+      <div class="qu-confirm" role="dialog" aria-modal="true" aria-labelledby="qu-confirm-title">
+        <h4 id="qu-confirm-title">确认升级 {{ selected.size }} 首</h4>
+        <p class="qu-confirm-sub">升级会下载新音质替换本地文件，请选择原文件的处理方式。</p>
+
+        <label class="qu-option" :class="{ active: !keepOriginal }">
+          <input v-model="keepOriginal" type="radio" :value="false" />
+          <div class="qu-option-body">
+            <div class="qu-option-title">不保留，直接覆盖</div>
+            <div class="qu-option-desc">下载成功后删除原文件，只保留升级后的文件。</div>
+          </div>
+        </label>
+
+        <label class="qu-option" :class="{ active: keepOriginal, disabled: !keepOriginalDir }">
+          <input v-model="keepOriginal" type="radio" :value="true" :disabled="!keepOriginalDir" />
+          <div class="qu-option-body">
+            <div class="qu-option-title">保留原文件</div>
+            <div class="qu-option-desc">
+              <template v-if="keepOriginalDir">
+                原文件将单独移动到
+                <code class="qu-option-path">{{ keepOriginalDir }}</code>
+                下，并按原目录结构归档。
+              </template>
+              <template v-else>未配置下载目录，暂时无法保留原文件。</template>
+            </div>
+          </div>
+        </label>
+
+        <div class="qu-confirm-actions">
+          <button type="button" class="btn-ghost" @click="confirmOpen = false">返回</button>
+          <button type="button" class="btn-primary" @click="confirmStart">确认开始升级</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -220,6 +255,9 @@ const strategy = ref('none')
 const matchDone = ref(0)
 const matchTotal = ref(0)
 const progressText = ref('')
+const confirmOpen = ref(false)
+const keepOriginal = ref(false)
+const keepOriginalDir = ref('')
 
 const formatGroupOptions = computed(() => {
   // 优先用扫描结果：库内实际存在的格式
@@ -340,6 +378,9 @@ watch(() => props.open, async (open) => {
   matchDone.value = 0
   matchTotal.value = 0
   progressText.value = ''
+  confirmOpen.value = false
+  keepOriginal.value = false
+  keepOriginalDir.value = ''
   await loadOptions()
   await runScan()
 })
@@ -385,6 +426,7 @@ async function loadOptions() {
     if (Array.isArray(data.targets) && data.targets.length) {
       targetSupport.value = data.targets
     }
+    keepOriginalDir.value = String(data.keepOriginalDir || '')
   } catch {
     // keep defaults
   }
@@ -443,7 +485,17 @@ function onCancel() {
   emit('cancel')
 }
 
-async function onStart() {
+function onStart() {
+  if (busy.value || scanning.value || !selected.value.size) return
+  confirmOpen.value = true
+}
+
+function confirmStart() {
+  confirmOpen.value = false
+  runUpgrade()
+}
+
+async function runUpgrade() {
   const picked = candidates.value.filter((c) => selected.value.has(c.filePath))
   if (!picked.length) return
 
@@ -490,6 +542,7 @@ async function onStart() {
       strategy: strategy.value,
       batchSize: batchSize.value,
       intervalHours: intervalHours.value,
+      keepOriginal: keepOriginal.value,
       matched,
     })
 
@@ -848,6 +901,93 @@ async function onStart() {
   margin-top: 12px;
   padding-top: 10px;
   border-top: 1px solid var(--border-light);
+}
+
+.qu-confirm-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+.qu-confirm {
+  width: min(460px, 100%);
+  max-height: 100%;
+  overflow: auto;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+  border-radius: 12px;
+  padding: 16px 18px;
+  box-shadow: var(--shadow);
+}
+.qu-confirm h4 {
+  margin: 0 0 4px;
+  font-size: 16px;
+  color: var(--text);
+}
+.qu-confirm-sub {
+  margin: 0 0 12px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+.qu-option {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  cursor: pointer;
+}
+.qu-option.active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.qu-option.disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.qu-option-body {
+  min-width: 0;
+}
+.qu-option-title {
+  font-size: 13px;
+  color: var(--text);
+  margin-bottom: 2px;
+}
+.qu-option-desc {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+.qu-option-path {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  word-break: break-all;
+}
+.qu-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+@media (max-width: 820px) {
+  .qu-confirm-overlay {
+    padding: 12px;
+  }
+  .qu-confirm-actions .btn-ghost,
+  .qu-confirm-actions .btn-primary {
+    flex: 1;
+    min-height: 40px;
+  }
 }
 
 @media (max-width: 820px) {

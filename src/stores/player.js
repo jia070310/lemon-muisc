@@ -22,6 +22,7 @@ import {
 import {
   recordRecentPlay,
   recordPlayStat,
+  recordPlayedSeconds,
   localCoverUrl,
   bumpLibraryCoverVersion,
   removeRoamTrack,
@@ -300,19 +301,27 @@ async function retryCurrentTrackBeforeSkip(reason = 'stall') {
 /** 听歌排行：实际听满该秒数才计 1 次（暂停不计时） */
 const PLAY_STAT_MIN_SEC = 20
 let playStatAccumSec = 0
+/** 本次播放已上报到多少秒（用于切歌时补记剩余时长） */
+let playStatCommittedSec = 0
 let playStatLastMediaTime = -1
 let playStatCountedKey = ''
 let playStatPendingTrack = null
 
+function playStatTrackKey(track) {
+  if (!track) return ''
+  return getTrackKey(track, track.source)
+    || track.key
+    || (track.localPath ? `local:${track.localPath}` : '')
+}
+
 function commitPlayStatIfDue() {
   if (!playStatPendingTrack || playStatAccumSec < PLAY_STAT_MIN_SEC) return
-  const key = getTrackKey(playStatPendingTrack, playStatPendingTrack.source)
-    || playStatPendingTrack.key
-    || (playStatPendingTrack.localPath ? `local:${playStatPendingTrack.localPath}` : '')
+  const key = playStatTrackKey(playStatPendingTrack)
   if (!key || playStatCountedKey === key) return
   playStatCountedKey = key
   try {
-    recordPlayStat(playStatPendingTrack)
+    recordPlayStat(playStatPendingTrack, { playedSec: playStatAccumSec })
+    playStatCommittedSec = playStatAccumSec
   } catch {}
 }
 
@@ -328,12 +337,22 @@ function flushPlayStatSession({ fromAudio = false } = {}) {
     }
   }
   commitPlayStatIfDue()
+  // 已计过播放次数时，补记本次多听的部分（试听时长是推荐主信号）
+  const key = playStatTrackKey(playStatPendingTrack)
+  const delta = playStatAccumSec - playStatCommittedSec
+  if (key && playStatCountedKey === key && delta >= 5) {
+    try {
+      recordPlayedSeconds(playStatPendingTrack, delta)
+      playStatCommittedSec = playStatAccumSec
+    } catch {}
+  }
 }
 
 function beginPlayStatSession(track) {
   flushPlayStatSession({ fromAudio: true })
   playStatPendingTrack = track || null
   playStatAccumSec = 0
+  playStatCommittedSec = 0
   playStatLastMediaTime = -1
   playStatCountedKey = ''
 }

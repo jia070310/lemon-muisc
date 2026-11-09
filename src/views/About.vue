@@ -16,8 +16,14 @@
         </div>
       </div>
       <div class="hero-actions">
-        <button class="btn-ghost btn-sm" type="button" @click="loadInfo" :disabled="loading">
-          {{ loading ? '检测中…' : '检测更新' }}
+        <button
+          class="btn-sm"
+          :class="info?.updateAvailable ? 'btn-primary' : 'btn-ghost'"
+          type="button"
+          :disabled="loading || autoUpdateBusy"
+          @click="onUpdateEntry"
+        >
+          {{ headerActionLabel }}
         </button>
         <a :href="REPO_URL" target="_blank" rel="noopener" class="btn-ghost btn-sm">GitHub</a>
       </div>
@@ -38,7 +44,7 @@
     </header>
 
     <!-- 更新：版本 + 说明 + 加速保存到「下载目录/柠檬音乐更新」 -->
-    <section v-if="info?.updateAvailable" class="update-card card">
+    <section v-if="info?.updateAvailable" ref="updateCardEl" class="update-card card">
       <div class="update-head">
         <div class="update-head-text">
           <h2 class="update-title">新版本 v{{ info.latestVersion }}</h2>
@@ -47,76 +53,98 @@
             <template v-if="info.publishedAt"> · {{ formatDate(info.publishedAt) }}</template>
           </p>
         </div>
-        <a :href="info.releaseUrl || REPO_URL" target="_blank" rel="noopener" class="btn-primary btn-sm">打开 Release</a>
+        <div class="update-head-actions">
+          <a :href="info.releaseUrl || REPO_URL" target="_blank" rel="noopener" class="btn-ghost btn-sm">打开 Release</a>
+        </div>
       </div>
 
-      <details v-if="info.releaseNotes" class="update-notes">
-        <summary>发布说明</summary>
-        <pre class="update-notes-body">{{ info.releaseNotes }}</pre>
-      </details>
-      <p v-else class="update-notes-empty">暂无正文说明，可到 GitHub Release 查看。</p>
+      <p v-if="!info.releaseNotes" class="update-notes-empty">暂无正文说明，可到 GitHub Release 查看。</p>
 
       <div v-if="info.installHints" class="update-install">
-        <div class="update-install-title">FPK 安装包</div>
+        <div class="update-install-title">{{ canAutoUpdate ? '安装更新' : 'FPK 安装包' }}</div>
         <template v-if="isAdminUser">
-          <div v-if="fpkAssets.length" class="fpk-actions">
-            <template v-for="asset in fpkAssets" :key="asset.name">
-              <button
-                type="button"
-                class="btn-primary btn-sm fpk-btn fpk-btn-strong"
-                :disabled="!!fpkDownloading[asset.name]"
-                title="先测速国内加速节点，失败后回落 GitHub，保存到下载目录下的「柠檬音乐更新」"
-                @click="downloadFpkToNas(asset, true)"
-              >
-                {{ fpkDownloading[asset.name] === 'mirror' ? '加速保存中…' : `${asset.label} 加速保存` }}
-                <span v-if="asset.sizeLabel && !fpkDownloading[asset.name]" class="fpk-size">{{ asset.sizeLabel }}</span>
-              </button>
-              <button
-                type="button"
-                class="btn-primary btn-sm fpk-btn fpk-btn-strong"
-                :disabled="!!fpkDownloading[asset.name]"
-                title="直连 GitHub 保存到下载目录下的「柠檬音乐更新」（需能访问 GitHub）"
-                @click="downloadFpkToNas(asset, false)"
-              >
-                {{ fpkDownloading[asset.name] === 'direct' ? '保存中…' : `直连 ${asset.label}` }}
-                <span v-if="asset.sizeLabel && !fpkDownloading[asset.name]" class="fpk-size">{{ asset.sizeLabel }}</span>
-              </button>
-            </template>
+          <div v-if="canAutoUpdate" class="auto-update-box">
+            <p class="fpk-mirror-hint">
+              点击右上角「立即更新」将自动选择 <strong>{{ hostArchLabel }}</strong> 安装包并加速下载，随后由飞牛应用中心完成安装与重启，无需手动导入。
+            </p>
+            <div v-if="autoUpdateVisible" class="fpk-progress-card">
+              <div class="fpk-progress-head">
+                <span>{{ autoUpdateTitle }}</span>
+                <span v-if="autoUpdatePct !== null">{{ autoUpdatePct }}%</span>
+              </div>
+              <div v-if="autoUpdatePct !== null" class="fpk-progress-track" role="progressbar" :aria-valuenow="autoUpdatePct" aria-valuemin="0" aria-valuemax="100">
+                <div class="fpk-progress-bar" :style="{ width: `${autoUpdatePct}%` }" />
+              </div>
+              <div class="fpk-progress-meta">
+                <span>{{ autoUpdateMeta }}</span>
+                <span v-if="installJob?.fileName" class="fpk-progress-name" :title="installJob.fileName">{{ installJob.fileName }}</span>
+              </div>
+            </div>
+            <p v-if="autoUpdateError" class="fpk-error">{{ autoUpdateError }}</p>
           </div>
-          <p v-if="fpkAssets.length" class="fpk-mirror-hint">
-            「加速保存」会先对各加速节点短测速再拉取，失败自动换源，最后回落 GitHub 直连；保存后可在飞牛应用中心「手动安装」直接选该文件夹。
-          </p>
-          <p v-else class="update-install-line">
-            暂未解析到 FPK 附件，请
-            <a :href="info.releaseUrl || REPO_URL" target="_blank" rel="noopener">打开 Release</a>
-            手动下载后放到下载目录下的 <code>柠檬音乐更新</code>。
-          </p>
-          <p v-if="fpkUpdateDir" class="fpk-save-path" :title="fpkUpdateDir">
-            保存目录：<code>{{ fpkUpdateDir }}</code>
-            <button type="button" class="btn-ghost btn-xs" @click="copyFpkDir">{{ fpkDirCopied ? '已复制' : '复制' }}</button>
-          </p>
-          <div v-if="fpkJob && fpkJob.status === 'downloading'" class="fpk-progress-card">
-            <div class="fpk-progress-head">
-              <span>
-                {{ fpkJob.label || '' }}{{ fpkJob.mirror ? ' 加速' : ' 直连' }}保存中
-                <template v-if="fpkJob.mirrorHost">（{{ fpkJob.mirrorHost }}）</template>
-              </span>
-              <span>{{ fpkProgressPct }}%</span>
+          <template v-else>
+            <p class="update-install-line auto-unavailable">
+              当前环境不支持应用内自动安装（仅飞牛 fnOS 原生应用可用）；可保存安装包后到应用中心手动安装。
+            </p>
+            <div v-if="fpkAssets.length" class="fpk-actions">
+              <template v-for="asset in fpkAssets" :key="asset.name">
+                <button
+                  type="button"
+                  class="btn-primary btn-sm fpk-btn fpk-btn-strong"
+                  :disabled="!!fpkDownloading[asset.name]"
+                  title="先测速国内加速节点，失败后回落 GitHub，保存到下载目录下的「柠檬音乐更新」"
+                  @click="downloadFpkToNas(asset, true)"
+                >
+                  {{ fpkDownloading[asset.name] === 'mirror' ? '加速保存中…' : `${asset.label} 加速保存` }}
+                  <span v-if="asset.sizeLabel && !fpkDownloading[asset.name]" class="fpk-size">{{ asset.sizeLabel }}</span>
+                </button>
+                <button
+                  type="button"
+                  class="btn-primary btn-sm fpk-btn fpk-btn-strong"
+                  :disabled="!!fpkDownloading[asset.name]"
+                  title="直连 GitHub 保存到下载目录下的「柠檬音乐更新」（需能访问 GitHub）"
+                  @click="downloadFpkToNas(asset, false)"
+                >
+                  {{ fpkDownloading[asset.name] === 'direct' ? '保存中…' : `直连 ${asset.label}` }}
+                  <span v-if="asset.sizeLabel && !fpkDownloading[asset.name]" class="fpk-size">{{ asset.sizeLabel }}</span>
+                </button>
+              </template>
             </div>
-            <div class="fpk-progress-track" role="progressbar" :aria-valuenow="fpkProgressPct" aria-valuemin="0" aria-valuemax="100">
-              <div class="fpk-progress-bar" :style="{ width: `${fpkProgressPct}%` }" />
+            <p v-if="fpkAssets.length" class="fpk-mirror-hint">
+              「加速保存」会先对各加速节点短测速再拉取，失败自动换源，最后回落 GitHub 直连；保存后可在飞牛应用中心「手动安装」直接选该文件夹。
+            </p>
+            <p v-else class="update-install-line">
+              暂未解析到 FPK 附件，请
+              <a :href="info.releaseUrl || REPO_URL" target="_blank" rel="noopener">打开 Release</a>
+              手动下载后放到下载目录下的 <code>柠檬音乐更新</code>。
+            </p>
+            <p v-if="fpkUpdateDir" class="fpk-save-path" :title="fpkUpdateDir">
+              保存目录：<code>{{ fpkUpdateDir }}</code>
+              <button type="button" class="btn-ghost btn-xs" @click="copyFpkDir">{{ fpkDirCopied ? '已复制' : '复制' }}</button>
+            </p>
+            <div v-if="fpkJob && fpkJob.status === 'downloading' && fpkJob.action !== 'install'" class="fpk-progress-card">
+              <div class="fpk-progress-head">
+                <span>
+                  {{ fpkJob.label || '' }}{{ fpkJob.mirror ? ' 加速' : ' 直连' }}保存中
+                  <template v-if="fpkJob.mirrorHost">（{{ fpkJob.mirrorHost }}）</template>
+                </span>
+                <span>{{ fpkProgressPct }}%</span>
+              </div>
+              <div class="fpk-progress-track" role="progressbar" :aria-valuenow="fpkProgressPct" aria-valuemin="0" aria-valuemax="100">
+                <div class="fpk-progress-bar" :style="{ width: `${fpkProgressPct}%` }" />
+              </div>
+              <div class="fpk-progress-meta">
+                <span>{{ fpkJob.downloadedLabel || '0 KB' }}<template v-if="fpkJob.totalLabel"> / {{ fpkJob.totalLabel }}</template></span>
+                <span v-if="fpkJob.fileName" class="fpk-progress-name" :title="fpkJob.fileName">{{ fpkJob.fileName }}</span>
+              </div>
             </div>
-            <div class="fpk-progress-meta">
-              <span>{{ fpkJob.downloadedLabel || '0 KB' }}<template v-if="fpkJob.totalLabel"> / {{ fpkJob.totalLabel }}</template></span>
-              <span v-if="fpkJob.fileName" class="fpk-progress-name" :title="fpkJob.fileName">{{ fpkJob.fileName }}</span>
-            </div>
-          </div>
-          <p v-if="fpkLastSaved" class="fpk-saved-ok">
-            已保存：<code :title="fpkLastSaved.path">{{ fpkLastSaved.fileName }}</code>
-            <span v-if="fpkLastSaved.sizeLabel">（{{ fpkLastSaved.sizeLabel }}）</span>
-          </p>
-          <p v-if="fpkError" class="fpk-error">{{ fpkError }}</p>
-          <p class="fpk-tip">{{ info.installHints.fpkHint }}</p>
+            <p v-if="fpkLastSaved" class="fpk-saved-ok">
+              已保存：<code :title="fpkLastSaved.path">{{ fpkLastSaved.fileName }}</code>
+              <span v-if="fpkLastSaved.sizeLabel">（{{ fpkLastSaved.sizeLabel }}）</span>
+            </p>
+            <p v-if="fpkError" class="fpk-error">{{ fpkError }}</p>
+            <p class="fpk-tip">{{ info.installHints.fpkHint }}</p>
+          </template>
         </template>
         <p v-else class="update-install-line">
           请联系管理员在「关于」页将 FPK 保存到下载目录，或
@@ -371,12 +399,35 @@ docker compose exec lemon-music node scripts/reset-password.js 用户名 新密�
     <p class="about-footer">© {{ new Date().getFullYear() }} {{ APP_NAME }}</p>
   </div>
 
+  <div v-if="notesOpen && info?.updateAvailable" class="notes-modal-mask" @click.self="notesOpen = false">
+    <div class="notes-modal" role="dialog" aria-modal="true" aria-labelledby="notes-modal-title">
+      <div class="notes-modal-head">
+        <h3 id="notes-modal-title">v{{ info.latestVersion }} 更新内容</h3>
+        <button type="button" class="btn-ghost btn-xs" @click="notesOpen = false">关闭</button>
+      </div>
+      <pre v-if="info.releaseNotes" class="notes-modal-body">{{ info.releaseNotes }}</pre>
+      <p v-else class="notes-modal-empty">本次发布暂无更新说明，可直接更新。</p>
+      <p v-if="!canAutoUpdate" class="notes-modal-warn">
+        当前环境不支持应用内自动安装（仅飞牛 fnOS 原生应用可用）；可先保存安装包后到应用中心手动安装。
+      </p>
+      <p v-else-if="!info.fpkAssets?.length" class="notes-modal-warn">
+        该版本尚未上传 FPK 安装包，暂时无法自动更新，请稍后再试。
+      </p>
+      <div class="notes-modal-foot">
+        <a :href="info.releaseUrl || REPO_URL" target="_blank" rel="noopener" class="btn-ghost btn-sm">打开 Release</a>
+        <button type="button" class="btn-primary btn-sm" :disabled="!canStartAutoUpdate" @click="confirmUpdate">
+          {{ autoUpdateBusy ? '更新中…' : '立即更新' }}
+        </button>
+      </div>
+    </div>
+  </div>
+
   <div v-if="toast" class="toast" :class="toast.type">{{ toast.text }}</div>
 </template>
 
 <script setup>
 defineOptions({ name: 'About' })
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
 import { api } from '../api.js'
 import { checkForUpdate, hasUpdate } from '../composables/useUpdateCheck.js'
 import { APP_NAME, APP_DISPLAY_NAME, APP_DESCRIPTION, APP_FEATURES, REPO_URL } from '../constants/app.js'
@@ -431,6 +482,92 @@ const fpkProgressPct = computed(() => {
   return Math.min(100, Math.round(p * 100))
 })
 
+const notesOpen = ref(false)
+const updateCardEl = ref(null)
+const autoUpdateError = ref('')
+const installJob = computed(() => (fpkJob.value?.action === 'install' ? fpkJob.value : null))
+const canAutoUpdate = computed(() => Boolean(
+  isAdminUser.value && info.value?.updateAvailable && info.value?.canAutoUpdate,
+))
+const hostArchLabel = computed(() => {
+  const arch = info.value?.hostArch
+  if (arch === 'arm') return 'ARM'
+  if (arch === 'x86') return 'x86'
+  return '当前平台'
+})
+const autoUpdateVisible = computed(() => {
+  const job = installJob.value
+  if (job) return ['downloading', 'installing', 'done'].includes(job.status)
+  return info.value?.lastAutoUpdate?.status === 'installing'
+})
+const autoUpdateBusy = computed(() => {
+  const status = installJob.value?.status
+  return status === 'downloading'
+    || status === 'installing'
+    || info.value?.lastAutoUpdate?.status === 'installing'
+})
+const autoUpdatePct = computed(() => {
+  const job = installJob.value
+  if (!job) return null
+  if (job.status === 'downloading') {
+    const p = Number(job.progress)
+    return Number.isFinite(p) ? Math.min(100, Math.round(p * 100)) : 0
+  }
+  return 100
+})
+const autoUpdateTitle = computed(() => {
+  const job = installJob.value
+  if (!job) {
+    const last = info.value?.lastAutoUpdate
+    return last?.status === 'installing' ? `正在安装 v${last.version}…` : ''
+  }
+  if (job.status === 'downloading') {
+    const arch = job.arch === 'arm' ? 'ARM' : job.arch === 'x86' ? 'x86' : ''
+    return `下载 ${arch} 安装包${job.mirror ? '（加速）' : ''}`
+  }
+  if (job.status === 'installing') return job.installStep || '正在安装…'
+  if (job.status === 'done') return '升级完成'
+  return '更新失败'
+})
+const autoUpdateMeta = computed(() => {
+  const job = installJob.value
+  if (!job) return '应用中心正在完成安装，稍后会自动恢复访问'
+  if (job.status === 'downloading') {
+    const size = `${job.downloadedLabel || '0 KB'}${job.totalLabel ? ` / ${job.totalLabel}` : ''}`
+    return job.mirrorHost ? `${size} · ${job.mirrorHost}` : size
+  }
+  if (job.status === 'installing') return '应用会短暂停止，完成后自动恢复运行'
+  return job.fileName || ''
+})
+
+const canStartAutoUpdate = computed(() => Boolean(
+  canAutoUpdate.value
+  && (info.value?.fpkAssets?.length || 0) > 0
+  && !autoUpdateBusy.value,
+))
+const headerActionLabel = computed(() => {
+  if (autoUpdateBusy.value) return '更新中…'
+  if (info.value?.updateAvailable) return '立即更新'
+  return loading.value ? '检测中…' : '检测更新'
+})
+
+function onUpdateEntry() {
+  if (info.value?.updateAvailable) {
+    notesOpen.value = true
+    return
+  }
+  loadInfo()
+}
+
+function confirmUpdate() {
+  if (!canStartAutoUpdate.value) return
+  notesOpen.value = false
+  startAutoUpdate()
+  nextTick(() => {
+    updateCardEl.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  })
+}
+
 function showToast(text, type = 'info') {
   toast.value = { text, type }
   if (toastTimer) clearTimeout(toastTimer)
@@ -440,21 +577,58 @@ function showToast(text, type = 'info') {
 function stopFpkPoll() {
   if (fpkPollTimer) {
     clearInterval(fpkPollTimer)
+    clearTimeout(fpkPollTimer)
     fpkPollTimer = null
   }
+}
+
+/** 应用内更新结束：确认版本并刷新信息 */
+function finishAutoUpdate(version) {
+  if (
+    version
+    && autoUpdateAnnouncedVersion === version
+    && fpkJob.value?.status === 'done'
+    && fpkJob.value?.installStep === '升级完成'
+  ) return
+  stopFpkPoll()
+  autoUpdateError.value = ''
+  if (version) autoUpdateAnnouncedVersion = version
+  fpkJob.value = {
+    ...(fpkJob.value || {}),
+    action: 'install',
+    status: 'done',
+    installStep: '升级完成',
+    targetVersion: version || fpkJob.value?.targetVersion || '',
+  }
+  const current = String(info.value?.currentVersion || '')
+  if (version && current && version !== current) {
+    showToast(`已升级到 v${version}，正在刷新…`, 'success')
+  } else {
+    showToast(`已更新到 v${version || current}`, 'success')
+  }
+  loadInfo()
 }
 
 function applyFpkJob(job, { toastOnTerminal = true } = {}) {
   if (!job) return
   fpkJob.value = job
   const key = job.name || job.fileName
+  const isInstall = job.action === 'install'
   if (job.status === 'downloading' && key) {
     fpkDownloading.value = {
       ...fpkDownloading.value,
       [key]: job.mirror ? 'mirror' : 'direct',
     }
   }
+  if (job.status === 'installing') {
+    autoUpdateError.value = ''
+    return
+  }
   if (job.status === 'done') {
+    if (isInstall) {
+      finishAutoUpdate(job.targetVersion)
+      return
+    }
     fpkLastSaved.value = {
       fileName: job.fileName || key,
       path: job.path || '',
@@ -479,6 +653,18 @@ function applyFpkJob(job, { toastOnTerminal = true } = {}) {
     }
   }
   if (job.status === 'error') {
+    if (isInstall) {
+      autoUpdateError.value = job.error || '应用内升级失败'
+      stopFpkPoll()
+      if (toastOnTerminal) {
+        const toastKey = `install-err:${job.jobKey || key}:${job.finishedAt || autoUpdateError.value}`
+        if (toastKey !== lastFpkToastKey) {
+          lastFpkToastKey = toastKey
+          showToast(autoUpdateError.value, 'error')
+        }
+      }
+      return
+    }
     fpkError.value = job.error || '保存安装包失败'
     if (key) {
       const next = { ...fpkDownloading.value }
@@ -509,6 +695,76 @@ function startFpkPoll(asset) {
       if (job?.status === 'done' || job?.status === 'error') stopFpkPoll()
     } catch {}
   }, 800)
+}
+
+let installPollDeadline = 0
+
+async function startAutoUpdate() {
+  if (!isAdminUser.value) {
+    showToast('仅管理员可执行应用内更新', 'error')
+    return
+  }
+  if (!canAutoUpdate.value || autoUpdateBusy.value) return
+  autoUpdateError.value = ''
+  fpkError.value = ''
+  fpkLastSaved.value = null
+  fpkJob.value = {
+    action: 'install',
+    status: 'downloading',
+    progress: 0,
+    arch: info.value?.hostArch || '',
+    mirror: true,
+    fileName: '',
+    downloadedLabel: '0 KB',
+    totalLabel: '',
+  }
+  try {
+    const res = await api.about.installUpdate({ mirror: true })
+    const data = res.data || res
+    if (data) applyFpkJob(data, { toastOnTerminal: false })
+    startInstallPoll()
+  } catch (e) {
+    autoUpdateError.value = e.message || '启动更新失败'
+    fpkJob.value = null
+    showToast(autoUpdateError.value, 'error')
+  }
+}
+
+function startInstallPoll() {
+  installPollDeadline = Date.now() + 8 * 60 * 1000
+  scheduleInstallPoll(1200)
+}
+
+/** 应用重启期间接口会短暂不可用，这里持续重试直到拿到最终状态 */
+function scheduleInstallPoll(delay) {
+  stopFpkPoll()
+  fpkPollTimer = setTimeout(async () => {
+    let finished = false
+    try {
+      const res = await api.about.installUpdateStatus()
+      const job = res.data || res
+      if (job) {
+        applyFpkJob(job, { toastOnTerminal: true })
+        if (job.status === 'done' || job.status === 'error') finished = true
+      }
+      const last = res.last || null
+      if (!finished && last?.status === 'success' && last.version) {
+        finishAutoUpdate(last.version)
+        finished = true
+      } else if (!finished && last?.status === 'error') {
+        autoUpdateError.value = last.message || '应用内升级失败'
+        finished = true
+      }
+    } catch {
+      // 应用正在重启
+    }
+    if (finished) return
+    if (Date.now() > installPollDeadline) {
+      autoUpdateError.value = '升级耗时较长，请稍后刷新页面确认版本'
+      return
+    }
+    scheduleInstallPoll(2000)
+  }, delay)
 }
 
 async function copyFpkDir() {
@@ -705,10 +961,38 @@ function formatUptime(seconds = 0) {
   return `${Math.floor(s / 86400)} 天`
 }
 
+let autoUpdateAnnouncedVersion = ''
+
+/** 页面重开/应用重启后，确认上一次应用内更新的结果 */
+function maybeAnnounceAutoUpdate() {
+  const last = info.value?.lastAutoUpdate
+  if (!last?.version) return
+  const current = String(info.value?.currentVersion || '')
+  if (last.status === 'success' && current === last.version) {
+    if (autoUpdateAnnouncedVersion !== last.version) {
+      autoUpdateAnnouncedVersion = last.version
+      fpkJob.value = {
+        ...(fpkJob.value || {}),
+        action: 'install',
+        status: 'done',
+        installStep: '升级完成',
+        targetVersion: last.version,
+        fileName: last.fileName || '',
+      }
+      showToast(`已更新到 v${last.version}`, 'success')
+    }
+    return
+  }
+  if (last.status === 'installing' && Date.now() - (Number(last.startedAt) || 0) < 15 * 60 * 1000) {
+    if (isAdminUser.value) startInstallPoll()
+  }
+}
+
 async function loadInfo() {
   loading.value = true
   try {
     info.value = await checkForUpdate()
+    maybeAnnounceAutoUpdate()
   } catch (e) {
     info.value = {
       currentVersion: '—',
@@ -910,40 +1194,82 @@ function formatDate(iso) {
   font-size: 12px;
   color: var(--text-secondary);
 }
-.update-notes {
-  border-radius: 10px;
-  background: rgba(0, 0, 0, 0.12);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  padding: 0 12px;
+.update-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
-.update-notes summary {
-  cursor: pointer;
-  list-style: none;
-  padding: 10px 0;
-  font-size: 13px;
-  font-weight: 600;
+.notes-modal-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 260;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.55);
+}
+.notes-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(640px, 100%);
+  max-height: min(80vh, 640px);
+  border-radius: 14px;
+  background: var(--bg-elevated, #1c1f26);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+.notes-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.notes-modal-head h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
   color: var(--text);
-  user-select: none;
 }
-.update-notes summary::-webkit-details-marker { display: none; }
-.update-notes summary::after {
-  content: '展开';
-  float: right;
-  font-weight: 500;
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-.update-notes[open] summary::after { content: '收起'; }
-.update-notes-body {
-  margin: 0 0 12px;
-  padding: 0;
-  max-height: min(40vh, 320px);
+.notes-modal-body {
+  flex: 1;
+  margin: 0;
+  padding: 14px 16px;
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-word;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--text-secondary);
+}
+.notes-modal-empty {
+  flex: 1;
+  margin: 0;
+  padding: 14px 16px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.notes-modal-warn {
+  margin: 0;
+  padding: 0 16px 12px;
   font-size: 12px;
-  line-height: 1.55;
+  line-height: 1.5;
+  color: #f0a34a;
+}
+.notes-modal-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 12px 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+.auto-unavailable {
   color: var(--text-secondary);
 }
 .update-notes-empty {
@@ -966,6 +1292,20 @@ function formatDate(iso) {
   font-size: 12px;
   line-height: 1.5;
   color: var(--text-secondary);
+}
+.auto-update-box {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
+  border-radius: 10px;
+  background: var(--bg-secondary, rgba(255, 255, 255, 0.03));
+}
+.auto-update-box .fpk-mirror-hint {
+  margin: 0;
 }
 .fpk-actions {
   display: flex;

@@ -1,5 +1,6 @@
+import path from 'path'
 import { Router } from 'express'
-import { isAllowedMediaPath, getMusicPathsForUser } from '../utils/filePaths.js'
+import { isAllowedMediaPath, getMusicPathsForUser, getDownloadSavePath } from '../utils/filePaths.js'
 import { hasActiveSource } from '../sourceManager.js'
 import { getStoredActiveSourceIds } from '../utils/activeSources.js'
 import {
@@ -21,6 +22,18 @@ import {
 
 export const qualityUpgradeRouter = Router()
 
+/** 保留原文件时的归档子目录（位于下载目录下） */
+const ORIGINAL_ARCHIVE_SUBDIR = 'lemon-originals'
+
+function getKeepOriginalDir(userId) {
+  try {
+    const root = getDownloadSavePath(userId)
+    return root ? path.join(root, ORIGINAL_ARCHIVE_SUBDIR) : ''
+  } catch {
+    return ''
+  }
+}
+
 function noSourcePayload() {
   return {
     error: '请先在设置中激活至少一个音源',
@@ -35,7 +48,7 @@ function noSourcePayload() {
 qualityUpgradeRouter.get('/options', (req, res) => {
   try {
     const data = getUpgradeTargetSourceSupport(req.user?.id)
-    res.json({ ok: true, data })
+    res.json({ ok: true, data: { ...data, keepOriginalDir: getKeepOriginalDir(req.user?.id) } })
   } catch (e) {
     res.status(500).json({ error: e.message || '读取失败' })
   }
@@ -107,7 +120,7 @@ qualityUpgradeRouter.post('/match', async (req, res) => {
 
 /**
  * POST /api/library/quality-upgrade/start
- * 用已匹配结果创建循序下载任务（覆盖原文件）
+ * 用已匹配结果创建循序下载任务（默认覆盖原文件，keepOriginal=true 时归档原文件）
  */
 qualityUpgradeRouter.post('/start', (req, res) => {
   try {
@@ -121,6 +134,10 @@ qualityUpgradeRouter.post('/start', (req, res) => {
     const floorQuality = String(req.body?.floorQuality || '').trim()
     const batchSize = req.body?.batchSize
     const intervalHours = req.body?.intervalHours
+    const keepOriginal = req.body?.keepOriginal === true
+    if (keepOriginal && !getKeepOriginalDir(userId)) {
+      return res.status(400).json({ error: '未配置下载目录，无法保留原文件' })
+    }
     const matched = Array.isArray(req.body?.matched) ? req.body.matched : []
     if (!matched.length) return res.status(400).json({ error: '没有可升级的匹配结果' })
     if (matched.length > 2000) return res.status(400).json({ error: '单次最多 2000 首' })
@@ -147,6 +164,7 @@ qualityUpgradeRouter.post('/start', (req, res) => {
       preferredQuality,
       strategy,
       floorQuality,
+      keepOriginal,
     })
     if (!tasks.length) return res.status(400).json({ error: '未能生成下载任务' })
 
