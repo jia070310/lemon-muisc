@@ -29,8 +29,8 @@
 | **iOS** | [liangddyy/lemon-music-ios](https://github.com/liangddyy/lemon-music-ios) | 原生 iPhone 客户端：音乐库、搜索与发现、收藏/歌单、后台播放与歌词；支持 **CarPlay** |
 | **Android** | [zyhub/LMplayer](https://github.com/zyhub/LMplayer) | 高保真无损播放器：手机 / 平板大屏，并面向车机、TV 等 Android 设备；对接柠檬云端曲库与在线检索 |
 
-QQ 互动群「飞牛柠檬🍋muisc」（群号 **1126326017**）  
-![群](docs/screenshots/QQ195632.png)
+QQ 互动群「飞牛柠檬🍋muisc」（2群号 **1104393408**）  
+![2群](docs/screenshots/屏幕截图%202026-11-19%20005155.png)
 
 ---
 
