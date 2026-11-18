@@ -740,31 +740,6 @@ async function loadExtras() {
   } catch {}
 }
 
-async function onExport() {
-  if (exporting.value) return
-  exporting.value = true
-  try {
-    const res = await api.podcasts.exportAll()
-    const count = res?.payload?.data?.podcastFeeds?.length || 0
-    if (!count) {
-      showToast('暂无可导出的订阅', 'info')
-      return
-    }
-    const blob = new Blob([JSON.stringify(res.payload, null, 2)], { type: 'application/json' })
-    const objectUrl = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = objectUrl
-    a.download = res?.filename || 'lemon-podcasts.json'
-    a.click()
-    URL.revokeObjectURL(objectUrl)
-    showToast(`已导出 ${count} 个订阅`, 'success')
-  } catch (e) {
-    showToast(e.message || '导出失败', 'error')
-  } finally {
-    exporting.value = false
-  }
-}
-
 async function loadFeeds() {
   const hadCache = hydratePodcastsFromCache()
   // 有缓存先展示，不挡首屏；无缓存才亮整页 loading
