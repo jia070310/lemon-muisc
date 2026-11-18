@@ -1,9 +1,20 @@
+/** 咪咕接口常返回 /data/oss/... 相对路径 */
+function absolutizeCoverUrl(url) {
+  const raw = String(url || '').trim()
+  if (!raw) return ''
+  if (/^https?:\/\//i.test(raw)) return raw
+  if (raw.startsWith('//')) return `https:${raw}`
+  if (raw.startsWith('/')) return `https://d.musicapp.migu.cn${raw}`
+  if (/^(?:data\/oss|product)\//i.test(raw)) return `https://d.musicapp.migu.cn/${raw}`
+  return raw
+}
+
 /** 从歌曲信息推导可用封面 URL 列表（按优先级） */
 export function resolveCoverCandidates(info = {}) {
   const list = []
   const push = (url) => {
     if (!url || typeof url !== 'string') return
-    const u = url.trim()
+    const u = absolutizeCoverUrl(url)
     if (!u || !/^https?:\/\//i.test(u)) return
     if (!list.includes(u)) list.push(u)
   }
@@ -20,11 +31,10 @@ export function resolveCoverCandidates(info = {}) {
   const source = String(info.source || '')
   const albumMid = info.albumMid || info.albummid || info.albumId || ''
 
-  if (source === 'tx' || albumMid) {
-    if (albumMid && String(albumMid) !== '0') {
-      push(`https://y.gtimg.cn/music/photo_new/T002R500x500M000${albumMid}.jpg`)
-      push(`https://y.gtimg.cn/music/photo_new/T002R300x300M000${albumMid}.jpg`)
-    }
+  // 仅 QQ：网易/酷狗等也有 albumId，不能套 T002 规则，否则会返回无效封面把前端钉死
+  if (source === 'tx' && albumMid && String(albumMid) !== '0') {
+    push(`https://y.gtimg.cn/music/photo_new/T002R500x500M000${albumMid}.jpg`)
+    push(`https://y.gtimg.cn/music/photo_new/T002R300x300M000${albumMid}.jpg`)
   }
 
   // 酷我短路径

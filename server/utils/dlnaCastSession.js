@@ -1,4 +1,13 @@
-import { dlnaGetStatus, dlnaStop, dlnaPause, dlnaResume, pinDlnaDevice, unpinDlnaDevice } from './dlna.js'
+import {
+  dlnaGetStatus,
+  dlnaStop,
+  dlnaPause,
+  dlnaResume,
+  pinDlnaDevice,
+  unpinDlnaDevice,
+  isXiaomiDlnaDevice,
+  getCachedDevice,
+} from './dlna.js'
 import { broadcast } from '../ws.js'
 import {
   captureDlnaHttpContext,
@@ -10,6 +19,13 @@ import {
 const MAX_QUEUE = 400
 const TICK_MS = 1500
 const IGNORE_STOP_MS = 12000
+
+/** 开播后忽略误报 STOPPED 的窗口；短曲不能死等 12s */
+function ignoreStopMsForDuration(durationSec) {
+  const dur = Number(durationSec) || 0
+  if (dur > 5 && dur < 25) return Math.min(IGNORE_STOP_MS, Math.max(3500, Math.floor(dur * 450)))
+  return IGNORE_STOP_MS
+}
 
 /** @type {Map<string, object>} */
 const sessions = new Map()
@@ -72,6 +88,7 @@ function stopTickerIfIdle() {
 function publicSession(s, extra = {}) {
   if (!s) return { active: false }
   const entry = s.queue[s.index]
+  const now = Date.now()
   return {
     active: true,
     udn: s.udn,
@@ -83,6 +100,11 @@ function publicSession(s, extra = {}) {
     item: entry?.item || null,
     source: entry?.source || '',
     key: trackKeyOf(entry),
+    elapsed: Math.round(sessionElapsed(s, now) * 10) / 10,
+    wallClockOnly: Boolean(s.wallClockOnly),
+    seenPlaying: Boolean(s.seenPlaying),
+    stopSuspect: Number(s.stopSuspect) || 0,
+    advancing: Boolean(s.advancing),
     ...extra,
   }
 }
@@ -137,54 +159,79 @@ function isLiveSession(s) {
   return Boolean(s) && sessions.get(sessionKey(s.userId)) === s
 }
 
-async function playSessionIndex(s, index) {
+async function playSessionIndex(s, index, { manageAdvancing = true } = {}) {
   if (!isLiveSession(s)) return false
   if (index < 0 || index >= s.queue.length) return false
   s.index = index
-  s.advancing = true
-  s.ignoreStopUntil = Date.now() + IGNORE_STOP_MS
+  if (manageAdvancing) s.advancing = true
   s.seenPlaying = false
   s.startedAt = Date.now()
   s.clockFrozenElapsed = 0
   s.paused = false
+  s.maxRelSeen = 0
+  s.stopSuspect = 0
+  // 切歌必须重置曲长，否则会继承上一首偏长 duration，导致永远不切下一首
+  s.durationSec = 0
   const entry = s.queue[index]
   const body = itemToPlayBody(entry, s.quality)
+  const approxDur = parseDurationSeconds(body.interval || body.duration)
+  s.ignoreStopUntil = Date.now() + ignoreStopMsForDuration(approxDur)
   const req = makeDlnaReq(s.http, body)
   try {
     const result = await playTrackOnDlnaDevice(req, s.udn)
-    s.durationSec = Number(result.duration) || parseDurationSeconds(body.interval || body.duration)
+    const fromResult = Number(result.duration) || 0
+    const fromItem = parseDurationSeconds(body.interval || body.duration)
+    s.durationSec = Math.max(fromResult, fromItem)
+    s.ignoreStopUntil = Date.now() + ignoreStopMsForDuration(s.durationSec)
     s.lastUri = result.uri || ''
     pinDlnaDevice(s.udn)
     notify(s, 'dlna:now-playing')
     return true
   } finally {
-    s.advancing = false
+    if (manageAdvancing) s.advancing = false
   }
+}
+
+async function endQueueSession(s, reason = 'queue-ended') {
+  if (!isLiveSession(s)) return
+  try { await dlnaStop(s.udn) } catch {}
+  unpinDlnaDevice(s.udn)
+  notify(s, 'dlna:queue-ended', { active: false, reason })
+  sessions.delete(sessionKey(s.userId))
+  stopTickerIfIdle()
 }
 
 async function advanceSession(s) {
   if (!isLiveSession(s) || s.advancing) return
-  const next = nextIndex(s)
-  if (next < 0) {
-    try { await dlnaStop(s.udn) } catch {}
-    unpinDlnaDevice(s.udn)
-    notify(s, 'dlna:queue-ended', { active: false })
-    sessions.delete(s.userId)
-    stopTickerIfIdle()
-    return
-  }
-  let idx = next
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    try {
-      const ok = await playSessionIndex(s, idx)
-      if (ok) return
-    } catch (e) {
-      console.warn('[dlna-cast] 下一首失败:', e?.message || e)
+  s.advancing = true
+  try {
+    const next = nextIndex(s)
+    if (next < 0) {
+      await endQueueSession(s, 'queue-ended')
+      return
     }
-    if (s.playMode === 'single') return
-    const more = nextIndex({ ...s, index: idx })
-    if (more < 0 || more === idx) return
-    idx = more
+    let idx = next
+    const maxAttempts = Math.min(8, Math.max(4, s.queue.length))
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      try {
+        const ok = await playSessionIndex(s, idx, { manageAdvancing: false })
+        if (ok) {
+          console.log(`[dlna-cast] 已切歌 → #${idx} ${s.queue[idx]?.item?.name || ''}`)
+          return
+        }
+      } catch (e) {
+        console.warn('[dlna-cast] 下一首失败:', e?.message || e)
+      }
+      if (s.playMode === 'single') return
+      const more = nextIndex({ ...s, index: idx })
+      if (more < 0 || more === idx) {
+        await endQueueSession(s, 'advance-exhausted')
+        return
+      }
+      idx = more
+    }
+  } finally {
+    if (isLiveSession(s)) s.advancing = false
   }
 }
 
@@ -196,9 +243,30 @@ function sessionElapsed(s, now) {
 function playbackLooksFinished(s, rel, now) {
   const dur = Number(s.durationSec) || 0
   const elapsed = sessionElapsed(s, now)
-  const nearEndByRel = dur > 5 && rel >= dur - 4
-  const nearEndByClock = dur > 5 && elapsed >= dur - 1.2
-  return nearEndByRel || (rel < 1.5 && nearEndByClock)
+  const maxRel = Math.max(Number(s.maxRelSeen) || 0, Number(rel) || 0)
+  // 小米电视播完常见：仍报 STOPPED 但 RelTime 归零，或卡在接近结尾；
+  // 不能要求「进度接近终点且时钟也到」，否则只会结束会话、不切下一首。
+  if (dur > 5) {
+    if (rel >= dur - 4) return true
+    if (elapsed >= dur - 1.0) return true
+    if (rel < 1.5 && maxRel >= Math.max(20, dur - 12)) return true
+    if (rel < 1.5 && elapsed >= dur * 0.88) return true
+    return false
+  }
+  // 无曲长元数据时：曾推进较久后进度归零，视为播完
+  if (rel < 1.0 && maxRel >= 45 && elapsed >= Math.max(40, maxRel - 3)) return true
+  return false
+}
+
+function isMidTrackStop(s, rel, now) {
+  const dur = Number(s.durationSec) || 0
+  const elapsed = sessionElapsed(s, now)
+  if (playbackLooksFinished(s, rel, now)) return false
+  if (dur > 5) {
+    return rel >= 0.8 && rel < dur - 8 && elapsed < dur - 5
+  }
+  // 无曲长：进度还在走、且开播不久，更像暂停而非播完
+  return rel >= 0.8 && elapsed < Math.max(45, rel + 8)
 }
 
 function enterPaused(s, now, state = 'PAUSED_PLAYBACK') {
@@ -226,50 +294,125 @@ async function endSessionFromDevice(s) {
 async function tickSession(s) {
   if (!isLiveSession(s) || s.advancing) return
   const now = Date.now()
+  const device = getCachedDevice(s.udn)
+  const xiaomi = Boolean(s.wallClockOnly) || isXiaomiDlnaDevice(device || { name: '', location: '', controlURL: '' })
+  if (xiaomi) s.wallClockOnly = true
+
   try {
     const st = await dlnaGetStatus(s.udn)
     const state = String(st?.state || '').toUpperCase()
     const rel = Number(st?.relTime) || 0
     const durFromTv = Number(st?.duration) || 0
-    if (durFromTv > 1 && durFromTv < 86400 && !(s.durationSec > 1)) s.durationSec = durFromTv
+    if (st?.wallClockOnly || st?.xiaomi) s.wallClockOnly = true
+    if (durFromTv > 1 && durFromTv < 86400) {
+      // 电视曲长可用时采纳；允许变短；变长只接受小幅修正，避免短曲被冲成数分钟
+      const cur = Number(s.durationSec) || 0
+      if (!(cur > 1)) {
+        s.durationSec = durFromTv
+      } else if (Math.abs(durFromTv - cur) > 2) {
+        if (durFromTv < cur) {
+          if (now < s.ignoreStopUntil || durFromTv >= cur * 0.55) s.durationSec = durFromTv
+        } else if (durFromTv <= Math.max(cur * 1.25, cur + 20)) {
+          s.durationSec = durFromTv
+        }
+      }
+    }
 
-    if (state === 'PLAYING' || state === 'TRANSITIONING') s.seenPlaying = true
+    if (rel > (Number(s.maxRelSeen) || 0)) s.maxRelSeen = rel
+    if (state === 'PLAYING' || state === 'TRANSITIONING') {
+      s.seenPlaying = true
+      s.stopSuspect = 0
+    }
     if (rel > 0.4) s.seenPlaying = true
 
-    if (state === 'PAUSED_PLAYBACK') {
-      enterPaused(s, now, state)
-      return
-    }
-
-    if (state === 'PLAYING' || state === 'TRANSITIONING') {
-      exitPaused(s, now)
-      return
-    }
-
-    if (now < s.ignoreStopUntil) return
-    if (!s.seenPlaying) return
-    if (state === 'STOPPED' || state === 'NO_MEDIA_PRESENT') {
-      if (playbackLooksFinished(s, rel, now)) {
-        await advanceSession(s)
-        return
+    // 小米：Position 不可信；播完常变 STOPPED。墙钟为主，STOPPED 接近曲终时也切歌
+    if (s.wallClockOnly) {
+      if (state === 'PLAYING' || state === 'TRANSITIONING') {
+        exitPaused(s, now)
+        s.seenPlaying = true
+        s.stopSuspect = 0
+      } else if (
+        (state === 'STOPPED' || state === 'NO_MEDIA_PRESENT')
+        && now >= s.ignoreStopUntil
+      ) {
+        const dur = Number(s.durationSec) || 0
+        const elapsed = sessionElapsed(s, now)
+        s.stopSuspect = (Number(s.stopSuspect) || 0) + 1
+        // 墙钟接近曲终 / 过半后持续 STOPPED / 长时间 STOPPED：按播放模式切下一首
+        const nearEnd = dur > 5
+          ? elapsed >= Math.max(8, dur - 4)
+          : elapsed >= 25
+        const mostlyDone = dur > 5
+          && elapsed >= Math.max(8, dur * 0.72)
+          && s.stopSuspect >= 2
+        const stuckStopped = s.stopSuspect >= 4
+          && (s.seenPlaying || elapsed >= Math.max(10, dur > 5 ? dur * 0.5 : 20))
+        if (nearEnd || mostlyDone || stuckStopped) {
+          console.log(
+            `[dlna-cast] 小米切歌触发 state=${state} elapsed=${elapsed.toFixed(1)} dur=${dur} suspect=${s.stopSuspect} near=${nearEnd} mid=${mostlyDone} stuck=${stuckStopped}`,
+          )
+          await advanceSession(s)
+          return
+        }
       }
-      // 进度还在曲中：设备暂停常报 STOPPED，勿切下一首
-      if (rel >= 0.8) {
+    } else {
+      if (state === 'PAUSED_PLAYBACK') {
         enterPaused(s, now, state)
         return
       }
-      await endSessionFromDevice(s)
+
+      if (state === 'PLAYING' || state === 'TRANSITIONING') {
+        exitPaused(s, now)
+        const dur = Number(s.durationSec) || 0
+        const elapsed = sessionElapsed(s, now)
+        if (dur > 5 && (elapsed >= dur + 2.5 || (rel >= dur - 1 && elapsed >= dur - 1))) {
+          await advanceSession(s)
+        }
+        return
+      }
+
+      if (now < s.ignoreStopUntil) return
+      if (!s.seenPlaying) return
+      if (state === 'STOPPED' || state === 'NO_MEDIA_PRESENT') {
+        if (playbackLooksFinished(s, rel, now)) {
+          await advanceSession(s)
+          return
+        }
+        if (isMidTrackStop(s, rel, now)) {
+          enterPaused(s, now, state)
+          return
+        }
+        const dur = Number(s.durationSec) || 0
+        const elapsed = sessionElapsed(s, now)
+        const playedEnough = dur > 5
+          ? elapsed >= Math.max(25, dur * 0.92)
+          : elapsed >= 45 || (Number(s.maxRelSeen) || 0) >= 40
+        if (playedEnough) {
+          await advanceSession(s)
+          return
+        }
+        s.stopSuspect = (Number(s.stopSuspect) || 0) + 1
+        const maxRel = Number(s.maxRelSeen) || 0
+        if (maxRel < 0.5 && elapsed >= 90 && s.stopSuspect >= 10) {
+          await endSessionFromDevice(s)
+        }
+        return
+      }
     }
   } catch {
     /* 部分音箱不报状态，用曲长墙钟切歌 */
   }
 
-  if (s.paused) return
+  if (s.paused && !s.wallClockOnly) return
   if (now < s.ignoreStopUntil) return
   const dur = Number(s.durationSec) || 0
+  const elapsed = sessionElapsed(s, now)
   if (dur > 3) {
-    const elapsed = sessionElapsed(s, now)
-    if (elapsed >= dur + 1.5) await advanceSession(s)
+    // 略早于曲终切歌，减少电视停住后的空窗
+    if (elapsed >= dur + 0.4) await advanceSession(s)
+  } else if (s.seenPlaying && elapsed >= 50) {
+    // 无曲长元数据时：已开播足够久再尝试切歌
+    await advanceSession(s)
   }
 }
 
@@ -323,6 +466,16 @@ export function attachCastSession(req, {
     advancing: false,
     paused: false,
     clockFrozenElapsed: 0,
+    maxRelSeen: 0,
+    stopSuspect: 0,
+    wallClockOnly: isXiaomiDlnaDevice({
+      name: '',
+      manufacturer: '',
+      model: '',
+      location: '',
+      controlURL: '',
+      ...(getCachedDevice(String(udn)) || {}),
+    }),
     lastUri: '',
   }
   if (!s.queue.length && req.body) {
@@ -359,15 +512,17 @@ export function markCastPlayed(userId, durationSec = 0) {
   const s = sessions.get(sessionKey(userId))
   if (!s) return
   s.startedAt = Date.now()
-  s.ignoreStopUntil = Date.now() + IGNORE_STOP_MS
   s.seenPlaying = false
   s.paused = false
   s.clockFrozenElapsed = 0
-  if (durationSec > 1) s.durationSec = durationSec
-  else {
-    const item = s.queue[s.index]?.item
-    s.durationSec = parseDurationSeconds(item?.interval || item?.duration)
-  }
+  s.maxRelSeen = 0
+  s.stopSuspect = 0
+  const item = s.queue[s.index]?.item
+  const fromItem = parseDurationSeconds(item?.interval || item?.duration)
+  const fromArg = Number(durationSec) || 0
+  // 新开播以本首曲长为准，不继承上一首
+  s.durationSec = Math.max(fromArg, fromItem)
+  s.ignoreStopUntil = Date.now() + ignoreStopMsForDuration(s.durationSec)
 }
 
 export async function pauseCastSession(userId) {

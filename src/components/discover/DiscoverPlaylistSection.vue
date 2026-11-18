@@ -58,6 +58,7 @@ import CoverArt from '../CoverArt.vue'
 import DiscoverSectionPager from './DiscoverSectionPager.vue'
 import DiscoverSectionSkeleton from './DiscoverSectionSkeleton.vue'
 import DiscoverSwipeCarousel from './DiscoverSwipeCarousel.vue'
+import { shouldPrefetchMore } from '../../utils/screenDataCache.js'
 import { cleanText } from '../../utils/text.js'
 
 const props = defineProps({
@@ -102,18 +103,30 @@ function onResize() {
   }
 }
 
+function maybePrefetch(idx = pageIndex.value) {
+  if (shouldPrefetchMore({
+    pageIndex: idx,
+    pageSize: pageSize.value,
+    listLength: props.list.length,
+    hasMore: props.hasMore,
+    idleMaxScreens: 3,
+    lookaheadScreens: 2,
+  })) {
+    emit('need-more')
+  }
+}
+
 watch(() => [props.list, props.sort], () => { pageIndex.value = 0 })
 watch(pageCount, (n) => {
   if (pageIndex.value >= n) pageIndex.value = Math.max(0, n - 1)
 })
-watch(pageIndex, (idx) => {
-  const nearEnd = (idx + 1) * pageSize.value >= props.list.length - pageSize.value
-  if (nearEnd && props.hasMore) emit('need-more')
-})
+watch(pageIndex, (idx) => { maybePrefetch(idx) })
+watch(() => [props.list.length, props.hasMore, pageSize.value], () => { maybePrefetch() })
 
 onMounted(() => {
   window.addEventListener('resize', onResize)
   onResize()
+  maybePrefetch(0)
 })
 onUnmounted(() => {
   window.removeEventListener('resize', onResize)

@@ -2,7 +2,7 @@
 openapi: 3.1.0
 info:
   title: Lemon Music Open API
-  version: 1.2.17.22
+  version: 1.2.17.23
   description: "柠檬音乐自托管开放 API。路径同时挂载在 `/api` 与 `/api/v1`（推荐客户端使用 `/api/v1`）。\n\n鉴权：`Authorization: Bearer <sessionToken>`；音频流可用 `?ticket=` 短时效媒体票（也可兼容 `?token=` 会话 JWT）。\n\n曲目稳定 ID：库内 `id` / `trackId` 为 UUID；在线曲目请用 `songId`+`source`，勿把平台 id 当作 trackId。\n\n播放换源：同一次 `/play/url` 内可用 `sourceApiId` / `skipSourceIds` 控制音源脚本；跨平台搜曲由客户端自行完成后再调本接口。\n\n本地转码：`smooth=true` 请求 AAC 流；关闭用户设置「本地转码」时客户端应直出 `/play/local`（APE / DSF / DFF 除外，始终转码）。\n\n稳定性：已公开路径与字段尽量固定；新功能新开路由或可选字段，避免破坏第三方客户端（详见 docs/open-api.md）。\n\n人读文档见 docs/open-api.md；交互文档 `GET /api/docs`。"
   license:
     name: MIT
@@ -734,6 +734,7 @@ paths:
       tags:
         - settings
       summary: 更新用户设置
+      description: "白名单 key + 客户端命名空间 app.*（按用户隔离）。响应含 accepted / ignored；非白名单 key 不会静默假装成功。"
       security:
         - bearerAuth: []
       responses:
@@ -1198,6 +1199,27 @@ paths:
         - source
       summary: 清除故障记录
       description: 清除 settings 中保存的最近音源故障记录（不再用于强制前端弹窗）。
+      security:
+        - bearerAuth: []
+      responses:
+        200:
+          description: 成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Ok"
+        401:
+          description: 未登录
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Error"
+  /source/health:
+    get:
+      tags:
+        - source
+      summary: 音源健康聚合
+      description: 各音源近期试听片段比例与平台级健康，供客户端避开异常源
       security:
         - bearerAuth: []
       responses:
@@ -3439,6 +3461,7 @@ paths:
       tags:
         - library
       summary: 曲库版本信号（updated 0/1，无扫盘）
+      description: "返回 revision / dirty / trackCount。索引变更也会通过 WS `library:index-changed` 推送。"
       security:
         - bearerAuth: []
       responses:
@@ -3872,8 +3895,15 @@ paths:
       tags:
         - library
       summary: 用户库数据（收藏等）
+      description: "支持 ?sinceRevision=N（未变返回 unchanged:true）与 If-None-Match → 304。响应带 ETag。"
       security:
         - bearerAuth: []
+      parameters:
+        - name: sinceRevision
+          in: query
+          description: 客户端已知 revision；相等则 unchanged
+          schema:
+          type: string
       responses:
         200:
           description: 成功
@@ -3891,6 +3921,60 @@ paths:
       tags:
         - library
       summary: 更新用户库数据
+      description: "部分更新：传 playlists / favorites / recentPlays / playStats 等。\n冲突：传 baseRevision（须等于服务端）或 revision（须大于服务端）；否则 409 + 服务端 data。\n写入时对 favorites / recentPlays / playStats 做跨平台同曲归并。"
+      security:
+        - bearerAuth: []
+      responses:
+        200:
+          description: 成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Ok"
+        401:
+          description: 未登录
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Error"
+        409:
+          description: revision 冲突，body 含 serverRevision 与 data
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                playlists:
+                  type: array
+                favorites:
+                  type: array
+                favoriteAlbums:
+                  type: array
+                favoriteArtists:
+                  type: array
+                recentPlays:
+                  type: array
+                playStats:
+                  type: array
+                revision:
+                  type: integer
+                  description: "期望写入的新 revision（须 > 服务端）"
+                baseRevision:
+                  type: integer
+                  description: 基于的服务端 revision（乐观锁）
+  /library/match-same-song:
+    post:
+      tags:
+        - library
+      summary: 跨平台同曲判定/归并
+      description: "传 { a, b } 判断是否同曲，或传 { tracks } 返回归并后的列表。口径：标题归一化+主唱+无 Live/remix 冲突+时长差≤5s。"
       security:
         - bearerAuth: []
       responses:
@@ -3912,7 +3996,15 @@ paths:
           application/json:
             schema:
               type: object
-              additionalProperties: true
+              properties:
+                a:
+                  type: object
+                b:
+                  type: object
+                tracks:
+                  type: array
+                  items:
+                    type: object
   /library/playlists:
     get:
       tags:

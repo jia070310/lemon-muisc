@@ -54,6 +54,10 @@ export function bumpLibraryIndexRevision() {
   const next = getLibraryIndexRevision() + 1
   setSetting(REVISION_KEY, String(next))
   setSetting(DIRTY_KEY, '0')
+  // 延迟 import，避免与 libraryNotify 循环依赖
+  import('./libraryNotify.js')
+    .then(({ notifyLibraryIndexChanged }) => notifyLibraryIndexChanged({ reason: 'revision-bump' }))
+    .catch(() => {})
   return next
 }
 

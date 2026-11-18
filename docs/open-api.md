@@ -29,7 +29,7 @@ GET /api/v1
 {
   "ok": true,
   "name": "Lemon Music",
-  "appVersion": "1.2.17.22",
+  "appVersion": "1.2.17.23",
   "apiVersion": 1,
   "openapi": "http://host:7983/api/openapi.json",
   "docs": "http://host:7983/api/docs",
@@ -143,23 +143,49 @@ POST /api/v1/play/url
 
 ## WebSocket
 
+### 鉴权与连接
+
 ```
 ws://host:7983/ws?token=<sessionJWT>
 ```
 
-消息形态：`{ "type": "<event>", "data": ... }`。常用事件：
+- `token`：与 HTTP `Authorization: Bearer` 相同的会话 JWT（登录接口返回）
+- 鉴权失败：连接以码 **4401** 关闭，原因 `Unauthorized`
+- 消息形态：`{ "type": "<event>", "data": <object> }`（UTF-8 JSON 文本帧）
+- 用户级事件只推给对应用户；全员事件推给所有已鉴权连接
+- **兼容承诺**：已有 `type` 名称与 `data` 主字段保持兼容；扩展只新增可选字段，不改语义
 
-| type | 含义 |
+### 事件清单
+
+| type | 范围 | data 要点 |
+|------|------|-----------|
+| `download:added` | 用户 | `{ tasks: [...] }` 新入队任务 |
+| `download:progress` / `download:status` | 用户 | 进度/状态变更 |
+| `download:removed` / `download:cleared` | 用户 | 移除或清空 |
+| `download:exist-summary` / `source-switched` / `platform-switched` | 用户 | 同名冲突、换源 |
+| `playlist-download:progress` / `done` / `cancelled` | 用户 | 循序下载 |
+| `library:scan-progress` | 全员 | 扫库进度文案与计数 |
+| `library:scan-complete` | 全员 | `{ revision, trackCount, ... }` |
+| `library:changed` | 全员 | `{ filePaths, revision, dirty, reason? }` 新增/更新 |
+| `library:removed` | 全员 | `{ filePaths, revision, dirty, reason? }` 删除/移出 |
+| `library:index-changed` | 全员 | `{ revision, dirty, updated, reason? }` 索引版本变化（秒级感知，可替代轮询 sync-state） |
+| `library:mood-progress` / `mood-complete` | 全员 | 情绪分析 |
+| `library:user-data-changed` | 用户 | `{ revision? }` 收藏/歌单/最近播放等 |
+| `podcast:updated` | 用户 | `{ feeds:[{ id, title, inserted, unreadCount, … }], at }` 订阅有新节目 |
+| `dlna:now-playing` / `dlna:transport` / `dlna:queue-ended` | 用户 | 投屏连播；`transport` 同步设备暂停/继续 |
+
+无 WS 时可轮询：`GET /library/sync-state`、`GET /download/list`、`GET /dlna/session` 等。
+
+### 双端同步相关 HTTP（补充）
+
+| 能力 | 接口 |
 |------|------|
-| `download:added` / `progress` / `status` / `removed` / `cleared` | 下载队列 |
-| `download:exist-summary` / `source-switched` / `platform-switched` | 下载交互 |
-| `playlist-download:progress` / `done` / `cancelled` | 循序下载 |
-| `library:scan-progress` / `scan-complete` / `changed` / `removed` | 扫库 |
-| `library:mood-progress` / `mood-complete` | 情绪分析 |
-| `library:user-data-changed` | 收藏/歌单等 |
-| `dlna:now-playing` / `dlna:transport` / `dlna:queue-ended` | 服务端投屏连播（页面关闭后仍切歌）；`transport` 同步设备端暂停/继续 |
-
-无 WS 时可轮询对应 `*-status` / `list` HTTP 接口。
+| 曲库版本 | `GET /library/sync-state` → `{ revision, dirty, trackCount }` |
+| 用户数据 | `GET /library/user-data?sinceRevision=N`（未变返回 `unchanged:true`；支持 `If-None-Match` → 304） |
+| 用户数据写入 | `PUT /library/user-data`：带 `baseRevision` 或 `revision`；冲突 **409** + 服务端 `data` |
+| 同曲判定 | `POST /library/match-same-song`：`{ a, b }` 或 `{ tracks }` |
+| 客户端设置 | `PUT /settings` 放行 `app.*` 前缀（按用户隔离）；响应含 `accepted` / `ignored` |
+| 音源健康 | `GET /source/health`；上报仍用 `POST /source/health/report` |
 
 投屏连播由服务端持有队列：`POST /dlna/play` 可带可选 `queue` / `index` / `playMode`；`GET|POST /dlna/session` 查询或只更新队列。设备端暂停/停止由服务端识别（曲中 STOPPED 不当作播完）。`POST /dlna/pause` / `/dlna/resume` 把控制转到音箱。
 

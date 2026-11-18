@@ -48,9 +48,14 @@ settingsRouter.put('/', (req, res) => {
   const globalEntries = {}
   const userEntries = {}
   const denied = []
+  const ignored = []
+  const skippedSensitive = []
 
   for (const [key, value] of Object.entries(body)) {
-    if (SENSITIVE_KEYS.has(key) && (!value || value === '********')) continue
+    if (SENSITIVE_KEYS.has(key) && (!value || value === '********')) {
+      skippedSensitive.push(key)
+      continue
+    }
 
     if (isGlobalSettingKey(key)) {
       if (req.user.role !== 'admin') {
@@ -60,6 +65,9 @@ settingsRouter.put('/', (req, res) => {
       globalEntries[key] = value
     } else if (isUserSettingKey(key)) {
       userEntries[key] = value
+    } else {
+      // 非白名单且非 app.* 的 key 丢弃并回传，避免第三方误以为已保存
+      ignored.push(key)
     }
   }
 
@@ -68,6 +76,7 @@ settingsRouter.put('/', (req, res) => {
       error: '以下设置需要管理员权限',
       keys: denied,
       code: 'FORBIDDEN',
+      ignored,
     })
   }
 
@@ -77,7 +86,16 @@ settingsRouter.put('/', (req, res) => {
     syncPreviewAutoCloseOverrides(req.user.id, parseSourcePlatformMap(userEntries[ENABLED_PLATFORMS_KEY]))
   }
 
-  res.json({ ok: true })
+  const accepted = [...Object.keys(globalEntries), ...Object.keys(userEntries)]
+  res.json({
+    ok: true,
+    accepted,
+    ignored,
+    ...(skippedSensitive.length ? { skippedSensitive } : {}),
+    ...(ignored.length
+      ? { warning: `有 ${ignored.length} 个 key 不在白名单内，未写入（客户端自定义请使用 app.* 前缀）` }
+      : {}),
+  })
 })
 
 /** 管理员读取纯全局设置 */

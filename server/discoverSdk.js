@@ -154,8 +154,15 @@ function mapTxSong(item) {
   })
 }
 
+function wyNormPic(url) {
+  let u = String(url || '').trim()
+  if (u.startsWith('//')) u = `https:${u}`
+  if (/^http:\/\//i.test(u)) u = `https://${u.slice(7)}`
+  return /^https:\/\//i.test(u) ? u : ''
+}
+
 function mapWySong(item) {
-  const pic = item.al?.picUrl || item.album?.picUrl || ''
+  const pic = wyNormPic(item.al?.picUrl || item.album?.picUrl || '')
   return attachSongTypes('wy', item, {
     id: String(item.id),
     name: cleanHtml(item.name),
@@ -267,8 +274,32 @@ function mapKgSong(item) {
   })
 }
 
+function mgAbsPicUrl(url) {
+  const raw = String(url || '').trim()
+  if (!raw) return ''
+  if (/^https?:\/\//i.test(raw)) return raw
+  if (raw.startsWith('//')) return `https:${raw}`
+  if (raw.startsWith('/')) return `https://d.musicapp.migu.cn${raw}`
+  if (/^(?:data\/oss|product)\//i.test(raw)) return `https://d.musicapp.migu.cn/${raw}`
+  return raw
+}
+
+function mgSongPicUrl(o) {
+  for (const key of ['img3', 'img2', 'img1', 'albumImg', 'imgUrl', 'cover']) {
+    const abs = mgAbsPicUrl(o?.[key])
+    if (abs) return abs
+  }
+  const imgs = o?.albumImgs || o?.imgItems || o?.imgList || []
+  if (Array.isArray(imgs) && imgs.length) {
+    const best = imgs.find((i) => i.imgSizeType === '03' || i.imgSizeType === '02') || imgs[0]
+    return mgAbsPicUrl(best?.img || best?.url || best?.imgUrl || '')
+  }
+  return ''
+}
+
 function mapMgSong(item) {
   const o = item?.objectInfo || item
+  const pic = mgSongPicUrl(o)
   return attachSongTypes('mg', o, {
     id: o.copyrightId || o.songId,
     name: cleanHtml(o.songName || o.name),
@@ -277,8 +308,9 @@ function mapMgSong(item) {
     source: 'mg',
     songId: o.copyrightId || o.songId,
     copyrightId: o.copyrightId || '',
-    img: o.albumImg || o.img1 || '',
-    picUrl: o.albumImg || o.img1 || '',
+    albumId: String(o.albumId || ''),
+    img: pic,
+    picUrl: pic,
     interval: '',
   })
 }

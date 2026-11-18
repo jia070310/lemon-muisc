@@ -183,8 +183,8 @@ async function wySearch(keyword, page = 1, limit = 30) {
         interval: formatTime(Math.floor((item.dt || item.duration || 0) / 1000)),
         source: 'wy',
         songId: String(item.id),
-        picUrl: item.al?.picUrl || '',
-        img: item.al?.picUrl || '',
+        picUrl: wyAlbumPic(item.al || item.album),
+        img: wyAlbumPic(item.al || item.album),
       }, types)
     }),
     allPage: Math.ceil(total / limit),
@@ -256,6 +256,27 @@ function kgPicUrl(item) {
   return ''
 }
 
+/**
+ * 酷狗 mobilecdn HTTPS 证书常与域名不匹配（ERR_TLS_CERT_ALTNAME_INVALID），
+ * 优先走 HTTP，避免每次封面请求先白白失败一次。
+ */
+const KG_MOBILE_HOSTS = [
+  'http://mobilecdn.kugou.com',
+  'http://mobilecdnbj.kugou.com',
+  'https://mobilecdn.kugou.com',
+]
+let kgPreferredMobileHost = KG_MOBILE_HOSTS[0]
+
+function kgMobileHostsInOrder() {
+  const preferred = kgPreferredMobileHost
+  if (!preferred || !KG_MOBILE_HOSTS.includes(preferred)) return [...KG_MOBILE_HOSTS]
+  return [preferred, ...KG_MOBILE_HOSTS.filter((h) => h !== preferred)]
+}
+
+function kgRememberMobileHost(host) {
+  if (host && KG_MOBILE_HOSTS.includes(host)) kgPreferredMobileHost = host
+}
+
 /** 酷狗专辑封面缓存（歌单/移动端曲目常只有 album_id） */
 const kgAlbumCoverCache = new Map()
 
@@ -269,10 +290,14 @@ export async function kgResolveAlbumCover(albumId) {
   const pending = (async () => {
     try {
       let data = null
-      for (const host of KG_MOBILE_HOSTS) {
+      for (const host of kgMobileHostsInOrder()) {
         try {
-          data = await kgFetchMobileJson(`${host}/api/v3/album/info?albumid=${encodeURIComponent(id)}`, 1)
-          if (data?.data) break
+          // 单次尝试：证书失败的 HTTPS 不要再重试拖慢整单
+          data = await kgFetchMobileJson(`${host}/api/v3/album/info?albumid=${encodeURIComponent(id)}`, 0)
+          if (data?.data) {
+            kgRememberMobileHost(host)
+            break
+          }
         } catch {
           data = null
         }
@@ -289,7 +314,10 @@ export async function kgResolveAlbumCover(albumId) {
   return pending
 }
 
-async function enrichKgSongsCoversByAlbum(songs, { concurrency = 6 } = {}) {
+async function enrichKgSongsCoversByAlbum(songs, {
+  concurrency = 10,
+  deadlineMs = 0,
+} = {}) {
   if (!Array.isArray(songs) || !songs.length) return songs
   const needIds = [...new Set(
     songs
@@ -298,10 +326,12 @@ async function enrichKgSongsCoversByAlbum(songs, { concurrency = 6 } = {}) {
       .filter((id) => id && id !== '0'),
   )]
   if (needIds.length) {
+    const deadline = deadlineMs > 0 ? Date.now() + deadlineMs : 0
     let next = 0
     const workers = Math.max(1, Math.min(concurrency, needIds.length))
     await Promise.all(Array.from({ length: workers }, async () => {
       while (next < needIds.length) {
+        if (deadline && Date.now() >= deadline) return
         const id = needIds[next++]
         await kgResolveAlbumCover(id)
       }
@@ -366,16 +396,29 @@ async function kgSearch(keyword, page = 1, limit = 30) {
   return { ...primary, list }
 }
 
-function mgPicUrl(item) {
-  for (const key of ['img3', 'img2', 'img1', 'imgUrl', 'cover']) {
-    if (typeof item[key] === 'string' && item[key]) return item[key]
+/** 咪咕封面常返回 /data/oss/... 相对路径，需补全 CDN 域名才能显示 */
+function mgAbsPicUrl(url) {
+  const raw = String(url || '').trim()
+  if (!raw) return ''
+  if (/^https?:\/\//i.test(raw)) return raw
+  if (raw.startsWith('//')) return `https:${raw}`
+  if (raw.startsWith('/')) return `https://d.musicapp.migu.cn${raw}`
+  if (/^data\/oss\//i.test(raw)) return `https://d.musicapp.migu.cn/${raw}`
+  return raw
+}
+
+function mgPicUrl(item, fallback = '') {
+  if (!item || typeof item !== 'object') return mgAbsPicUrl(fallback)
+  for (const key of ['img3', 'img2', 'img1', 'imgUrl', 'cover', 'albumImg']) {
+    if (typeof item[key] === 'string' && item[key]) return mgAbsPicUrl(item[key])
   }
-  const imgs = item.imgItems || item.imgList || []
+  const imgs = item.imgItems || item.imgList || item.albumImgs || []
   if (Array.isArray(imgs) && imgs.length) {
     const best = imgs.find(i => i.imgSizeType === '03' || i.imgSizeType === '02') || imgs[0]
-    return best?.img || best?.url || ''
+    const fromList = best?.img || best?.url || ''
+    if (fromList) return mgAbsPicUrl(fromList)
   }
-  return ''
+  return mgAbsPicUrl(fallback)
 }
 
 function cleanHtml(str) {
@@ -1343,8 +1386,9 @@ async function mgAlbum(id) {
           source: 'mg',
           songId: item.copyrightId || item.songId || item.id || '',
           copyrightId: item.copyrightId || '',
-          picUrl: item.img3 || item.img2 || item.img1 || albumInfo?.img || '',
-          img: item.img3 || item.img2 || item.img1 || albumInfo?.img || '',
+          picUrl: mgPicUrl(item, albumInfo?.img || ''),
+          img: mgPicUrl(item, albumInfo?.img || ''),
+          albumId: String(item.albumId || albumInfo?.albumId || id || ''),
         }, types)
       })
       all.push(...batch)
@@ -1486,8 +1530,11 @@ async function wyFetchSongsByIds(ids, headers) {
 
 function wyAlbumPic(al) {
   if (!al || typeof al !== 'object') return ''
-  const url = String(al.picUrl || '').trim()
-  if (/^https?:\/\//i.test(url)) return url
+  let url = String(al.picUrl || '').trim()
+  if (url.startsWith('//')) url = `https:${url}`
+  // 网易 CDN 常回 http；统一 https，避免部分环境下代理/缓存异常
+  if (/^http:\/\//i.test(url)) url = `https://${url.slice(7)}`
+  if (/^https:\/\//i.test(url)) return url
   return ''
 }
 
@@ -1624,7 +1671,10 @@ async function wyPlaylist({ id, token }, options = {}) {
       tracks.map(item => mapWyPlaylistTrack(item, privMap.get(item.id), pl)),
       headers,
     )
-    return buildPlaylistResponse(list, total, 'wy', info, { partial: true, hasMore: total > list.length })
+    // clearMatching 会清掉与歌单封面相同的条目；用歌曲详情回填后不再二次清理，避免整单占位图
+    const resp = buildPlaylistResponse(list, total, 'wy', info, { partial: true, hasMore: total > list.length })
+    resp.list = await wyFillMissingTrackPics(resp.list, headers)
+    return resp
   }
 
   let tracks = pl.tracks || []
@@ -1644,7 +1694,9 @@ async function wyPlaylist({ id, token }, options = {}) {
     tracks.map(item => mapWyPlaylistTrack(item, privMap.get(item.id), pl)),
     headers,
   )
-  return buildPlaylistResponse(list, total, 'wy', info)
+  const resp = buildPlaylistResponse(list, total, 'wy', info)
+  resp.list = await wyFillMissingTrackPics(resp.list, headers)
+  return resp
 }
 
 const TX_PLAYLIST_HEADERS = (id) => ({
@@ -1877,8 +1929,9 @@ async function mgPlaylist({ id }, options = {}) {
         source: 'mg',
         songId: item.copyrightId || item.songId || '',
         copyrightId: item.copyrightId || '',
-        picUrl: item.img3 || item.img2 || item.img1 || mgPicUrl(item),
-        img: item.img3 || item.img2 || item.img1 || mgPicUrl(item),
+        albumId: String(item.albumId || ''),
+        picUrl: mgPicUrl(item),
+        img: mgPicUrl(item),
       }, types)
     })
 
@@ -2074,19 +2127,13 @@ async function kgFetchMobileJson(url, retries = 1) {
   throw lastErr || new Error('酷狗接口请求失败')
 }
 
-function kgMobileSongPageUrl(specialId, page, pageSize, host = 'https://mobilecdn.kugou.com') {
+function kgMobileSongPageUrl(specialId, page, pageSize, host = kgPreferredMobileHost) {
   return `${host}/api/v3/special/song?plat=0&specialid=${specialId}&page=${page}&pagesize=${pageSize}&version=9108&with_res_tag=1`
 }
 
-function kgMobileInfoUrl(specialId, host = 'https://mobilecdn.kugou.com') {
+function kgMobileInfoUrl(specialId, host = kgPreferredMobileHost) {
   return `${host}/api/v3/special/info?specialid=${specialId}`
 }
-
-const KG_MOBILE_HOSTS = [
-  'https://mobilecdn.kugou.com',
-  'http://mobilecdn.kugou.com',
-  'http://mobilecdnbj.kugou.com',
-]
 
 function kgMapMobilePlaylistInfo(infoPayload = {}) {
   return {
@@ -2104,22 +2151,24 @@ function kgMapMobileSongPage(data) {
   return { batch, total }
 }
 
-async function kgFetchMobilePlaylistPages(specialId, { pageSize = 100, partial = false } = {}) {
+async function kgFetchMobilePlaylistPages(specialId, { pageSize = 300, partial = false } = {}) {
+  const fetchSize = partial ? Math.min(pageSize, PLAYLIST_PARTIAL_LIMIT) : pageSize
   let infoData = null
   let firstData = null
-  let activeHost = KG_MOBILE_HOSTS[0]
+  let activeHost = kgPreferredMobileHost
   let lastErr = null
 
-  for (const host of KG_MOBILE_HOSTS) {
+  for (const host of kgMobileHostsInOrder()) {
     try {
       const [info, first] = await Promise.all([
-        kgFetchMobileJson(kgMobileInfoUrl(specialId, host)).catch(() => null),
-        kgFetchMobileJson(kgMobileSongPageUrl(specialId, 1, pageSize, host)),
+        kgFetchMobileJson(kgMobileInfoUrl(specialId, host), 0).catch(() => null),
+        kgFetchMobileJson(kgMobileSongPageUrl(specialId, 1, fetchSize, host), 0),
       ])
       if (first?.status === 1 && first.data) {
         infoData = info
         firstData = first
         activeHost = host
+        kgRememberMobileHost(host)
         break
       }
       lastErr = new Error('无法获取酷狗歌单')
@@ -2135,7 +2184,11 @@ async function kgFetchMobilePlaylistPages(specialId, { pageSize = 100, partial =
   const playlistCover = info.img || ''
 
   if (partial) {
-    const list = await enrichKgSongsCoversByAlbum(clearMatchingTrackCovers(firstBatch, playlistCover))
+    // 首屏：限时补封面，剩余交给前端渐进补全，避免卡在专辑接口
+    const list = await enrichKgSongsCoversByAlbum(
+      clearMatchingTrackCovers(firstBatch, playlistCover),
+      { concurrency: 12, deadlineMs: 1500 },
+    )
     const infoFinal = finalizePlaylistInfo(info, list)
     return {
       list,
@@ -2147,12 +2200,12 @@ async function kgFetchMobilePlaylistPages(specialId, { pageSize = 100, partial =
     }
   }
 
-  const totalPages = Math.ceil(total / pageSize)
+  const totalPages = Math.ceil(total / fetchSize)
   const pageResults = [firstBatch]
   if (totalPages > 1) {
     const rest = await Promise.all(
       Array.from({ length: totalPages - 1 }, (_, i) => (
-        kgFetchMobileJson(kgMobileSongPageUrl(specialId, i + 2, pageSize, activeHost))
+        kgFetchMobileJson(kgMobileSongPageUrl(specialId, i + 2, fetchSize, activeHost), 0)
       )),
     )
     for (const data of rest) {
@@ -2163,7 +2216,10 @@ async function kgFetchMobilePlaylistPages(specialId, { pageSize = 100, partial =
   }
 
   const flat = pageResults.flat()
-  const list = await enrichKgSongsCoversByAlbum(clearMatchingTrackCovers(flat, info.img || ''))
+  const list = await enrichKgSongsCoversByAlbum(
+    clearMatchingTrackCovers(flat, info.img || ''),
+    { concurrency: 12, deadlineMs: 8000 },
+  )
   const infoFinal = finalizePlaylistInfo(info, list)
   return {
     list,
@@ -2233,7 +2289,10 @@ async function kgPlaylistFromHtml(id) {
     }
     return mapKgSongItem(item)
   }).filter(s => s.hash || s.name)
-  const list = await enrichKgSongsCoversByAlbum(clearMatchingTrackCovers(mapped, info.img || ''))
+  const list = await enrichKgSongsCoversByAlbum(
+    clearMatchingTrackCovers(mapped, info.img || ''),
+    { concurrency: 12, deadlineMs: 8000 },
+  )
   const infoFinal = finalizePlaylistInfo(info, list)
   return { list, total: list.length, source: 'kg', info: infoFinal }
 }
@@ -2306,7 +2365,10 @@ async function kgPlaylistFromShareEmbed(extracted, options = {}) {
   }
   const mapped = songs.map(mapKgSongItem).filter((s) => s.hash || s.name)
   const total = parseInt(listinfo.count, 10) || mapped.length
-  const list = await enrichKgSongsCoversByAlbum(clearMatchingTrackCovers(mapped, info.img || ''))
+  const list = await enrichKgSongsCoversByAlbum(
+    clearMatchingTrackCovers(mapped, info.img || ''),
+    { concurrency: 12, deadlineMs: options.partial ? 1500 : 8000 },
+  )
   const infoFinal = finalizePlaylistInfo(info, list)
   const hasMore = total > list.length
   if (options.partial) {
@@ -2481,7 +2543,10 @@ async function kgPlaylistFromGid(globalCollectionId, options = {}) {
   const firstBatch = mapPageSongs(firstData)
   const total = parseInt(firstData.data?.count || firstData.data?.total, 10) || firstBatch.length
   if (options.partial) {
-    const list = await enrichKgSongsCoversByAlbum(clearMatchingTrackCovers(normalizeTracks(firstBatch), info.img || ''))
+    const list = await enrichKgSongsCoversByAlbum(
+      clearMatchingTrackCovers(normalizeTracks(firstBatch), info.img || ''),
+      { concurrency: 12, deadlineMs: 1500 },
+    )
     const infoFinal = finalizePlaylistInfo(info, list)
     const hasMore = total > firstBatch.length
     return {
@@ -2497,19 +2562,41 @@ async function kgPlaylistFromGid(globalCollectionId, options = {}) {
   const batches = [firstBatch]
   const pageKeys = new Set([firstBatch.map(s => s.albumAudioId || s.hash || s.id).join(',')])
   let begin = firstBatch.length
-  while (begin < total) {
-    const data = await kgFetchOtherListNofilt(globalCollectionId, { beginIdx: begin, pageSize })
-    const batch = mapPageSongs(data)
-    if (!batch.length) break
-    const pageKey = batch.map(s => s.albumAudioId || s.hash || s.id).join(',')
-    if (pageKeys.has(pageKey)) break
-    pageKeys.add(pageKey)
-    batches.push(batch)
-    begin += batch.length
+  // 已知总数时并行拉后续页，避免串行翻页拖慢大歌单
+  if (total > firstBatch.length && pageSize > 0) {
+    const starts = []
+    for (let i = firstBatch.length; i < total; i += pageSize) starts.push(i)
+    const rest = await Promise.all(
+      starts.map((beginIdx) => kgFetchOtherListNofilt(globalCollectionId, { beginIdx, pageSize }).catch(() => null)),
+    )
+    for (const data of rest) {
+      if (!data) continue
+      const batch = mapPageSongs(data)
+      if (!batch.length) continue
+      const pageKey = batch.map(s => s.albumAudioId || s.hash || s.id).join(',')
+      if (pageKeys.has(pageKey)) continue
+      pageKeys.add(pageKey)
+      batches.push(batch)
+      begin += batch.length
+    }
+  } else {
+    while (begin < total) {
+      const data = await kgFetchOtherListNofilt(globalCollectionId, { beginIdx: begin, pageSize })
+      const batch = mapPageSongs(data)
+      if (!batch.length) break
+      const pageKey = batch.map(s => s.albumAudioId || s.hash || s.id).join(',')
+      if (pageKeys.has(pageKey)) break
+      pageKeys.add(pageKey)
+      batches.push(batch)
+      begin += batch.length
+    }
   }
 
   const flat = batches.flat()
-  const list = await enrichKgSongsCoversByAlbum(clearMatchingTrackCovers(normalizeTracks(flat), info.img || ''))
+  const list = await enrichKgSongsCoversByAlbum(
+    clearMatchingTrackCovers(normalizeTracks(flat), info.img || ''),
+    { concurrency: 12, deadlineMs: 8000 },
+  )
   const infoFinal = finalizePlaylistInfo(info, list)
   const hasMore = begin < total
   const normalizedTotal = hasMore ? Math.max(list.length, total - (flat.length - list.length)) : list.length

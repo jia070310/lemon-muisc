@@ -1,5 +1,10 @@
 <template>
-  <div v-show="!showFullscreenPlayer" class="player-bar" ref="playerBarRef" :class="{ compact: isCompact }">
+  <div
+    v-show="!showFullscreenPlayer"
+    class="player-bar"
+    ref="playerBarRef"
+    :class="{ compact: isCompact, casting: !!dlnaCastingUdn }"
+  >
     <div v-if="visualizerEnabled" class="bar-spectrum">
       <SpectrumVisualizer mode="bar" :active="visualizerEnabled && !!currentPlaying && !showFullscreenPlayer" />
     </div>
@@ -116,8 +121,9 @@
         <input
           type="range"
           min="0"
-          :max="displayDuration || 1"
-          :value="progressDisplayTime"
+          step="any"
+          :max="Math.max(1, Number(displayDuration) || 1)"
+          :value="Number(progressDisplayTime) || 0"
           class="progress-slider"
           @input="onSeekInput"
           @change="onSeekCommit"
@@ -477,6 +483,12 @@
             type="button"
             @click="exitMoodListening"
           >退出心情试听</button>
+          <button
+            v-else-if="queueSource === 'podcast'"
+            class="btn-ghost btn-sm"
+            type="button"
+            @click="exitPodcastListening"
+          >退出播客试听</button>
           <button class="btn-ghost btn-sm" @click="clearQueue" :disabled="!playQueue.length">清空</button>
           <button class="btn-icon" @click="showQueuePanel = false">×</button>
         </div>
@@ -495,6 +507,7 @@
           </div>
           <div class="queue-actions">
             <button
+              v-if="queueSource !== 'podcast'"
               type="button"
               class="queue-action-btn queue-fav-btn"
               :class="{ active: isQueueFavorite(entry.item, entry.source) }"
@@ -519,7 +532,13 @@
           </div>
         </div>
       </div>
-      <div v-else class="queue-empty">{{ queueSource === 'mood' ? '心情试听为空，在情绪地图点击封面加入' : '列表为空，在搜索页点击 + 或试听添加歌曲' }}</div>
+      <div v-else class="queue-empty">{{
+        queueSource === 'mood'
+          ? '心情试听为空，在情绪地图点击封面加入'
+          : queueSource === 'podcast'
+            ? '播客试听为空，在播客页选择单集播放'
+            : '列表为空，在搜索页点击 + 或试听添加歌曲'
+      }}</div>
     </div>
 
     <PickPlaylistModal
@@ -531,7 +550,7 @@
     />
     <div
       v-if="showDlnaCast"
-      class="queue-panel card"
+      class="queue-panel dlna-cast-panel card"
       ref="dlnaPanelRef"
       @click.stop
     >
@@ -543,6 +562,7 @@
 <script setup>
 import {
   currentPlaying, isPaused, isBuffering, currentTime, displayDuration, volume, isMuted,
+  dlnaCastingUdn,
   coverUrl, coverStyle, currentLyricText, visualizerEnabled, showFullscreenPlayer,
   playQueue, currentQueueIndex, playMode, playModeLabel, showQueuePanel, playerError, playerNotice,
   queueSource, queuePanelTitle,
@@ -552,7 +572,7 @@ import {
   playNext, playPrev, togglePlayMode, resumeOrTogglePause, unlockAudioFromGesture,
   removeFromQueue,   clearQueue, playTrackAt, openFullscreenPlayer,
   currentLocalTrackPath, tryFillCoverFromNetwork, showPlayerNotice,
-  exitMoodQueueMode,
+  exitMoodQueueMode, exitPodcastQueueMode,
 } from '../stores/player.js'
 import { onMounted, onUnmounted, ref, computed, watch } from 'vue'
 import { cleanText, formatArtists } from '../utils/text.js'
@@ -720,6 +740,11 @@ function exitMoodListening() {
   showPlayerNotice('已恢复普通试听列表', 2500)
 }
 
+function exitPodcastListening() {
+  exitPodcastQueueMode({ restore: true })
+  showPlayerNotice('已恢复歌曲试听列表', 2500)
+}
+
 const SLEEP_STEPS = [0, 15, 30, 45, 60, 90]
 function cycleSleepTimer() {
   const cur = sleepTimerMinutes.value || 0
@@ -802,7 +827,8 @@ function updateMobilePlayer() {
 }
 
 watch(isCompact, (compact) => {
-  document.documentElement.style.setProperty('--player-height', compact ? '76px' : '64px')
+  // compact 两行：曲目行 + 全宽进度条
+  document.documentElement.style.setProperty('--player-height', compact ? '92px' : '64px')
   if (!compact) {
     showVolumePanel.value = false
     showMorePanel.value = false
@@ -820,7 +846,14 @@ const moreBtnTitle = computed(() => {
   const parts = ['更多']
   if (sleepTimerMinutes.value) parts.push(`定时 ${sleepTimerLeftLabel.value || sleepTimerMinutes.value + 'm'}`)
   if (currentLocalPath.value) parts.push('可编辑标签')
-  if (playQueue.value.length) parts.push(`${queueSource.value === 'mood' ? '心情' : '列表'} ${playQueue.value.length}`)
+  if (playQueue.value.length) {
+    const label = queueSource.value === 'mood'
+      ? '心情'
+      : queueSource.value === 'podcast'
+        ? '播客'
+        : '列表'
+    parts.push(`${label} ${playQueue.value.length}`)
+  }
   return parts.join(' · ')
 })
 
@@ -1795,6 +1828,9 @@ async function onQueuePlayClick(index) {
   border-radius: var(--radius-lg);
   overflow: hidden;
 }
+.queue-panel.dlna-cast-panel {
+  min-height: 280px;
+}
 .queue-header {
   display: flex;
   align-items: center;
@@ -1920,11 +1956,21 @@ async function onQueuePlayClick(index) {
 }
 
 .player-bar.compact {
-  padding: 8px 12px;
-  gap: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-areas:
+    'left center more'
+    'progress progress progress';
+  align-items: center;
+  height: auto;
+  min-height: var(--player-height);
+  padding: 8px 12px 6px;
+  gap: 4px 6px;
+  box-sizing: border-box;
 }
 
 .player-bar.compact .bar-left {
+  grid-area: left;
   flex: 1;
   width: auto;
   min-width: 0;
@@ -1996,14 +2042,16 @@ async function onQueuePlayClick(index) {
   opacity: 1;
 }
 
+/* 进度条已在 compact 显示时间，不再在左侧重复 */
 .player-bar.compact .player-time-mobile {
-  display: block;
+  display: none;
 }
 
 .player-bar.compact .bar-center {
+  grid-area: center;
   flex-shrink: 0;
   gap: 2px;
-  margin: 0 4px;
+  margin: 0;
 }
 
 .player-bar.compact .ctrl-main {
@@ -2020,17 +2068,41 @@ async function onQueuePlayClick(index) {
 
 .player-bar.compact .ctrl-sub[title="停止"],
 .player-bar.compact .ctrl-tag,
-.player-bar.compact .player-progress,
 .player-bar.compact .player-volume,
 .player-bar.compact .desktop-extra {
   display: none;
 }
-
+/* compact：bar-right 拆开，进度独占第二行全宽，右侧「更多」进第一行 */
 .player-bar.compact .bar-right {
-  flex: 0 0 auto;
-  width: auto;
-  margin-left: 0;
-  gap: 4px;
+  display: contents;
+}
+
+/* compact 也必须显示进度条（播客/投屏进度此前被 display:none 整段藏掉） */
+.player-bar.compact .player-progress {
+  grid-area: progress;
+  display: flex !important;
+  flex: none;
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  gap: 8px;
+  padding: 0 2px;
+}
+.player-bar.compact .player-progress .time-display {
+  display: inline !important;
+  font-size: 11px;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+.player-bar.compact .progress-slider {
+  min-width: 0;
+  flex: 1;
+  height: 5px;
+}
+
+.player-bar.compact .player-more.compact-only {
+  grid-area: more;
+  align-self: center;
 }
 
 .compact-only {
@@ -2133,6 +2205,9 @@ async function onQueuePlayClick(index) {
   width: 380px;
   max-width: calc(100vw - 32px);
   max-height: 420px;
+}
+.player-bar.compact .queue-panel.dlna-cast-panel {
+  min-height: 280px;
 }
 
 .player-bar.compact .queue-header {

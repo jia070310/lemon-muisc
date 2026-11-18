@@ -124,7 +124,11 @@ add('/auth/mail/test', 'post', '测试 SMTP', { tag: 'auth', admin: true, body: 
 
 // —— Settings ——
 add('/settings', 'get', '用户设置', { tag: 'settings' })
-add('/settings', 'put', '更新用户设置', { tag: 'settings', body: {} })
+add('/settings', 'put', '更新用户设置', {
+  tag: 'settings',
+  description: '白名单 key + 客户端命名空间 app.*（按用户隔离）。响应含 accepted / ignored；非白名单 key 不会静默假装成功。',
+  body: {},
+})
 add('/settings/global', 'get', '全局设置', { tag: 'settings', admin: true })
 add('/settings/ffmpeg', 'get', 'ffmpeg 状态', { tag: 'settings' })
 add('/settings/ffmpeg/detect', 'post', '检测 ffmpeg', { tag: 'settings' })
@@ -179,6 +183,10 @@ add('/source/fault', 'get', '最近一次音源故障（诊断用）', {
 add('/source/fault/dismiss', 'post', '清除故障记录', {
   tag: 'source',
   description: '清除 settings 中保存的最近音源故障记录（不再用于强制前端弹窗）。',
+})
+add('/source/health', 'get', '音源健康聚合', {
+  tag: 'source',
+  description: '各音源近期试听片段比例与平台级健康，供客户端避开异常源',
 })
 add('/source/health/report', 'post', '上报音源健康（试听片段检测）', {
   tag: 'source',
@@ -429,7 +437,10 @@ add('/library/artists', 'get', '歌手聚合', { tag: 'library', parameters: [q(
 add('/library/albums', 'get', '专辑聚合', { tag: 'library', parameters: [q('page', '页'), q('q', '搜索')] })
 add('/library/genres', 'get', '流派聚合', { tag: 'library' })
 add('/library/sync', 'post', '同步索引', { tag: 'library', body: {} })
-add('/library/sync-state', 'get', '曲库版本信号（updated 0/1，无扫盘）', { tag: 'library' })
+add('/library/sync-state', 'get', '曲库版本信号（updated 0/1，无扫盘）', {
+  tag: 'library',
+  description: '返回 revision / dirty / trackCount。索引变更也会通过 WS `library:index-changed` 推送。',
+})
 add('/library/scan-settings', 'get', '扫描设置', { tag: 'library' })
 add('/library/scan-settings', 'put', '更新扫描设置', { tag: 'library', body: {} })
 add('/library/scan-start', 'post', '开始扫描', { tag: 'library', body: {} })
@@ -447,8 +458,56 @@ add('/library/duplicates', 'get', '查重分组', { tag: 'library' })
 add('/library/delete-files', 'post', '删除文件', { tag: 'library', body: {} })
 add('/library/scan-fake-flac', 'post', '伪 FLAC 扫描', { tag: 'library', body: {} })
 add('/library/rename-file', 'post', '重命名文件（保留 trackId）', { tag: 'library', body: {} })
-add('/library/user-data', 'get', '用户库数据（收藏等）', { tag: 'library' })
-add('/library/user-data', 'put', '更新用户库数据', { tag: 'library', body: {} })
+add('/library/user-data', 'get', '用户库数据（收藏等）', {
+  tag: 'library',
+  description: '支持 ?sinceRevision=N（未变返回 unchanged:true）与 If-None-Match → 304。响应带 ETag。',
+  parameters: [q('sinceRevision', '客户端已知 revision；相等则 unchanged')],
+})
+add('/library/user-data', 'put', '更新用户库数据', {
+  tag: 'library',
+  description: [
+    '部分更新：传 playlists / favorites / recentPlays / playStats 等。',
+    '冲突：传 baseRevision（须等于服务端）或 revision（须大于服务端）；否则 409 + 服务端 data。',
+    '写入时对 favorites / recentPlays / playStats 做跨平台同曲归并。',
+  ].join('\n'),
+  body: {
+    schema: {
+      type: 'object',
+      properties: {
+        playlists: { type: 'array' },
+        favorites: { type: 'array' },
+        favoriteAlbums: { type: 'array' },
+        favoriteArtists: { type: 'array' },
+        recentPlays: { type: 'array' },
+        playStats: { type: 'array' },
+        revision: { type: 'integer', description: '期望写入的新 revision（须 > 服务端）' },
+        baseRevision: { type: 'integer', description: '基于的服务端 revision（乐观锁）' },
+      },
+    },
+  },
+  responses: {
+    '200': { description: '成功', content: { 'application/json': { schema: { $ref: '#/components/schemas/Ok' } } } },
+    '401': { description: '未登录', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
+    '409': {
+      description: 'revision 冲突，body 含 serverRevision 与 data',
+      content: { 'application/json': { schema: { type: 'object', additionalProperties: true } } },
+    },
+  },
+})
+add('/library/match-same-song', 'post', '跨平台同曲判定/归并', {
+  tag: 'library',
+  description: '传 { a, b } 判断是否同曲，或传 { tracks } 返回归并后的列表。口径：标题归一化+主唱+无 Live/remix 冲突+时长差≤5s。',
+  body: {
+    schema: {
+      type: 'object',
+      properties: {
+        a: { type: 'object' },
+        b: { type: 'object' },
+        tracks: { type: 'array', items: { type: 'object' } },
+      },
+    },
+  },
+})
 add('/library/playlists', 'get', '库内歌单', { tag: 'library' })
 add('/library/playlists', 'put', '更新库内歌单', { tag: 'library', body: {} })
 add('/library/organize', 'post', '整理/迁移文件', { tag: 'library', body: {} })

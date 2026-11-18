@@ -29,6 +29,13 @@ import { ensureApePlayWav } from '../utils/apePlay.js'
 import { buildMusicCdnHeaders } from '../utils/musicCdnHeaders.js'
 import { ensureSmoothPlayAac, canSmoothOrRepairTranscode, warmSmoothPlayAac } from '../utils/smoothPlay.js'
 import { ensureDlnaPlayMp3 } from '../utils/dlnaTranscode.js'
+import {
+  getDlnaCastSlot,
+  fetchCastCoverBuffer,
+  resolveCastRemoteUrl,
+  openCastLiveMp3,
+  estimateMp3Bytes,
+} from '../utils/dlnaCastMedia.js'
 import { isPlatformEnabled } from '../utils/enabledPlatforms.js'
 import { AVAILABLE_SOURCES } from '../musicSdk.js'
 import { getEpisodeForUser } from '../utils/podcastStore.js'
@@ -380,26 +387,33 @@ function resolveStreamLocalFile(req) {
   return ''
 }
 
-function applyDlnaStreamHeaders(res, mime) {
+function applyDlnaStreamHeaders(res, mime, { seekable = true, durationSec = 0 } = {}) {
   const m = String(mime || 'audio/mpeg').split(';')[0].trim() || 'audio/mpeg'
   let pn = 'MP3'
   if (/mp4|aac|m4a/i.test(m)) pn = 'AAC_ISO'
   else if (/flac/i.test(m)) pn = 'FLAC'
   else if (/wav|lpcm/i.test(m)) pn = 'LPCM'
+  const op = seekable ? '01' : '00'
   res.setHeader('transferMode.dlna.org', 'Streaming')
   res.setHeader('realTimeInfo.dlna.org', 'DLNA.ORG_TLAG=*')
   res.setHeader(
     'contentFeatures.dlna.org',
-    `DLNA.ORG_PN=${pn};DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000`,
+    `DLNA.ORG_PN=${pn};DLNA.ORG_OP=${op};DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000`,
   )
+  const dur = Number(durationSec) || 0
+  if (dur > 1) {
+    // 部分电视（含小米）用 NPT 范围推断总时长
+    res.setHeader('TimeSeekRange.dlna.org', `npt=0.000-${dur.toFixed(3)}`)
+    res.setHeader('X-Content-Duration', String(Math.floor(dur)))
+  }
 }
 
 function wantsDlnaHeaders(req) {
   const ua = String(req.headers['user-agent'] || '')
   const url = String(req.originalUrl || req.url || '')
   if (String(req.query?.dlna || '') === '1') return true
-  if (/dlna\.mp3|proxy\.mp3/i.test(url)) return true
-  return /DLNA|UPnP|Intel Micro|Portable SDK|Linux\/.*UPnP| Lavf|ffmpeg/i.test(ua)
+  if (/dlna\.mp3|proxy\.mp3|\/play\/cast\//i.test(url)) return true
+  return /DLNA|UPnP|Intel Micro|Portable SDK|Linux\/.*UPnP| Lavf|ffmpeg|MiTV|hyperDLNA|AirKan/i.test(ua)
 }
 
 function applyRangeOrFull(res, req, filePath, mime) {
@@ -594,6 +608,171 @@ async function localDlnaMp3Handler(req, res) {
 playRouter.get('/dlna.mp3', localDlnaMp3Handler)
 playRouter.head('/dlna.mp3', localDlnaMp3Handler)
 
+/** DLNA 短链音频：/api/play/cast/:id/audio.mp3 */
+async function castAudioHandler(req, res) {
+  try {
+    const id = String(req.params.id || '').replace(/\.mp3$/i, '')
+    const slot = getDlnaCastSlot(id)
+    if (!slot) return res.status(404).json({ error: '投屏媒体不存在或已过期' })
+    if (slot.userId && req.user?.id && slot.userId !== req.user.id && !req.streamTicket) {
+      return res.status(403).json({ error: '无权访问该投屏媒体' })
+    }
+
+    if (slot.preparedMp3 && fs.existsSync(slot.preparedMp3)) {
+      return applyRangeOrFull(res, req, slot.preparedMp3, 'audio/mpeg')
+    }
+    if (slot.localPath) {
+      const resolved = path.resolve(mapToContainerPath(slot.localPath) || slot.localPath)
+      const exists = fs.existsSync(resolved) ? resolved : path.resolve(slot.localPath)
+      if (!fs.existsSync(exists)) return res.status(404).json({ error: '本地文件不存在' })
+      let out = exists
+      if (path.extname(exists).toLowerCase() !== '.mp3') {
+        out = await ensureDlnaPlayMp3(exists)
+      }
+      return applyRangeOrFull(res, req, out, 'audio/mpeg')
+    }
+
+    const remote = resolveCastRemoteUrl(slot)
+    if (!remote || !isAllowedRemoteUrl(remote)) {
+      return res.status(404).json({ error: '远程音频不可用' })
+    }
+
+    const needLive = Boolean(slot.needsLiveTranscode)
+      || !/\.mp3(\?|#|$)/i.test(remote)
+
+    // 非 MP3（播客 m4a 等）：ffmpeg 实时转 MP3，避免投送前整集转码超时
+    if (needLive && !(slot.preparedMp3 && fs.existsSync(slot.preparedMp3))) {
+      const durSec = Number(slot.durationSec) || 0
+      const estBytes = estimateMp3Bytes(durSec)
+      const setLiveHeaders = () => {
+        res.setHeader('Content-Type', 'audio/mpeg')
+        res.setHeader('Accept-Ranges', 'none')
+        res.setHeader('Cache-Control', 'private, no-cache')
+        // 估算长度：小米对无 Content-Length 的流会把总时长显示成 00:00
+        if (estBytes > 0) res.setHeader('Content-Length', estBytes)
+        applyDlnaStreamHeaders(res, 'audio/mpeg', { seekable: false, durationSec: durSec })
+      }
+      if (req.method === 'HEAD') {
+        setLiveHeaders()
+        return res.status(200).end()
+      }
+      const child = await openCastLiveMp3(remote)
+      setLiveHeaders()
+      res.setHeader('Connection', 'close')
+      const stop = () => {
+        try { child.kill('SIGKILL') } catch {}
+      }
+      req.on('close', stop)
+      res.on('close', stop)
+      child.on('error', (err) => {
+        logPlayError('cast-live', req, err, { status: 500 })
+        if (!res.headersSent) res.status(500).json({ error: formatUserError(err, '投屏转码失败') })
+        else try { res.destroy() } catch {}
+      })
+      // Content-Length 为估算值：实际流可能略短/略长，读完后正常结束即可
+      child.stdout.pipe(res)
+      return
+    }
+
+    // 透传远程 MP3（带 Range）
+    if (activePlayProxies >= MAX_PLAY_PROXIES) {
+      return res.status(503).json({ error: '播放服务繁忙，请稍后重试' })
+    }
+    activePlayProxies++
+    let released = false
+    const releaseProxy = () => {
+      if (released) return
+      released = true
+      activePlayProxies = Math.max(0, activePlayProxies - 1)
+    }
+    const headers = buildMusicCdnHeaders(slot.source || '', req.headers.range ? { Range: req.headers.range } : {})
+    const upstream = needle.get(remote, {
+      follow_max: 5,
+      headers,
+      parse_response: false,
+      open_timeout: PLAY_PROXY_OPEN_TIMEOUT_MS,
+      response_timeout: PLAY_PROXY_RESPONSE_TIMEOUT_MS,
+      read_timeout: PLAY_PROXY_READ_TIMEOUT_MS,
+    })
+    const abortUpstream = () => {
+      try { upstream.request?.abort?.() } catch {}
+      releaseProxy()
+    }
+    req.on('close', abortUpstream)
+    res.on('close', abortUpstream)
+    upstream.on('header', (statusCode, respHeaders) => {
+      if (statusCode >= 400) {
+        if (!res.headersSent) res.status(statusCode).json({ error: '远程音频不可用' })
+        abortUpstream()
+        return
+      }
+      const rawMime = respHeaders['content-type']?.split(';')[0]?.trim() || ''
+      if (isNonAudioContentType(rawMime)) {
+        if (!res.headersSent) res.status(502).json({ error: '远程音频返回了非音频内容' })
+        abortUpstream()
+        return
+      }
+      res.setHeader('Content-Type', 'audio/mpeg')
+      res.setHeader('Accept-Ranges', 'bytes')
+      res.setHeader('Cache-Control', 'private, no-cache')
+      if (wantsDlnaHeaders(req)) applyDlnaStreamHeaders(res, 'audio/mpeg')
+      if (respHeaders['content-length']) res.setHeader('Content-Length', respHeaders['content-length'])
+      if (statusCode === 206 && respHeaders['content-range']) {
+        res.status(206)
+        res.setHeader('Content-Range', respHeaders['content-range'])
+      }
+      if (req.method === 'HEAD') {
+        if (!res.headersSent) res.status(statusCode >= 200 && statusCode < 400 ? statusCode : 200)
+        res.end()
+        abortUpstream()
+      }
+    })
+    upstream.on('err', (err) => {
+      if (!res.headersSent) res.status(502).json({ error: formatUserError(err, '音频流传输失败') })
+      abortUpstream()
+    })
+    if (req.method !== 'HEAD') upstream.pipe(res)
+  } catch (e) {
+    logPlayError('cast-audio', req, e, { status: 500 })
+    if (!res.headersSent) res.status(500).json({ error: formatUserError(e, '投屏音频失败') })
+  }
+}
+
+async function castCoverHandler(req, res) {
+  try {
+    const id = String(req.params.id || '')
+    const slot = getDlnaCastSlot(id)
+    if (!slot?.coverUrl) return res.status(404).json({ error: '无封面' })
+    const got = await fetchCastCoverBuffer(slot.coverUrl)
+    if (!got?.buf?.length) return res.status(404).json({ error: '封面不可用' })
+    res.setHeader('Content-Type', got.type || 'image/jpeg')
+    res.setHeader('Cache-Control', 'private, max-age=3600')
+    res.setHeader('Content-Length', got.buf.length)
+    if (req.method === 'HEAD') return res.status(200).end()
+    res.end(got.buf)
+  } catch (e) {
+    if (!res.headersSent) res.status(500).json({ error: formatUserError(e, '封面加载失败') })
+  }
+}
+
+const MAX_PLAY_PROXIES = 8
+let activePlayProxies = 0
+
+const PLAY_PROXY_OPEN_TIMEOUT_MS = 8000
+const PLAY_PROXY_RESPONSE_TIMEOUT_MS = 15000
+const PLAY_PROXY_READ_TIMEOUT_MS = 30000
+const NON_AUDIO_CONTENT_TYPE_RE = /^(text\/html|text\/plain|application\/json|application\/xml|text\/xml)$/i
+
+/** 上游返回 HTML/JSON 等错误页时视为不可播放，避免把错误页 pipe 给播放器 */
+function isNonAudioContentType(contentType) {
+  return NON_AUDIO_CONTENT_TYPE_RE.test(String(contentType || '').split(';')[0].trim())
+}
+
+playRouter.get('/cast/:id/audio.mp3', castAudioHandler)
+playRouter.head('/cast/:id/audio.mp3', castAudioHandler)
+playRouter.get('/cast/:id/cover.jpg', castCoverHandler)
+playRouter.head('/cast/:id/cover.jpg', castCoverHandler)
+
 /** 预热下一首 AAC 缓存，减轻连播首卡 */
 playRouter.post('/smooth-warmup', async (req, res) => {
   try {
@@ -608,19 +787,6 @@ playRouter.post('/smooth-warmup', async (req, res) => {
     res.status(500).json({ error: formatUserError(e, '流畅播放预热失败') })
   }
 })
-
-const MAX_PLAY_PROXIES = 8
-let activePlayProxies = 0
-
-const PLAY_PROXY_OPEN_TIMEOUT_MS = 8000
-const PLAY_PROXY_RESPONSE_TIMEOUT_MS = 15000
-const PLAY_PROXY_READ_TIMEOUT_MS = 30000
-const NON_AUDIO_CONTENT_TYPE_RE = /^(text\/html|text\/plain|application\/json|application\/xml|text\/xml)$/i
-
-/** 上游返回 HTML/JSON 等错误页时视为不可播放，避免把错误页 pipe 给播放器 */
-function isNonAudioContentType(contentType) {
-  return NON_AUDIO_CONTENT_TYPE_RE.test(String(contentType || '').split(';')[0].trim())
-}
 
 function playProxyHandler(req, res) {
   if (activePlayProxies >= MAX_PLAY_PROXIES) {
@@ -682,7 +848,10 @@ function playProxyHandler(req, res) {
       return
     }
     const mime = rawMime || guessMimeFromUrl(url)
-    const outMime = /proxy\.mp3/i.test(String(req.originalUrl || req.url || '')) ? 'audio/mpeg' : mime
+    // proxy.mp3 仅在上游确实是 mp3/mpeg 时宣称 audio/mpeg；否则沿用真实类型（播客 m4a 等）
+    const forceMp3Name = /proxy\.mp3/i.test(String(req.originalUrl || req.url || ''))
+    const looksMpeg = /mpeg|mp3/i.test(mime) || /\.mp3(\?|#|$)/i.test(String(url))
+    const outMime = forceMp3Name && looksMpeg ? 'audio/mpeg' : (mime || 'audio/mpeg')
     res.setHeader('Content-Type', outMime)
     res.setHeader('Accept-Ranges', 'bytes')
     res.setHeader('Cache-Control', 'private, no-cache')

@@ -610,6 +610,7 @@
       @cancel="cancelAppDialog"
       @update:input-value="setAppDialogInput"
     />
+    <div v-if="globalToast" class="global-toast" :class="globalToast.type">{{ globalToast.text }}</div>
   </div>
 </template>
 
@@ -665,6 +666,7 @@ import {
   cancelAppDialog,
   setAppDialogInput,
 } from './stores/appDialog.js'
+import { toast as globalToast } from './stores/toast.js'
 import {
   noActiveSourcePrompt,
   clearNoActiveSourcePrompt,
@@ -2498,5 +2500,28 @@ onUnmounted(() => {
   color: var(--text);
   max-width: min(560px, calc(100vw - 32px));
   text-align: center;
+}
+
+.global-toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(88px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  z-index: 1400;
+  max-width: min(420px, calc(100vw - 32px));
+  padding: 10px 16px;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.4;
+  box-shadow: 0 10px 28px color-mix(in srgb, #000 28%, transparent);
+  pointer-events: none;
+}
+.global-toast.success { background: var(--success, #16a34a); color: #fff; }
+.global-toast.error { background: var(--error, #dc2626); color: #fff; }
+.global-toast.warning { background: var(--warning, #e6a23c); color: #fff; }
+.global-toast.info {
+  background: var(--bg-card, #1f2937);
+  border: 1px solid var(--border, #374151);
+  color: var(--text, #fff);
 }
 </style>

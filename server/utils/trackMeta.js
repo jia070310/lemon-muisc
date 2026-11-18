@@ -307,6 +307,32 @@ export async function fetchTrackCover({
     }
   }
 
+  // 网易：歌单清理同图封面后常缺 picUrl；走官方歌曲详情，避免用户音源 pic 卡 30s
+  if (!candidates.length && src === 'wy') {
+    const sid = merged.songId || merged.songmid || merged.musicId || merged.id
+    if (sid) {
+      try {
+        const { default: needle } = await import('needle')
+        const body = `c=${encodeURIComponent(JSON.stringify([{ id: String(sid) }]))}`
+        const resp = await needle('post', 'https://music.163.com/api/v3/song/detail', body, {
+          headers: {
+            Referer: 'https://music.163.com',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+          parse_response: false,
+          timeout: 10000,
+        })
+        const text = Buffer.isBuffer(resp.body) ? resp.body.toString('utf8') : String(resp.body || '')
+        const json = JSON.parse(text.replace(/^\uFEFF/, '').trim() || '{}')
+        let pic = String(json?.songs?.[0]?.al?.picUrl || '').trim()
+        if (pic.startsWith('//')) pic = `https:${pic}`
+        if (/^http:\/\//i.test(pic)) pic = `https://${pic.slice(7)}`
+        if (/^https:\/\//i.test(pic)) candidates.push(pic)
+      } catch {}
+    }
+  }
+
   if (asBuffer) {
     for (const url of candidates) {
       const pic = await fetchPicBuffer(url)

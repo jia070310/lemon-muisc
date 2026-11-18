@@ -22,14 +22,18 @@ export const dlnaRouter = Router()
 dlnaRouter.get('/devices', async (req, res) => {
   try {
     const refresh = String(req.query.refresh || '') === '1'
-    const devices = refresh ? await discoverDlnaDevices() : listCachedDevices()
+    const devices = refresh
+      ? await discoverDlnaDevices({ timeoutMs: 4200 })
+      : listCachedDevices()
     if (!devices.length && !refresh) {
-      const found = await discoverDlnaDevices()
+      const found = await discoverDlnaDevices({ timeoutMs: 4200 })
       return res.json({ ok: true, data: found, advertisedBase: getAdvertisedBaseUrl(req) })
     }
     res.json({ ok: true, data: devices, advertisedBase: getAdvertisedBaseUrl(req) })
   } catch (e) {
-    res.status(500).json({ error: e.message || '搜索 DLNA 设备失败。Docker 需使用 host 网络才能发现电视/音箱。' })
+    res.status(500).json({
+      error: e.message || '搜索 DLNA 设备失败。请确认与电视同一局域网；Docker 需 host 网络；Windows 请暂时关闭 VPN 后再搜。',
+    })
   }
 })
 
@@ -64,8 +68,12 @@ dlnaRouter.post('/play', async (req, res) => {
     res.json({ ok: true, ...result, serverOwned: true, session })
   } catch (e) {
     const status = Number(e.status) || 400
+    const raw = String(e.message || e || '')
+    const error = raw && /[\u4e00-\u9fff]/.test(raw)
+      ? raw
+      : (raw ? `投屏失败：${raw.slice(0, 160)}` : '投屏失败，请稍后重试')
     res.status(status >= 400 && status < 600 ? status : 400).json({
-      error: e.message || '投屏失败',
+      error,
       code: e.code,
     })
   }

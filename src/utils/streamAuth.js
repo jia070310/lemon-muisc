@@ -1,10 +1,17 @@
 import { getToken } from './auth.js'
 
-const STREAM_PREFIXES = ['/api/play/', '/api/tag/cover', '/api/v1/play/', '/api/v1/tag/cover']
+const STREAM_PREFIXES = [
+  '/api/play/',
+  '/api/tag/cover',
+  '/api/v1/play/',
+  '/api/v1/tag/cover',
+]
 
 export function needsStreamAuth(url) {
   if (!url) return false
-  return STREAM_PREFIXES.some((prefix) => String(url).includes(prefix))
+  const s = String(url)
+  if (/\/api\/(?:v1\/)?podcasts\/[^/?#]+\/cover(?:\?|#|$)/i.test(s)) return true
+  return STREAM_PREFIXES.some((prefix) => s.includes(prefix))
 }
 
 export function stripStreamAuth(url) {

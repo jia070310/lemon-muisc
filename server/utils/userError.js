@@ -89,8 +89,8 @@ const RULES = [
     message: '资源不存在或链接已失效',
   },
   {
-    test: /HTTP\s*429|statusCode[:\s]*429|\b429\b/i,
-    message: '请求过于频繁，请稍后再试',
+    test: /托管站(?:\/代理)?限流|HTTP\s*429|statusCode[:\s]*429|\b429\b/i,
+    message: '托管站限流，请稍后再试；也可浏览器打开链接另存为 .js 后本地导入',
   },
   {
     test: /HTTP\s*5\d{2}|statusCode[:\s]*5\d{2}/i,

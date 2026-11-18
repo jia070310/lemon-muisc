@@ -415,7 +415,7 @@ export function showPlayerNotice(text, ms = 10000) {
 /** 试听列表 @type {import('vue').Ref<Array<{ key: string, item: object, source: string }>>} */
 export const playQueue = ref([])
 export const currentQueueIndex = ref(-1)
-/** 当前列表来源：main=普通试听，mood=心情地图试听（互不混用） */
+/** 当前列表来源：main=普通试听，mood=心情地图，podcast=播客（互不混用） */
 export const queueSource = ref('main')
 /**
  * 动态歌单模式：当前播放列表是否绑定「漫游歌单」
@@ -427,13 +427,18 @@ export const activeDynamicList = ref(null)
 export const playMode = ref('list')
 export const showQueuePanel = ref(false)
 
-export const queuePanelTitle = computed(() => (
-  queueSource.value === 'mood' ? '心情试听' : '试听列表'
-))
+export const queuePanelTitle = computed(() => {
+  if (queueSource.value === 'mood') return '心情试听'
+  if (queueSource.value === 'podcast') return '播客试听'
+  return '试听列表'
+})
 
 const PARKED_MAIN_QUEUE_KEY = 'lx-music-nas:play-queue-main-parked'
+const PARKED_PODCAST_QUEUE_KEY = 'lx-music-nas:play-queue-podcast-parked'
 /** @type {null | { queue: any[], index: number, history: number[] }} */
 let parkedMainQueue = null
+/** @type {null | { queue: any[], index: number, history: number[] }} */
+let parkedPodcastQueue = null
 
 function cloneQueueEntries(list) {
   return (list || []).map((e) => ({
@@ -441,6 +446,11 @@ function cloneQueueEntries(list) {
     source: e.source,
     item: e.item ? { ...e.item } : e.item,
   }))
+}
+
+function isPodcastItem(item, source = '') {
+  const src = String(source || item?.source || '')
+  return src === 'podcast' || Boolean(item?.podcastEpisodeId)
 }
 
 function persistParkedMainQueue() {
@@ -483,19 +493,92 @@ function loadParkedMainQueue() {
   }
 }
 
-/** 进入心情试听：暂存普通列表，改用独立心情列表 */
-export function enterMoodQueueMode() {
-  if (queueSource.value === 'mood') return
+function persistParkedPodcastQueue() {
+  try {
+    if (!parkedPodcastQueue) {
+      localStorage.removeItem(PARKED_PODCAST_QUEUE_KEY)
+      return
+    }
+    localStorage.setItem(PARKED_PODCAST_QUEUE_KEY, JSON.stringify({
+      queue: parkedPodcastQueue.queue.map((e) => ({
+        key: e.key,
+        source: e.source,
+        item: pickItemFields(e.item, e.key),
+      })),
+      index: parkedPodcastQueue.index,
+      history: parkedPodcastQueue.history || [],
+    }))
+  } catch {}
+}
+
+function loadParkedPodcastQueue() {
+  if (parkedPodcastQueue) return parkedPodcastQueue
+  try {
+    const raw = localStorage.getItem(PARKED_PODCAST_QUEUE_KEY)
+    if (!raw) return null
+    const data = JSON.parse(raw)
+    if (!Array.isArray(data?.queue)) return null
+    parkedPodcastQueue = {
+      queue: data.queue.filter((e) => e?.key && e?.item?.name).map((e) => ({
+        key: e.key,
+        source: e.source || e.item?.source || 'podcast',
+        item: e.item,
+      })),
+      index: typeof data.index === 'number' ? data.index : -1,
+      history: Array.isArray(data.history) ? data.history : [],
+    }
+    return parkedPodcastQueue
+  } catch {
+    return null
+  }
+}
+
+function parkCurrentAsMain() {
   parkedMainQueue = {
     queue: cloneQueueEntries(playQueue.value),
     index: currentQueueIndex.value,
     history: [...playHistory],
   }
   persistParkedMainQueue()
+}
+
+function parkCurrentAsPodcast() {
+  parkedPodcastQueue = {
+    queue: cloneQueueEntries(playQueue.value),
+    index: currentQueueIndex.value,
+    history: [...playHistory],
+  }
+  persistParkedPodcastQueue()
+}
+
+function applyQueueSnapshot(snap) {
+  playQueue.value = cloneQueueEntries(snap?.queue || [])
+  playHistory = Array.isArray(snap?.history) ? [...snap.history] : []
+  currentQueueIndex.value = Math.min(
+    typeof snap?.index === 'number' ? snap.index : -1,
+    Math.max(-1, playQueue.value.length - 1),
+  )
+}
+
+function clearActiveQueueMeta() {
   playQueue.value = []
   playHistory = []
   currentQueueIndex.value = -1
   activeDynamicList.value = null
+}
+
+function stopMoodRadioQuiet() {
+  import('./moodRadio.js').then((m) => { try { m.stopMoodRadio() } catch {} }).catch(() => {})
+}
+
+/** 进入心情试听：暂存普通列表，改用独立心情列表 */
+export function enterMoodQueueMode() {
+  if (queueSource.value === 'mood') return
+  if (queueSource.value === 'podcast') {
+    exitPodcastQueueMode({ restore: true })
+  }
+  parkCurrentAsMain()
+  clearActiveQueueMeta()
   queueSource.value = 'mood'
   saveQueueState({ immediate: true })
 }
@@ -509,22 +592,77 @@ export function exitMoodQueueMode({ restore = true } = {}) {
   queueSource.value = 'main'
   if (!wasMood && !snap) return
   if (restore && snap) {
-    playQueue.value = cloneQueueEntries(snap.queue)
-    playHistory = Array.isArray(snap.history) ? [...snap.history] : []
-    currentQueueIndex.value = Math.min(
-      snap.index,
-      Math.max(-1, playQueue.value.length - 1),
-    )
+    applyQueueSnapshot(snap)
   } else if (wasMood) {
-    playQueue.value = []
-    playHistory = []
-    currentQueueIndex.value = -1
+    clearActiveQueueMeta()
   }
   saveQueueState({ immediate: true })
 }
 
 export function isMoodQueueMode() {
   return queueSource.value === 'mood'
+}
+
+/** 进入播客试听：暂存歌曲列表，改用独立播客列表 */
+export function enterPodcastQueueMode() {
+  if (queueSource.value === 'podcast') return
+  if (queueSource.value === 'mood') {
+    stopMoodRadioQuiet()
+    exitMoodQueueMode({ restore: true })
+  }
+  parkCurrentAsMain()
+  const snap = parkedPodcastQueue || loadParkedPodcastQueue()
+  parkedPodcastQueue = null
+  persistParkedPodcastQueue()
+  activeDynamicList.value = null
+  if (snap?.queue?.length) {
+    applyQueueSnapshot(snap)
+  } else {
+    clearActiveQueueMeta()
+  }
+  queueSource.value = 'podcast'
+  saveQueueState({ immediate: true })
+}
+
+/** 退出播客试听：暂存播客列表，恢复歌曲试听列表 */
+export function exitPodcastQueueMode({ restore = true } = {}) {
+  const wasPodcast = queueSource.value === 'podcast'
+  if (wasPodcast) {
+    parkCurrentAsPodcast()
+  }
+  const snap = parkedMainQueue || loadParkedMainQueue()
+  parkedMainQueue = null
+  persistParkedMainQueue()
+  queueSource.value = 'main'
+  if (!wasPodcast && !snap) return
+  if (restore && snap) {
+    applyQueueSnapshot(snap)
+  } else if (wasPodcast) {
+    clearActiveQueueMeta()
+  }
+  saveQueueState({ immediate: true })
+}
+
+export function isPodcastQueueMode() {
+  return queueSource.value === 'podcast'
+}
+
+/** 按曲目类型切入对应试听列表（歌曲 / 播客 / 心情互斥） */
+function ensureQueueModeForItem(item, source, { mood = false } = {}) {
+  if (mood) {
+    enterMoodQueueMode()
+    return
+  }
+  if (isPodcastItem(item, source)) {
+    enterPodcastQueueMode()
+    return
+  }
+  if (queueSource.value === 'podcast') {
+    exitPodcastQueueMode({ restore: true })
+  } else if (queueSource.value === 'mood') {
+    stopMoodRadioQuiet()
+    exitMoodQueueMode({ restore: true })
+  }
 }
 
 
@@ -592,8 +730,92 @@ export function setSleepTimer(minutes) {
 
 let audio = null
 
+/** 播客播放进度：节流上报服务端，跨端续听 */
+let lastPodcastProgressSaveAt = 0
+let podcastProgressRestoreToken = 0
+
+function getPodcastEpisodeId(track) {
+  if (!track) return ''
+  if (track.podcastEpisodeId) return String(track.podcastEpisodeId)
+  if (track.source === 'podcast' && track.id) return String(track.id)
+  const key = String(track.key || '')
+  if (key.startsWith('podcast:')) return key.slice('podcast:'.length)
+  return ''
+}
+
+function flushPodcastProgress({ completed = false, force = false, reset = false } = {}) {
+  const track = currentPlaying.value
+  const episodeId = getPodcastEpisodeId(track)
+  if (!episodeId) return
+  // 投屏时本机 audio 已暂停，进度以 currentTime（跟随电视）为准
+  const live = Number(audio?.currentTime)
+  const positionSec = dlnaCastingUdn.value
+    ? (Number(currentTime.value) || 0)
+    : (Number.isFinite(live) ? live : (Number(currentTime.value) || 0))
+  const durationSec = Number(duration.value)
+    || Number(displayDuration.value)
+    || Number(audio?.duration)
+    || Number(track?.duration)
+    || 0
+  // 开播即记一条历史；之后有实际进度再更新
+  if (!force && !completed && !reset && positionSec < 1 && lastPodcastProgressSaveAt) return
+  lastPodcastProgressSaveAt = Date.now()
+  api.podcasts.saveProgress({
+    episodeId,
+    positionSec,
+    durationSec,
+    completed: Boolean(completed),
+    reset: Boolean(reset),
+  }).catch(() => {})
+}
+
+/**
+ * 开播时写入/刷新播放历史。
+ * - resumeSec>0：按续播点上报，避免 audio 尚未 seek 时用 0 覆盖旧进度
+ * - reset：重新播放，允许进度回退到 0
+ */
+function touchPodcastHistory(track, { resumeSec = 0, reset = false } = {}) {
+  const episodeId = getPodcastEpisodeId(track)
+  if (!episodeId) return
+  const live = Number(audio?.currentTime)
+  const fromAudio = Number.isFinite(live) ? live : 0
+  const positionSec = reset
+    ? 0
+    : Math.max(Number(resumeSec) || 0, fromAudio, Number(currentTime.value) || 0)
+  lastPodcastProgressSaveAt = Date.now()
+  api.podcasts.saveProgress({
+    episodeId,
+    positionSec,
+    durationSec: Number(audio?.duration) || Number(track?.duration) || 0,
+    completed: false,
+    reset: Boolean(reset),
+  }).catch(() => {})
+}
+
+async function restorePodcastProgress(track) {
+  const episodeId = getPodcastEpisodeId(track)
+  if (!episodeId) return
+  const token = ++podcastProgressRestoreToken
+  try {
+    const res = await api.podcasts.getProgress(episodeId)
+    if (token !== podcastProgressRestoreToken) return
+    const data = res?.data
+    if (!data || data.completed) return
+    const pos = Number(data.positionSec) || 0
+    if (pos < 5) return
+    const dur = Number(audio?.duration) || Number(data.durationSec) || Number(track?.duration) || 0
+    if (dur > 0 && pos >= dur * 0.92) return
+    if (!audio || getPodcastEpisodeId(currentPlaying.value) !== episodeId) return
+    seekTo(pos)
+  } catch {}
+}
+
 /** 音频元素实时进度（逐字扫光用，比 timeupdate 更密） */
 export function peekPlaybackTime() {
+  if (dlnaCastingUdn.value) {
+    const cast = Number(currentTime.value)
+    return Number.isFinite(cast) ? cast : 0
+  }
   const live = audio?.currentTime
   if (Number.isFinite(live)) return live
   const fallback = Number(currentTime.value)
@@ -1405,6 +1627,9 @@ function bindAudioElementEvents(el) {
       lastSessionSave = now
       saveQueueState()
     }
+    if (getPodcastEpisodeId(currentPlaying.value) && now - lastPodcastProgressSaveAt > 5000) {
+      flushPodcastProgress()
+    }
   })
   el.addEventListener('loadedmetadata', () => {
     if (audio !== el) return
@@ -1422,12 +1647,18 @@ function bindAudioElementEvents(el) {
     maybeWarnPreviewClip(currentPlaying.value, currentPlaying.value?.source)
   })
   el.addEventListener('waiting', () => {
-    if (audio !== el || isPaused.value) return
+    if (audio !== el || isPaused.value || dlnaCastingUdn.value) return
     if (!audio.paused) beginPlaybackBuffer()
   })
   el.addEventListener('pause', () => {
     if (audio !== el) return
     clearPlayStatTick()
+    if (getPodcastEpisodeId(currentPlaying.value)) flushPodcastProgress()
+    // 投屏中本机 pause 是预期行为，勿把「电视在播」的 UI 打成暂停，也勿干扰投屏进度钟
+    if (dlnaCastingUdn.value) {
+      endPlaybackBuffer()
+      return
+    }
     if (isPaused.value) {
       endPlaybackBuffer()
       syncMediaSessionPlaybackState()
@@ -1445,7 +1676,10 @@ function bindAudioElementEvents(el) {
     syncMediaSessionPosition()
   })
   el.addEventListener('ended', () => {
-    if (audio === el && !dlnaCastingUdn.value) onTrackEnded()
+    if (audio === el && !dlnaCastingUdn.value) {
+      if (getPodcastEpisodeId(currentPlaying.value)) flushPodcastProgress({ completed: true })
+      onTrackEnded()
+    }
   })
   el.addEventListener('error', () => {
     if (audio !== el) return
@@ -1657,6 +1891,38 @@ export async function unlockAudioFromGestureAsync() {
 
 function hasPlayableAudioSrc() {
   return Boolean(audio && hasMediaSrc)
+}
+
+function normalizePlayStreamRel(rawUrl) {
+  const raw = stripStreamAuth(String(rawUrl || ''))
+  if (!raw || /^(blob:|data:)/i.test(raw)) return ''
+  try {
+    const u = new URL(raw, typeof window !== 'undefined' ? window.location.origin : 'http://local')
+    if (!/\/api\/(?:v1\/)?play\//i.test(u.pathname)) return ''
+    u.searchParams.delete('token')
+    u.searchParams.delete('ticket')
+    const path = u.pathname.replace(/^\/api\/v1\//i, '/api/')
+    const qs = []
+    u.searchParams.forEach((value, key) => {
+      qs.push(`${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+    })
+    return `${path}${qs.length ? `?${qs.join('&')}` : ''}`
+  } catch {
+    return ''
+  }
+}
+
+/** 当前本机可投屏的流路径（/api/play/…）；blob 预缓存时回退到取链缓存 */
+export function getCurrentPlayStreamRel() {
+  if (audio && hasMediaSrc) {
+    const fromAudio = normalizePlayStreamRel(audio.src)
+    if (fromAudio) return fromAudio
+  }
+  const item = currentPlaying.value
+  if (!item) return ''
+  const source = currentPlayPlatform.value || item.source || ''
+  const quality = currentPlayQuality.value || getPlayQuality() || '128k'
+  return normalizePlayStreamRel(getCachedPlayUrl(item, source, quality))
 }
 
 function resolveQueueIndexForCurrent() {
@@ -1976,8 +2242,12 @@ function loadQueueState() {
     }
     if (data.queueSource === 'mood' && loadParkedMainQueue()) {
       queueSource.value = 'mood'
+    } else if (data.queueSource === 'podcast') {
+      queueSource.value = 'podcast'
+      loadParkedMainQueue()
     } else {
       queueSource.value = 'main'
+      loadParkedPodcastQueue()
     }
     activeDynamicList.value = data.activeDynamicList === ROAM_PLAYLIST_ID ? ROAM_PLAYLIST_ID : null
   } catch {}
@@ -2005,7 +2275,14 @@ export const currentLocalTrackPath = computed(() => {
 
 export function pauseLocalPlayback() {
   try { audio?.pause() } catch {}
-  try { if (audio && dlnaCastingUdn.value) audio.muted = true } catch {}
+  try {
+    if (audio && dlnaCastingUdn.value) {
+      audio.muted = true
+      // 投屏时彻底禁止本机出声；部分浏览器 pause 后仍可能短暂继续
+      if (typeof audio.volume === 'number') audio.dataset.lemonVol = String(audio.volume)
+      audio.volume = 0
+    }
+  } catch {}
   endPlaybackBuffer()
   if (!dlnaCastingUdn.value) isPaused.value = true
   syncMediaSessionPlaybackState()
@@ -2024,6 +2301,8 @@ let dlnaEndedOnce = false
 let dlnaServerOwned = false
 let dlnaSessionSyncTimer = 0
 let applyingServerDlna = false
+/** 小米等设备 Position 不可用：进度只走墙钟，不因 STOPPED/PAUSED 冻住 */
+let dlnaWallClockOnly = false
 
 function slimQueueForDlna() {
   const all = playQueue.value
@@ -2072,7 +2351,7 @@ function applyServerNowPlaying(data) {
     if (udn && dlnaCastingUdn.value !== udn) {
       dlnaCastingUdn.value = udn
       pauseLocalPlayback()
-      isPaused.value = false
+      isPaused.value = Boolean(data.paused)
     }
     dlnaServerOwned = true
     const incomingKey = data.key
@@ -2101,13 +2380,9 @@ function applyServerNowPlaying(data) {
     }
     if (Number(data.duration) > 1) duration.value = Number(data.duration)
     pauseLocalPlayback()
-    if (data.paused) {
-      isPaused.value = true
-      freezeDlnaProgressClock()
-    } else {
-      isPaused.value = false
-      startDlnaProgressClock()
-    }
+    isPaused.value = Boolean(data.paused)
+    startDlnaProgressClock(0)
+    if (data.paused) freezeDlnaProgressClock()
     ensureDlnaStatusPoll()
     saveQueueState()
     updateMediaSession()
@@ -2117,12 +2392,33 @@ function applyServerNowPlaying(data) {
 }
 
 function applyServerQueueEnded() {
+  // 播客/小米开播后的误报 STOPPED 会推 queue-ended；忽略过早结束，避免进度钟被掐死
+  if (dlnaCastingUdn.value && Date.now() < dlnaIgnoreStopUntil) {
+    return
+  }
+  if (dlnaCastingUdn.value && dlnaWallClockOnly) {
+    const dur = dlnaTrackDuration()
+    const elapsed = dlnaClockFrozen
+      ? dlnaClockFrozenElapsed
+      : Math.max(0, (Date.now() - dlnaClockStartedAt) / 1000)
+    // 墙钟未接近曲终前，一律当作误报
+    if (dur > 30 && elapsed < dur * 0.85) return
+    if (dur <= 30 && elapsed < 90) return
+  }
   applyingServerDlna = true
   try {
     dlnaServerOwned = false
     dlnaCastingUdn.value = ''
+    dlnaWallClockOnly = false
     stopDlnaStatusPoll()
-    try { if (audio) audio.muted = false } catch {}
+    try {
+      if (audio) {
+        audio.muted = false
+        const prev = Number(audio.dataset?.lemonVol)
+        if (Number.isFinite(prev) && prev >= 0) audio.volume = Math.min(1, prev)
+        delete audio.dataset.lemonVol
+      }
+    } catch {}
     isPaused.value = true
     saveQueueState()
   } finally {
@@ -2157,25 +2453,31 @@ function resumeDlnaProgressClock() {
   dlnaClockFrozen = false
 }
 
-function startDlnaProgressClock() {
+/**
+ * 投屏进度：本机不出声，进度条跟随电视（墙钟 + 状态校正）。
+ * 电视一般从 0 起播；fromSec 用于会话恢复对齐。
+ */
+function startDlnaProgressClock(fromSec = 0) {
   stopDlnaProgressClock()
-  dlnaClockStartedAt = Date.now()
-  dlnaClockFrozenElapsed = 0
+  const pos = Math.max(0, Number(fromSec) || 0)
+  currentTime.value = pos
+  updateActiveLyric(pos)
+  dlnaClockStartedAt = Date.now() - pos * 1000
+  dlnaClockFrozenElapsed = pos
   dlnaClockFrozen = false
   dlnaEndedOnce = false
-  currentTime.value = 0
   dlnaClockTimer = setInterval(() => {
-    if (!dlnaCastingUdn.value) return
-    const elapsed = dlnaClockFrozen
-      ? dlnaClockFrozenElapsed
-      : (Date.now() - dlnaClockStartedAt) / 1000
+    if (!dlnaCastingUdn.value || dlnaEndedOnce || dlnaClockFrozen) return
+    const elapsed = (Date.now() - dlnaClockStartedAt) / 1000
     const dur = dlnaTrackDuration()
     currentTime.value = dur > 0 ? Math.min(elapsed, dur) : elapsed
     updateActiveLyric(currentTime.value)
-    if (dlnaEndedOnce || dlnaClockFrozen) return
-    if (dur > 3 && elapsed >= dur + 1.2) {
-      if (!dlnaServerOwned) fireDlnaTrackEnded()
+    if (getPodcastEpisodeId(currentPlaying.value) && Date.now() - lastPodcastProgressSaveAt > 5000) {
+      flushPodcastProgress()
     }
+    // 服务端持有队列时由服务端切歌；本机仅驱动进度 UI
+    if (dlnaServerOwned) return
+    if (dur > 3 && elapsed >= dur + 1.2) fireDlnaTrackEnded()
   }, 400)
 }
 
@@ -2216,32 +2518,53 @@ async function pollDlnaStatus() {
   try {
     const st = await api.dlna.status(udn)
     if (dlnaCastingUdn.value !== udn) return
+    if (st?.wallClockOnly || st?.xiaomi) dlnaWallClockOnly = true
     const state = String(st?.state || '').toUpperCase()
     const rel = Number(st?.relTime) || 0
     const durFromTv = Number(st?.duration) || 0
-    const dur = dlnaTrackDuration()
-    if (durFromTv > 1 && durFromTv < 86400 && (!duration.value || duration.value < 1)) {
-      duration.value = durFromTv
+    if (durFromTv > 1 && durFromTv < 86400) {
+      if (!duration.value || duration.value < 1 || Math.abs(durFromTv - duration.value) > 5) {
+        duration.value = durFromTv
+      }
     }
-
-    const relPlausible = rel > 0.4 && dur > 3 && rel <= dur + 2.5
+    const dur = dlnaTrackDuration()
+    // 播客常缺本地曲长：只要电视回报了 RelTime 就可用于同步
+    const relPlausible = !dlnaWallClockOnly
+      && rel > 0.4
+      && rel < 86400
+      && (dur < 1 || rel <= dur + 5)
     if (relPlausible) dlnaSeenPlaying = true
     if (state === 'PLAYING' || state === 'TRANSITIONING') dlnaSeenPlaying = true
 
+    // 小米墙钟模式：忽略设备 PAUSED/STOPPED，避免进度条冻在 00:00
+    if (dlnaWallClockOnly) {
+      if (isPaused.value) isPaused.value = false
+      if (dlnaClockFrozen) resumeDlnaProgressClock()
+      try { if (audio && !audio.paused) audio.pause() } catch {}
+      return
+    }
+
     if (state === 'PAUSED_PLAYBACK') {
-      freezeDlnaProgressClock()
-      isPaused.value = true
+      // 播客开播缓冲期也会误报暂停；只有真正播过后再暂停才冻进度
+      if (dlnaSeenPlaying) {
+        freezeDlnaProgressClock()
+        isPaused.value = true
+      }
       return
     }
     if (state === 'PLAYING' || state === 'TRANSITIONING') {
+      // 电视在播：本机静音，进度跟随电视
       if (isPaused.value) isPaused.value = false
       if (dlnaClockFrozen) resumeDlnaProgressClock()
+      try { if (audio && !audio.paused) audio.pause() } catch {}
     }
 
     if (relPlausible && !dlnaClockFrozen) {
       const elapsed = (Date.now() - dlnaClockStartedAt) / 1000
-      if (Math.abs(rel - elapsed) >= 2 && Math.abs(rel - elapsed) <= 12) {
+      if (Math.abs(rel - elapsed) >= 1.5) {
         dlnaClockStartedAt = Date.now() - rel * 1000
+        currentTime.value = rel
+        updateActiveLyric(rel)
       }
     }
 
@@ -2262,7 +2585,10 @@ export function setDlnaCasting(udn) {
   if (dlnaCastingUdn.value) {
     pauseLocalPlayback()
     isPaused.value = false
-    startDlnaProgressClock()
+    ensureCastDuration(currentPlaying.value)
+    applyDurationFallback(currentPlaying.value, { force: true })
+    // 电视从 0 起播，进度条同步从 0 走
+    startDlnaProgressClock(0)
     ensureDlnaStatusPoll()
   } else {
     dlnaServerOwned = false
@@ -2274,18 +2600,42 @@ export async function stopDlnaCast() {
   const udn = dlnaCastingUdn.value
   dlnaCastingUdn.value = ''
   dlnaServerOwned = false
+  dlnaWallClockOnly = false
   stopDlnaStatusPoll()
-  try { if (audio) audio.muted = false } catch {}
+  try {
+    if (audio) {
+      audio.muted = false
+      const prev = Number(audio.dataset?.lemonVol)
+      if (Number.isFinite(prev) && prev >= 0) audio.volume = Math.min(1, prev)
+      delete audio.dataset.lemonVol
+    }
+  } catch {}
   if (!udn) return
   try { await api.dlna.stop(udn) } catch {}
 }
 
-export async function pushPlayingToDlna(udn = dlnaCastingUdn.value) {
+function looksLikeXiaomiCastTarget(udn = '', opts = {}) {
+  const s = `${udn} ${opts.deviceName || ''} ${opts.name || ''} ${opts.host || ''} ${opts.location || ''}`
+  return /Xiaomi|小米|Redmi|hyperDLNA|smartshare|MiTV/i.test(s)
+}
+
+/**
+ * 把当前曲目投到 DLNA，并带上播放队列；服务端按 playMode 连播下一首。
+ * @param {string} [udn]
+ * @param {{ streamRel?: string, picUrl?: string, deviceName?: string, host?: string, name?: string }} [opts]
+ */
+export async function pushPlayingToDlna(udn = dlnaCastingUdn.value, opts = {}) {
   const t = currentPlaying.value
-  if (!t || !udn) return
-  dlnaIgnoreStopUntil = Date.now() + 8000
+  const target = String(udn || dlnaCastingUdn.value || '').trim()
+  if (!t || !target) return
+  dlnaCastingUdn.value = target
+  const episodeIdEarly = t.podcastEpisodeId || (t.source === 'podcast' ? t.id : '')
+  // 播客实时转码开播慢，忽略误报 STOPPED / queue-ended 的窗口加长
+  dlnaIgnoreStopUntil = Date.now() + (episodeIdEarly ? 25000 : 8000)
   dlnaSeenPlaying = false
   dlnaEndedOnce = false
+  // 小米 Position 不可用；播客实时流转码状态更乱——一律墙钟进度
+  dlnaWallClockOnly = Boolean(episodeIdEarly) || looksLikeXiaomiCastTarget(target, opts)
   const source = t.podcastEpisodeId || t.source === 'podcast'
     ? 'podcast'
     : (currentPlayPlatform.value || t.source || '')
@@ -2293,10 +2643,19 @@ export async function pushPlayingToDlna(udn = dlnaCastingUdn.value) {
   const rawId = String(t.id || t.trackId || '')
   const localPath = currentLocalTrackPath.value
   const trackId = localPath && /^[0-9a-f-]{36}$/i.test(rawId) ? rawId : ''
-  const episodeId = t.podcastEpisodeId || (t.source === 'podcast' ? t.id : '')
+  const episodeId = episodeIdEarly
   const snap = slimQueueForDlna()
+  const pic = String(opts.picUrl || t.picUrl || t.img || coverUrl.value || '').trim()
+  const streamRel = opts.streamRel != null ? opts.streamRel : getCurrentPlayStreamRel()
+  // 先起进度钟+写总时长，再等 SOAP（播客取链/转码可能很慢，避免 UI 一直 00:00）
+  pauseLocalPlayback()
+  isPaused.value = false
+  ensureCastDuration(t)
+  applyDurationFallback(currentPlaying.value || t, { force: true })
+  startDlnaProgressClock(0)
+  ensureDlnaStatusPoll()
   const res = await api.dlna.play({
-    udn,
+    udn: target,
     ...buildPlayPayload(t, source, quality),
     trackId: trackId || undefined,
     localPath: localPath || undefined,
@@ -2304,16 +2663,40 @@ export async function pushPlayingToDlna(udn = dlnaCastingUdn.value) {
     name: t.name,
     singer: t.singer,
     album: t.album || t.albumName,
+    duration: resolveTrackDurationSec(t) || duration.value || undefined,
+    interval: t.interval || resolveTrackDurationSec(t) || undefined,
+    picUrl: pic && !pic.startsWith('blob:') ? pic : undefined,
+    streamRel: streamRel || undefined,
     queue: snap.queue,
     index: snap.index,
     playMode: playMode.value,
     quality,
   })
   dlnaServerOwned = res?.serverOwned !== false
+  if (res?.xiaomi || res?.wallClockOnly || episodeId) dlnaWallClockOnly = true
   pauseLocalPlayback()
   isPaused.value = false
-  startDlnaProgressClock()
+  const castDur = Number(res?.duration) || 0
+  ensureCastDuration(t, castDur)
+  if (castDur > 1) {
+    duration.value = castDur
+    if (currentPlaying.value) {
+      currentPlaying.value = {
+        ...currentPlaying.value,
+        duration: castDur,
+        interval: currentPlaying.value.interval || castDur,
+      }
+    }
+  }
+  if (dlnaClockFrozen) resumeDlnaProgressClock()
+  // 投送返回后若进度钟被误停，重新拉起
+  if (!dlnaClockTimer && dlnaCastingUdn.value) {
+    startDlnaProgressClock(Number(currentTime.value) || 0)
+  }
   ensureDlnaStatusPoll()
+  scheduleDlnaSessionSync()
+  // 电视通常从头播：重置进度，但务必带上总时长
+  if (episodeId) flushPodcastProgress({ force: true, reset: true })
 }
 
 async function handoffToDlnaIfCasting() {
@@ -2326,15 +2709,49 @@ async function handoffToDlnaIfCasting() {
   }
 }
 
+function resolveTrackDurationSec(item) {
+  if (!item) return 0
+  return parseIntervalToSeconds(item.interval)
+    || parseIntervalToSeconds(item.duration)
+    || parseIntervalToSeconds(item.durationSec)
+    || parseIntervalToSeconds(item.progress?.durationSec)
+    || 0
+}
+
+/** 投屏/播客：尽量把总时长写进 duration ref，供进度条显示 */
+function ensureCastDuration(track, extraSec = 0) {
+  const fromTrack = resolveTrackDurationSec(track)
+  const fromAudio = (audio && Number.isFinite(audio.duration) && audio.duration > 1 && audio.duration < 86400)
+    ? Number(audio.duration)
+    : 0
+  const fromExtra = Number(extraSec) || 0
+  const fromRef = Number(duration.value) || 0
+  const best = Math.max(fromTrack, fromAudio, fromExtra, fromRef > 1 ? fromRef : 0)
+  if (best > 1) {
+    duration.value = best
+    // 同步到当前曲，避免后续 fallback 又丢
+    if (currentPlaying.value && resolveTrackDurationSec(currentPlaying.value) < 1) {
+      currentPlaying.value = {
+        ...currentPlaying.value,
+        duration: best,
+        interval: currentPlaying.value.interval || best,
+      }
+    }
+  }
+  return best
+}
+
 export const displayDuration = computed(() => {
   if (duration.value && isFinite(duration.value) && duration.value > 0) return duration.value
-  return parseIntervalToSeconds(currentPlaying.value?.interval)
+  return resolveTrackDurationSec(currentPlaying.value)
 })
 
 function parseIntervalToSeconds(interval) {
   if (interval == null || interval === '') return 0
   if (typeof interval === 'number' && isFinite(interval)) return interval
   const str = String(interval).trim()
+  if (!str) return 0
+  if (/^\d+(\.\d+)?$/.test(str)) return Math.max(0, Math.round(Number(str)))
   const parts = str.split(':').map(Number)
   if (parts.length === 2 && parts.every(n => !isNaN(n))) {
     return parts[0] * 60 + parts[1]
@@ -2349,13 +2766,24 @@ function parseIntervalToSeconds(interval) {
 function syncDurationFromAudio() {
   if (!audio) return
   const d = audio.duration
-  if (d && isFinite(d) && d > 0) duration.value = d
+  if (!(d && isFinite(d) && d > 0 && d < 86400)) return
+  // 投屏播客：优先保留 RSS/元数据曲长，避免流式 audio 短暂错误时长盖掉总时间
+  if (dlnaCastingUdn.value && getPodcastEpisodeId(currentPlaying.value)) {
+    const meta = resolveTrackDurationSec(currentPlaying.value)
+    if (meta > 1) {
+      duration.value = meta
+      return
+    }
+  }
+  duration.value = d
 }
 
-function applyDurationFallback(item) {
-  if (duration.value && isFinite(duration.value) && duration.value > 0) return
-  const fallback = parseIntervalToSeconds(item?.interval || item?.duration)
-  if (fallback > 0) duration.value = fallback
+function applyDurationFallback(item, { force = false } = {}) {
+  const fallback = resolveTrackDurationSec(item)
+  if (fallback <= 0) return
+  if (force || !(duration.value && isFinite(duration.value) && duration.value > 0)) {
+    duration.value = fallback
+  }
 }
 
 let previewSwitchToken = 0
@@ -2754,10 +3182,14 @@ export function initPlayer() {
   restoreSessionState()
   loadPlayerSettings()
 
-  window.addEventListener('beforeunload', () => saveQueueState({ immediate: true }))
+  window.addEventListener('beforeunload', () => {
+    saveQueueState({ immediate: true })
+    if (getPodcastEpisodeId(currentPlaying.value)) flushPodcastProgress({ force: true })
+  })
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') {
       saveQueueState({ immediate: true })
+      if (getPodcastEpisodeId(currentPlaying.value)) flushPodcastProgress({ force: true })
       // 手机 / 桌面 PWA：切后台时改原生输出，否则 Web Audio 会被挂起
       if ((isStandalonePwa() || isMobileLike()) && audio && !isPaused.value && hasMediaSrc) {
         prepareNativeOutputForBackground().catch(() => {})
@@ -2777,6 +3209,7 @@ export function initPlayer() {
     }
   })
   window.addEventListener('pagehide', () => {
+    if (getPodcastEpisodeId(currentPlaying.value)) flushPodcastProgress({ force: true })
     if ((isStandalonePwa() || isMobileLike()) && audio && !isPaused.value && hasMediaSrc) {
       prepareNativeOutputForBackground().catch(() => {})
     }
@@ -2814,6 +3247,8 @@ let endedHandling = false
 
 async function onTrackEnded() {
   flushPlayStatSession({ fromAudio: true })
+  // 服务端持有投屏队列时由服务端按 playMode 切歌，避免本机再 push 把会话时钟重置
+  if (dlnaCastingUdn.value && dlnaServerOwned) return
   // 单飞：ended 重入会叠出「当前又播 + 下一首也播」
   if (endedHandling) return
   endedHandling = true
@@ -3648,15 +4083,9 @@ function watchPlaybackKickstart({ intent, isLocal, url, item, source }) {
 }
 
 export function addToQueue(item, source, { play = false, replace = false, mood = false } = {}) {
-  if (mood) {
-    enterMoodQueueMode()
-  } else if (queueSource.value === 'mood') {
-    // 从其它入口加入普通试听：退出心情列表并恢复主列表
-    import('./moodRadio.js').then((m) => { try { m.stopMoodRadio() } catch {} }).catch(() => {})
-    exitMoodQueueMode({ restore: true })
-  }
   const cleaned = cleanTrackItem(item)
   const src = cleaned.source || source
+  ensureQueueModeForItem(cleaned, src, { mood })
   const key = getTrackKey(cleaned, src)
   let idx = playQueue.value.findIndex(q => q.key === key)
 
@@ -3687,14 +4116,6 @@ export async function startPlayTracks(tracks, sourceOverride = '', opts = {}) {
     opts = sourceOverride
     sourceOverride = opts.source || ''
   }
-  // 与心情试听互斥：进入漫游前先退出心情模式
-  if (queueSource.value === 'mood') {
-    try {
-      const { stopMoodRadio } = await import('./moodRadio.js')
-      stopMoodRadio()
-    } catch {}
-    exitMoodQueueMode({ restore: false })
-  }
 
   const list = (tracks || []).map(t => {
     const cleaned = cleanTrackItem({ ...t, source: t.source || sourceOverride || 'local' })
@@ -3703,6 +4124,23 @@ export async function startPlayTracks(tracks, sourceOverride = '', opts = {}) {
     return { key, item: cleaned, source: src }
   }).filter(e => e.key)
   if (!list.length) return
+
+  const listIsPodcast = list.some((e) => isPodcastItem(e.item, e.source))
+  if (listIsPodcast) {
+    if (queueSource.value === 'mood') {
+      stopMoodRadioQuiet()
+      exitMoodQueueMode({ restore: true })
+    }
+    enterPodcastQueueMode()
+  } else {
+    // 歌曲/漫游与心情、播客试听互斥
+    if (queueSource.value === 'mood') {
+      stopMoodRadioQuiet()
+      exitMoodQueueMode({ restore: false })
+    } else if (queueSource.value === 'podcast') {
+      exitPodcastQueueMode({ restore: true })
+    }
+  }
 
   const seen = new Set()
   const dedup = []
@@ -3714,10 +4152,12 @@ export async function startPlayTracks(tracks, sourceOverride = '', opts = {}) {
   playQueue.value = dedup
   playHistory = []
 
-  activeDynamicList.value = opts.dynamic === false ? null : ROAM_PLAYLIST_ID
+  activeDynamicList.value = listIsPodcast || opts.dynamic === false ? null : ROAM_PLAYLIST_ID
   if (currentQueueIndex.value >= playQueue.value.length) currentQueueIndex.value = -1
+  const resumeTime = Number(opts.resumeTime) || 0
+  const podcastProgress = opts.podcastProgress === 'skip' ? 'skip' : 'auto'
   try {
-    await playTrackAt(0)
+    await playTrackAt(0, { resumeTime, podcastProgress })
   } catch (e) {
     if (e?.aborted) return
     // 首曲失败（常见：本地文件已删）→ 自动向后跳，避免整列表报错停住
@@ -3838,15 +4278,7 @@ export function togglePlayMode() {
 }
 
 export async function playItem(item, activeSource, { mood = false } = {}) {
-  if (mood) {
-    enterMoodQueueMode()
-  } else if (queueSource.value === 'mood') {
-    try {
-      const { stopMoodRadio } = await import('./moodRadio.js')
-      stopMoodRadio()
-    } catch {}
-    exitMoodQueueMode({ restore: true })
-  }
+  ensureQueueModeForItem(item, activeSource, { mood })
 
   if (activeDynamicList.value) activeDynamicList.value = null
 
@@ -3885,7 +4317,7 @@ export async function resumeOrTogglePause() {
   await togglePause()
 }
 
-export async function playTrackAt(index, { fromHistory = false, resumeTime = 0, skipFailedCombos = false } = {}) {
+export async function playTrackAt(index, { fromHistory = false, resumeTime = 0, skipFailedCombos = false, podcastProgress = 'auto' } = {}) {
   if (index < 0 || index >= playQueue.value.length) return
 
   flushPlayStatSession({ fromAudio: true })
@@ -4072,6 +4504,19 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0, 
       if (isMoodRadioActive()) syncMoodRadioFromPlaying(currentPlaying.value)
     } catch {}
     await handoffToDlnaIfCasting()
+    if (getPodcastEpisodeId(cleaned)) {
+      const restart = podcastProgress === 'skip' && !(resumeTime > 0)
+      touchPodcastHistory(cleaned, {
+        resumeSec: resumeTime > 0 ? resumeTime : 0,
+        reset: restart,
+      })
+      // skip：调用方已指定续播/重头；auto：拉取服务端进度自动续听
+      if (podcastProgress === 'skip' || resumeTime > 0) {
+        podcastProgressRestoreToken += 1
+      } else {
+        restorePodcastProgress(cleaned)
+      }
+    }
     return true
   }
 
@@ -4775,6 +5220,9 @@ export async function commitSeek(time) {
     lastSeekSaveAt = now
     saveQueueState()
   }
+  if (getPodcastEpisodeId(currentPlaying.value)) {
+    flushPodcastProgress({ force: true })
+  }
 }
 
 export function setVolume(val) {
@@ -4811,8 +5259,12 @@ export function toggleMute() {
 
 export function fmtTime(sec) {
   if (sec == null || isNaN(sec) || !isFinite(sec) || sec < 0) return '00:00'
-  const m = Math.floor(sec / 60)
-  const s = Math.floor(sec % 60)
+  const total = Math.floor(sec)
+  const h = Math.floor(total / 3600)
+  const m = Math.floor((total % 3600) / 60)
+  const s = total % 60
+  // 播客常超过 60 分钟，显示 h:mm:ss，避免只见分钟被当成「没总时长」
+  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
 }
 

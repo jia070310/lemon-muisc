@@ -250,19 +250,22 @@ lemon-muisc/
 
 ## 10. WebSocket 事件
 
-连接：`ws://host/ws?token=<jwt>`（失败 4401 关闭）；消息格式 `{ type, data }`。
+连接：`ws://host/ws?token=<jwt>`（失败 4401 关闭）；消息格式 `{ type, data }`。完整 payload 与兼容约定见 `docs/open-api.md`「WebSocket」。
 
 | 事件 | 范围 | 说明 |
 |------|------|------|
-| `download:added` / `download:cleared` | 用户级 | 下载任务新增/清空 |
-| `library:changed` / `library:removed` | 全员 | 音乐库变更（整理/保存标签后触发，驱动前端全量重载） |
+| `download:added` / `download:cleared` / `progress` / `status` | 用户级 | 下载任务 |
+| `library:changed` / `library:removed` | 全员 | 文件变更；`data` 含 `revision` |
+| `library:index-changed` | 全员 | 索引 revision 变化（扫库 bump 后广播） |
 | `library:scan-progress` / `library:scan-complete` | 全员 | 扫描进度/完成 |
-| `library:user-data-changed` | 用户级 | 个人歌单/收藏变更 |
+| `library:user-data-changed` | 用户级 | 个人歌单/收藏/最近播放 |
 | `source.fault` | （已弱化） | 历史事件名；现默认不再向前端推送弹窗，故障见运行日志 / `GET /source/fault` |
-| `dlna:now-playing` | 用户级 | 服务端投屏切歌（队列由服务器推进） |
+| `dlna:now-playing` / `dlna:transport` | 用户级 | 服务端投屏切歌与暂停/继续 |
 | `dlna:queue-ended` | 用户级 | 投屏队列结束或手动停止 |
 
 客户端：指数退避重连（1s→15s）、弱网自动恢复。
+
+双端同步：`GET /library/user-data?sinceRevision=`、`PUT` 冲突 409、`POST /library/match-same-song`、`GET /source/health`、`settings` 的 `app.*` 命名空间。
 
 ## 11. 开发与部署
 

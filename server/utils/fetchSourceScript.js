@@ -47,9 +47,30 @@ export function encodeSourceScriptUrl(input) {
   return `${origin}${path}${search}`
 }
 
+/**
+ * 解开 cors.isteed.cc / ghproxy 等「把完整 https:// 塞进 path」的代理包装，
+ * 便于后续走 GitHub 镜像竞速，而不是死磕单一易限流的 CORS 网关。
+ */
+export function unwrapSourceProxyUrl(input) {
+  const raw = stripUrlNoise(input)
+  if (!raw) return ''
+  const m = raw.match(/^(https?:\/\/)([^/?#]+)\/+(https?:\/\/.+)$/i)
+  if (!m) return raw
+  const host = String(m[2] || '').toLowerCase()
+  const isProxyHost = (
+    host === 'cors.isteed.cc'
+    || host === 'corsproxy.io'
+    || host === 'cors-anywhere.herokuapp.com'
+    || /(?:^|\.)(?:ghproxy\.(?:com|net)|ghfast\.top|gitmirror\.com|kkgithub\.com)$/i.test(host)
+    || /^cors[.-]/i.test(host)
+  )
+  if (!isProxyHost) return raw
+  return stripUrlNoise(m[3])
+}
+
 /** GitHub blob / gist / gitee 页面链接转成可下载的 raw */
 export function normalizeSourceScriptUrl(input) {
-  let url = encodeSourceScriptUrl(input)
+  let url = encodeSourceScriptUrl(unwrapSourceProxyUrl(input))
   if (!url) return ''
   url = url.split('#')[0]
   if (url.startsWith('http://github.com/') || url.startsWith('http://raw.githubusercontent.com/') || url.startsWith('http://gist.github.com/')) {
@@ -90,7 +111,7 @@ function isGithubHost(url) {
 }
 
 function alreadyProxied(url) {
-  return /ghproxy|ghfast|gitmirror|jsdelivr\.net|kkgithub|gitdl\.cn/i.test(url)
+  return /ghproxy|ghfast|gitmirror|jsdelivr\.net|kkgithub|gitdl\.cn|cors\.isteed\.cc/i.test(url)
 }
 
 function toJsdelivr(rawUrl) {
@@ -100,10 +121,35 @@ function toJsdelivr(rawUrl) {
   return `https://cdn.jsdelivr.net/gh/${m[1]}/${m[2]}@${m[3]}/${filePath}`
 }
 
-export function sourceScriptFetchCandidates(url) {
-  const normalized = normalizeSourceScriptUrl(url)
-  if (!normalized) return []
-  if (alreadyProxied(normalized) || !isGithubHost(normalized)) return [normalized]
+function expandJsdelivrHosts(url) {
+  const m = String(url).match(/^https?:\/\/(?:cdn|fastly|gcore|testingcf)\.jsdelivr\.net\/(.+)$/i)
+  if (!m) return [url]
+  const path = m[1]
+  return [
+    `https://cdn.jsdelivr.net/${path}`,
+    `https://fastly.jsdelivr.net/${path}`,
+    `https://gcore.jsdelivr.net/${path}`,
+  ]
+}
+
+function jsdelivrGhToRawList(url) {
+  const text = String(url)
+  let m = text.match(/^https?:\/\/(?:cdn|fastly|gcore|testingcf)\.jsdelivr\.net\/gh\/([^/]+)\/([^/@]+)@([^/]+)\/(.+)$/i)
+  if (m) {
+    return [encodeSourceScriptUrl(`https://raw.githubusercontent.com/${m[1]}/${m[2]}/${m[3]}/${m[4]}`)]
+  }
+  // jsDelivr 允许省略 @ref（默认最新）；补 main/master 方便走 GitHub 镜像
+  m = text.match(/^https?:\/\/(?:cdn|fastly|gcore|testingcf)\.jsdelivr\.net\/gh\/([^/]+)\/([^/]+)\/(.+)$/i)
+  if (!m) return []
+  return [
+    encodeSourceScriptUrl(`https://raw.githubusercontent.com/${m[1]}/${m[2]}/main/${m[3]}`),
+    encodeSourceScriptUrl(`https://raw.githubusercontent.com/${m[1]}/${m[2]}/master/${m[3]}`),
+  ]
+}
+
+function githubMirrorCandidates(rawUrl) {
+  const normalized = normalizeSourceScriptUrl(rawUrl)
+  if (!normalized || !isGithubHost(normalized)) return normalized ? [normalized] : []
   const mirrors = [
     normalized,
     `https://ghfast.top/${normalized}`,
@@ -111,13 +157,53 @@ export function sourceScriptFetchCandidates(url) {
     `https://mirror.ghproxy.com/${normalized}`,
   ]
   const cdn = toJsdelivr(normalized)
-  if (cdn) mirrors.splice(1, 0, cdn)
+  if (cdn) mirrors.splice(1, 0, ...expandJsdelivrHosts(cdn))
   return [...new Set(mirrors)]
+}
+
+export function sourceScriptFetchCandidates(url) {
+  const original = stripUrlNoise(url)
+  const unwrapped = unwrapSourceProxyUrl(original)
+  const normalized = normalizeSourceScriptUrl(unwrapped)
+  if (!normalized) return []
+
+  const list = []
+  if (isGithubHost(normalized)) {
+    list.push(...githubMirrorCandidates(normalized))
+  } else if (/jsdelivr\.net/i.test(normalized)) {
+    list.push(...expandJsdelivrHosts(normalized))
+    for (const raw of jsdelivrGhToRawList(normalized)) {
+      list.push(...githubMirrorCandidates(raw))
+    }
+  } else if (alreadyProxied(normalized)) {
+    list.push(normalized)
+    // 若本身是代理包装但未能解开，仍保留原链
+  } else {
+    list.push(normalized)
+  }
+
+  // 用户给的原始代理链也作为候选（部分环境直连镜像反而更差）
+  // 注意：嵌套 https:// 的 CORS 代理 path 不要再 encode，否则会变成 https%3A// 更易失败
+  if (original && original !== normalized && /^https?:\/\//i.test(original)) {
+    list.push(original)
+  }
+  return [...new Set(list.filter(Boolean))]
 }
 
 function looksLikeHtml(text) {
   const t = String(text || '').trimStart().slice(0, 240)
   return /^<!DOCTYPE html/i.test(t) || /^<html[\s>]/i.test(t)
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function isRetriableFetchError(err) {
+  const code = Number(err?.statusCode || 0)
+  if (code === 429 || code === 502 || code === 503 || code === 504) return true
+  const msg = String(err?.message || err || '')
+  return /ETIMEDOUT|ESOCKETTIMEDOUT|timed?\s*out|timeout|ECONNRESET|EPIPE|socket hang|EAI_AGAIN/i.test(msg)
 }
 
 async function fetchOnce(url) {
@@ -147,6 +233,20 @@ async function fetchOnce(url) {
   return script
 }
 
+async function fetchWithRetry(url, retries = 1) {
+  let lastErr = null
+  for (let i = 0; i <= retries; i++) {
+    try {
+      return await fetchOnce(url)
+    } catch (e) {
+      lastErr = e
+      if (!isRetriableFetchError(e) || i === retries) throw e
+      await sleep(350 * (i + 1) + Math.floor(Math.random() * 250))
+    }
+  }
+  throw lastErr || new Error('下载音源脚本失败')
+}
+
 function describeFetchError(err, triedMirrors) {
   const msg = String(err?.message || err || '')
   const code = err?.statusCode || err?.code || ''
@@ -170,6 +270,11 @@ function describeFetchError(err, triedMirrors) {
       ? '托管站点拒绝访问（限流或无法直连 GitHub）。请换镜像链接，或下载 .js 后本地导入'
       : '托管站点拒绝访问，请稍后重试或改用本地导入'
   }
+  if (code === 429 || /HTTP_429/.test(msg)) {
+    return triedMirrors
+      ? '托管站/代理限流。请稍后再试，或浏览器打开链接另存为 .js 后本地导入'
+      : '托管站限流，请稍后再试，或改用本地导入'
+  }
   if (triedMirrors) return '无法下载音源脚本（已尝试 GitHub 镜像）。请检查链接，或下载后本地导入'
   return msg.startsWith('HTTP_') ? `下载失败（${msg.replace('HTTP_', 'HTTP ')}）` : (msg || '下载音源脚本失败')
 }
@@ -182,7 +287,7 @@ export async function fetchSourceScriptFromUrl(input) {
 
   if (candidates.length === 1) {
     try {
-      return await fetchOnce(candidates[0])
+      return await fetchWithRetry(candidates[0], 2)
     } catch (e) {
       console.warn(`[音源导入] ${candidates[0]} 失败: ${e?.message || e}`)
       throw new Error(describeFetchError(e, false))
@@ -194,7 +299,8 @@ export async function fetchSourceScriptFromUrl(input) {
     let settled = false
     let lastErr = null
     for (const url of candidates) {
-      fetchOnce(url).then(
+      // 多镜像竞速时各候选少重试，避免放大限流
+      fetchWithRetry(url, 1).then(
         (script) => {
           if (settled) return
           settled = true

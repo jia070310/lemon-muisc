@@ -300,7 +300,7 @@
               </div>
             </template>
 
-            <button class="fs-btn" type="button" title="试听列表" :class="{ active: showQueuePanel }" @click="onOpenQueue">
+            <button class="fs-btn" type="button" :title="queuePanelTitle" :class="{ active: showQueuePanel }" @click="onOpenQueue">
               <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
                 <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/>
                 <circle cx="4" cy="6" r="1" fill="currentColor"/><circle cx="4" cy="12" r="1" fill="currentColor"/><circle cx="4" cy="18" r="1" fill="currentColor"/>
@@ -398,7 +398,7 @@
         <div v-if="showQueuePanel" class="fs-queue-mask" @click="showQueuePanel = false">
           <div class="fs-queue" @click.stop>
             <div class="fs-queue-header">
-              <span class="fs-queue-title">试听列表 <em>{{ playQueue.length }}</em></span>
+              <span class="fs-queue-title">{{ queuePanelTitle }} <em>{{ playQueue.length }}</em></span>
               <div class="fs-queue-actions">
                 <span class="fs-queue-mode">{{ playModeLabel }}</span>
                 <button class="fs-queue-text" type="button" :disabled="!playQueue.length" @click="clearQueue">清空</button>
@@ -433,7 +433,7 @@
                 </div>
               </div>
             </div>
-            <div v-else class="fs-queue-empty">列表为空</div>
+            <div v-else class="fs-queue-empty">{{ queuePanelTitle }}为空</div>
           </div>
         </div>
 
@@ -473,7 +473,7 @@ import {
   togglePause, seekTo, previewSeek, commitSeek, setVolume, toggleMute, fmtTime, playNext, playPrev, togglePlayMode,
   closeFullscreenPlayer, showQueuePanel, playTrackAt, removeFromQueue, clearQueue,
   resumeOrTogglePause, unlockAudioFromGesture, currentLocalTrackPath, tryFillCoverFromNetwork,
-  showPlayerNotice,
+  showPlayerNotice, queuePanelTitle,
   peekPlaybackTime,
   applyManualLyrics,
 } from '../stores/player.js'

@@ -135,8 +135,12 @@ export function ticketAllowsRequest(claims, req) {
   if (scope === 'proxy') {
     return url.includes('/play/proxy')
   }
+  if (scope === 'cast') {
+    const m = String(url).match(/\/play\/cast\/([a-f0-9]{16,})(?:\/|\.|\?|#|$)/i)
+    return Boolean(m && claims.path && m[1] === String(claims.path))
+  }
   if (scope === 'cover') {
-    return url.includes('/cover') || url.includes('/tag/cover')
+    return url.includes('/cover') || url.includes('/tag/cover') || url.includes('/play/cast/')
   }
   if (reqTrackId) {
     // trackId 短链：ticket 内 path 常为同一 trackId；或仅 scope=local/stream

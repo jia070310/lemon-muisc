@@ -40,6 +40,13 @@ import {
   getAutoClosedPlatformsPublic,
   dismissAutoClosedPlatforms,
 } from '../utils/enabledPlatforms.js'
+import {
+  getSourceProbeStatus,
+  runSourceProbeRound,
+  updateProbeScheduleConfig,
+  isSourceProbeRunning,
+} from '../utils/sourceProbeRunner.js'
+import { getProbeCell } from '../utils/sourceProbeStore.js'
 export const sourceRouter = Router()
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -160,6 +167,7 @@ sourceRouter.get('/list', (req, res) => {
   repairUnnamedSourceNames()
   const activeIds = new Set(getStoredActiveSourceIds(req.user?.id))
   const healthMap = getAllSourceHealth()
+  const probeView = getSourceProbeStatus()
   const rows = getDB().prepare('SELECT id, name, description, author, version, homepage, sources FROM user_apis').all()
   res.json(rows.map(r => ({
     ...r,
@@ -169,6 +177,7 @@ sourceRouter.get('/list', (req, res) => {
       ...(sourceHealthPublicView(healthMap[r.id]) || {}),
       autoClosedPlatforms: getAutoClosedPlatformsPublic(req.user?.id, r.id),
     },
+    probe: probeView.sources?.[r.id] || null,
   })))
 })
 
@@ -537,6 +546,23 @@ sourceRouter.post('/fault/dismiss', (_req, res) => {
   res.json({ ok: true })
 })
 
+/** 音源健康聚合：各源近期试听/失败率，供客户端避开异常源 */
+sourceRouter.get('/health', (req, res) => {
+  try {
+    const map = getAllSourceHealth()
+    const sources = {}
+    for (const [id, entry] of Object.entries(map)) {
+      sources[id] = {
+        ...(sourceHealthPublicView(entry) || {}),
+        autoClosedPlatforms: getAutoClosedPlatformsPublic(req.user?.id, id),
+      }
+    }
+    res.json({ ok: true, sources })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
 /** 客户端上报试听片段检测结果（播放侧） */
 sourceRouter.post('/health/report', (req, res) => {
   try {
@@ -584,6 +610,54 @@ sourceRouter.post('/health/clear', requireAdmin, (req, res) => {
     if (!sourceId) return res.status(400).json({ error: '缺少 sourceId' })
     clearSourceHealth(sourceId)
     res.json({ ok: true })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+/** 音源状态监测：周期探针结果 + 配置 */
+sourceRouter.get('/probe', (req, res) => {
+  try {
+    res.json({ ok: true, ...getSourceProbeStatus() })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+sourceRouter.post('/probe/config', requireAdmin, (req, res) => {
+  try {
+    const body = req.body || {}
+    const patch = {}
+    if (body.enabled != null) patch.enabled = Boolean(body.enabled)
+    if (body.intervalMin != null) patch.intervalMin = Number(body.intervalMin)
+    if (body.autoDisable != null) patch.autoDisable = Boolean(body.autoDisable)
+    const config = updateProbeScheduleConfig(patch)
+    res.json({ ok: true, config })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+/** 立即跑一轮监测（管理员）；进行中则返回 busy */
+sourceRouter.post('/probe/run', requireAdmin, async (req, res) => {
+  try {
+    if (isSourceProbeRunning()) {
+      return res.json({ ok: true, skipped: true, reason: 'busy', ...getSourceProbeStatus() })
+    }
+    const result = await runSourceProbeRound({ reason: 'manual' })
+    res.json({ ok: true, ...result, status: getSourceProbeStatus() })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+/** 单格探针详情（调试 / 面板展开） */
+sourceRouter.get('/probe/cell', (req, res) => {
+  try {
+    const sourceId = String(req.query.sourceId || '').trim()
+    const platform = String(req.query.platform || '').trim()
+    if (!sourceId || !platform) return res.status(400).json({ error: '缺少 sourceId 或 platform' })
+    res.json({ ok: true, cell: getProbeCell(sourceId, platform) })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }

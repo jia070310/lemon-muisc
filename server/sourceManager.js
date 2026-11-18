@@ -24,6 +24,7 @@ import {
 import { formatUserError } from './utils/userError.js'
 import { assertMusicUrl } from './utils/sourceResult.js'
 import { getSourceHealth } from './utils/sourceHealth.js'
+import { getProbeScore } from './utils/sourceProbeStore.js'
 import { isSourcePlatformEnabled } from './utils/enabledPlatforms.js'
 import { isValidPlatformKey } from './utils/platformCatalog.js'
 
@@ -813,18 +814,22 @@ function resolveCandidates(source, action, allowedSourceIds = null, userId = nul
 }
 
 function platformHealthScore(sourceId, platform) {
+  let score = 0
   try {
     const h = getSourceHealth(sourceId)
-    if (!h) return 0
-    const p = (h.platforms || []).find((x) => String(x.id) === String(platform))
-    if (p?.level === 'ok') return 100
-    if (p?.level === 'preview') return -100
-    if (p?.level === 'watch') return -10
-    if (h.level === 'preview' && !(h.platforms || []).length) return -30
-    return 0
-  } catch {
-    return 0
-  }
+    if (h) {
+      const p = (h.platforms || []).find((x) => String(x.id) === String(platform))
+      if (p?.level === 'ok') score += 100
+      else if (p?.level === 'preview') score -= 100
+      else if (p?.level === 'watch') score -= 10
+      else if (h.level === 'preview' && !(h.platforms || []).length) score -= 30
+    }
+  } catch {}
+  // 周期探针：延迟与可用性参与智能排序
+  try {
+    score += getProbeScore(sourceId, platform)
+  } catch {}
+  return score
 }
 
 function actionLabel(action) {

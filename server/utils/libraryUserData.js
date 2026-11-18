@@ -1,4 +1,5 @@
 import { getDB } from '../db.js'
+import { dedupeSameSongs } from './sameSong.js'
 
 const KEYS = {
   playlists: 'library.customPlaylists',
@@ -74,11 +75,12 @@ export function setLibraryUserData(userId, {
   revision,
 } = {}) {
   if (playlists !== undefined) writeArray(userId, KEYS.playlists, playlists)
-  if (favorites !== undefined) writeArray(userId, KEYS.favorites, favorites)
+  // 跨平台同曲归并，保证 Web / App 写入口径一致
+  if (favorites !== undefined) writeArray(userId, KEYS.favorites, dedupeSameSongs(favorites))
   if (favoriteAlbums !== undefined) writeArray(userId, KEYS.favoriteAlbums, favoriteAlbums)
   if (favoriteArtists !== undefined) writeArray(userId, KEYS.favoriteArtists, favoriteArtists)
-  if (recentPlays !== undefined) writeArray(userId, KEYS.recentPlays, recentPlays)
-  if (playStats !== undefined) writeArray(userId, KEYS.playStats, playStats)
+  if (recentPlays !== undefined) writeArray(userId, KEYS.recentPlays, dedupeSameSongs(recentPlays))
+  if (playStats !== undefined) writeArray(userId, KEYS.playStats, dedupeSameSongs(playStats))
   if (revision !== undefined) writeNumber(userId, KEYS.revision, revision)
 }
 

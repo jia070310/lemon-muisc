@@ -1,5 +1,10 @@
 import { ref, computed } from 'vue'
-import { findLocalMatchForTrack, isLocalPlaylistTrack } from '../utils/trackMatch.js'
+import {
+  findLocalMatchForTrack,
+  findSameSongIndex,
+  isLocalPlaylistTrack,
+  mergeSameSongSnapshots,
+} from '../utils/trackMatch.js'
 import { withStreamAuth } from '../utils/streamAuth.js'
 import { currentUser } from '../utils/auth.js'
 import { splitArtists } from '../utils/text.js'
@@ -22,6 +27,7 @@ const PLAY_SEC_MAX = 1_000_000
 const SESSION_TRACKS_KEY_BASE = 'lemon-library-tracks-v1'
 const SESSION_TRACKS_LIMIT = 8000
 const LIBRARY_SNAPSHOT_KEY_BASE = 'lemon-library-snapshot-v1'
+const LIBRARY_BROWSE_SNAPSHOT_KEY_BASE = 'lemon-library-browse-v1'
 const LIBRARY_SNAPSHOT_TRACK_LIMIT = 80
 const coverVersions = new Map()
 
@@ -40,6 +46,7 @@ function playlistsKey() { return storageKey(PLAYLISTS_KEY_BASE) }
 function userDataRevKey() { return storageKey(USER_DATA_REV_KEY_BASE) }
 function sessionTracksKey() { return storageKey(SESSION_TRACKS_KEY_BASE) }
 function librarySnapshotKey() { return storageKey(LIBRARY_SNAPSHOT_KEY_BASE) }
+function libraryBrowseSnapshotKey() { return storageKey(LIBRARY_BROWSE_SNAPSHOT_KEY_BASE) }
 
 export const libraryTracks = ref([])
 /** 当前用户生效的音乐库根目录（用于热更新过滤） */
@@ -494,6 +501,61 @@ export function hydrateLibrarySnapshot() {
     return true
   }
   return false
+}
+
+function slimBrowsePlaylistCard(card) {
+  if (!card || typeof card !== 'object') return null
+  return {
+    id: card.id,
+    name: card.name,
+    count: card.count || 0,
+    coverUrl: card.coverUrl || '',
+    coverUrls: Array.isArray(card.coverUrls) ? card.coverUrls.slice(0, 4) : [],
+    coverStyle: card.coverStyle || 'cover',
+    gradient: card.gradient,
+    icon: card.icon,
+    isSmart: Boolean(card.isSmart),
+    hidden: Boolean(card.hidden),
+    // 仅首屏展示；点击播放前会由网络刷新补齐 tracks
+    tracks: [],
+  }
+}
+
+/** 缓存音乐库首页歌手/专辑/流派/歌单卡，下次打开秒开 */
+export function saveLibraryBrowseSnapshot({
+  artists = [],
+  albums = [],
+  genres = [],
+  playlistCards = [],
+} = {}) {
+  try {
+    const payload = {
+      artists: (artists || []).slice(0, 24),
+      albums: (albums || []).slice(0, 40),
+      genres: (genres || []).slice(0, 20),
+      playlistCards: (playlistCards || []).slice(0, 24).map(slimBrowsePlaylistCard).filter(Boolean),
+      savedAt: Date.now(),
+    }
+    localStorage.setItem(libraryBrowseSnapshotKey(), JSON.stringify(payload))
+  } catch {}
+}
+
+export function hydrateLibraryBrowseSnapshot() {
+  try {
+    const raw = localStorage.getItem(libraryBrowseSnapshotKey())
+    if (!raw) return null
+    const data = JSON.parse(raw)
+    if (!data || typeof data !== 'object') return null
+    return {
+      artists: Array.isArray(data.artists) ? data.artists : [],
+      albums: Array.isArray(data.albums) ? data.albums : [],
+      genres: Array.isArray(data.genres) ? data.genres : [],
+      playlistCards: Array.isArray(data.playlistCards) ? data.playlistCards : [],
+      savedAt: Number(data.savedAt) || 0,
+    }
+  } catch {
+    return null
+  }
 }
 
 /** 从搜索/发现页挑选歌曲加入歌单时设置 */
@@ -1131,19 +1193,27 @@ export function snapshotToPlayTrack(snapshot, sourceOverride) {
 
 export function isFavorite(track) {
   const key = getLibraryTrackKey(track)
-  return key ? favoriteKeys.value.has(key) : false
+  if (key && favoriteKeys.value.has(key)) return true
+  // 跨平台同曲：mg:xxx 已收藏时，wy 同曲也视为已收藏
+  return findSameSongIndex(favorites.value, track || {}) >= 0
 }
 
 export function toggleFavorite(track) {
   const snapshot = trackToSnapshot(track)
   if (!snapshot) return false
   const list = [...favorites.value]
-  const idx = list.findIndex(f => f.key === snapshot.key)
-  if (idx >= 0) list.splice(idx, 1)
-  else list.unshift(snapshot)
+  // 跨平台同曲合并：取消时去掉同曲任一条；收藏时合并封面等元数据
+  const idx = findSameSongIndex(list, snapshot)
+  if (idx >= 0) {
+    list.splice(idx, 1)
+    favorites.value = list
+    persistFavorites()
+    return false
+  }
+  list.unshift(snapshot)
   favorites.value = list
   persistFavorites()
-  return idx < 0
+  return true
 }
 
 function albumToFavoriteSnapshot(album) {
@@ -1352,13 +1422,14 @@ export function recordPlayStat(track, { playedSec = 0 } = {}) {
   const now = Date.now()
   const sec = Math.min(PLAY_SEC_MAX, Math.max(0, Number(playedSec) || 0))
   const list = [...playStats.value]
-  const idx = list.findIndex((s) => s.key === snapshot.key)
+  // 跨平台同曲（如 mg:xxx / wy:yyy）合并为一条，避免失败换源后排行翻倍
+  const idx = findSameSongIndex(list, snapshot)
   if (idx >= 0) {
     const prev = list[idx]
     const recentAts = prunePlayRecentAts([...(prev.recentAts || []), now], now)
+    const merged = mergeSameSongSnapshots(prev, snapshot)
     const next = {
-      ...prev,
-      ...snapshot,
+      ...merged,
       count: Math.max(0, Number(prev.count) || 0) + 1,
       playedSec: Math.min(PLAY_SEC_MAX, (Number(prev.playedSec) || 0) + sec),
       recentAts,
@@ -1385,7 +1456,7 @@ export function recordPlayedSeconds(track, deltaSec) {
   const sec = Math.min(PLAY_SEC_MAX, Math.max(0, Number(deltaSec) || 0))
   if (!snapshot || sec <= 0) return
   const list = [...playStats.value]
-  const idx = list.findIndex((s) => s.key === snapshot.key)
+  const idx = findSameSongIndex(list, snapshot)
   if (idx < 0) return
   list[idx] = {
     ...list[idx],
@@ -1399,8 +1470,16 @@ export function recordRecentPlay(track) {
   const snapshot = trackToSnapshot(track)
   if (!snapshot) return
   snapshot.playedAt = Date.now()
-  const list = [snapshot, ...recentPlays.value.filter(r => r.key !== snapshot.key)].slice(0, RECENT_LIMIT)
-  recentPlays.value = list
+  const list = [...recentPlays.value]
+  // 跨平台同曲合并：保留最新播放时间与更全元数据（封面只增不丢）
+  const idx = findSameSongIndex(list, snapshot)
+  let merged = snapshot
+  if (idx >= 0) {
+    merged = mergeSameSongSnapshots(list[idx], snapshot)
+    merged.playedAt = snapshot.playedAt
+    list.splice(idx, 1)
+  }
+  recentPlays.value = [merged, ...list].slice(0, RECENT_LIMIT)
   persistRecent()
 }
 
@@ -1487,7 +1566,8 @@ export function resolvePlaylistTracks(playlist, allTracks) {
       if (!trackHasOwnCover(track, playlistCover) && trackHasOwnCover({ picUrl: onlinePic }, playlistCover)) {
         track = { ...track, picUrl: onlinePic, img: onlinePic }
       }
-      return { ...track, isLocal: true }
+      // 工作集可能混入最近播放等在线快照，不能无条件标本地
+      return { ...track, isLocal: isLocalPlaylistTrack(track) }
     }
     const snap = snapshots[k]
     if (!snap) return null
@@ -2235,7 +2315,8 @@ export function resolveTracksByKeys(keys, allTracks, snapshots = []) {
   return keys.map((k) => {
     if (map.has(k)) {
       const track = enrichLocalCover(map.get(k))
-      return { ...track, isLocal: true }
+      // 工作集可能混入最近播放等在线快照，不能无条件标本地
+      return { ...track, isLocal: isLocalPlaylistTrack(track) }
     }
     const snap = snapMap.get(k)
     if (!snap) return null

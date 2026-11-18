@@ -51,6 +51,7 @@ export function buildPodcastExportPayload(userId) {
     title: f.title || '',
     author: f.author || '',
     imageUrl: f.imageUrl || '',
+    imageCustom: Boolean(f.imageCustom),
     siteUrl: f.siteUrl || '',
   }))
   return {

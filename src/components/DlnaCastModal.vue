@@ -15,11 +15,9 @@
         <button class="btn-icon" type="button" @click="emit('close')">×</button>
       </div>
     </div>
-    <p class="cast-tip">把正在播放的歌曲投到局域网电视 / 音箱。Docker 需 host 网络才能搜到设备。</p>
     <p v-if="error" class="cast-err">{{ error }}</p>
-    <p v-if="hint" class="cast-ok">{{ hint }}</p>
     <div v-if="loading && !devices.length" class="cast-empty">正在搜索设备…</div>
-    <div v-else-if="!devices.length" class="cast-empty">未发现设备。请确认与电视同一局域网。</div>
+    <div v-else-if="!devices.length" class="cast-empty">未发现设备</div>
     <div v-else class="queue-list">
       <button
         v-for="d in devices"
@@ -30,7 +28,11 @@
         :disabled="playingUdn === d.udn"
         @click="castTo(d)"
       >
-        <span class="queue-name">{{ d.name }}</span>
+        <span class="dev-meta">
+          <span class="queue-name">{{ d.name }}</span>
+          <span v-if="d.kind === 'app'" class="dev-sub">应用接收端 · 建议投系统电视</span>
+          <span v-else-if="d.host" class="dev-sub">{{ d.host }}</span>
+        </span>
         <em>{{ playingUdn === d.udn ? '投送中…' : (dlnaCastingUdn === d.udn ? '投送中' : '投送') }}</em>
       </button>
     </div>
@@ -42,15 +44,12 @@ import { ref, watch } from 'vue'
 import { api } from '../api.js'
 import {
   currentPlaying,
-  currentLocalTrackPath,
-  currentPlayPlatform,
-  currentPlayQuality,
-  getPlayQuality,
+  coverUrl,
+  getCurrentPlayStreamRel,
   dlnaCastingUdn,
-  setDlnaCasting,
+  pushPlayingToDlna,
   stopDlnaCast,
 } from '../stores/player.js'
-import { buildPlayPayload } from '../utils/musicPayload.js'
 import CastIcon from './CastIcon.vue'
 
 const props = defineProps({
@@ -61,7 +60,6 @@ const emit = defineEmits(['close'])
 const devices = ref([])
 const loading = ref(false)
 const error = ref('')
-const hint = ref('')
 const playingUdn = ref('')
 
 async function search(refresh = false) {
@@ -83,29 +81,17 @@ async function castTo(device) {
     error.value = '当前没有正在播放的内容'
     return
   }
-  const source = t.podcastEpisodeId || t.source === 'podcast'
-    ? 'podcast'
-    : (currentPlayPlatform.value || t.source || '')
-  const quality = currentPlayQuality.value || getPlayQuality() || '128k'
-  const rawId = String(t.id || t.trackId || '')
-  const trackId = currentLocalTrackPath.value && /^[0-9a-f-]{36}$/i.test(rawId) ? rawId : ''
-  const episodeId = t.podcastEpisodeId || (t.source === 'podcast' ? t.id : '')
   playingUdn.value = device.udn
   error.value = ''
-  hint.value = ''
   try {
-    await api.dlna.play({
-      udn: device.udn,
-      ...buildPlayPayload(t, source, quality),
-      trackId: trackId || undefined,
-      localPath: currentLocalTrackPath.value || undefined,
-      podcastEpisodeId: episodeId || undefined,
-      name: t.name,
-      singer: t.singer,
-      album: t.album || t.albumName,
+    const pic = String(t.picUrl || t.img || coverUrl.value || '').trim()
+    // 带上完整播放队列，由服务端按播放模式连播；勿只投当前一首否则播完即停
+    await pushPlayingToDlna(device.udn, {
+      streamRel: getCurrentPlayStreamRel() || undefined,
+      picUrl: pic && !pic.startsWith('blob:') ? pic : undefined,
+      deviceName: device.name,
+      host: device.host,
     })
-    setDlnaCasting(device.udn)
-    hint.value = `已投送到 ${device.name}，本机已暂停`
   } catch (e) {
     error.value = e.message || '投送失败'
   } finally {
@@ -117,7 +103,6 @@ async function stopCast() {
   if (!dlnaCastingUdn.value) return
   try {
     await stopDlnaCast()
-    hint.value = '已停止投屏，本机保持暂停'
   } catch (e) {
     error.value = e.message || '停止失败'
   }
@@ -132,7 +117,8 @@ watch(() => props.open, (v) => {
 .cast-inner {
   display: flex;
   flex-direction: column;
-  min-height: 0;
+  min-height: 280px;
+  height: 100%;
   max-height: inherit;
 }
 .queue-header {
@@ -163,24 +149,29 @@ watch(() => props.open, (v) => {
   cursor: pointer;
 }
 .btn-icon:hover { color: var(--text); }
-.cast-tip, .cast-empty {
+.cast-empty {
   margin: 0;
-  padding: 10px 14px;
+  flex: 1;
+  min-height: 200px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px 14px;
   font-size: 12px;
   color: var(--text-muted);
   line-height: 1.5;
 }
-.cast-err, .cast-ok {
+.cast-err {
   margin: 0;
-  padding: 0 14px 8px;
+  padding: 8px 14px;
   font-size: 12px;
+  color: var(--danger, #ef4444);
+  flex-shrink: 0;
 }
-.cast-err { color: var(--danger, #ef4444); }
-.cast-ok { color: var(--accent); }
 .queue-list {
   overflow-y: auto;
   flex: 1;
-  min-height: 0;
+  min-height: 200px;
 }
 .dev-row {
   display: flex;
@@ -199,9 +190,23 @@ watch(() => props.open, (v) => {
 .dev-row:hover { background: var(--bg-hover); }
 .dev-row.active { background: var(--accent-muted); }
 .dev-row:disabled { opacity: 0.7; cursor: wait; }
+.dev-meta {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-right: 10px;
+}
 .queue-name {
   font-size: 13px;
   font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dev-sub {
+  font-size: 11px;
+  color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

@@ -383,6 +383,19 @@ import { cleanText, cleanTrackItem } from '../utils/text.js'
 import { useQualityMenuPosition } from '../utils/qualityMenu.js'
 import { playlistPickTarget, addTracksToPickingPlaylist, importPlaylistFromLoaded } from '../stores/library.js'
 import { assertActiveSourceForDownload } from '../stores/downloadGuard.js'
+import { currentUser } from '../utils/auth.js'
+import {
+  buildCacheKey,
+  cacheUserPart,
+  readScreenCache,
+  writeScreenCache,
+  runAfterPaint,
+  runIdle,
+} from '../utils/screenDataCache.js'
+
+const DISCOVER_HOME_CACHE_BASE = 'lemon-discover-home-v1'
+/** 首屏静置预取约 3 屏歌单（桌面约 10/屏） */
+const RECOMMEND_IDLE_LIMIT = 30
 
 const router = useRouter()
 const route = useRoute()
@@ -695,20 +708,135 @@ function applyRecommendPage(data, { append = false } = {}) {
   if (!append) discoverState.recommendPage = page
 }
 
+function discoverHomeCacheKey(source = discoverState.activeSource) {
+  return buildCacheKey(DISCOVER_HOME_CACHE_BASE, [
+    cacheUserPart(currentUser.value),
+    source || '',
+    discoverState.recommendSort || 'new',
+    discoverState.songRegion || '',
+    discoverState.albumRegion || '',
+  ])
+}
+
+function slimDiscoverPlaylist(item) {
+  if (!item || typeof item !== 'object') return null
+  return {
+    id: item.id,
+    source: item.source,
+    name: item.name,
+    author: item.author,
+    img: item.img || item.picUrl || '',
+    total: item.total,
+    playCount: item.playCount,
+  }
+}
+
+function slimDiscoverSong(item) {
+  if (!item || typeof item !== 'object') return null
+  return {
+    id: item.id,
+    songmid: item.songmid,
+    hash: item.hash,
+    source: item.source,
+    name: item.name,
+    singer: item.singer || item.artist,
+    album: item.album || item.albumName,
+    img: item.img || item.picUrl || '',
+    interval: item.interval,
+    duration: item.duration,
+    qualitys: item.qualitys,
+    types: item.types,
+  }
+}
+
+function persistDiscoverHomeCache() {
+  if (!discoverState.activeSource) return
+  writeScreenCache(discoverHomeCacheKey(), {
+    source: discoverState.activeSource,
+    recommendSort: discoverState.recommendSort,
+    songRegion: discoverState.songRegion,
+    albumRegion: discoverState.albumRegion,
+    recommendList: (discoverState.recommendList || []).slice(0, 40).map(slimDiscoverPlaylist).filter(Boolean),
+    recommendHasMore: Boolean(discoverState.recommendHasMore),
+    recommendTotal: discoverState.recommendTotal || 0,
+    recommendPage: discoverState.recommendPage || 1,
+    newSongs: (discoverState.newSongs || []).slice(0, 27).map(slimDiscoverSong).filter(Boolean),
+    newSongsRegions: discoverState.newSongsRegions || [],
+    newSongsUnsupported: Boolean(discoverState.newSongsUnsupported),
+    newAlbums: (discoverState.newAlbums || []).slice(0, 20).map(slimDiscoverPlaylist).filter(Boolean),
+    newAlbumsRegions: discoverState.newAlbumsRegions || [],
+    newAlbumsUnsupported: Boolean(discoverState.newAlbumsUnsupported),
+    ranks: (discoverState.ranks || []).slice(0, 12).map((item) => ({
+      id: item.id,
+      source: item.source,
+      name: item.name,
+      img: item.img || item.picUrl || '',
+      songs: (item.songs || []).slice(0, 3).map(slimDiscoverSong).filter(Boolean),
+    })),
+    ranksUnsupported: Boolean(discoverState.ranksUnsupported),
+  })
+}
+
+/** 用本地缓存先铺首屏，网络回来后再替换（显得不卡） */
+function hydrateDiscoverHomeFromCache() {
+  if (!discoverState.activeSource) return false
+  const cached = readScreenCache(discoverHomeCacheKey())
+  if (!cached) return false
+  if (cached.source && cached.source !== discoverState.activeSource) return false
+  let hit = false
+  if (!discoverState.recommendList.length && Array.isArray(cached.recommendList) && cached.recommendList.length) {
+    discoverState.recommendList = cached.recommendList
+    discoverState.recommendHasMore = Boolean(cached.recommendHasMore)
+    discoverState.recommendTotal = Number(cached.recommendTotal) || cached.recommendList.length
+    discoverState.recommendPage = Number(cached.recommendPage) || 1
+    discoverState.recommendLoading = false
+    hit = true
+  }
+  if (!discoverState.newSongs.length && Array.isArray(cached.newSongs) && cached.newSongs.length) {
+    discoverState.newSongs = cached.newSongs
+    discoverState.newSongsRegions = cached.newSongsRegions || []
+    discoverState.newSongsUnsupported = Boolean(cached.newSongsUnsupported)
+    discoverState.newSongsLoading = false
+    hit = true
+  }
+  if (!discoverState.newAlbums.length && Array.isArray(cached.newAlbums) && cached.newAlbums.length) {
+    discoverState.newAlbums = cached.newAlbums
+    discoverState.newAlbumsRegions = cached.newAlbumsRegions || []
+    discoverState.newAlbumsUnsupported = Boolean(cached.newAlbumsUnsupported)
+    discoverState.newAlbumsLoading = false
+    hit = true
+  }
+  if (!discoverState.ranks.length && Array.isArray(cached.ranks) && cached.ranks.length) {
+    discoverState.ranks = cached.ranks
+    discoverState.ranksUnsupported = Boolean(cached.ranksUnsupported)
+    discoverState.ranksLoading = false
+    hit = true
+  }
+  return hit
+}
+
 function loadHomeFeed() {
   if (!discoverState.activeSource) return
   cancelHomeFeed()
   const controller = new AbortController()
   homeFeedAbort = controller
-  // 无数据时先亮骨架，避免短暂空白
+  hydrateDiscoverHomeFromCache()
+  // 无缓存时才亮骨架；有缓存则直接展示，后台静默刷新
   if (!discoverState.recommendList.length) discoverState.recommendLoading = true
   if (!discoverState.newSongs.length) discoverState.newSongsLoading = true
   if (!discoverState.newAlbums.length) discoverState.newAlbumsLoading = true
   if (!discoverState.ranks.length) discoverState.ranksLoading = true
+  // 首屏优先：歌单；二屏栏目绘制后再慢慢拉
   loadRecommend({ signal: controller.signal })
-  loadNewSongs({ signal: controller.signal })
-  loadNewAlbums({ signal: controller.signal })
-  loadRanks({ signal: controller.signal })
+  runAfterPaint(() => {
+    if (homeFeedAbort !== controller) return
+    loadNewSongs({ signal: controller.signal })
+    runIdle(() => {
+      if (homeFeedAbort !== controller) return
+      loadNewAlbums({ signal: controller.signal })
+      loadRanks({ signal: controller.signal })
+    }, 2200)
+  })
 }
 
 async function loadRecommend(opts = {}) {
@@ -724,12 +852,12 @@ async function loadRecommend(opts = {}) {
 
   discoverState.recommendPage = 1
   if (!discoverState.recommendList.length) discoverState.recommendLoading = true
-  discoverState.recommendHasMore = false
   discoverState.playlistsError = ''
   try {
-    const res = await api.playlist.recommend(source, sort, 1, 20, { signal })
+    const res = await api.playlist.recommend(source, sort, 1, RECOMMEND_IDLE_LIMIT, { signal })
     if (seq !== discoverSeq || source !== discoverState.activeSource) return
     applyRecommendPage(res.data, { append: false })
+    persistDiscoverHomeCache()
   } catch (e) {
     if (isAbortedError(e)) return
     if (seq !== discoverSeq) return
@@ -766,6 +894,7 @@ async function loadRecommendMore() {
     if (source !== discoverState.activeSource || sort !== discoverState.recommendSort) return
     discoverState.recommendPage = nextPage
     applyRecommendPage(res.data, { append: true })
+    persistDiscoverHomeCache()
   } catch {
     // 预取失败不打断当前页浏览
   } finally {
@@ -788,6 +917,7 @@ async function loadNewSongs(opts = {}) {
     discoverState.newSongsRegions = data.regions || []
     discoverState.newSongsUnsupported = Boolean(data.unsupported)
     if (data.region != null && data.region !== '') discoverState.songRegion = String(data.region)
+    persistDiscoverHomeCache()
   } catch (e) {
     if (isAbortedError(e)) return
     if (source !== discoverState.activeSource) return
@@ -813,6 +943,7 @@ async function loadNewAlbums(opts = {}) {
     discoverState.newAlbumsRegions = data.regions || []
     discoverState.newAlbumsUnsupported = Boolean(data.unsupported)
     if (data.region != null && data.region !== '') discoverState.albumRegion = String(data.region)
+    persistDiscoverHomeCache()
   } catch (e) {
     if (isAbortedError(e)) return
     if (source !== discoverState.activeSource) return
@@ -838,6 +969,7 @@ async function loadRanks(opts = {}) {
       songs: (item.songs || []).filter((s) => s?.name || s?.singer || s?.author).slice(0, 3),
     }))
     discoverState.ranksUnsupported = Boolean(data.unsupported)
+    persistDiscoverHomeCache()
   } catch (e) {
     if (isAbortedError(e)) return
     if (source !== discoverState.activeSource) return

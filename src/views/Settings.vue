@@ -673,21 +673,23 @@
 
       <!-- 音源管理 -->
       <div v-if="activeTab === 'source'" class="panel-body">
-        <p v-if="isAdminUser" class="source-tip">支持同时激活多个音源（落雪 / 澜音 / MusicFree / BakaMusic）。每个账号的激活状态相互独立；点「平台」可单独开关该音源支持的平台。若某平台近期多为试听片段，会自动关闭该音源对它的解析。试听 / 下载顺序：当前音源先穷尽其可用平台，再按激活列表切换下一个音源继续查找。</p>
-        <p v-else class="source-tip">音源脚本由管理员导入。你可以自行激活或停用音源，并点「平台」单独开关各平台（仅对自己生效）。某平台被检测为多为试听时会自动关闭解析。试听 / 下载按「当前源各平台 → 下一激活源各平台」查找；列表旁的健康标注来自本机近期播放/下载。</p>
-        <div v-if="isAdminUser" class="setting-item">
-          <div class="setting-item-info">
-            <div class="setting-item-label">音源切换方式</div>
-            <div class="setting-item-desc">当前音源无法播放或下载时的处理方式</div>
-          </div>
-          <div class="setting-item-action">
-            <AppSelect
-              v-model="settings[SOURCE_FALLBACK_MODE_KEY]"
-              :options="sourceFallbackOptions"
-              min-width="180px"
-              @change="saveSourceFallbackMode"
-            />
-          </div>
+        <p v-if="isAdminUser" class="source-tip">支持同时激活多个音源（落雪 / 澜音 / MusicFree / BakaMusic）。每个账号的激活状态相互独立；点「平台」可单独开关该音源支持的平台。试听片段过多或监测连续失败时，会自动关闭该平台解析。取链会结合健康与监测权重择优调用。</p>
+        <p v-else class="source-tip">音源脚本由管理员导入。你可以自行激活或停用音源，并点「平台」单独开关各平台（仅对自己生效）。试听过多或监测失败的平台会自动关闭。列表旁的健康 / 监测标注来自本机播放与后台探针。</p>
+        <div v-if="isAdminUser" class="source-top-row single">
+          <section class="source-option-card">
+            <div class="source-option-card-text">
+              <h4 class="source-option-card-title">音源切换方式</h4>
+              <p class="source-option-card-desc">当前音源无法播放或下载时的处理方式</p>
+            </div>
+            <div class="source-option-card-action">
+              <AppSelect
+                v-model="settings[SOURCE_FALLBACK_MODE_KEY]"
+                :options="sourceFallbackOptions"
+                min-width="180px"
+                @change="saveSourceFallbackMode"
+              />
+            </div>
+          </section>
         </div>
 
         <div v-if="sourceList.length" class="source-batch-toolbar">
@@ -730,12 +732,17 @@
             @click="checkSourceUpdates"
           >{{ checkingSourceUpdates ? '检查中…' : '检查音源更新' }}</button>
           <button
-            v-if="isAdminUser"
             class="btn-ghost btn-sm"
             type="button"
             :disabled="exportingAllSources || !sourceList.length"
             @click="exportAllSources"
           >{{ exportingAllSources ? '导出中…' : '导出全部音源' }}</button>
+          <button
+            class="btn-ghost btn-sm"
+            type="button"
+            :disabled="sourceProbeRunning || !sourceList.length || !!sourceBatchBusy"
+            @click="runSourceProbeNow"
+          >{{ sourceProbeRunning ? '检测中…' : '音源检测' }}</button>
           <button
             v-if="outdatedSourceCount"
             class="btn-primary btn-sm"
@@ -744,6 +751,7 @@
             @click="applyAllSourceUpdates"
           >{{ sourceUpdatingAll ? '全部更新中…' : `全部更新 (${outdatedSourceCount})` }}</button>
           <span v-if="sourceUpdateSummary" class="hint">{{ sourceUpdateSummary }}</span>
+          <span v-if="sourceProbeSummary" class="hint">{{ sourceProbeSummary }}</span>
         </div>
 
         <div class="source-list" v-if="sourceDisplayRows.length">
@@ -761,89 +769,110 @@
               'is-source-group': row.type === 'group',
             }"
           >
-            <div class="source-item-main">
-              <label class="source-check" @click.stop>
-                <input
-                  type="checkbox"
-                  :checked="isDisplayRowSelected(row)"
-                  @change="toggleDisplayRowSelected(row)"
-                />
-              </label>
-              <div class="source-info">
-                <div class="source-name-row">
-                  <span class="source-name">{{ row.name }}</span>
-                  <span v-if="row.type === 'group'" class="source-group-badge" :title="`含 ${row.members.length} 个平台插件`">合集</span>
-                  <span
-                    v-if="displayRowHealthBadge(row)"
-                    class="source-health-badge"
-                    :class="displayRowHealthLevel(row) === 'mixed' ? 'mixed' : 'preview'"
-                    :title="displayRowHealthTip(row)"
-                  >{{ displayRowHealthBadge(row) }}</span>
-                  <span
-                    v-if="displayRowCanUpdate(row)"
-                    class="source-update-badge"
-                    :title="displayRowUpdateTip(row)"
-                  >有更新</span>
-                </div>
-                <span class="source-meta">{{ displayRowMeta(row) }}</span>
-                <span v-if="displayRowUpdateLog(row)" class="source-update-log">{{ displayRowUpdateLog(row) }}</span>
-                <span v-if="displayRowHealthTip(row)" class="source-health-tip">{{ displayRowHealthTip(row) }}</span>
-                <span v-if="displayRowAutoCloseNotice(row)" class="source-autoclose-tip">{{ displayRowAutoCloseNotice(row) }}</span>
+            <label class="source-check" @click.stop>
+              <input
+                type="checkbox"
+                :checked="isDisplayRowSelected(row)"
+                @change="toggleDisplayRowSelected(row)"
+              />
+            </label>
+
+            <div class="source-card-head">
+              <div class="source-name-row">
+                <span class="source-name" :title="row.name">{{ row.name }}</span>
+                <span v-if="row.type === 'group'" class="source-group-badge" :title="`含 ${row.members.length} 个平台插件`">合集</span>
+                <span
+                  v-if="displayRowHealthBadge(row)"
+                  class="source-health-badge"
+                  :class="displayRowHealthLevel(row) === 'mixed' ? 'mixed' : 'preview'"
+                  :title="displayRowHealthTip(row)"
+                >{{ displayRowHealthBadge(row) }}</span>
+                <span
+                  v-if="displayRowCanUpdate(row)"
+                  class="source-update-badge"
+                  :title="displayRowUpdateTip(row)"
+                >有更新</span>
               </div>
-              <div class="source-actions">
-                <div class="source-platform-wrap" :class="{ open: expandedSourceId === row.id }">
-                  <button
-                    type="button"
-                    class="source-expand-btn"
-                    :class="{ expanded: expandedSourceId === row.id }"
-                    :data-source-plat="row.id"
-                    :aria-expanded="expandedSourceId === row.id"
-                    :title="expandedSourceId === row.id ? '收起平台开关' : '展开平台开关'"
-                    @click.stop="toggleSourcePlatformPanel(row.id)"
-                  >
-                    <span>平台</span>
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
-                  </button>
-                </div>
-                <button v-if="displayRowUnhealthy(row) || displayRowAutoCloseNotice(row)" class="btn-sm btn-ghost" @click="dismissDisplayRowHealth(row)">知道了</button>
-                <button
-                  v-if="isAdminUser && displayRowCanUpdate(row)"
-                  class="btn-sm btn-primary"
-                  :disabled="isDisplayRowBusy(row) || sourceUpdatingAll || checkingSourceUpdates"
-                  @click="applyDisplayRowUpdate(row)"
-                >{{ isDisplayRowUpdating(row) ? '更新中…' : '更新' }}</button>
-                <button
-                  v-if="!isDisplayRowActive(row)"
-                  type="button"
-                  class="btn-sm btn-primary"
-                  :disabled="isDisplayRowBusy(row) || !!sourceBatchBusy || importingUrl || importingFiles"
-                  @click.stop="activateDisplayRow(row)"
-                >{{ isDisplayRowBusy(row) ? '激活中…' : '激活' }}</button>
-                <button
-                  v-else
-                  type="button"
-                  class="btn-sm btn-ghost"
-                  :disabled="isDisplayRowBusy(row) || !!sourceBatchBusy"
-                  @click.stop="deactivateDisplayRow(row)"
-                >{{ isDisplayRowBusy(row) ? '停用中…' : (isDisplayRowPartial(row) ? '全部停用' : '停用') }}</button>
-                <button
-                  v-if="isAdminUser"
-                  class="btn-sm btn-ghost"
-                  type="button"
-                  :title="row.type === 'group'
-                    ? `将合集内 ${row.members.length} 个平台插件保存到下载目录「音源导出」`
-                    : '保存到下载目录下的「音源导出」文件夹'"
-                  :disabled="isDisplayRowBusy(row) || !!exportingSourceId"
-                  @click.stop="exportDisplayRow(row)"
-                >{{ exportingSourceId === row.id ? '导出中…' : '导出' }}</button>
-                <button
-                  v-if="isAdminUser"
-                  type="button"
-                  class="btn-sm btn-danger"
-                  :disabled="isDisplayRowBusy(row) || !!sourceBatchBusy || importingUrl || importingFiles"
-                  @click.stop="removeDisplayRow(row)"
-                >删除</button>
+            </div>
+
+            <div class="source-card-body">
+              <div class="source-status-line">
+                <span class="source-status-pill" :class="isDisplayRowActive(row) ? 'on' : 'off'">
+                  {{ isDisplayRowActive(row) ? (isDisplayRowPartial(row) ? '部分激活' : '已激活') : '未激活' }}
+                </span>
+                <span v-if="displayRowProbeRatio(row)" class="source-probe-ratio" :class="`level-${displayRowProbeLevel(row)}`">
+                  {{ displayRowProbeRatio(row) }}
+                </span>
               </div>
+              <span class="source-meta">{{ displayRowMeta(row) }}</span>
+              <div v-if="displayRowProbePlatforms(row).length" class="source-probe-pills">
+                <span
+                  v-for="p in displayRowProbePlatforms(row)"
+                  :key="p.key"
+                  class="source-probe-pill"
+                  :class="`level-${p.level}`"
+                  :title="p.title"
+                >{{ p.label }}{{ p.suffix }}</span>
+              </div>
+              <span v-else class="source-probe-empty">{{ isDisplayRowActive(row) ? '尚未检测，可点上方「音源检测」' : '激活后可参与检测' }}</span>
+              <span v-if="displayRowUpdateLog(row)" class="source-update-log">{{ displayRowUpdateLog(row) }}</span>
+              <span v-if="displayRowHealthTip(row)" class="source-health-tip">{{ displayRowHealthTip(row) }}</span>
+              <span v-if="displayRowAutoCloseNotice(row)" class="source-autoclose-tip">{{ displayRowAutoCloseNotice(row) }}</span>
+            </div>
+
+            <div class="source-card-foot source-actions">
+              <div class="source-platform-wrap" :class="{ open: expandedSourceId === row.id }">
+                <button
+                  type="button"
+                  class="source-expand-btn"
+                  :class="{ expanded: expandedSourceId === row.id }"
+                  :data-source-plat="row.id"
+                  :aria-expanded="expandedSourceId === row.id"
+                  :title="expandedSourceId === row.id ? '收起平台开关' : '展开平台开关'"
+                  @click.stop="toggleSourcePlatformPanel(row.id)"
+                >
+                  <span>平台</span>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                </button>
+              </div>
+              <button v-if="displayRowUnhealthy(row) || displayRowAutoCloseNotice(row)" class="btn-sm btn-ghost" @click="dismissDisplayRowHealth(row)">知道了</button>
+              <button
+                v-if="isAdminUser && displayRowCanUpdate(row)"
+                class="btn-sm btn-primary"
+                :disabled="isDisplayRowBusy(row) || sourceUpdatingAll || checkingSourceUpdates"
+                @click="applyDisplayRowUpdate(row)"
+              >{{ isDisplayRowUpdating(row) ? '更新中…' : '更新' }}</button>
+              <button
+                v-if="!isDisplayRowActive(row)"
+                type="button"
+                class="btn-sm btn-primary"
+                :disabled="isDisplayRowBusy(row) || !!sourceBatchBusy || importingUrl || importingFiles"
+                @click.stop="activateDisplayRow(row)"
+              >{{ isDisplayRowBusy(row) ? '激活中…' : '激活' }}</button>
+              <button
+                v-else
+                type="button"
+                class="btn-sm btn-ghost"
+                :disabled="isDisplayRowBusy(row) || !!sourceBatchBusy"
+                @click.stop="deactivateDisplayRow(row)"
+              >{{ isDisplayRowBusy(row) ? '停用中…' : (isDisplayRowPartial(row) ? '全部停用' : '停用') }}</button>
+              <button
+                v-if="isAdminUser"
+                class="btn-sm btn-ghost"
+                type="button"
+                :title="row.type === 'group'
+                  ? `将合集内 ${row.members.length} 个平台插件保存到下载目录「音源导出」`
+                  : '保存到下载目录下的「音源导出」文件夹'"
+                :disabled="isDisplayRowBusy(row) || !!exportingSourceId"
+                @click.stop="exportDisplayRow(row)"
+              >{{ exportingSourceId === row.id ? '导出中…' : '导出' }}</button>
+              <button
+                v-if="isAdminUser"
+                type="button"
+                class="btn-sm btn-danger"
+                :disabled="isDisplayRowBusy(row) || !!sourceBatchBusy || importingUrl || importingFiles"
+                @click.stop="removeDisplayRow(row)"
+              >删除</button>
             </div>
           </div>
         </div>
@@ -1433,7 +1462,11 @@
                 </div>
                 <div
                   class="platform-switch-status"
-                  :class="{ on: isDisplayPlatformOn(expandedDisplayRow, p), auto: isDisplayPlatformAutoClosed(expandedDisplayRow, p) }"
+                  :class="{
+                    on: isDisplayPlatformOn(expandedDisplayRow, p),
+                    auto: isDisplayPlatformAutoClosed(expandedDisplayRow, p),
+                    probe: Boolean(displayPlatformProbe(expandedDisplayRow, p)),
+                  }"
                 >
                   {{ displayPlatformStatus(expandedDisplayRow, p) }}
                 </div>
@@ -1530,6 +1563,8 @@ import {
 } from '../utils/sourceFamily.js'
 
 const route = useRoute()
+const sourceProbeRunning = ref(false)
+const sourceProbeSummary = ref('')
 
 const themeOptions = [
   { value: 'dark', label: '深色' },
@@ -1787,6 +1822,53 @@ function displayRowMeta(row) {
     parts.push(sourcePlatformSummary(row.primary))
   }
   return parts.filter(Boolean).join(' · ')
+}
+
+function displayRowProbePlatforms(row) {
+  const members = row?.type === 'group'
+    ? (row.members || [])
+    : [row?.primary || row].filter(Boolean)
+  const out = []
+  for (const m of members) {
+    const list = Array.isArray(m?.probe?.platforms) ? m.probe.platforms : []
+    for (const p of list) {
+      const level = p.level || 'unknown'
+      let suffix = ''
+      if (level === 'ok' && p.lastMs > 0) suffix = ` ${(Number(p.lastMs) / 1000).toFixed(1)}s`
+      else if (level === 'down' || level === 'fail') suffix = ' 失败'
+      else if (level === 'watch') suffix = ' 观察'
+      const label = row?.type === 'group'
+        ? (p.label || memberPlatformLabel(m) || p.id)
+        : (p.label || p.id)
+      const pct = Math.round((p.okRatio || 0) * 100)
+      out.push({
+        key: `${m.id}-${p.id}`,
+        label,
+        level,
+        suffix,
+        title: `${label} · 近 ${p.sampleCount || 0} 次成功率 ${pct}%`,
+      })
+    }
+  }
+  return out
+}
+
+function displayRowProbeRatio(row) {
+  const plats = displayRowProbePlatforms(row)
+  if (!plats.length) return ''
+  const ok = plats.filter((p) => p.level === 'ok').length
+  return `${ok}/${plats.length} 平台`
+}
+
+function displayRowProbeLevel(row) {
+  const plats = displayRowProbePlatforms(row)
+  if (!plats.length) return 'unknown'
+  const ok = plats.filter((p) => p.level === 'ok').length
+  const down = plats.filter((p) => p.level === 'down' || p.level === 'fail').length
+  if (down && ok) return 'mixed'
+  if (down) return 'down'
+  if (ok) return 'ok'
+  return 'unknown'
 }
 
 function displayRowHealthLevel(row) {
@@ -2057,9 +2139,64 @@ function isDisplayPlatformAutoClosed(row, p) {
   return isAutoClosedPlatform(row.primary, p.id)
 }
 
+function displayPlatformProbe(row, p) {
+  if (!row || !p) return null
+  if (row.type === 'group') {
+    const mid = p.memberId || p.id
+    const m = (row.members || []).find((x) => x.id === mid)
+    const plat = p.platformId || platformsOfSource(m || {})[0]
+    return (m?.probe?.platforms || []).find((x) => x.id === plat) || null
+  }
+  const fromList = (row.primary?.probe || row.probe)?.platforms
+  return Array.isArray(fromList) ? fromList.find((x) => x.id === p.id) || null : null
+}
+
+function applySourceList(list) {
+  sourceList.value = Array.isArray(list) ? list : []
+  activeSourceIds.value = sourceList.value.filter((s) => s.active).map((s) => s.id)
+}
+
+async function refreshSourceListQuiet() {
+  try {
+    applySourceList(await api.source.list())
+  } catch {}
+}
+
+async function runSourceProbeNow() {
+  if (!isAdminUser.value || sourceProbeRunning.value) return
+  sourceProbeRunning.value = true
+  sourceProbeSummary.value = '正在检测音源…'
+  try {
+    const res = await api.source.probeRun()
+    if (res?.skipped) {
+      sourceProbeSummary.value = '已有检测任务在进行中'
+      showToast('已有检测任务在进行中', 'info')
+    } else {
+      const ok = res?.okCount ?? res?.status?.meta?.lastOk ?? 0
+      const total = res?.total ?? res?.status?.meta?.lastTotal ?? 0
+      sourceProbeSummary.value = total ? `检测完成 ${ok}/${total}` : '检测完成'
+      showToast(sourceProbeSummary.value, 'success')
+    }
+    applySourceList(await api.source.list())
+  } catch (e) {
+    sourceProbeSummary.value = ''
+    showToast(e.message || '音源检测失败', 'error')
+  } finally {
+    sourceProbeRunning.value = false
+  }
+}
+
 function displayPlatformStatus(row, p) {
-  if (isDisplayPlatformOn(row, p)) return '允许解析'
-  if (isDisplayPlatformAutoClosed(row, p)) return '试听源，已自动关闭'
+  const probe = displayPlatformProbe(row, p)
+  const probeHint = probe && probe.level !== 'unknown'
+    ? (probe.level === 'ok'
+      ? `监测 ${(probe.lastMs / 1000).toFixed(1)}s`
+      : (probe.level === 'down' || probe.level === 'fail' ? '监测失败' : '监测观察'))
+    : ''
+  if (isDisplayPlatformOn(row, p)) return probeHint ? `允许解析 · ${probeHint}` : '允许解析'
+  if (isDisplayPlatformAutoClosed(row, p)) {
+    return probeHint?.includes('失败') ? '监测失败，已自动关闭' : '试听源，已自动关闭'
+  }
   if (row?.type === 'group' && !isSourceActive(p.memberId || p.id)) return '未激活'
   return '已关闭'
 }
@@ -2980,6 +3117,8 @@ onMounted(async () => {
 
 onActivated(() => {
   scrollSettingsToTop()
+  // 从手机端监测页返回时同步 probe / 自动关闭后的音源列表
+  if (activeTab.value === 'source') refreshSourceListQuiet()
 })
 
 onUnmounted(() => {
@@ -3894,7 +4033,7 @@ async function importFile(e) {
     } else {
       showToast(`导入成功: ${res.name || files[0].name}（需点「激活」）`, 'success')
     }
-    sourceList.value = await api.source.list()
+    applySourceList(await api.source.list())
   } catch (err) {
     showToast(err.message, 'error')
   } finally {
@@ -3928,7 +4067,7 @@ async function importFromUrl() {
     }
     importUrl.value = ''
     try {
-      sourceList.value = await api.source.list()
+      applySourceList(await api.source.list())
     } catch {}
   } catch (err) {
     showToast(err.message || '导入失败', 'error')
@@ -4300,6 +4439,9 @@ async function deactivateSource(id) {
     } else {
       syncActiveIdsFromServer(activeSourceIds.value.filter((x) => x !== id))
     }
+    sourceList.value = sourceList.value.map((s) => (
+      s.id === id ? { ...s, active: false } : s
+    ))
     showToast('音源已停用', 'success')
   } catch (e) {
     showToast(e.message || '停用失败', 'error')
@@ -5242,24 +5384,124 @@ function showToast(text, type = 'info') {
 .platform-switch-status.on { color: #2f9e44; }
 .platform-switch-status.auto { color: var(--warning, #e6a23c); }
 
-.source-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+.source-list {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
 .source-item {
+  position: relative;
   display: flex;
   flex-direction: column;
-  padding: 12px 14px;
-  border-radius: var(--radius);
-  background: var(--bg-input);
-  border: 1px solid transparent;
+  gap: 10px;
+  min-width: 0;
+  min-height: 188px;
+  padding: 14px 16px;
+  padding-top: 14px;
+  border-radius: 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
   overflow: visible;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
 }
-.source-item-main {
+.source-item.active {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--border-light));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.source-item > .source-check {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 2;
+  margin: 0;
+  padding: 4px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
+}
+.source-card-head {
+  min-width: 0;
+  padding-right: 28px;
+}
+.source-card-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.source-status-line {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  width: 100%;
-  overflow: visible;
+  flex-wrap: wrap;
+  gap: 6px 8px;
 }
+.source-status-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.5;
+  border: 1px solid transparent;
+}
+.source-status-pill.on {
+  color: #166534;
+  background: color-mix(in srgb, #22c55e 16%, transparent);
+  border-color: color-mix(in srgb, #22c55e 30%, transparent);
+}
+.source-status-pill.off {
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--text-muted) 12%, transparent);
+  border-color: var(--border-light);
+}
+.source-probe-ratio {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.source-probe-ratio.level-ok { color: #16a34a; }
+.source-probe-ratio.level-mixed { color: var(--warning, #e6a23c); }
+.source-probe-ratio.level-down { color: var(--error, #ef4444); }
+.source-probe-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.source-probe-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1.45;
+  border: 1px solid transparent;
+}
+.source-probe-pill.level-ok {
+  color: #166534;
+  background: color-mix(in srgb, #22c55e 16%, transparent);
+  border-color: color-mix(in srgb, #22c55e 30%, transparent);
+}
+.source-probe-pill.level-fail,
+.source-probe-pill.level-down {
+  color: #991b1b;
+  background: color-mix(in srgb, #ef4444 14%, transparent);
+  border-color: color-mix(in srgb, #ef4444 28%, transparent);
+}
+.source-probe-pill.level-watch,
+.source-probe-pill.level-mixed,
+.source-probe-pill.level-unknown {
+  color: #92400e;
+  background: color-mix(in srgb, #f59e0b 14%, transparent);
+  border-color: color-mix(in srgb, #f59e0b 28%, transparent);
+}
+.source-probe-empty {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+.source-card-foot.source-actions,
 .source-actions {
   display: flex;
   gap: 6px;
@@ -5268,14 +5510,67 @@ function showToast(text, type = 'info') {
   position: relative;
   z-index: 1;
   overflow: visible;
+  flex-shrink: 0;
+  width: 100%;
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-light);
 }
 .source-item.platform-open {
   z-index: 20;
   position: relative;
 }
-.source-item.unhealthy { border-color: var(--warning, #e6a23c); }
-.source-item.health-mixed { border-color: color-mix(in srgb, var(--accent) 45%, var(--warning, #e6a23c)); }
-.source-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.source-top-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin: 4px 0 16px;
+  align-items: stretch;
+}
+.source-top-row.single {
+  grid-template-columns: 1fr;
+}
+.source-option-card {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+}
+.source-option-card-text {
+  min-width: 0;
+}
+.source-option-card-title {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+.source-option-card-desc {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+.source-option-card-action {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.platform-switch-status.probe { opacity: 0.95; }
+
+.source-item.unhealthy {
+  border-color: var(--warning, #e6a23c);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--warning, #e6a23c) 18%, transparent);
+}
+.source-item.health-mixed {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--warning, #e6a23c));
+}
 .source-expand-btn {
   display: inline-flex;
   align-items: center;
@@ -5309,8 +5604,16 @@ function showToast(text, type = 'info') {
   border-color: color-mix(in srgb, var(--accent) 45%, var(--border-light, var(--border)));
   background: var(--accent-muted);
 }
-.source-name-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.source-name { font-size: 14px; font-weight: 500; }
+.source-name-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.source-name {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.35;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
 .source-group-badge {
   font-size: 11px;
   padding: 1px 7px;
@@ -5398,6 +5701,10 @@ function showToast(text, type = 'info') {
   gap: 12px;
   flex-wrap: wrap;
   margin: 0 0 12px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
 }
 .source-select-all,
 .source-check {
@@ -5417,8 +5724,9 @@ function showToast(text, type = 'info') {
   accent-color: var(--accent, #3d8bfd);
 }
 .source-item.selected {
-  border-color: color-mix(in srgb, var(--accent, #3d8bfd) 45%, var(--border));
-  background: color-mix(in srgb, var(--accent, #3d8bfd) 8%, var(--bg-input));
+  border-color: color-mix(in srgb, var(--accent, #3d8bfd) 50%, var(--border-light));
+  background: color-mix(in srgb, var(--accent, #3d8bfd) 8%, var(--bg-elevated));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent, #3d8bfd) 12%, transparent);
 }
 .source-update-badge {
   display: inline-flex;
@@ -5625,8 +5933,19 @@ function showToast(text, type = 'info') {
 
 @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 
+@media (max-width: 1500px) {
+  .source-list {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+@media (max-width: 1200px) {
+  .source-list {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
 @media (max-width: 1100px) {
-  .paths-top-row {
+  .paths-top-row,
+  .source-top-row:not(.single) {
     grid-template-columns: 1fr;
   }
   .setting-item-path-row {
@@ -5679,11 +5998,17 @@ function showToast(text, type = 'info') {
   }
   .path-actions { width: 100%; }
   .path-manual { flex-direction: column; }
-  .source-item-main { flex-direction: row; flex-wrap: wrap; align-items: flex-start; gap: 10px; }
-  .source-info { flex: 1 1 180px; }
+  .source-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .source-item {
+    padding: 12px 12px;
+  }
+  .source-item { min-height: 0; }
+  .source-card-body { gap: 5px; }
   .source-actions { width: 100%; }
   .source-platform-wrap {
-    margin-left: auto;
+    margin-left: 0;
   }
   .source-platform-popover {
     padding: 8px 8px 10px;
@@ -5745,6 +6070,12 @@ function showToast(text, type = 'info') {
     left: 12px;
     right: 12px;
     bottom: calc(var(--player-height) + var(--mobile-nav-height) + 16px);
+  }
+}
+
+@media (max-width: 560px) {
+  .source-list {
+    grid-template-columns: 1fr;
   }
 }
 

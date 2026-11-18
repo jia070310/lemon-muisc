@@ -468,7 +468,7 @@ import {
   sortLibrarySongs,
   PLAYLIST_SORT_OPTIONS, ALBUM_SORT_OPTIONS, SONG_SORT_OPTIONS,
   scanLibrary, isFavorite, toggleFavorite,
-  hydrateLibrarySnapshot, libraryIndexFresh,
+  hydrateLibrarySnapshot, hydrateLibraryBrowseSnapshot, saveLibraryBrowseSnapshot, libraryIndexFresh,
   librarySongColumns, loadLibrarySongColumns,
   fetchLibraryTracksPage, fetchLibraryArtists, fetchLibraryAlbums, fetchLibraryGenres,
   libraryBrowseRevision,
@@ -479,6 +479,7 @@ import {
   setLibraryTrackTotal,
   libraryMusicRoots,
 } from '../stores/library.js'
+import { runAfterPaint, runIdle } from '../utils/screenDataCache.js'
 import {
   dailyMix,
   dailyMixDesc,
@@ -752,9 +753,35 @@ async function loadSongPage({ allowLocal = false } = {}) {
   }
 }
 
-async function loadBrowsePreviews() {
+function applyBrowseCache(cached) {
+  if (!cached) return false
+  let hit = false
+  if (!previewArtists.value.length && cached.artists?.length) {
+    previewArtists.value = cached.artists
+    hit = true
+  }
+  if (!previewAlbums.value.length && cached.albums?.length) {
+    previewAlbums.value = cached.albums
+    hit = true
+  }
+  if (!previewGenres.value.length && cached.genres?.length) {
+    previewGenres.value = cached.genres
+    hit = true
+  }
+  if (!playlistCards.value.length && cached.playlistCards?.length) {
+    playlistCards.value = cached.playlistCards
+    hit = true
+  }
+  return hit
+}
+
+async function loadBrowsePreviews({ hydrateFirst = false } = {}) {
+  if (hydrateFirst) {
+    try { applyBrowseCache(hydrateLibraryBrowseSnapshot()) } catch {}
+  }
   try {
-    const [artistsRes, albumsRes, genresRes, cards] = await Promise.all([
+    // 轻量栏目先回填；歌单卡（by-paths）放到后半段，避免抢首屏
+    const [artistsRes, albumsRes, genresRes] = await Promise.all([
       fetchLibraryArtists(api, { page: 1, limit: artistPreviewLimit, sort: 'count' }),
       fetchLibraryAlbums(api, {
         page: 1,
@@ -762,12 +789,24 @@ async function loadBrowsePreviews() {
         sort: albumSort.value === 'name' ? 'name' : (albumSort.value === 'artist' ? 'artist' : 'recent'),
       }),
       fetchLibraryGenres(api, { page: 1, limit: genrePreviewLimit, sort: 'count' }),
-      loadPlaylistCardsFromServer(api).catch(() => buildPlaylistCards([])),
     ])
     previewArtists.value = artistsRes.items
     previewAlbums.value = albumsRes.items
     previewGenres.value = genresRes.items
+    saveLibraryBrowseSnapshot({
+      artists: previewArtists.value,
+      albums: previewAlbums.value,
+      genres: previewGenres.value,
+      playlistCards: playlistCards.value,
+    })
+    const cards = await loadPlaylistCardsFromServer(api).catch(() => buildPlaylistCards([]))
     playlistCards.value = cards
+    saveLibraryBrowseSnapshot({
+      artists: previewArtists.value,
+      albums: previewAlbums.value,
+      genres: previewGenres.value,
+      playlistCards: playlistCards.value,
+    })
   } catch {
     if (!previewArtists.value.length) previewArtists.value = []
     if (!previewAlbums.value.length) previewAlbums.value = []
@@ -859,11 +898,15 @@ onMounted(() => {
   updatePlaylistCols()
   updateAlbumCols()
   loadLibrarySongColumns(api).catch(() => {})
-  // 先本地快照秒开；扫库 / 混搭等到页面可交互后再慢慢做
+  // 先本地快照秒开（曲目 + 浏览预览）；网络在绘制后再替换更新
   const hadSnapshot = hydrateLibrarySnapshot()
-  loadScanSummary()
-  loadBrowsePreviews()
+  let hadBrowse = false
+  try { hadBrowse = applyBrowseCache(hydrateLibraryBrowseSnapshot()) } catch {}
   loadSongPage({ allowLocal: true })
+  runAfterPaint(() => {
+    loadBrowsePreviews({ hydrateFirst: !hadBrowse })
+    runIdle(() => { loadScanSummary() }, 1600)
+  })
   const deferHeavy = () => {
     refreshLibraryMix().catch(() => {})
     scanLibrary(api, {
@@ -881,12 +924,8 @@ onMounted(() => {
     }).catch(() => {})
   }
   // 有缓存：多等一会再轻量 sync；无缓存：稍早点拉服务端，但仍不挡首屏
-  const deferMs = hadSnapshot ? 6000 : 2500
-  if (typeof requestIdleCallback === 'function') {
-    requestIdleCallback(deferHeavy, { timeout: deferMs })
-  } else {
-    setTimeout(deferHeavy, deferMs)
-  }
+  const deferMs = (hadSnapshot || hadBrowse) ? 6000 : 2500
+  runIdle(deferHeavy, deferMs)
 })
 
 onActivated(() => {
@@ -1117,6 +1156,11 @@ async function openRecoPlaylist(card) {
     return
   }
   if (!card?.tracks?.length) {
+    // 本地浏览缓存只有封面元数据：进歌单页再拉曲目，避免误报「曲库不足」
+    if (card?.count > 0 || card?.id) {
+      openPlaylist(card)
+      return
+    }
     showToast('曲库曲目不足，暂时无法生成该歌单', 'info')
     return
   }

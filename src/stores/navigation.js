@@ -39,6 +39,7 @@ const ROUTE_PAGE_MAP = {
   FileManager: 'file-manager',
   TagEditTrack: 'tag',
   Settings: 'settings',
+  SourceProbe: 'settings',
   About: 'about',
 }
 
@@ -51,6 +52,7 @@ const PATH_PAGE_MAP = {
   '/file-manager': 'file-manager',
   '/tag': 'file-manager',
   '/settings': 'settings',
+  '/settings/source-probe': 'settings',
   '/about': 'about',
 }
 
@@ -64,6 +66,7 @@ const prefetchers = {
   '/file-manager': () => import('../views/FileManager.vue'),
   '/tag': () => import('../views/FileManager.vue'),
   '/settings': () => import('../views/Settings.vue'),
+  '/settings/source-probe': () => import('../views/SourceProbe.vue'),
   '/about': () => import('../views/About.vue'),
 }
 
@@ -78,6 +81,7 @@ function resolvePage(to) {
     if (path.startsWith('/podcasts')) return 'podcasts'
     if (path.startsWith('/tag')) return 'tag'
     if (path.startsWith('/file-manager')) return 'file-manager'
+    if (path.startsWith('/settings')) return 'settings'
     return 'default'
   }
   return ROUTE_PAGE_MAP[to.name] || 'default'

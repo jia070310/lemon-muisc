@@ -497,7 +497,8 @@ const hostArchLabel = computed(() => {
 })
 const autoUpdateVisible = computed(() => {
   const job = installJob.value
-  if (job) return ['downloading', 'installing', 'done'].includes(job.status)
+  // 成功态不常驻：toast 后清掉，进度区只展示进行中
+  if (job) return ['downloading', 'installing'].includes(job.status)
   return info.value?.lastAutoUpdate?.status === 'installing'
 })
 const autoUpdateBusy = computed(() => {
@@ -513,7 +514,8 @@ const autoUpdatePct = computed(() => {
     const p = Number(job.progress)
     return Number.isFinite(p) ? Math.min(100, Math.round(p * 100)) : 0
   }
-  return 100
+  if (job.status === 'installing') return 100
+  return null
 })
 const autoUpdateTitle = computed(() => {
   const job = installJob.value
@@ -526,12 +528,15 @@ const autoUpdateTitle = computed(() => {
     return `下载 ${arch} 安装包${job.mirror ? '（加速）' : ''}`
   }
   if (job.status === 'installing') return job.installStep || '正在安装…'
-  if (job.status === 'done') return '升级完成'
-  return '更新失败'
+  return ''
 })
 const autoUpdateMeta = computed(() => {
   const job = installJob.value
-  if (!job) return '应用中心正在完成安装，稍后会自动恢复访问'
+  if (!job) {
+    return info.value?.lastAutoUpdate?.status === 'installing'
+      ? '应用中心正在完成安装，稍后会自动恢复访问'
+      : ''
+  }
   if (job.status === 'downloading') {
     const size = `${job.downloadedLabel || '0 KB'}${job.totalLabel ? ` / ${job.totalLabel}` : ''}`
     return job.mirrorHost ? `${size} · ${job.mirrorHost}` : size
@@ -582,30 +587,30 @@ function stopFpkPoll() {
   }
 }
 
+/** 清掉应用内更新进度区，恢复「立即更新」前的初始说明 */
+function clearInstallUi() {
+  stopFpkPoll()
+  if (fpkJob.value?.action === 'install') fpkJob.value = null
+}
+
 /** 应用内更新结束：确认版本并刷新信息 */
 function finishAutoUpdate(version) {
-  if (
-    version
-    && autoUpdateAnnouncedVersion === version
-    && fpkJob.value?.status === 'done'
-    && fpkJob.value?.installStep === '升级完成'
-  ) return
   stopFpkPoll()
   autoUpdateError.value = ''
-  if (version) autoUpdateAnnouncedVersion = version
-  fpkJob.value = {
-    ...(fpkJob.value || {}),
-    action: 'install',
-    status: 'done',
-    installStep: '升级完成',
-    targetVersion: version || fpkJob.value?.targetVersion || '',
+  const ver = String(version || fpkJob.value?.targetVersion || '')
+  if (ver && autoUpdateAnnouncedVersion === ver) {
+    clearInstallUi()
+    return
   }
+  if (ver) autoUpdateAnnouncedVersion = ver
   const current = String(info.value?.currentVersion || '')
-  if (version && current && version !== current) {
-    showToast(`已升级到 v${version}，正在刷新…`, 'success')
+  if (ver && current && ver !== current) {
+    showToast(`已升级到 v${ver}，正在刷新…`, 'success')
   } else {
-    showToast(`已更新到 v${version || current}`, 'success')
+    showToast(`已更新到 v${ver || current}`, 'success')
   }
+  // 成功后立刻收起进度区，避免下次再出更新卡时仍停在「升级成功」
+  clearInstallUi()
   loadInfo()
 }
 
@@ -966,23 +971,45 @@ let autoUpdateAnnouncedVersion = ''
 /** 页面重开/应用重启后，确认上一次应用内更新的结果 */
 function maybeAnnounceAutoUpdate() {
   const last = info.value?.lastAutoUpdate
-  if (!last?.version) return
   const current = String(info.value?.currentVersion || '')
+  const latest = String(info.value?.latestVersion || '')
+  const job = fpkJob.value?.action === 'install' ? fpkJob.value : null
+
+  if (!last?.version) {
+    // 无升级记录却残留成功/安装进度时，直接收起
+    if (job && (job.status === 'done' || job.status === 'installing')) clearInstallUi()
+    return
+  }
+
   if (last.status === 'success' && current === last.version) {
     if (autoUpdateAnnouncedVersion !== last.version) {
       autoUpdateAnnouncedVersion = last.version
-      fpkJob.value = {
-        ...(fpkJob.value || {}),
-        action: 'install',
-        status: 'done',
-        installStep: '升级完成',
-        targetVersion: last.version,
-        fileName: last.fileName || '',
-      }
       showToast(`已更新到 v${last.version}`, 'success')
+    }
+    // 已成功安装当前版本：进度区回到初始说明（下次有新版时不会仍显示升级成功）
+    clearInstallUi()
+    return
+  }
+
+  if (last.status === 'error' || last.status === 'unknown') {
+    if (job && job.status !== 'downloading') {
+      if (last.status === 'error' && last.message) autoUpdateError.value = last.message
+      clearInstallUi()
     }
     return
   }
+
+  // 最新要更的版本已变，旧安装进度作废
+  if (
+    job
+    && job.targetVersion
+    && latest
+    && job.targetVersion !== latest
+    && job.status !== 'downloading'
+  ) {
+    clearInstallUi()
+  }
+
   if (last.status === 'installing' && Date.now() - (Number(last.startedAt) || 0) < 15 * 60 * 1000) {
     if (isAdminUser.value) startInstallPoll()
   }

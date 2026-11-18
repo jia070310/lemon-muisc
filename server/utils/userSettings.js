@@ -83,8 +83,15 @@ export function isGlobalSettingKey(key) {
   return GLOBAL_SETTING_KEYS.has(key)
 }
 
+/** 第三方客户端自定义命名空间（按用户隔离），如 app.theme、app.lmplayer.* */
+const APP_SETTING_KEY_RE = /^app\.[A-Za-z0-9._-]{1,120}$/
+
+export function isAppSettingKey(key) {
+  return APP_SETTING_KEY_RE.test(String(key || ''))
+}
+
 export function isUserSettingKey(key) {
-  return USER_SETTING_KEYS.has(key)
+  return USER_SETTING_KEYS.has(key) || isAppSettingKey(key)
 }
 
 export function getGlobalSettings() {

@@ -233,6 +233,20 @@ server.listen(PORT, '::', () => {
     startLibraryAutoWatch()
   }, 45000).unref?.()
 
+  // 3b) 播客订阅自动刷新（约 30 分钟；启动后再错开 2 分钟）
+  setTimeout(() => {
+    import('./utils/podcastAutoRefresh.js')
+      .then(({ startPodcastAutoRefresh }) => startPodcastAutoRefresh())
+      .catch(() => {})
+  }, 50000).unref?.()
+
+  // 3c) 音源状态监测：周期探针 → 权重排序 / 失效平台自动关闭
+  setTimeout(() => {
+    import('./utils/sourceProbeRunner.js')
+      .then(({ startSourceProbeScheduler }) => startSourceProbeScheduler())
+      .catch(() => {})
+  }, 70000).unref?.()
+
   // 4) 发现页预热：用户打开后再慢慢打音源
   setTimeout(() => {
     import('./utils/discoverFeedWarm.js')

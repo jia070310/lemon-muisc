@@ -73,6 +73,11 @@ import {
   getLibraryUserData,
   setLibraryUserData,
 } from '../utils/libraryUserData.js'
+import {
+  isSameSongIdentity,
+  dedupeSameSongs,
+  findSameSongIndex,
+} from '../utils/sameSong.js'
 
 export const libraryRouter = Router()
 
@@ -923,20 +928,50 @@ libraryRouter.post('/rename-file', (req, res) => {
   }
 })
 
-/** 读取用户库数据：歌单、收藏、最近播放 */
+/** 读取用户库数据：歌单、收藏、最近播放
+ *  ?sinceRevision=N — 若服务端 revision 未变，返回 unchanged:true（省流量）
+ *  If-None-Match / ETag 同理
+ */
 libraryRouter.get('/user-data', (req, res) => {
   try {
     const data = getLibraryUserData(req.user.id)
-    res.json({ ok: true, data })
+    const rev = Number(data.revision) || 0
+    const etag = `W/"user-data-${rev}"`
+    res.setHeader('ETag', etag)
+    res.setHeader('Cache-Control', 'private, no-cache')
+
+    const sinceRaw = req.query.sinceRevision
+    const since = sinceRaw !== undefined && sinceRaw !== '' ? Number(sinceRaw) : NaN
+    const inm = String(req.headers['if-none-match'] || '').trim()
+    if ((Number.isFinite(since) && since === rev) || (inm && inm === etag)) {
+      if (inm && inm === etag) return res.status(304).end()
+      return res.json({ ok: true, unchanged: true, revision: rev })
+    }
+
+    res.json({ ok: true, data, unchanged: false })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
 })
 
-/** 保存用户库数据（可部分更新） */
+/** 保存用户库数据（可部分更新）
+ *  冲突检测（任选其一）：
+ *  - baseRevision：必须等于服务端当前 revision，否则 409
+ *  - revision：作为「期望写入的新版本」；若 ≤ 服务端当前 revision 则 409
+ *  409 响应带上服务端当前 data，便于客户端三路合并
+ */
 libraryRouter.put('/user-data', (req, res) => {
   try {
-    const { playlists, favorites, favoriteAlbums, favoriteArtists, recentPlays, playStats, revision } = req.body || {}
+    const {
+      playlists,
+      favorites,
+      favoriteAlbums,
+      favoriteArtists,
+      recentPlays,
+      playStats,
+      revision,
+      baseRevision,
+    } = req.body || {}
     if (playlists !== undefined && !Array.isArray(playlists)) {
       return res.status(400).json({ error: 'playlists 必须是数组' })
     }
@@ -955,6 +990,42 @@ libraryRouter.put('/user-data', (req, res) => {
     if (playStats !== undefined && !Array.isArray(playStats)) {
       return res.status(400).json({ error: 'playStats 必须是数组' })
     }
+
+    const current = getLibraryUserData(req.user.id)
+    const serverRev = Number(current.revision) || 0
+    const hasBase = baseRevision !== undefined && baseRevision !== null && baseRevision !== ''
+    const hasRev = revision !== undefined && revision !== null && revision !== ''
+
+    if (hasBase) {
+      const base = Number(baseRevision)
+      if (!Number.isFinite(base) || base !== serverRev) {
+        return res.status(409).json({
+          ok: false,
+          error: 'user-data revision 冲突',
+          code: 'REVISION_CONFLICT',
+          serverRevision: serverRev,
+          baseRevision: Number.isFinite(base) ? base : baseRevision,
+          data: current,
+        })
+      }
+    } else if (hasRev) {
+      const nextRev = Number(revision)
+      if (!Number.isFinite(nextRev) || nextRev <= serverRev) {
+        return res.status(409).json({
+          ok: false,
+          error: 'user-data revision 冲突（需大于服务端当前 revision）',
+          code: 'REVISION_CONFLICT',
+          serverRevision: serverRev,
+          clientRevision: Number.isFinite(nextRev) ? nextRev : revision,
+          data: current,
+        })
+      }
+    }
+
+    const nextRevision = hasRev
+      ? Number(revision)
+      : (hasBase ? serverRev + 1 : serverRev)
+
     setLibraryUserData(req.user.id, {
       playlists,
       favorites,
@@ -962,10 +1033,38 @@ libraryRouter.put('/user-data', (req, res) => {
       favoriteArtists,
       recentPlays,
       playStats,
-      revision,
+      revision: (hasRev || hasBase) ? nextRevision : undefined,
     })
-    notifyLibraryUserDataChanged(req.user.id)
-    res.json({ ok: true })
+    notifyLibraryUserDataChanged(req.user.id, { revision: (hasRev || hasBase) ? nextRevision : serverRev })
+    const saved = getLibraryUserData(req.user.id)
+    res.json({ ok: true, revision: saved.revision, data: saved })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+/** 同曲判定工具：供客户端校验/合并跨平台同曲 */
+libraryRouter.post('/match-same-song', (req, res) => {
+  try {
+    const { a, b, tracks } = req.body || {}
+    if (Array.isArray(tracks)) {
+      const deduped = dedupeSameSongs(tracks)
+      return res.json({
+        ok: true,
+        count: tracks.length,
+        dedupedCount: deduped.length,
+        tracks: deduped,
+      })
+    }
+    if (!a || !b) {
+      return res.status(400).json({ error: '请提供 a/b 两首曲目，或 tracks 数组' })
+    }
+    const same = isSameSongIdentity(a, b)
+    res.json({
+      ok: true,
+      same,
+      indexInA: findSameSongIndex([a], b),
+    })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
