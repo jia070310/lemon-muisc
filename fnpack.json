@@ -137,6 +137,23 @@
               "size": 5627597
             }
           }
+        },
+        "1.2.17.23": {
+          "changelog": "页面打开加速（本地缓存）；发现 / 音乐库 / 播客首屏数据写入本地缓存，再次打开先秒开再静默刷新；发现页歌单按屏渐进加载：静置最多预取到第 3 屏，滑到第 2 屏再拉第 4 屏；音乐库浏览预览（歌手/专辑/流派/歌单卡）与播客列表支持过期后后台替换，减少弱设备卡顿；投屏连播；修复小米电视投屏播完一首后不按播放模式继续的问题",
+          "updated_at": "2026-11-19T00:51:57+08:00",
+          "os_min_version": "1.1.8",
+          "packages": {
+            "x86": {
+              "download_url": "https://github.com/jia070310/lemon-muisc/releases/download/v1.2.17.23/lemon-music-1.2.17.23-x86.fpk",
+              "sha256": "8e4bbfa5668f106660ce225fb3cb3481b1e2544366c5e79abaafc221565d44f3",
+              "size": 5726543
+            },
+            "arm": {
+              "download_url": "https://github.com/jia070310/lemon-muisc/releases/download/v1.2.17.23/lemon-music-1.2.17.23-arm.fpk",
+              "sha256": "f1c8e2fb6b9756ee71c5b7cde7c0cf2cebcb33b9f87949ae20e273677093287b",
+              "size": 5726502
+            }
+          }
         }
       }
     }
