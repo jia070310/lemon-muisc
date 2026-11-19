@@ -126,6 +126,23 @@ $openapiYaml = Join-Path $Root "docs\openapi.yaml"
 if (Test-Path $openapiYaml) {
   Copy-Item -Force $openapiYaml (Join-Path $docsDir "openapi.yaml")
 }
+# 关于页：从 README 解析 QQ 群号与二维码
+$readmePath = Join-Path $Root "README.md"
+if (Test-Path $readmePath) {
+  Copy-Item -Force $readmePath (Join-Path $FpkDir "app\README.md")
+}
+$shotsDir = Join-Path $Root "docs\screenshots"
+if (Test-Path $shotsDir) {
+  $destShots = Join-Path $FpkDir "app\docs\screenshots"
+  New-Item -ItemType Directory -Force -Path $destShots | Out-Null
+  Copy-Item -Force -Recurse (Join-Path $shotsDir "*") $destShots
+}
+$qqQr = Join-Path $Root "public\qq-group-qr.png"
+if (Test-Path $qqQr) {
+  $pubDir = Join-Path $FpkDir "app\public"
+  New-Item -ItemType Directory -Force -Path $pubDir | Out-Null
+  Copy-Item -Force $qqQr (Join-Path $pubDir "qq-group-qr.png")
+}
 Remove-Item -Recurse -Force $AppBundle -ErrorAction SilentlyContinue
 
 Write-Host ">>> normalize cmd scripts to LF" -ForegroundColor Cyan

@@ -159,11 +159,11 @@
         <h2 class="section-title">交流反馈</h2>
         <div class="community-body">
           <div class="community-info">
-            <p class="community-name">飞牛柠檬🍋muisc</p>
+            <p class="community-name">{{ communityName }}</p>
             <p class="community-desc">加群反馈问题、交流用法，或获取安装与更新帮助。</p>
             <div class="community-id-row">
               <span class="community-id-label">群号</span>
-              <code class="community-id">{{ QQ_GROUP_ID }}</code>
+              <code class="community-id">{{ qqGroupId }}</code>
               <button type="button" class="btn-ghost btn-sm" @click="copyGroupId">
                 {{ groupIdCopied ? '已复制' : '复制' }}
               </button>
@@ -178,7 +178,7 @@
             </a>
           </div>
           <figure class="community-qr">
-            <img :src="QQ_GROUP_QR_URL" alt="飞牛柠檬 QQ 群二维码" class="community-qr-img" />
+            <img :src="qqGroupQrUrl" alt="飞牛柠檬 QQ 群二维码" class="community-qr-img" />
             <figcaption>扫码加入</figcaption>
           </figure>
         </div>
@@ -437,9 +437,17 @@ import { APP_ICON_URL } from '../utils/appIcon.js'
 import { onWS } from '../ws.js'
 import { formatRuntimeLogText, downloadTextFile, logRuntime } from '../utils/runtimeLog.js'
 
-const QQ_GROUP_ID = '1126326017'
-const QQ_GROUP_QR_URL = '/qq-group-qr.png'
-const qqGroupJoinUrl = `https://qm.qq.com/cgi-bin/qm/qr?_wv=1027&jump_from=webapi&noverify=0&group_code=${QQ_GROUP_ID}`
+/** 群号 / 二维码：服务端每天从 GitHub README 拉取一次，缺省再回落 */
+const FALLBACK_QQ_GROUP_ID = '1104393408'
+const FALLBACK_QQ_GROUP_NAME = '飞牛柠檬🍋muisc'
+const FALLBACK_QQ_GROUP_QR = '/qq-group-qr.png'
+
+const qqGroupId = computed(() => String(info.value?.community?.groupId || FALLBACK_QQ_GROUP_ID))
+const communityName = computed(() => String(info.value?.community?.groupName || FALLBACK_QQ_GROUP_NAME))
+const qqGroupQrUrl = computed(() => String(info.value?.community?.qrUrl || FALLBACK_QQ_GROUP_QR))
+const qqGroupJoinUrl = computed(() => (
+  `https://qm.qq.com/cgi-bin/qm/qr?_wv=1027&jump_from=webapi&noverify=0&group_code=${qqGroupId.value}`
+))
 
 const info = ref(null)
 const loading = ref(false)
@@ -893,7 +901,7 @@ async function copyLogPath(kind) {
 
 async function copyGroupId() {
   try {
-    await navigator.clipboard.writeText(QQ_GROUP_ID)
+    await navigator.clipboard.writeText(qqGroupId.value)
     groupIdCopied.value = true
     if (groupCopyTimer) clearTimeout(groupCopyTimer)
     groupCopyTimer = setTimeout(() => { groupIdCopied.value = false }, 2000)

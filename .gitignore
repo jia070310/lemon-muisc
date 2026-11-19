@@ -44,6 +44,11 @@ config/*.sqlite3
 config/cache/
 config/cover-cache/
 config/discover-feed-cache/
+config/community-readme-cache.json
+config/community-qr.png
+config/community-qr.jpg
+config/community-qr.webp
+config/community-qr.gif
 config/download-staging/
 config/ADMIN_CREDENTIALS.txt
 config/desktop-protocol

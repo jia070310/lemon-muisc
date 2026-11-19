@@ -33,6 +33,10 @@ COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/server ./server
 COPY --from=builder /app/scripts ./scripts
+# 关于页 QQ 群号 / 二维码从 README.md 解析
+COPY --from=builder /app/README.md ./README.md
+COPY --from=builder /app/docs/screenshots ./docs/screenshots
+COPY --from=builder /app/public/qq-group-qr.png ./public/qq-group-qr.png
 
 ENV PORT=7983 \
     DOWNLOAD_PATH=/downloads \

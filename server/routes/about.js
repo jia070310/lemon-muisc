@@ -21,6 +21,11 @@ import { requireAdmin } from '../middleware/auth.js'
 import { broadcast } from '../ws.js'
 import os from 'os'
 import { formatRuntimeLogLines } from '../utils/runtimeLog.js'
+import {
+  ensureCommunityInfo,
+  getCommunityPublicInfo,
+  loadCommunityQrBuffer,
+} from '../utils/communityFromReadme.js'
 
 export const aboutRouter = Router()
 
@@ -612,6 +617,14 @@ aboutRouter.get('/', async (_req, res) => {
     }
   }
 
+  let community = getCommunityPublicInfo()
+  try {
+    await ensureCommunityInfo()
+    community = getCommunityPublicInfo()
+  } catch {
+    /* 用同步回落 */
+  }
+
   res.json({
     name: 'Lemon Music',
     displayName: '柠檬音乐下载',
@@ -622,6 +635,7 @@ aboutRouter.get('/', async (_req, res) => {
       '飞牛 NAS 原生应用（FPK）',
     ],
     repoUrl: REPO_URL,
+    community,
     currentVersion,
     latestVersion,
     updateAvailable,
@@ -651,6 +665,29 @@ aboutRouter.get('/', async (_req, res) => {
     logDirExists: logInfo.exists,
     logFiles: logInfo.files,
   })
+})
+
+/** 关于页 QQ 群二维码：本地缓存优先，否则经 GitHub 加速节点拉取 */
+aboutRouter.get('/community-qr', async (_req, res) => {
+  try {
+    const data = await loadCommunityQrBuffer()
+    if (!data?.buffer?.length) {
+      return res.status(404).json({ error: '未找到群二维码图片' })
+    }
+    // 用 fetchedAt 做弱校验，避免换图后仍被中间层/浏览器死缓存
+    const etag = `"qq-${data.fetchedAt || 0}-${data.buffer.length}"`
+    res.setHeader('ETag', etag)
+    res.setHeader('Cache-Control', 'public, max-age=120, must-revalidate')
+    if (_req.headers['if-none-match'] === etag) {
+      return res.status(304).end()
+    }
+    res.type(data.mime || 'image/png')
+    return res.send(data.buffer)
+  } catch (e) {
+    if (!res.headersSent) {
+      res.status(404).json({ error: e?.message || '二维码不可用' })
+    }
+  }
 })
 
 aboutRouter.get('/diagnostics', (_req, res) => {
