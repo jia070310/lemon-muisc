@@ -890,6 +890,17 @@ function isMobileLike() {
   }
 }
 
+/** 手机/平板客户端（按 UA / 触摸，不看窗口宽度，避免桌面缩窗误判） */
+function isMobileAudioClient() {
+  try {
+    if (navigator.userAgentData?.mobile) return true
+    if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '')) return true
+    if (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1) return true
+    if (window.matchMedia('(hover: none) and (pointer: coarse)').matches) return true
+  } catch {}
+  return false
+}
+
 function isBackgroundPlayActive() {
   return !visualizerEnabled.value || backgroundNativeOverride
 }
@@ -959,6 +970,10 @@ function detachPlaybackGraphKeepElement() {
   if (mainMediaSource) {
     try { mainMediaSource.disconnect() } catch {}
   }
+  // Gain 仍挂在 destination 也会占调度；切缓存元素时一并摘掉
+  if (mainOutputGain) {
+    try { mainOutputGain.disconnect() } catch {}
+  }
 }
 
 function destroyMediaAudioCacheEntry(key) {
@@ -978,6 +993,15 @@ function destroyMediaAudioCacheEntry(key) {
 function clearMediaAudioCache() {
   for (const key of [...mediaAudioCache.keys()]) {
     destroyMediaAudioCacheEntry(key)
+  }
+}
+
+/** 缓存元素上若挂过 MediaElementSource，切 CarPlay/后台时摘掉，避免残留节点 */
+function detachCachedMediaSources() {
+  for (const entry of mediaAudioCache.values()) {
+    if (!entry?.mediaSource) continue
+    try { entry.mediaSource.disconnect() } catch {}
+    entry.mediaSource = null
   }
 }
 
@@ -1484,8 +1508,15 @@ function applyMainOutputGain() {
   mainOutputGain.gain.value = effective
 }
 
-function teardownPlaybackGraph() {
+/**
+ * 拆掉 MediaElementSource / Analyser / Gain。
+ * @param {{ closeContext?: boolean }} [opts] closeContext=true 时彻底 close AudioContext
+ * （无线 CarPlay：残留 AudioContext 会干扰系统音频调度导致断续）
+ */
+function teardownPlaybackGraph({ closeContext = false } = {}) {
   playbackGraphToken++
+  analyserBoundSrc = ''
+  audioGraphReady = false
   if (analyser) {
     try { analyser.disconnect() } catch {}
     analyser = null
@@ -1495,11 +1526,49 @@ function teardownPlaybackGraph() {
     mainMediaSource = null
     mainAudioTapElement = null
   }
+  if (mainOutputGain) {
+    try { mainOutputGain.disconnect() } catch {}
+    mainOutputGain = null
+  }
+  if (closeContext) {
+    shutdownAudioContext()
+  }
+}
+
+/** 彻底关闭 Web Audio，消除 CarPlay「幽灵」音频节点 */
+function shutdownAudioContext() {
+  const ctx = audioCtx
+  audioCtx = null
+  mainOutputGain = null
+  analyser = null
+  mainMediaSource = null
+  mainAudioTapElement = null
   audioGraphReady = false
+  analyserBoundSrc = ''
+  if (!ctx) return
+  try {
+    if (typeof ctx.suspend === 'function' && ctx.state === 'running') {
+      ctx.suspend().catch(() => {})
+    }
+  } catch {}
+  try {
+    if (typeof ctx.close === 'function' && ctx.state !== 'closed') {
+      ctx.close().catch(() => {})
+    }
+  } catch {}
+}
+
+function shouldAvoidWebAudio() {
+  // 流畅转码 / 后台原生 / 频谱关闭：各端都不创建 AudioContext
+  if (smoothStreamEnabled.value || backgroundNativeOverride || !visualizerEnabled.value) return true
+  // 仅手机端禁用 Web Audio 直通（含频谱）；桌面端保持频谱直通
+  if (isMobileAudioClient()) return true
+  return false
 }
 
 function recreateMainAudioElement() {
-  teardownPlaybackGraph()
+  // 重建元素时先拆图；AudioContext 由 restoreNativeAudioOutput 统一 close
+  teardownPlaybackGraph({ closeContext: false })
   const old = audio
   audio = createAudioElement()
   if (old) {
@@ -1568,7 +1637,7 @@ export function playQualityLabel(q = getPlayQuality(), types) {
 }
 
 function stopPlaybackGraph() {
-  teardownPlaybackGraph()
+  teardownPlaybackGraph({ closeContext: true })
   recreateMainAudioElement()
 }
 
@@ -1734,10 +1803,14 @@ function createAnalyserNode() {
 }
 
 async function ensureAudioContextRunning() {
+  if (shouldAvoidWebAudio()) return false
   try {
     const AC = window.AudioContext || window.webkitAudioContext
     if (!AC) return false
-    if (!audioCtx) audioCtx = new AC()
+    if (!audioCtx || audioCtx.state === 'closed') {
+      audioCtx = new AC()
+      mainOutputGain = null
+    }
     if (audioCtx.state === 'suspended') await audioCtx.resume()
     return audioCtx.state === 'running'
   } catch {
@@ -1745,15 +1818,25 @@ async function ensureAudioContextRunning() {
   }
 }
 
-async function restoreNativeAudioOutput() {
-  if (!audio || !isMainAudioTapped()) return
-  const src = audio.src
-  const time = audio.currentTime || 0
-  const wasPlaying = !audio.paused && !isPaused.value
+async function restoreNativeAudioOutput({ releaseContext = true } = {}) {
+  const wasTapped = isMainAudioTapped()
+  if (!audio || (!wasTapped && !audioCtx)) {
+    if (releaseContext) shutdownAudioContext()
+    return
+  }
+  const src = audio?.src || ''
+  const time = audio?.currentTime || 0
+  const wasPlaying = Boolean(audio && !audio.paused && !isPaused.value)
+  const keepSrc = Boolean(src && hasMediaSrc)
   suppressAudioFocusPause += 1
   try {
-    recreateMainAudioElement()
-    if (!src || !hasMediaSrc) {
+    if (wasTapped) {
+      recreateMainAudioElement()
+    } else {
+      teardownPlaybackGraph({ closeContext: false })
+    }
+    if (releaseContext) shutdownAudioContext()
+    if (!keepSrc || !audio) {
       applyAudioOutput()
       return
     }
@@ -1777,9 +1860,11 @@ async function restoreNativeAudioOutput() {
 
 /** 主音频 Web Audio 直通：播放与频谱共用同一时钟，同步最佳 */
 async function ensurePlaybackGraph() {
-  // 关闭频谱或 PWA 后台临时原生输出时，禁止再挂 MediaElementSource（否则无声）
-  if (!visualizerEnabled.value || backgroundNativeOverride) {
-    if (isMainAudioTapped()) await restoreNativeAudioOutput()
+  // 关闭频谱 / 流畅模式 / 后台原生：禁止再挂 MediaElementSource，并释放 Context
+  if (shouldAvoidWebAudio()) {
+    if (isMainAudioTapped() || audioCtx) {
+      await restoreNativeAudioOutput({ releaseContext: true })
+    }
     return null
   }
   if (!audio || !hasPlayableAudioSrc() || audio.paused || isPaused.value) return null
@@ -1843,7 +1928,7 @@ async function ensurePlaybackGraph() {
     applyAudioOutput()
     return visualizerEnabled.value ? analyser : null
   } catch {
-    teardownPlaybackGraph()
+    teardownPlaybackGraph({ closeContext: true })
     return null
   }
 }
@@ -1853,7 +1938,7 @@ async function resumeAudioPlayback() {
     pauseLocalPlayback()
     return
   }
-  if (visualizerEnabled.value && !backgroundNativeOverride) {
+  if (!shouldAvoidWebAudio()) {
     try {
       if (audioCtx?.state === 'suspended') await audioCtx.resume()
     } catch {}
@@ -1867,18 +1952,23 @@ async function resumeAudioPlayback() {
   if (audio.paused) {
     try { await audio.play() } catch {}
   }
-  if (visualizerEnabled.value && !backgroundNativeOverride) await ensurePlaybackGraph()
+  if (!shouldAvoidWebAudio()) await ensurePlaybackGraph()
   syncMediaSessionPlaybackState()
   if (isBackgroundPlayActive()) syncMediaSessionPosition()
 }
 
-/** 在用户手势同步调用栈内解锁 AudioContext */
+/** 在用户手势同步调用栈内解锁 AudioContext（仅频谱直通模式需要） */
 export function unlockAudioFromGesture() {
   if (!audio) initPlayer()
+  if (shouldAvoidWebAudio()) return
   try {
     const AC = window.AudioContext || window.webkitAudioContext
-    if (AC && !audioCtx) audioCtx = new AC()
-    if (audioCtx?.state === 'suspended') {
+    if (!AC) return
+    if (!audioCtx || audioCtx.state === 'closed') {
+      audioCtx = new AC()
+      mainOutputGain = null
+    }
+    if (audioCtx.state === 'suspended') {
       audioCtx.resume().catch(() => {})
     }
   } catch {}
@@ -2045,8 +2135,10 @@ async function applyBackgroundPlayMode() {
     clearMediaSession()
     return
   }
-  if (isMainAudioTapped()) {
-    await restoreNativeAudioOutput()
+  if (isMainAudioTapped() || audioCtx) {
+    await restoreNativeAudioOutput({ releaseContext: true })
+  } else {
+    shutdownAudioContext()
   }
   updateMediaSession()
   syncMediaSessionPosition()
@@ -2056,14 +2148,15 @@ async function prepareNativeOutputForBackground() {
   if (!audio || isPaused.value || !hasMediaSrc) return
   suppressAudioFocusPause += 1
   try {
-    // Web Audio 在 hidden 时会被挂起：只要已经 createMediaElementSource，必须重建为原生 <audio>
-    if (isMainAudioTapped()) {
-      backgroundNativeOverride = true
-      await restoreNativeAudioOutput()
-    } else if (visualizerEnabled.value) {
-      // 尚未建图也先占住 override，避免切后台瞬间又被 ensurePlaybackGraph 挂上
-      backgroundNativeOverride = true
+    // 切后台 / CarPlay：必须改走原生 <audio>，并 close AudioContext，
+    // 否则无线 CarPlay 会因残留 Web Audio 节点持续卡顿断音
+    backgroundNativeOverride = true
+    if (isMainAudioTapped() || audioCtx) {
+      await restoreNativeAudioOutput({ releaseContext: true })
+    } else {
+      shutdownAudioContext()
     }
+    detachCachedMediaSources()
     updateMediaSession()
     syncMediaSessionPlaybackState()
     syncMediaSessionPosition()
@@ -2079,6 +2172,20 @@ async function prepareNativeOutputForBackground() {
 async function restoreVisualizerAfterBackground() {
   if (!backgroundNativeOverride) return
   backgroundNativeOverride = false
+  // 流畅模式或已关频谱：保持原生输出，不要重建 Web Audio
+  if (smoothStreamEnabled.value || !visualizerEnabled.value) {
+    shutdownAudioContext()
+    updateMediaSession()
+    return
+  }
+  // 手机端：回前台也不重建 Web Audio（与 shouldAvoidWebAudio 一致）
+  if (isMobileAudioClient()) {
+    shutdownAudioContext()
+    updateMediaSession()
+    syncMediaSessionPlaybackState()
+    syncMediaSessionPosition()
+    return
+  }
   if (visualizerEnabled.value && audio && !audio.paused && !isPaused.value) {
     await ensurePlaybackGraph()
     scheduleAudioAnalyserRefresh()
@@ -3190,8 +3297,9 @@ export function initPlayer() {
     if (document.visibilityState === 'hidden') {
       saveQueueState({ immediate: true })
       if (getPodcastEpisodeId(currentPlaying.value)) flushPodcastProgress({ force: true })
-      // 手机 / 桌面 PWA：切后台时改原生输出，否则 Web Audio 会被挂起
-      if ((isStandalonePwa() || isMobileLike()) && audio && !isPaused.value && hasMediaSrc) {
+      // 仅手机端：切后台改原生输出并 close AudioContext（CarPlay）
+      // 桌面端保留 Web Audio 直通，不在此强拆
+      if (isMobileAudioClient() && audio && !isPaused.value && hasMediaSrc) {
         prepareNativeOutputForBackground().catch(() => {})
       } else if (isBackgroundPlayActive() && audio && !audio.paused && !isPaused.value) {
         syncMediaSessionPlaybackState()
@@ -3200,9 +3308,13 @@ export function initPlayer() {
       return
     }
     restoreVisualizerAfterBackground().catch(() => {})
-    if (audio && !audio.paused && hasMediaSrc && visualizerEnabled.value && !backgroundNativeOverride) {
+    if (
+      audio && !audio.paused && hasMediaSrc
+      && !shouldAvoidWebAudio()
+    ) {
+      // 桌面：回前台恢复频谱直通
       ensureAudioContextRunning().then(() => ensurePlaybackGraph()).catch(() => {})
-    } else if (isBackgroundPlayActive() && audio && !isPaused.value && !dlnaCastingUdn.value) {
+    } else if ((isBackgroundPlayActive() || isMobileAudioClient()) && audio && !isPaused.value && !dlnaCastingUdn.value) {
       if (audio.paused) audio.play().catch(() => {})
       syncMediaSessionPlaybackState()
       syncMediaSessionPosition()
@@ -3210,8 +3322,11 @@ export function initPlayer() {
   })
   window.addEventListener('pagehide', () => {
     if (getPodcastEpisodeId(currentPlaying.value)) flushPodcastProgress({ force: true })
-    if ((isStandalonePwa() || isMobileLike()) && audio && !isPaused.value && hasMediaSrc) {
+    // 仅手机端关页时 close Context；桌面不主动拆 Web Audio
+    if (isMobileAudioClient() && audio && !isPaused.value && hasMediaSrc) {
       prepareNativeOutputForBackground().catch(() => {})
+    } else if (isMobileAudioClient() && audioCtx) {
+      shutdownAudioContext()
     }
   })
   window.addEventListener('focus', () => { resumeAudioPlayback() })
@@ -3484,7 +3599,7 @@ export async function applyPlayerSettingsFromMap(settings = {}) {
   }
 
   if (prevViz && !visualizerEnabled.value) {
-    await restoreNativeAudioOutput()
+    await restoreNativeAudioOutput({ releaseContext: true })
   } else if (visualizerEnabled.value && audio && !audio.paused) {
     await ensurePlaybackGraph()
     scheduleAudioAnalyserRefresh()
@@ -3510,7 +3625,7 @@ export async function loadVisualizerSetting() {
     visualizerEnabled.value = true
   }
   if (prev && !visualizerEnabled.value) {
-    await restoreNativeAudioOutput()
+    await restoreNativeAudioOutput({ releaseContext: true })
   } else if (visualizerEnabled.value && audio && !audio.paused) {
     await ensurePlaybackGraph()
     scheduleAudioAnalyserRefresh()
@@ -3911,8 +4026,7 @@ async function startPlaybackFromUrl(url, { resumeTime = 0, item, source, isLocal
   applyAudioCrossOrigin(audio, url)
   audio.src = authedUrl
   hasMediaSrc = true
-  // 本地：至少等 HAVE_CURRENT_DATA / canplay，避免 metadata 假播放卡死 00:00
-  // 流畅模式：等 canplaythrough，多缓冲再开播，减轻车机 WiFi 抖动欠载
+  // 外网本地与在线一样尽早 play；流畅转码仍等更多缓冲
   const repairing = isLocal && /\/api\/play\/local-smooth(?:\?|$)/.test(String(url || ''))
   const localSmoothUrl = isLocal && /\/api\/play\/local-smooth(?:\?|$)/.test(String(url || ''))
   await waitForAudioReady(authedUrl, {
@@ -3939,7 +4053,8 @@ async function startPlaybackFromUrl(url, { resumeTime = 0, item, source, isLocal
     syncMediaSessionPlaybackState()
   } else {
     try {
-      await ensureAudioContextRunning()
+      // 流畅 / CarPlay 原生路径不要创建 AudioContext，避免无线调度被幽灵节点干扰
+      if (!shouldAvoidWebAudio()) await ensureAudioContextRunning()
       await audio.play()
     } catch (playErr) {
       if (playErr?.name === 'NotAllowedError') {
@@ -4033,13 +4148,13 @@ function watchPlaybackKickstart({ intent, isLocal, url, item, source }) {
     beginPlaybackBuffer()
     const waited = Date.now() - startedAt
 
-    if (isLocal && !recovered && waited >= 1600) {
+    // 局域网本地：假播放时升到 canplay 再踢一次；外网勿强制 canplay（FLAC 会再卡数秒）
+    if (isLocal && isLikelyLanAccess() && !recovered && waited >= 1600) {
       recovered = true
       try {
-        // 拆掉可能已挂上的坏图，强制等 canplay 再播
         invalidatePlaybackGraph()
-        if (isMainAudioTapped()) {
-          try { await restoreNativeAudioOutput() } catch {}
+        if (isMainAudioTapped() || audioCtx) {
+          try { await restoreNativeAudioOutput({ releaseContext: true }) } catch {}
         }
         if (intent !== playIntentToken || token !== playbackKickToken) return
         if (!urlsMatch(audio?.src || '', url)) {
@@ -4049,14 +4164,26 @@ function watchPlaybackKickstart({ intent, isLocal, url, item, source }) {
         }
         await waitForAudioReady(url, { isLocal: true, preferCanPlay: true })
         if (intent !== playIntentToken || token !== playbackKickToken) return
-        unlockAudioFromGesture()
-        await ensureAudioContextRunning()
+        if (!shouldAvoidWebAudio()) unlockAudioFromGesture()
         await audio.play()
         isPaused.value = false
         applyAudioOutput()
       } catch {
         // 交给外层重试 / 错误态
       }
+      playbackKickTimer = setTimeout(tick, 250)
+      return
+    }
+    // 外网本地：进度未动时只再调一次 play()，不抬高就绪门槛
+    if (isLocal && !isLikelyLanAccess() && !recovered && waited >= 900) {
+      recovered = true
+      try {
+        if (intent !== playIntentToken || token !== playbackKickToken) return
+        if (!shouldAvoidWebAudio()) unlockAudioFromGesture()
+        await audio.play()
+        isPaused.value = false
+        applyAudioOutput()
+      } catch {}
       playbackKickTimer = setTimeout(tick, 250)
       return
     }
@@ -4839,12 +4966,24 @@ function waitForAudioReady(expectedUrl = '', { isLocal = false, preferCanPlay = 
   } else {
     timeoutMs = slowNet ? 22000 : 8000
   }
-  // 本地：默认等 HAVE_CURRENT_DATA(2)；卡住重试时升到 canplay(3)；流畅模式等 canplaythrough(4)
-  // 在线：metadata(1) 即可
-  const minReady = isLocal
-    ? (preferCanPlayThrough ? 4 : preferCanPlay ? 3 : 2)
-    : 1
-  const softCanPlayMs = isLocal && !preferCanPlay && !preferCanPlayThrough ? 2800 : 0
+  // 开播门槛：
+  // - 在线 / 外网本地：metadata(1) 即播（与平台流一致；外网 FLAC 若等 HAVE_CURRENT_DATA 会白等数秒）
+  // - 局域网本地：HAVE_CURRENT_DATA(2)，盘内秒开且防假播放
+  // - 卡住重试 preferCanPlay → canplay(3)；流畅 → canplaythrough(4)
+  const lanLocal = isLocal && isLikelyLanAccess()
+  const minReady = (() => {
+    if (!isLocal) return 1
+    if (preferCanPlayThrough) return 4
+    if (preferCanPlay) return 3
+    if (lanLocal) return 2
+    return 1
+  })()
+  // soft wait：仅弱网短等多缓冲；普通外网/局域网不等
+  const softCanPlayMs = (() => {
+    if (!isLocal || preferCanPlay || preferCanPlayThrough) return 0
+    if (!isConstrainedNetwork()) return 0
+    return isTouchMobileDevice() ? 1800 : 1400
+  })()
   return new Promise((resolve, reject) => {
     if (!audio) { resolve(); return }
     const matchesExpected = () => !expectedUrl || urlsMatch(audio.src, expectedUrl)
@@ -5037,8 +5176,8 @@ export async function togglePause() {
     applyAudioOutput()
     try {
       unlockAudioFromGesture()
-      // 仅频谱模式需要拉起 AudioContext；后台原生模式不要碰 Web Audio
-      if (visualizerEnabled.value && !backgroundNativeOverride) {
+      // 仅频谱直通需要 AudioContext；流畅/后台原生模式禁止创建，避免 CarPlay 断续
+      if (!shouldAvoidWebAudio()) {
         await ensureAudioContextRunning()
       }
       await audio.play()
@@ -5047,7 +5186,7 @@ export async function togglePause() {
       endPlaybackBuffer()
       isPaused.value = false
       saveQueueState()
-      if (visualizerEnabled.value && !backgroundNativeOverride) {
+      if (!shouldAvoidWebAudio()) {
         await ensurePlaybackGraph()
         scheduleAudioAnalyserRefresh()
       }

@@ -8,11 +8,14 @@ function readLimitMb(envKey, fallback) {
   return fallback
 }
 
-/** 默认比旧版 384/512 放宽；可用环境变量覆盖 */
-const RSS_SOFT_LIMIT_MB = readLimitMb('LEMON_RSS_SOFT_MB', 768)
+/**
+ * 默认对齐大库实测补丁：软 1536 / 硬 2048，避免 14 万首时常驻 800MB+ 被误清缓存。
+ * 仍可用 LEMON_RSS_SOFT_MB / LEMON_RSS_HARD_MB 覆盖。
+ */
+const RSS_SOFT_LIMIT_MB = readLimitMb('LEMON_RSS_SOFT_MB', 1536)
 const RSS_HARD_LIMIT_MB = Math.max(
-  RSS_SOFT_LIMIT_MB + 128,
-  readLimitMb('LEMON_RSS_HARD_MB', 1024),
+  RSS_SOFT_LIMIT_MB + 256,
+  readLimitMb('LEMON_RSS_HARD_MB', 2048),
 )
 
 const guardState = {

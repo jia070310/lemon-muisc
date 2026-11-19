@@ -8,10 +8,12 @@ import { parseFilename } from './filenameParse.js'
 import { readMetaLite, isLikelyTagMojibake } from '../meta.js'
 import { mapWithConcurrency } from './asyncPool.js'
 import { splitArtists } from './artistTag.js'
-import { bumpLibraryIndexRevision } from './libraryIndexState.js'
+import { bumpLibraryIndexRevision, getLibraryIndexRevision } from './libraryIndexState.js'
 
 let tableReady = false
 let columnsReady = false
+/** @type {{ revision: number, dirsKey: string, tracks: any[] } | null} */
+let allTracksMemo = null
 
 const VARIOUS_ARTISTS_NAME = '群星 (Various Artists)'
 
@@ -278,12 +280,30 @@ export function getAllCachedTracks(dirsOverride = null) {
   const dirs = (Array.isArray(dirsOverride) ? dirsOverride : getMusicPaths()).filter(Boolean)
   if (!dirs.length) return []
 
+  const revision = getLibraryIndexRevision()
+  const dirsKey = dirs.map((d) => normalizePathKey(d)).sort().join('\n')
+  if (
+    allTracksMemo
+    && allTracksMemo.revision === revision
+    && allTracksMemo.dirsKey === dirsKey
+    && Array.isArray(allTracksMemo.tracks)
+  ) {
+    return allTracksMemo.tracks
+  }
+
   const filter = buildDirSqlFilter(dirs)
   const rows = filter
     ? db.prepare(`SELECT file_path, mtime, size, meta_json, track_id FROM library_index WHERE ${filter.where} ORDER BY mtime DESC`).all(...filter.params)
     : db.prepare('SELECT file_path, mtime, size, meta_json, track_id FROM library_index ORDER BY mtime DESC').all()
 
-  return rows.map(rowToSlimFile)
+  const tracks = rows.map(rowToSlimFile)
+  allTracksMemo = { revision, dirsKey, tracks }
+  return tracks
+}
+
+/** 索引变更后丢弃全量物化缓存（bump revision 时也会因 revision 失配自动失效） */
+export function clearAllCachedTracksMemo() {
+  allTracksMemo = null
 }
 
 export function buildDiskIndex(dirs) {
@@ -1375,15 +1395,26 @@ export function recalibrateMoodPercentiles({ version, dirs = null } = {}) {
   if (xs.length < 2 || ys.length < 2) return { updated: 0 }
 
   function percentileRank(sorted, value) {
-    let lo = 0
-    let eq = 0
-    for (const v of sorted) {
-      if (v < value) lo += 1
-      else if (v === value) eq += 1
-    }
     const n = sorted.length
     if (n <= 1) return 0.5
-    return (lo + eq * 0.5) / n
+    // 已排序：二分找下界 / 上界，避免 14 万行时 O(n²) 卡死主线程
+    let lo = 0
+    let hi = n
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      if (sorted[mid] < value) lo = mid + 1
+      else hi = mid
+    }
+    const first = lo
+    lo = first
+    hi = n
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      if (sorted[mid] <= value) lo = mid + 1
+      else hi = mid
+    }
+    const eq = lo - first
+    return (first + eq * 0.5) / n
   }
 
   function rankToSigned(rank01) {

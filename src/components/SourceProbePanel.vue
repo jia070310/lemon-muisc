@@ -280,7 +280,8 @@ async function runSourceProbeNow() {
     }
     if (res?.status) applyProbeStatus(res.status)
     sourceList.value = await api.source.list()
-    emit('updated', { status: probeStatus.value, list: sourceList.value })
+    // 通知设置页等父级重载平台开关（自动关闭写在 settings，不仅是 source.list）
+    emit('updated', { status: probeStatus.value, list: sourceList.value, platformsChanged: true })
   } catch (e) {
     showToast(e.message || '监测失败', 'error')
   } finally {

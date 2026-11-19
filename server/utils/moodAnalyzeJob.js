@@ -19,8 +19,12 @@ import {
 } from './libraryNotify.js'
 
 const CONCURRENCY = 1
-/** 每分析多少首做一次库内百分位重标定（启发式） */
-const CALIBRATE_EVERY = 25
+/** 每分析多少首做一次库内百分位重标定（启发式；大库勿过密） */
+const CALIBRATE_EVERY = 2000
+/** 自动补跑每轮上限；手动「立即分析」不限 */
+const AUTO_BATCH_LIMIT = 300
+/** 自动补跑每轮结束后的冷却（毫秒） */
+const AUTO_COOLDOWN_MS = 8 * 60 * 1000
 
 /** @type {{ running: boolean, phase: string, current: number, total: number, analyzed: number, skipped: number, error: number, errorMsg: string, startedAt: number, finishedAt: number }} */
 let moodState = {
@@ -109,14 +113,24 @@ async function analyzeOne(item) {
   return 'error'
 }
 
-async function runMoodJob() {
+/**
+ * @param {{ pending?: any[], chunkLimit?: number | null }} [opts]
+ * chunkLimit：自动补跑限流；null/0 表示全量（手动）
+ */
+async function runMoodJob({ pending: presetPending = null, chunkLimit = null } = {}) {
   try {
     moodState.phase = 'prepare'
     moodState.errorMsg = ''
     emitProgress({ text: '准备分析队列' })
 
     const algoVersion = getActiveMoodAlgoVersion()
-    const pending = listMoodAnalyzePending({ algoVersion })
+    let pending = Array.isArray(presetPending)
+      ? presetPending
+      : listMoodAnalyzePending({ algoVersion })
+    const limit = Number(chunkLimit) > 0 ? Math.floor(Number(chunkLimit)) : 0
+    if (limit > 0 && pending.length > limit) {
+      pending = pending.slice(0, limit)
+    }
     moodState.total = pending.length
     moodState.current = 0
     moodState.analyzed = 0
@@ -184,9 +198,9 @@ async function runMoodJob() {
 
 /**
  * 启动本地情绪分析（与曲库扫描互斥）
- * @param {{ force?: boolean, analyzer?: string }} opts
+ * @param {{ force?: boolean, analyzer?: string, chunkLimit?: number | null, pending?: any[] }} opts
  */
-export function startMoodAnalyzeJob({ force = false, analyzer } = {}) {
+export function startMoodAnalyzeJob({ force = false, analyzer, chunkLimit = null, pending = null } = {}) {
   const scan = getLibraryScanStatus()
   if (scan.running) {
     return {
@@ -217,7 +231,7 @@ export function startMoodAnalyzeJob({ force = false, analyzer } = {}) {
     finishedAt: 0,
   }
 
-  jobPromise = runMoodJob().finally(() => {
+  jobPromise = runMoodJob({ pending, chunkLimit }).finally(() => {
     jobPromise = null
     abortRequested = false
   })
@@ -278,5 +292,12 @@ async function runMoodAutoAnalyze() {
     }
   }
 
-  startMoodAnalyzeJob({ analyzer })
+  // 自动补跑：每轮最多 AUTO_BATCH_LIMIT，结束后冷却再续，避免单核满载数小时
+  const chunk = pending.slice(0, AUTO_BATCH_LIMIT)
+  const hasMore = pending.length > chunk.length
+  startMoodAnalyzeJob({ analyzer, chunkLimit: AUTO_BATCH_LIMIT, pending: chunk })
+  await waitForMoodAnalyzeJob()
+  if (hasMore && !abortRequested) {
+    scheduleMoodAutoAnalyze({ delayMs: AUTO_COOLDOWN_MS })
+  }
 }

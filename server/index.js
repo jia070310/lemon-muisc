@@ -210,6 +210,7 @@ server.listen(PORT, '::', () => {
     syncNativeDesktopProtocol('auto')
   } catch {}
 
+  // 启动重活错峰：避免同一分钟内音源元数据 + 库指纹 walk + discover-warm 叠满单核
   // 1) 先后台装音源（搜索/试听依赖），不挡页面静态资源
   setImmediate(() => {
     console.log('[boot] 后台加载已激活音源…')
@@ -218,7 +219,7 @@ server.listen(PORT, '::', () => {
     })
   })
 
-  // 2) 稍后再刷新音源元数据（会读全部脚本，较重）
+  // 2) ~5min：刷新音源元数据（会读全部脚本，较重）
   setTimeout(() => {
     try {
       refreshStoredSourceMeta()
@@ -226,45 +227,45 @@ server.listen(PORT, '::', () => {
     } catch (e) {
       console.warn('[boot] 音源元数据刷新失败:', e?.message || e)
     }
-  }, 20000).unref?.()
+  }, 5 * 60 * 1000).unref?.()
 
-  // 3) 音乐库监测：再延后，避开用户刚打开时的 IO
-  setTimeout(() => {
-    startLibraryAutoWatch()
-  }, 45000).unref?.()
-
-  // 3b) 播客订阅自动刷新（约 30 分钟；启动后再错开 2 分钟）
+  // 3) ~8min：播客订阅自动刷新
   setTimeout(() => {
     import('./utils/podcastAutoRefresh.js')
       .then(({ startPodcastAutoRefresh }) => startPodcastAutoRefresh())
       .catch(() => {})
-  }, 50000).unref?.()
+  }, 8 * 60 * 1000).unref?.()
 
-  // 3c) 音源状态监测：周期探针 → 权重排序 / 失效平台自动关闭
+  // 4) ~10min：音源状态监测
   setTimeout(() => {
     import('./utils/sourceProbeRunner.js')
       .then(({ startSourceProbeScheduler }) => startSourceProbeScheduler())
       .catch(() => {})
-  }, 70000).unref?.()
+  }, 10 * 60 * 1000).unref?.()
 
-  // 4) 发现页预热：用户打开后再慢慢打音源
-  setTimeout(() => {
-    import('./utils/discoverFeedWarm.js')
-      .then(({ startDiscoverFeedWarm }) => startDiscoverFeedWarm())
-      .catch(() => {})
-  }, 45000).unref?.()
-
-  // 5) 版本检查 / 自动备份
+  // 5) ~12min：版本检查 / 自动备份
   setTimeout(() => {
     import('./utils/autoUserBackup.js')
       .then(({ runAutoBackupVersionCheck }) => runAutoBackupVersionCheck())
       .catch(() => {})
-  }, 60000).unref?.()
+  }, 12 * 60 * 1000).unref?.()
 
-  // 6) 情绪分析补跑（最耗 CPU，最后）
+  // 6) ~15min：音乐库目录监测（大库指纹 walk 很重）
+  setTimeout(() => {
+    startLibraryAutoWatch()
+  }, 15 * 60 * 1000).unref?.()
+
+  // 7) ~30min：发现页预热（内部默认再隔 6h）
+  setTimeout(() => {
+    import('./utils/discoverFeedWarm.js')
+      .then(({ startDiscoverFeedWarm }) => startDiscoverFeedWarm())
+      .catch(() => {})
+  }, 30 * 60 * 1000).unref?.()
+
+  // 8) ~35min：情绪分析补跑（最耗 CPU，最后）
   setTimeout(() => {
     import('./utils/moodAnalyzeJob.js')
       .then(({ scheduleMoodAutoAnalyze }) => scheduleMoodAutoAnalyze({ delayMs: 5000 }))
       .catch(() => {})
-  }, 90000).unref?.()
+  }, 35 * 60 * 1000).unref?.()
 })

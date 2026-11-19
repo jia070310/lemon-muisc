@@ -126,16 +126,10 @@ $openapiYaml = Join-Path $Root "docs\openapi.yaml"
 if (Test-Path $openapiYaml) {
   Copy-Item -Force $openapiYaml (Join-Path $docsDir "openapi.yaml")
 }
-# 关于页：从 README 解析 QQ 群号与二维码
+# 关于页 QQ：运行时从 GitHub README 拉取；包内只带 README + 兜底二维码（勿打整夹 screenshots）
 $readmePath = Join-Path $Root "README.md"
 if (Test-Path $readmePath) {
   Copy-Item -Force $readmePath (Join-Path $FpkDir "app\README.md")
-}
-$shotsDir = Join-Path $Root "docs\screenshots"
-if (Test-Path $shotsDir) {
-  $destShots = Join-Path $FpkDir "app\docs\screenshots"
-  New-Item -ItemType Directory -Force -Path $destShots | Out-Null
-  Copy-Item -Force -Recurse (Join-Path $shotsDir "*") $destShots
 }
 $qqQr = Join-Path $Root "public\qq-group-qr.png"
 if (Test-Path $qqQr) {

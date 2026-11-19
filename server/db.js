@@ -13,6 +13,23 @@ export function initDB(configPath) {
   db = new Database(path.join(configPath, 'lx-music.db'))
   db.pragma('journal_mode = WAL')
   db.pragma('busy_timeout = 5000')
+  // 大曲库（十万级）默认 2MB 页缓存会把随机读打满盘；WAL 下这些设置可回滚、风险低
+  try {
+    db.pragma('cache_size = -131072') // 约 128MB
+    db.pragma('synchronous = NORMAL')
+    db.pragma('wal_autocheckpoint = 4000') // 约 16MB 触发
+    db.pragma('mmap_size = 268435456') // 256MB
+    db.pragma('temp_store = MEMORY')
+  } catch (e) {
+    console.warn('[db] pragma tune failed:', e?.message || e)
+  }
+  try {
+    // 回收长期膨胀的 WAL（用户侧曾见固定 76MB）
+    db.pragma('wal_checkpoint(TRUNCATE)')
+    db.pragma('optimize')
+  } catch (e) {
+    console.warn('[db] wal_checkpoint/optimize failed:', e?.message || e)
+  }
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS settings (
@@ -110,6 +127,7 @@ export function initDB(configPath) {
     'download.isDownloadLrc': 'false',
     'download.isDownloadTLrc': 'false',
     'download.isDownloadRLrc': 'false',
+    'download.lyricStyle': 'line',
     'download.lrcFormat': 'utf8',
     'download.isUseOtherSource': 'true',
     'download.isSavePathGroupByListName': 'false',

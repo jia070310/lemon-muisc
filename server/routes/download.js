@@ -2437,6 +2437,7 @@ async function writeMetaIfNeeded(task, meta, filePath, ext, settings) {
   let lrcResult = null
   if (wantEmbedLyric || wantLrcFile) {
     try {
+      const wantWord = String(settings['download.lyricStyle'] || 'line').toLowerCase() === 'word'
       lrcResult = await fetchTrackLyric({
         source,
         songId: meta.songmid || meta.hash || meta.songId || meta.copyrightId
@@ -2446,6 +2447,7 @@ async function writeMetaIfNeeded(task, meta, filePath, ext, settings) {
         task,
         settings,
         useOtherSource: true,
+        preferWords: wantWord,
         userId: task.user_id,
       })
     } catch (e) {
@@ -2485,8 +2487,9 @@ async function writeMetaIfNeeded(task, meta, filePath, ext, settings) {
     if (genre) metaData.genre = genre
     if (comment) metaData.comment = comment
     if (wantEmbedPic && picBuf) metaData.pic = picBuf
-    if (wantEmbedLyric && lrcResult?.lyric) {
-      metaData.lyric = buildEmbedLyrics(lrcResult, settings)
+    if (wantEmbedLyric && (lrcResult?.lyric || lrcResult?.ylyric)) {
+      const embedded = buildEmbedLyrics(lrcResult, settings)
+      if (embedded) metaData.lyric = embedded
     }
     try {
       // 不在此写 .lrc：是否落盘歌词文件只看 download.isDownloadLrc
@@ -2497,7 +2500,7 @@ async function writeMetaIfNeeded(task, meta, filePath, ext, settings) {
   }
 
   // 开启「下载歌词文件」时，在下载目录写入同名 .lrc（与音频格式无关）
-  if (wantLrcFile && lrcResult?.lyric) {
+  if (wantLrcFile && (lrcResult?.lyric || lrcResult?.ylyric)) {
     try {
       await saveLrcFile(filePath, lrcResult, settings)
     } catch (e) {
@@ -2510,15 +2513,12 @@ async function saveLrcFile(filePath, lrcResult, settings) {
   const on = (key) => settings[key] === 'true' || settings[key] === true
   const lrcPath = filePath.replace(/\.[^.]+$/, '.lrc')
 
-  let content = lrcResult.lyric || ''
-  // 与内嵌逻辑一致：按「下载翻译/罗马音」开关合并进 .lrc
-  if (on('download.isDownloadTLrc') || on('download.isDownloadRLrc')) {
-    content = buildEmbedLyrics(lrcResult, {
-      ...settings,
-      'download.isEmbedLyricT': on('download.isDownloadTLrc') ? 'true' : 'false',
-      'download.isEmbedLyricR': on('download.isDownloadRLrc') ? 'true' : 'false',
-    }) || content
-  }
+  // 与内嵌共用：歌词样式（逐行/逐词）+ 翻译/罗马音开关
+  const content = buildEmbedLyrics(lrcResult, {
+    ...settings,
+    'download.isEmbedLyricT': on('download.isDownloadTLrc') ? 'true' : 'false',
+    'download.isEmbedLyricR': on('download.isDownloadRLrc') ? 'true' : 'false',
+  })
 
   if (!content) return
 

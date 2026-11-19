@@ -59,8 +59,9 @@ function entryLooksLikeFile(entry, fullPath) {
 
 /**
  * 快速递归列出音频文件（迭代扫描，避免深层目录栈溢出）
+ * maxFiles 默认 30 万：旧默认 5 万会截断大曲库入库（实测可超 14 万）
  */
-export function listAudioFiles(rootDir, { maxDepth = Infinity, maxFiles = 50000 } = {}) {
+export function listAudioFiles(rootDir, { maxDepth = Infinity, maxFiles = 300000 } = {}) {
   const files = []
   const errors = []
   if (!rootDir) {

@@ -805,74 +805,90 @@
                 </span>
               </div>
               <span class="source-meta">{{ displayRowMeta(row) }}</span>
-              <div v-if="displayRowProbePlatforms(row).length" class="source-probe-pills">
-                <span
-                  v-for="p in displayRowProbePlatforms(row)"
-                  :key="p.key"
-                  class="source-probe-pill"
-                  :class="`level-${p.level}`"
-                  :title="p.title"
-                >{{ p.label }}{{ p.suffix }}</span>
+              <div class="source-probe-zone">
+                <div v-if="displayRowProbePlatforms(row).length" class="source-probe-pills">
+                  <span
+                    v-for="p in displayRowProbePlatforms(row)"
+                    :key="p.key"
+                    class="source-probe-pill"
+                    :class="`level-${p.level}`"
+                    :title="p.title"
+                  >{{ p.label }}{{ p.suffix }}</span>
+                </div>
+                <span v-else class="source-probe-empty">{{ isDisplayRowActive(row) ? '尚未检测，可点上方「音源检测」' : '激活后可参与检测' }}</span>
               </div>
-              <span v-else class="source-probe-empty">{{ isDisplayRowActive(row) ? '尚未检测，可点上方「音源检测」' : '激活后可参与检测' }}</span>
               <span v-if="displayRowUpdateLog(row)" class="source-update-log">{{ displayRowUpdateLog(row) }}</span>
-              <span v-if="displayRowHealthTip(row)" class="source-health-tip">{{ displayRowHealthTip(row) }}</span>
-              <span v-if="displayRowAutoCloseNotice(row)" class="source-autoclose-tip">{{ displayRowAutoCloseNotice(row) }}</span>
+              <div
+                class="source-card-notices"
+                :class="{ empty: !(displayRowHealthTip(row) || displayRowAutoCloseNotice(row)) }"
+              >
+                <div v-if="displayRowHealthTip(row) || displayRowAutoCloseNotice(row)" class="source-notice-main">
+                  <span v-if="displayRowHealthTip(row)" class="source-health-tip">{{ displayRowHealthTip(row) }}</span>
+                  <span v-if="displayRowAutoCloseNotice(row)" class="source-autoclose-tip">{{ displayRowAutoCloseNotice(row) }}</span>
+                </div>
+                <button
+                  v-if="displayRowUnhealthy(row) || displayRowAutoCloseNotice(row)"
+                  type="button"
+                  class="btn-sm btn-ghost source-notice-dismiss"
+                  @click="dismissDisplayRowHealth(row)"
+                >知道了</button>
+              </div>
             </div>
 
-            <div class="source-card-foot source-actions">
-              <div class="source-platform-wrap" :class="{ open: expandedSourceId === row.id }">
+            <div class="source-card-foot">
+              <div class="source-actions-row source-actions-main">
+                <div class="source-platform-wrap" :class="{ open: expandedSourceId === row.id }">
+                  <button
+                    type="button"
+                    class="source-expand-btn"
+                    :class="{ expanded: expandedSourceId === row.id }"
+                    :data-source-plat="row.id"
+                    :aria-expanded="expandedSourceId === row.id"
+                    :title="expandedSourceId === row.id ? '收起平台开关' : '展开平台开关'"
+                    @click.stop="toggleSourcePlatformPanel(row.id)"
+                  >
+                    <span>平台</span>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                  </button>
+                </div>
+                <button
+                  v-if="isAdminUser && displayRowCanUpdate(row)"
+                  class="btn-sm btn-primary"
+                  :disabled="isDisplayRowBusy(row) || sourceUpdatingAll || checkingSourceUpdates"
+                  @click="applyDisplayRowUpdate(row)"
+                >{{ isDisplayRowUpdating(row) ? '更新中…' : '更新' }}</button>
+                <button
+                  v-if="!isDisplayRowActive(row)"
+                  type="button"
+                  class="btn-sm btn-primary"
+                  :disabled="isDisplayRowBusy(row) || !!sourceBatchBusy || importingUrl || importingFiles"
+                  @click.stop="activateDisplayRow(row)"
+                >{{ isDisplayRowBusy(row) ? '激活中…' : '激活' }}</button>
+                <button
+                  v-else
+                  type="button"
+                  class="btn-sm btn-ghost"
+                  :disabled="isDisplayRowBusy(row) || !!sourceBatchBusy"
+                  @click.stop="deactivateDisplayRow(row)"
+                >{{ isDisplayRowBusy(row) ? '停用中…' : (isDisplayRowPartial(row) ? '全部停用' : '停用') }}</button>
+              </div>
+              <div v-if="isAdminUser" class="source-actions-row source-actions-tools">
+                <button
+                  class="btn-sm btn-ghost"
+                  type="button"
+                  :title="row.type === 'group'
+                    ? `将合集内 ${row.members.length} 个平台插件保存到下载目录「音源导出」`
+                    : '保存到下载目录下的「音源导出」文件夹'"
+                  :disabled="isDisplayRowBusy(row) || !!exportingSourceId"
+                  @click.stop="exportDisplayRow(row)"
+                >{{ exportingSourceId === row.id ? '导出中…' : '导出' }}</button>
                 <button
                   type="button"
-                  class="source-expand-btn"
-                  :class="{ expanded: expandedSourceId === row.id }"
-                  :data-source-plat="row.id"
-                  :aria-expanded="expandedSourceId === row.id"
-                  :title="expandedSourceId === row.id ? '收起平台开关' : '展开平台开关'"
-                  @click.stop="toggleSourcePlatformPanel(row.id)"
-                >
-                  <span>平台</span>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
-                </button>
+                  class="btn-sm btn-danger"
+                  :disabled="isDisplayRowBusy(row) || !!sourceBatchBusy || importingUrl || importingFiles"
+                  @click.stop="removeDisplayRow(row)"
+                >删除</button>
               </div>
-              <button v-if="displayRowUnhealthy(row) || displayRowAutoCloseNotice(row)" class="btn-sm btn-ghost" @click="dismissDisplayRowHealth(row)">知道了</button>
-              <button
-                v-if="isAdminUser && displayRowCanUpdate(row)"
-                class="btn-sm btn-primary"
-                :disabled="isDisplayRowBusy(row) || sourceUpdatingAll || checkingSourceUpdates"
-                @click="applyDisplayRowUpdate(row)"
-              >{{ isDisplayRowUpdating(row) ? '更新中…' : '更新' }}</button>
-              <button
-                v-if="!isDisplayRowActive(row)"
-                type="button"
-                class="btn-sm btn-primary"
-                :disabled="isDisplayRowBusy(row) || !!sourceBatchBusy || importingUrl || importingFiles"
-                @click.stop="activateDisplayRow(row)"
-              >{{ isDisplayRowBusy(row) ? '激活中…' : '激活' }}</button>
-              <button
-                v-else
-                type="button"
-                class="btn-sm btn-ghost"
-                :disabled="isDisplayRowBusy(row) || !!sourceBatchBusy"
-                @click.stop="deactivateDisplayRow(row)"
-              >{{ isDisplayRowBusy(row) ? '停用中…' : (isDisplayRowPartial(row) ? '全部停用' : '停用') }}</button>
-              <button
-                v-if="isAdminUser"
-                class="btn-sm btn-ghost"
-                type="button"
-                :title="row.type === 'group'
-                  ? `将合集内 ${row.members.length} 个平台插件保存到下载目录「音源导出」`
-                  : '保存到下载目录下的「音源导出」文件夹'"
-                :disabled="isDisplayRowBusy(row) || !!exportingSourceId"
-                @click.stop="exportDisplayRow(row)"
-              >{{ exportingSourceId === row.id ? '导出中…' : '导出' }}</button>
-              <button
-                v-if="isAdminUser"
-                type="button"
-                class="btn-sm btn-danger"
-                :disabled="isDisplayRowBusy(row) || !!sourceBatchBusy || importingUrl || importingFiles"
-                @click.stop="removeDisplayRow(row)"
-              >删除</button>
             </div>
           </div>
         </div>
@@ -1387,6 +1403,20 @@
           </div>
           <div class="setting-item">
             <div class="setting-item-info">
+              <div class="setting-item-label">歌词样式</div>
+              <div class="setting-item-desc">内嵌与下载 .lrc 共用；逐词会拉取增强时间轴（无则回退逐行）</div>
+            </div>
+            <div class="setting-item-action">
+              <AppSelect
+                v-model="settings['download.lyricStyle']"
+                :options="lyricStyleOptions"
+                min-width="120px"
+                @change="saveSetting('download.lyricStyle')"
+              />
+            </div>
+          </div>
+          <div class="setting-item">
+            <div class="setting-item-info">
               <div class="setting-item-label">歌词编码</div>
               <div class="setting-item-desc">独立歌词文件的字符编码</div>
             </div>
@@ -1624,6 +1654,10 @@ const librarySongColumnsOptions = [
 ]
 const DOWNLOAD_GROUP_BY_KEY = 'download.savePathGroupBy'
 const AUTO_MATCH_ON_PLAY_KEY = PLAYER_AUTO_MATCH_ON_PLAY_KEY
+const lyricStyleOptions = [
+  { value: 'line', label: '逐行' },
+  { value: 'word', label: '逐词' },
+]
 const lrcFormatOptions = [
   { value: 'utf8', label: 'UTF-8' },
   { value: 'gbk', label: 'GBK' },
@@ -1814,12 +1848,11 @@ function displayRowMeta(row) {
   const parts = []
   if (row?.author) parts.push(row.author)
   if (row?.version) parts.push(`v${row.version}`)
+  // 单源不再重复「平台 x/y」（状态行 / 监测比例已展示）
   if (row?.type === 'group') {
     const total = row.members?.length || 0
     const on = (row.members || []).filter((m) => isSourceActive(m.id)).length
-    parts.push(total ? `平台 ${on}/${total}` : '合集')
-  } else if (row?.primary) {
-    parts.push(sourcePlatformSummary(row.primary))
+    parts.push(total ? `合集 ${on}/${total}` : '合集')
   }
   return parts.filter(Boolean).join(' · ')
 }
@@ -2156,9 +2189,53 @@ function applySourceList(list) {
   activeSourceIds.value = sourceList.value.filter((s) => s.active).map((s) => s.id)
 }
 
+/** 检测/自动关闭后：从服务端重载平台开关，避免提示已关但下拉仍显示开启 */
+async function reloadEnabledPlatformsFromServer() {
+  try {
+    const s = await api.settings.get()
+    if (s && typeof s === 'object') {
+      if (s[ENABLED_PLATFORMS_KEY] != null) settings[ENABLED_PLATFORMS_KEY] = s[ENABLED_PLATFORMS_KEY]
+      if (s['source.autoClosedPlatforms'] != null) {
+        settings['source.autoClosedPlatforms'] = s['source.autoClosedPlatforms']
+      }
+      if (s['source.previewAutoCloseSkip'] != null) {
+        settings['source.previewAutoCloseSkip'] = s['source.previewAutoCloseSkip']
+      }
+    }
+  } catch {}
+  syncEnabledPlatformsFromSettings()
+  reconcilePlatformMapWithAutoClose()
+}
+
+/** 用 autoClosed 纠偏本地 map，防止未刷新时误把已关平台又存回去 */
+function reconcilePlatformMapWithAutoClose() {
+  const next = { ...sourcePlatformMap.value }
+  let changed = false
+  for (const s of sourceList.value || []) {
+    const closedIds = autoClosedList(s).map((p) => p.id).filter(Boolean)
+    if (!closedIds.length || !s?.id) continue
+    if (!Object.prototype.hasOwnProperty.call(next, s.id)) {
+      next[s.id] = platformsOfSource(s).filter((k) => !closedIds.includes(k))
+      changed = true
+      continue
+    }
+    const cur = next[s.id] || []
+    const filtered = cur.filter((k) => !closedIds.includes(k))
+    if (filtered.length !== cur.length) {
+      next[s.id] = filtered
+      changed = true
+    }
+  }
+  if (changed) {
+    sourcePlatformMap.value = next
+    settings[ENABLED_PLATFORMS_KEY] = serializeSourcePlatformMap(next)
+  }
+}
+
 async function refreshSourceListQuiet() {
   try {
     applySourceList(await api.source.list())
+    await reloadEnabledPlatformsFromServer()
   } catch {}
 }
 
@@ -2178,6 +2255,7 @@ async function runSourceProbeNow() {
       showToast(sourceProbeSummary.value, 'success')
     }
     applySourceList(await api.source.list())
+    await reloadEnabledPlatformsFromServer()
   } catch (e) {
     sourceProbeSummary.value = ''
     showToast(e.message || '音源检测失败', 'error')
@@ -2441,19 +2519,17 @@ function initScanTreeExpansion() {
 
   const roots = musicPaths.value.map(normalizeDirPath)
   const hasCache = roots.some((root) => getScanTreeEntry(root).loaded || getScanTreeEntry(root).loading)
-  if (hasCache && scanExpandedPaths.value.size) return
+  // 已初始化则保留用户展开状态；勿因 expand 为空反复清空
+  if (hasCache) return
 
   scanTreeCache.value = {}
   scanTreeLoaders.clear()
-  scanExpandedPaths.value = new Set(roots)
+  // 对齐补丁 B：初始不展开任何节点（根下上万一级目录时，展开即渲染上万行 DOM）
+  // 仅预取各音乐库根目录一层；子目录按点击 ju/ku 懒加载，勾选仍会 expandScanTreeNode
+  scanExpandedPaths.value = new Set()
   void (async () => {
     for (const root of musicPaths.value) {
       await ensureScanTreeChildren(root)
-      const children = getLoadedScanChildren(root)
-      const next = new Set([...scanExpandedPaths.value].map(normalizeDirPath))
-      for (const child of children) next.add(normalizeDirPath(child.path))
-      scanExpandedPaths.value = next
-      for (const child of children) ensureScanTreeChildren(child.path)
     }
   })()
 }
@@ -3031,6 +3107,8 @@ onMounted(async () => {
     if (settings['tag.matchRejectForeignArtist'] == null) settings['tag.matchRejectForeignArtist'] = 'true'
     if (!settings['player.coverStyle']) settings['player.coverStyle'] = 'disc'
     if (settings['player.visualizer'] == null) settings['player.visualizer'] = 'true'
+    if (settings['download.lyricStyle'] !== 'word') settings['download.lyricStyle'] = 'line'
+    if (!settings['download.lrcFormat']) settings['download.lrcFormat'] = 'utf8'
     if (settings[PLAYER_SMOOTH_STREAM_KEY] == null) {
       // 与播放器一致：iOS 默认开，并写入设置避免开关状态漂移
       try {
@@ -4187,9 +4265,11 @@ function platformOptionsForSource(source) {
 }
 
 function isSourcePlatformOn(sourceId, platformId) {
+  const s = sourceList.value.find((row) => row.id === sourceId)
+  // 服务端已自动关闭时，优先视为关闭（避免本地 map 未刷新仍显示开启）
+  if (s && autoClosedList(s).some((p) => p.id === platformId)) return false
   const list = sourcePlatformMap.value[sourceId]
   if (list) return list.includes(platformId)
-  const s = sourceList.value.find((row) => row.id === sourceId)
   return platformsOfSource(s || {}).includes(platformId)
 }
 
@@ -5389,6 +5469,7 @@ function showToast(text, type = 'info') {
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 12px;
   margin-bottom: 16px;
+  align-items: stretch;
 }
 .source-item {
   position: relative;
@@ -5396,7 +5477,8 @@ function showToast(text, type = 'info') {
   flex-direction: column;
   gap: 10px;
   min-width: 0;
-  min-height: 188px;
+  height: 100%;
+  min-height: 220px;
   padding: 14px 16px;
   padding-top: 14px;
   border-radius: 12px;
@@ -5421,11 +5503,14 @@ function showToast(text, type = 'info') {
 }
 .source-card-head {
   min-width: 0;
+  min-height: 38px;
   padding-right: 28px;
+  flex-shrink: 0;
 }
 .source-card-body {
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -5464,10 +5549,17 @@ function showToast(text, type = 'info') {
 .source-probe-ratio.level-ok { color: #16a34a; }
 .source-probe-ratio.level-mixed { color: var(--warning, #e6a23c); }
 .source-probe-ratio.level-down { color: var(--error, #ef4444); }
+.source-probe-zone {
+  min-height: 52px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+}
 .source-probe-pills {
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
+  align-content: flex-start;
 }
 .source-probe-pill {
   display: inline-flex;
@@ -5501,20 +5593,69 @@ function showToast(text, type = 'info') {
   line-height: 1.45;
   color: var(--text-muted);
 }
+.source-card-notices {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 40px;
+  margin-top: auto;
+  padding-top: 2px;
+}
+.source-card-notices.empty {
+  visibility: hidden;
+  pointer-events: none;
+}
+.source-notice-main {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.source-notice-dismiss {
+  flex-shrink: 0;
+  align-self: flex-start;
+}
+.source-card-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+  width: 100%;
+  margin-top: 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-light);
+  position: relative;
+  z-index: 1;
+  overflow: visible;
+}
+.source-actions-row {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 28px;
+}
+.source-actions-main .source-platform-wrap {
+  flex-shrink: 0;
+}
+.source-actions-main > .btn-sm,
+.source-actions-tools > .btn-sm {
+  flex: 1 1 0;
+  min-width: 0;
+  justify-content: center;
+  height: 28px;
+  box-sizing: border-box;
+}
+/* 兼容旧类名 */
 .source-card-foot.source-actions,
 .source-actions {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
   align-items: center;
-  position: relative;
-  z-index: 1;
-  overflow: visible;
-  flex-shrink: 0;
-  width: 100%;
-  margin-top: auto;
-  padding-top: 10px;
-  border-top: 1px solid var(--border-light);
 }
 .source-item.platform-open {
   z-index: 20;
@@ -5635,21 +5776,17 @@ function showToast(text, type = 'info') {
   background: color-mix(in srgb, var(--accent) 16%, transparent);
   color: var(--accent);
 }
-.source-health-tip {
-  display: block;
-  margin-top: 4px;
-  font-size: 12px;
-  color: var(--warning, #e6a23c);
-  line-height: 1.45;
-  max-width: 52ch;
-}
+.source-health-tip,
 .source-autoclose-tip {
-  display: block;
-  margin-top: 4px;
+  display: -webkit-box;
+  margin: 0;
   font-size: 12px;
   color: var(--warning, #e6a23c);
-  line-height: 1.45;
-  max-width: 52ch;
+  line-height: 1.4;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  word-break: break-word;
 }
 .source-item.health-mixed .source-health-tip { color: var(--text-secondary); }
 .source-health-platforms {
@@ -5680,7 +5817,15 @@ function showToast(text, type = 'info') {
   border-color: var(--border);
   color: var(--text-secondary);
 }
-.source-meta { font-size: 12px; color: var(--text-muted); }
+.source-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.4;
+  min-height: 1.4em;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
 
 .import-tabs { display: flex; gap: 6px; margin-bottom: 12px; }
 .pill-tab {
@@ -5998,18 +6143,97 @@ function showToast(text, type = 'info') {
   }
   .path-actions { width: 100%; }
   .path-manual { flex-direction: column; }
+  .source-admin-toolbar,
+  .source-batch-toolbar {
+    gap: 8px;
+    padding: 10px 12px;
+    margin-bottom: 10px;
+  }
   .source-list {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
   }
   .source-item {
-    padding: 12px 12px;
+    gap: 8px;
+    padding: 10px 10px 12px;
+    min-height: 0;
   }
-  .source-item { min-height: 0; }
-  .source-card-body { gap: 5px; }
-  .source-actions { width: 100%; }
+  .source-card-head {
+    min-height: 0;
+    padding-right: 26px;
+  }
+  .source-name {
+    font-size: 13px;
+    -webkit-line-clamp: 1;
+  }
+  .source-card-body { gap: 4px; }
+  .source-status-pill,
+  .source-probe-ratio {
+    font-size: 10px;
+  }
+  .source-meta {
+    font-size: 11px;
+  }
+  .source-probe-zone {
+    min-height: 0;
+  }
+  .source-probe-pills {
+    gap: 4px;
+  }
+  .source-probe-pill {
+    padding: 0 6px;
+    font-size: 10px;
+    line-height: 1.55;
+  }
+  .source-probe-empty {
+    font-size: 11px;
+  }
+  /* 无提示时不占位，避免手机端大块留白 */
+  .source-card-notices {
+    min-height: 0;
+    margin-top: 0;
+    padding-top: 0;
+  }
+  .source-card-notices.empty {
+    display: none;
+  }
+  .source-card-notices:not(.empty) {
+    margin-top: 4px;
+    min-height: 0;
+  }
+  .source-health-tip,
+  .source-autoclose-tip {
+    -webkit-line-clamp: 2;
+    font-size: 11px;
+  }
+  .source-card-foot {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    padding-top: 8px;
+    width: 100%;
+  }
+  .source-actions-row {
+    display: contents;
+  }
   .source-platform-wrap {
     margin-left: 0;
+    min-width: 0;
   }
+  .source-expand-btn {
+    width: 100%;
+    justify-content: center;
+    height: 32px;
+    padding: 0 8px;
+  }
+  .source-actions-main > .btn-sm,
+  .source-actions-tools > .btn-sm {
+    flex: none;
+    width: 100%;
+    height: 32px;
+    min-height: 32px;
+  }
+  .source-actions { width: 100%; }
   .source-platform-popover {
     padding: 8px 8px 10px;
   }
@@ -6076,6 +6300,31 @@ function showToast(text, type = 'info') {
 @media (max-width: 560px) {
   .source-list {
     grid-template-columns: 1fr;
+    gap: 10px;
+  }
+  .source-item {
+    padding: 12px 12px 12px;
+  }
+  .source-name {
+    font-size: 14px;
+    -webkit-line-clamp: 2;
+  }
+  .source-card-foot {
+    grid-template-columns: auto 1fr 1fr 1fr;
+    gap: 6px;
+  }
+  /* 单列：平台 | 停用 | 导出 | 删除 同一行 */
+  .source-expand-btn {
+    width: auto;
+    min-width: 64px;
+  }
+  .source-actions-main > .btn-sm,
+  .source-actions-tools > .btn-sm {
+    width: auto;
+  }
+  /* 若有「更新」按钮，允许换到下一行 */
+  .source-card-foot > .btn-primary:first-of-type {
+    grid-column: auto;
   }
 }
 

@@ -14,6 +14,7 @@ export const GLOBAL_SETTING_KEYS = new Set([
   'download.isDownloadLrc',
   'download.isDownloadTLrc',
   'download.isDownloadRLrc',
+  'download.lyricStyle',
   'download.lrcFormat',
   'download.isSavePathGroupByListName',
   'download.savePathGroupBy',

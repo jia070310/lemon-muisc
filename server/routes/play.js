@@ -449,7 +449,10 @@ function applyRangeOrFull(res, req, filePath, mime) {
 }
 
 function pipeLocalFile(res, filePath, { start = 0, end } = {}) {
-  const options = end != null ? { start, end } : undefined
+  // 256KB 首包，外网首帧比默认 64KB 更快攒到可解码量
+  const options = end != null
+    ? { start, end, highWaterMark: 256 * 1024 }
+    : { highWaterMark: 256 * 1024 }
   const stream = fs.createReadStream(filePath, options)
   stream.on('error', (err) => {
     logPlayError('local-stream', { query: {}, body: {} }, err, { filePath })

@@ -6,7 +6,6 @@ import {
 import {
   syncLibraryIndex,
   scanBatchAndCache,
-  getAllCachedTracks,
   countCachedTracks,
 } from './libraryCache.js'
 import {
@@ -90,7 +89,7 @@ async function runScanJob(precomputed, scanDirs) {
       emitProgress()
       const revision = finalizeLibraryIndexUpdate({ changed: removedCount > 0 && !abortRequested })
       notifyLibraryScanComplete({
-        totalTracks: getAllCachedTracks().length,
+        totalTracks: countCachedTracks(),
         scannedTags: 0,
         hadPending: false,
         trackCount: countCachedTracks(),
@@ -127,7 +126,7 @@ async function runScanJob(precomputed, scanDirs) {
       changed: !abortRequested && (pending.length > 0 || removedCount > 0),
     })
     notifyLibraryScanComplete({
-      totalTracks: getAllCachedTracks().length,
+      totalTracks: countCachedTracks(),
       scannedTags: scanState.scanned,
       hadPending: pending.length > 0,
       trackCount: countCachedTracks(),
