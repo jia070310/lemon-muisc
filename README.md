@@ -30,7 +30,7 @@
 | **Android** | [zyhub/LMplayer](https://github.com/zyhub/LMplayer) | 高保真无损播放器：手机 / 平板大屏，并面向车机、TV 等 Android 设备；对接柠檬云端曲库与在线检索 |
 
 QQ 互动群「飞牛柠檬🍋muisc」（2群号 **1104393408**）  
-![2群](docs/screenshots/屏幕截图%202026-11-19%20005155.png)
+![2群](docs/screenshots/docs/screenshots/kj.png)
 
 ---
 
