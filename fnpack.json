@@ -154,6 +154,23 @@
               "size": 5726502
             }
           }
+        },
+        "1.2.17.24": {
+          "changelog": "大曲库性能；扫库上限由 5 万提升至 30 万，避免大库入库被截断；设置页目录树改为懒加载：初始不展开、不预取全部子目录（上万一级目录时不再打爆 NAS）；SQLite 页缓存 / WAL checkpoint / mmap 等 PRAGMA 调优；内存软硬限默认 1536 / 2048MB，减少大库误清缓存；情绪标定百分位改二分查找；自动补跑每轮 300 首 + 8 分钟冷却（手动仍全量）",
+          "updated_at": "2026-11-19T13:35:27+08:00",
+          "os_min_version": "1.1.8",
+          "packages": {
+            "x86": {
+              "download_url": "https://github.com/jia070310/lemon-muisc/releases/download/v1.2.17.24/lemon-music-1.2.17.24-x86.fpk",
+              "sha256": "a039bbdd8c24360ad3f4ef4c18aefa50031f88b2e5f5a6867dec742f32b49f4f",
+              "size": 5785740
+            },
+            "arm": {
+              "download_url": "https://github.com/jia070310/lemon-muisc/releases/download/v1.2.17.24/lemon-music-1.2.17.24-arm.fpk",
+              "sha256": "7eaed3289e68278526045a4261fe3b89a7a3884b8667a0b253ec84761d1a1e5b",
+              "size": 5785710
+            }
+          }
         }
       }
     }
