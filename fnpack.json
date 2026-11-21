@@ -171,6 +171,23 @@
               "size": 5785710
             }
           }
+        },
+        "1.2.17.25": {
+          "changelog": "下载 · 同名检测；音乐库索引新增 `file_base` 全路径检索键，下载同名检测不再依赖整盘扫描；兼容 `06. 歌手 - 歌名` 与 `歌名 - 歌手` 等命名差异；支持多候选键 + 歌名/歌手身份匹配；启动后后台分批回填 / 纠正旧键，避免阻塞服务；曲库扫描稳定性；合入大曲库相关修复（含 #59 / #60 / #61）：目录指纹、异步同步串行化、扫描路径等补丁落地源码",
+          "updated_at": "2026-11-22T02:16:06+08:00",
+          "os_min_version": "1.1.8",
+          "packages": {
+            "x86": {
+              "download_url": "https://github.com/jia070310/lemon-muisc/releases/download/v1.2.17.25/lemon-music-1.2.17.25-x86.fpk",
+              "sha256": "e9b587ecce82c6f2c359479effabb10c47368ee58a83f4fb2ceb4130edb421f1",
+              "size": 5792508
+            },
+            "arm": {
+              "download_url": "https://github.com/jia070310/lemon-muisc/releases/download/v1.2.17.25/lemon-music-1.2.17.25-arm.fpk",
+              "sha256": "beca323885f07a3d3c7084ca08935473e4250bfba73731df63cd3f04a68dd3ed",
+              "size": 5792451
+            }
+          }
         }
       }
     }
