@@ -170,14 +170,25 @@ async function mapPool(items, limit, worker) {
   return results
 }
 
-export async function runSourceProbeRound({ reason = 'schedule' } = {}) {
+/**
+ * @param {{ reason?: string, sourceIds?: string[] }} [opts]
+ * sourceIds：仅测这些音源（手动单测）；空则测全部激活音源
+ */
+export async function runSourceProbeRound({ reason = 'schedule', sourceIds = null } = {}) {
   if (running) {
     return { ok: false, skipped: true, reason: 'busy' }
   }
   running = true
   const startedAt = new Date().toISOString()
   try {
-    const targets = collectProbeTargets()
+    const filterIds = Array.isArray(sourceIds)
+      ? [...new Set(sourceIds.map((id) => String(id || '').trim()).filter(Boolean))]
+      : []
+    let targets = collectProbeTargets()
+    if (filterIds.length) {
+      const allow = new Set(filterIds)
+      targets = targets.filter((t) => allow.has(String(t.sourceId)))
+    }
     if (!targets.length) {
       setProbeMeta({
         lastRunAt: startedAt,
@@ -185,9 +196,16 @@ export async function runSourceProbeRound({ reason = 'schedule' } = {}) {
         lastOk: 0,
         lastFail: 0,
         lastTotal: 0,
-        lastError: '无激活音源可测',
+        lastError: filterIds.length ? '指定音源无可测平台（需已激活且支持取链）' : '无激活音源可测',
       })
-      return { ok: true, total: 0, results: [] }
+      return {
+        ok: true,
+        total: 0,
+        okCount: 0,
+        failCount: 0,
+        results: [],
+        sourceIds: filterIds,
+      }
     }
     const results = await mapPool(targets, CONCURRENCY, probeOne)
     const ok = results.filter((r) => r?.ok).length
@@ -201,8 +219,15 @@ export async function runSourceProbeRound({ reason = 'schedule' } = {}) {
       lastTotal: results.length,
       lastError: '',
     })
-    console.log(`[source-probe] ${reason}: ${ok}/${results.length} 成功`)
-    return { ok: true, total: results.length, okCount: ok, failCount: fail, results }
+    console.log(`[source-probe] ${reason}${filterIds.length ? ` [${filterIds.join(',')}]` : ''}: ${ok}/${results.length} 成功`)
+    return {
+      ok: true,
+      total: results.length,
+      okCount: ok,
+      failCount: fail,
+      results,
+      sourceIds: filterIds,
+    }
   } catch (e) {
     setProbeMeta({
       lastRunAt: startedAt,

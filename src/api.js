@@ -263,7 +263,11 @@ export const api = {
     }),
     probeStatus: () => request('/source/probe'),
     probeConfig: (body) => request('/source/probe/config', { method: 'POST', body }),
-    probeRun: () => request('/source/probe/run', { method: 'POST', timeout: 120000 }),
+    probeRun: (body = {}) => request('/source/probe/run', {
+      method: 'POST',
+      body: body && typeof body === 'object' ? body : {},
+      timeout: 120000,
+    }),
     probeCell: (sourceId, platform) => request(`/source/probe/cell?sourceId=${encodeURIComponent(sourceId)}&platform=${encodeURIComponent(platform)}`),
     request: (source, action, info) => request('/source/request', { method: 'POST', body: { source, action, info } }),
   },

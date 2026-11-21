@@ -65,7 +65,6 @@
           ref="historyScrollerEl"
           class="history-scroller"
           @wheel="onHistoryWheel"
-          @pointerdown="onHistoryPointerDown"
           @scroll="refreshHistoryNav"
         >
           <button
@@ -74,7 +73,7 @@
             type="button"
             class="history-card"
             :title="group.feedTitle"
-            @click="onHistoryCardClick(group, $event)"
+            @click="openHistoryGroup(group)"
           >
             <div class="history-cover-wrap">
               <img
@@ -159,18 +158,43 @@
 
     <section v-if="updates.length" class="pod-section">
       <h2 class="section-label">最近更新</h2>
-      <div class="update-chips">
+      <div class="history-rail">
         <button
-          v-for="feed in updates"
-          :key="'u-' + feed.id"
+          v-show="updatesCanLeft"
           type="button"
-          class="update-chip card"
-          @click="openFeed(feed)"
+          class="history-nav history-nav-left"
+          title="向左滑动"
+          aria-label="向左滑动"
+          @click="scrollUpdates(-1)"
+        >‹</button>
+        <div
+          ref="updatesScrollerEl"
+          class="history-scroller updates-scroller"
+          @wheel="onUpdatesWheel"
+          @scroll="refreshUpdatesNav"
         >
-          <img v-if="feed.imageUrl" class="chip-cover" :src="coverSrc(feed.imageUrl)" alt="" />
-          <span class="chip-title">{{ feed.title }}</span>
-          <span v-if="feed.unreadCount" class="chip-badge">{{ feed.unreadCount }} 新</span>
-        </button>
+          <div class="update-chips">
+            <button
+              v-for="feed in updates"
+              :key="'u-' + feed.id"
+              type="button"
+              class="update-chip card"
+              @click="openFeed(feed)"
+            >
+              <img v-if="feed.imageUrl" class="chip-cover" :src="coverSrc(feed.imageUrl)" alt="" />
+              <span class="chip-title">{{ feed.title }}</span>
+              <span v-if="feed.unreadCount" class="chip-badge">{{ feed.unreadCount }} 新</span>
+            </button>
+          </div>
+        </div>
+        <button
+          v-show="updatesCanRight"
+          type="button"
+          class="history-nav history-nav-right"
+          title="向右滑动"
+          aria-label="向右滑动"
+          @click="scrollUpdates(1)"
+        >›</button>
       </div>
     </section>
 
@@ -315,6 +339,9 @@ const historyScrollerEl = ref(null)
 const historyCanLeft = ref(false)
 const historyCanRight = ref(false)
 const updates = ref([])
+const updatesScrollerEl = ref(null)
+const updatesCanLeft = ref(false)
+const updatesCanRight = ref(false)
 const url = ref('')
 const loading = ref(false)
 const subscribing = ref(false)
@@ -328,14 +355,6 @@ let offPodcastUpdated = null
 const swipeOpenId = ref('')
 const swipeOffset = reactive({})
 const ctxMenu = ref(null)
-const historyDrag = reactive({
-  active: false,
-  moved: false,
-  x0: 0,
-  left0: 0,
-  pointerId: 0,
-})
-
 /** 播放历史按栏目封面聚合 */
 const historyGroups = computed(() => {
   const map = new Map()
@@ -384,7 +403,10 @@ function scrollHistory(dir) {
   setTimeout(refreshHistoryNav, 280)
 }
 
-/** 电脑端：滚轮转为横向滑动 */
+/**
+ * 电脑端：滚轮转为横向滑动。
+ * 不用鼠标拖拽（setPointerCapture 会吃掉卡片 click）；触控走原生左右滑。
+ */
 function onHistoryWheel(e) {
   const el = historyScrollerEl.value
   if (!el) return
@@ -400,59 +422,54 @@ function onHistoryWheel(e) {
   refreshHistoryNav()
 }
 
-/** 电脑端：按住拖拽横向滑动 */
-function onHistoryPointerDown(e) {
-  if (e.pointerType === 'touch') return
-  if (e.button != null && e.button !== 0) return
-  const el = historyScrollerEl.value
-  if (!el) return
-  historyDrag.active = true
-  historyDrag.moved = false
-  historyDrag.x0 = e.clientX
-  historyDrag.left0 = el.scrollLeft
-  historyDrag.pointerId = e.pointerId
-  try { el.setPointerCapture(e.pointerId) } catch {}
-  window.addEventListener('pointermove', onHistoryPointerMove)
-  window.addEventListener('pointerup', onHistoryPointerUp)
-  window.addEventListener('pointercancel', onHistoryPointerUp)
-}
-
-function onHistoryPointerMove(e) {
-  if (!historyDrag.active) return
-  const el = historyScrollerEl.value
-  if (!el) return
-  const dx = e.clientX - historyDrag.x0
-  if (Math.abs(dx) > 4) historyDrag.moved = true
-  el.scrollLeft = historyDrag.left0 - dx
-  refreshHistoryNav()
-}
-
-function onHistoryPointerUp() {
-  if (!historyDrag.active) return
-  historyDrag.active = false
-  const el = historyScrollerEl.value
-  try { el?.releasePointerCapture?.(historyDrag.pointerId) } catch {}
-  window.removeEventListener('pointermove', onHistoryPointerMove)
-  window.removeEventListener('pointerup', onHistoryPointerUp)
-  window.removeEventListener('pointercancel', onHistoryPointerUp)
-  // 拖拽后短暂保留 moved，让随后的 click 能拦截误触
-  if (historyDrag.moved) {
-    setTimeout(() => { historyDrag.moved = false }, 80)
-  }
-}
-
-function onHistoryCardClick(group, e) {
-  if (historyDrag.moved) {
-    e?.preventDefault?.()
-    historyDrag.moved = false
-    return
-  }
-  openHistoryGroup(group)
-}
-
 watch(historyGroups, async () => {
   await nextTick()
   refreshHistoryNav()
+})
+
+function refreshUpdatesNav() {
+  const el = updatesScrollerEl.value
+  if (!el) {
+    updatesCanLeft.value = false
+    updatesCanRight.value = false
+    return
+  }
+  const max = Math.max(0, el.scrollWidth - el.clientWidth)
+  updatesCanLeft.value = el.scrollLeft > 4
+  updatesCanRight.value = el.scrollLeft < max - 4
+}
+
+function scrollUpdates(dir) {
+  const el = updatesScrollerEl.value
+  if (!el) return
+  const step = Math.max(180, Math.floor(el.clientWidth * 0.7))
+  el.scrollBy({ left: dir * step, behavior: 'smooth' })
+  setTimeout(refreshUpdatesNav, 280)
+}
+
+/**
+ * 电脑端：滚轮转为横向滑动。
+ * 最近更新几乎全是可点芯片，不用鼠标拖拽（拖拽会 setPointerCapture 吃掉 click）；
+ * 触控端走原生左右滑即可。
+ */
+function onUpdatesWheel(e) {
+  const el = updatesScrollerEl.value
+  if (!el) return
+  const max = Math.max(0, el.scrollWidth - el.clientWidth)
+  if (max <= 4) return
+  const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY
+  if (!delta) return
+  const atStart = el.scrollLeft <= 0 && delta < 0
+  const atEnd = el.scrollLeft >= max - 1 && delta > 0
+  if (atStart || atEnd) return
+  e.preventDefault()
+  el.scrollLeft += delta
+  refreshUpdatesNav()
+}
+
+watch(updates, async () => {
+  await nextTick()
+  refreshUpdatesNav()
 })
 
 /** 订阅已按服务端 created_at DESC（最新在前）；本地分页：列数×2 行 */
@@ -898,6 +915,7 @@ onMounted(() => {
   offPodcastUpdated = onWS('podcast:updated', () => { loadFeeds() })
   nextTick(() => {
     refreshHistoryNav()
+    refreshUpdatesNav()
     bindSubGridObserver()
   })
 })
@@ -905,15 +923,13 @@ onActivated(() => {
   loadExtras()
   nextTick(() => {
     refreshHistoryNav()
+    refreshUpdatesNav()
     bindSubGridObserver()
   })
 })
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeydown)
   window.removeEventListener('resize', onWindowResize)
-  window.removeEventListener('pointermove', onHistoryPointerMove)
-  window.removeEventListener('pointerup', onHistoryPointerUp)
-  window.removeEventListener('pointercancel', onHistoryPointerUp)
   subGridObserver?.disconnect?.()
   subGridObserver = null
   offPodcastUpdated?.()
@@ -953,10 +969,9 @@ onUnmounted(() => {
   -webkit-overflow-scrolling: touch;
   flex: 1;
   min-width: 0;
-  cursor: grab;
+  cursor: default;
   scrollbar-width: thin;
 }
-.history-scroller:active { cursor: grabbing; }
 .history-scroller::-webkit-scrollbar { height: 6px; }
 .history-scroller::-webkit-scrollbar-thumb {
   background: var(--border-light);
@@ -1163,21 +1178,22 @@ onUnmounted(() => {
   font-size: 11px;
   color: var(--text-muted);
 }
-/* 最近更新：旧芯片样式，固定两行，多的横向滑动 */
+/* 最近更新：两行芯片，外层与播放历史同一套横向滚动条 */
+.updates-scroller {
+  align-items: stretch;
+  cursor: default;
+  gap: 0;
+}
 .update-chips {
   display: grid;
   grid-template-rows: repeat(2, auto);
   grid-auto-flow: column;
   grid-auto-columns: max-content;
   gap: 8px;
-  overflow-x: auto;
-  padding-bottom: 4px;
-  -webkit-overflow-scrolling: touch;
-}
-.update-chips::-webkit-scrollbar { height: 4px; }
-.update-chips::-webkit-scrollbar-thumb {
-  background: var(--border-light);
-  border-radius: 4px;
+  width: max-content;
+  flex: 0 0 auto;
+  padding: 2px 0;
+  pointer-events: auto;
 }
 .update-chip {
   display: inline-flex;
@@ -1189,6 +1205,10 @@ onUnmounted(() => {
   color: inherit;
   cursor: pointer;
   max-width: 280px;
+  scroll-snap-align: start;
+  pointer-events: auto;
+  position: relative;
+  z-index: 1;
 }
 .chip-cover {
   width: 40px;
@@ -1485,8 +1505,6 @@ onUnmounted(() => {
   .history-feed { font-size: 10px; }
   .update-chips {
     gap: 8px;
-    margin: 0 -2px;
-    padding: 0 2px 6px;
   }
   .update-chip {
     max-width: 200px;
@@ -1519,13 +1537,14 @@ onUnmounted(() => {
     justify-content: center;
   }
   .history-sheet-overlay {
-    align-items: flex-end;
-    padding: 0;
+    align-items: center;
+    justify-content: center;
+    padding: max(16px, env(safe-area-inset-top, 0px)) 16px max(16px, env(safe-area-inset-bottom, 0px));
   }
   .history-sheet {
-    width: 100%;
-    max-height: min(82vh, 720px);
-    border-radius: 16px 16px 0 0;
+    width: min(520px, 100%);
+    max-height: min(78vh, 640px);
+    border-radius: 16px;
   }
 }
 @media (max-width: 420px) {

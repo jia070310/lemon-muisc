@@ -740,9 +740,10 @@
           <button
             class="btn-ghost btn-sm"
             type="button"
+            title="检测全部已激活音源；单条请用列表里的「检测」"
             :disabled="sourceProbeRunning || !sourceList.length || !!sourceBatchBusy"
             @click="runSourceProbeNow"
-          >{{ sourceProbeRunning ? '检测中…' : '音源检测' }}</button>
+          ><template v-if="sourceProbeRunning && !sourceProbingRowId">检测<span class="probe-busy-dots">{{ probeBusyDots }}</span></template><template v-else>全部检测</template></button>
           <button
             v-if="outdatedSourceCount"
             class="btn-primary btn-sm"
@@ -800,7 +801,12 @@
                 <span class="source-status-pill" :class="isDisplayRowActive(row) ? 'on' : 'off'">
                   {{ isDisplayRowActive(row) ? (isDisplayRowPartial(row) ? '部分激活' : '已激活') : '未激活' }}
                 </span>
-                <span v-if="displayRowProbeRatio(row)" class="source-probe-ratio" :class="`level-${displayRowProbeLevel(row)}`">
+                <span
+                  v-if="displayRowProbeRatio(row)"
+                  class="source-probe-ratio"
+                  :class="`level-${displayRowProbeLevel(row)}`"
+                  :title="displayRowProbeSummaryTitle(row)"
+                >
                   {{ displayRowProbeRatio(row) }}
                 </span>
               </div>
@@ -815,7 +821,7 @@
                     :title="p.title"
                   >{{ p.label }}{{ p.suffix }}</span>
                 </div>
-                <span v-else class="source-probe-empty">{{ isDisplayRowActive(row) ? '尚未检测，可点上方「音源检测」' : '激活后可参与检测' }}</span>
+                <span v-else class="source-probe-empty">{{ isDisplayRowActive(row) ? '尚未检测，可点本条「检测」或上方「音源检测」' : '激活后可参与检测' }}</span>
               </div>
               <span v-if="displayRowUpdateLog(row)" class="source-update-log">{{ displayRowUpdateLog(row) }}</span>
               <div
@@ -873,6 +879,13 @@
                 >{{ isDisplayRowBusy(row) ? '停用中…' : (isDisplayRowPartial(row) ? '全部停用' : '停用') }}</button>
               </div>
               <div v-if="isAdminUser" class="source-actions-row source-actions-tools">
+                <button
+                  class="btn-sm btn-ghost"
+                  type="button"
+                  title="只检测这一条音源的平台取链，不必全量跑一遍"
+                  :disabled="sourceProbeRunning || isDisplayRowBusy(row) || !!sourceBatchBusy || !isDisplayRowActive(row)"
+                  @click.stop="runSourceProbeOne(row)"
+                ><template v-if="isDisplayRowProbing(row)">检测<span class="probe-busy-dots">{{ probeBusyDots }}</span></template><template v-else>检测</template></button>
                 <button
                   class="btn-sm btn-ghost"
                   type="button"
@@ -1235,7 +1248,7 @@
               通过局域网 IP / localhost 访问时，本地歌曲仍直出原文件（不转码），外网或域名远程访问时才转码。
               关闭：始终直出原文件，不自动转码；播不动时会提示网络不佳并建议开转码，连播时自动跳下一曲。
               APE / DSF / DFF（DSD）浏览器无法直出，始终转码播放，不受本开关影响。
-              开启后会关闭音频可视化。需要可用的 ffmpeg。iPhone/iPad 默认开启。
+              手机端开启时会关闭音频可视化（CarPlay）；电脑端可与可视化同时开启。需要可用的 ffmpeg。iPhone/iPad 默认开启。
             </div>
           </div>
           <label class="toggle">
@@ -1462,6 +1475,7 @@
       <div
         v-if="expandedDisplayRow"
         class="source-platform-popover"
+        :class="{ 'place-above': platformPopoverAbove }"
         role="dialog"
         :aria-label="`${expandedDisplayRow.name} 平台开关`"
         :style="platformPopoverStyle"
@@ -1594,7 +1608,41 @@ import {
 
 const route = useRoute()
 const sourceProbeRunning = ref(false)
+/** 单条检测中的展示行 id（合集 / 单源） */
+const sourceProbingRowId = ref('')
 const sourceProbeSummary = ref('')
+/** 检测中省略号动画：. → .. → ... */
+const probeBusyDots = ref('.')
+let probeDotsTimer = 0
+
+function formatProbeBusyDots(n) {
+  const dots = '.'.repeat(n)
+  // 用空格补齐到 3 位宽，避免省略号变长时把「检测」挤着晃
+  return dots + '\u00a0'.repeat(Math.max(0, 3 - n))
+}
+
+function startProbeDotsAnim() {
+  stopProbeDotsAnim()
+  let n = 0
+  probeBusyDots.value = formatProbeBusyDots(1)
+  probeDotsTimer = window.setInterval(() => {
+    n = (n % 3) + 1
+    probeBusyDots.value = formatProbeBusyDots(n)
+  }, 420)
+}
+
+function stopProbeDotsAnim() {
+  if (probeDotsTimer) {
+    clearInterval(probeDotsTimer)
+    probeDotsTimer = 0
+  }
+  probeBusyDots.value = formatProbeBusyDots(1)
+}
+
+watch(sourceProbeRunning, (running) => {
+  if (running) startProbeDotsAnim()
+  else stopProbeDotsAnim()
+})
 
 const themeOptions = [
   { value: 'dark', label: '深色' },
@@ -1813,6 +1861,8 @@ const PLATFORM_SHORT = {
 const sourcePlatformMap = ref({})
 const expandedSourceId = ref('')
 const platformPopoverStyle = ref({})
+/** 弹层相对「平台」按钮向上展开（下方会被遮挡时） */
+const platformPopoverAbove = ref(false)
 const expandedDisplayRow = computed(() => (
   sourceDisplayRows.value.find((row) => row.id === expandedSourceId.value) || null
 ))
@@ -1857,6 +1907,69 @@ function displayRowMeta(row) {
   return parts.filter(Boolean).join(' · ')
 }
 
+function formatProbeMs(ms) {
+  const n = Number(ms) || 0
+  if (n <= 0) return ''
+  if (n < 1000) return `${Math.round(n)}ms`
+  return `${(n / 1000).toFixed(1)}s`
+}
+
+function formatProbeTime(iso) {
+  const s = String(iso || '').trim()
+  if (!s) return ''
+  const d = new Date(s)
+  if (Number.isNaN(d.getTime())) return s
+  const pad = (x) => String(x).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}
+
+function probeLevelLabel(level) {
+  if (level === 'ok') return '正常'
+  if (level === 'watch') return '观察'
+  if (level === 'fail') return '失败'
+  if (level === 'down') return '连续失败 / 已降权'
+  return '未知'
+}
+
+/** 悬停完整检测信息（原生 title，多行） */
+function buildProbePlatformTitle(label, p, { memberName = '' } = {}) {
+  const level = p?.level || 'unknown'
+  const lines = []
+  lines.push(memberName ? `${label}（${memberName}）` : String(label || p?.id || '平台'))
+  lines.push(`状态：${probeLevelLabel(level)}`)
+  const samples = Number(p?.sampleCount) || 0
+  const okCount = Number(p?.okCount) || 0
+  const failCount = Number(p?.failCount) || 0
+  const pct = Math.round((Number(p?.okRatio) || 0) * 100)
+  if (samples > 0) {
+    lines.push(`近 ${samples} 次：成功 ${okCount} · 失败 ${failCount} · 成功率 ${pct}%`)
+  } else {
+    lines.push('尚无检测样本')
+  }
+  const lastMs = formatProbeMs(p?.lastMs)
+  const avgMs = formatProbeMs(p?.avgMs)
+  if (lastMs || avgMs) {
+    lines.push(`耗时：最近 ${lastMs || '—'} · 平均 ${avgMs || '—'}`)
+  }
+  const streak = Number(p?.failStreak) || 0
+  if (streak > 0) lines.push(`连续失败：${streak} 次`)
+  if (p?.lastError) {
+    lines.push(`最近错误：${String(p.lastError).slice(0, 160)}`)
+  } else if (p?.recentOk === true) {
+    lines.push('最近一次：成功')
+  } else if (p?.recentOk === false) {
+    lines.push('最近一次：失败')
+  }
+  const hist = Array.isArray(p?.history) ? p.history.slice(-8) : []
+  if (hist.length) {
+    const marks = hist.map((h) => (h?.ok ? '✓' : '✗')).join('')
+    lines.push(`近期：${marks}`)
+  }
+  const at = formatProbeTime(p?.updatedAt)
+  if (at) lines.push(`更新：${at}`)
+  return lines.join('\n')
+}
+
 function displayRowProbePlatforms(row) {
   const members = row?.type === 'group'
     ? (row.members || [])
@@ -1873,17 +1986,31 @@ function displayRowProbePlatforms(row) {
       const label = row?.type === 'group'
         ? (p.label || memberPlatformLabel(m) || p.id)
         : (p.label || p.id)
-      const pct = Math.round((p.okRatio || 0) * 100)
       out.push({
         key: `${m.id}-${p.id}`,
         label,
         level,
         suffix,
-        title: `${label} · 近 ${p.sampleCount || 0} 次成功率 ${pct}%`,
+        title: buildProbePlatformTitle(label, p, {
+          memberName: row?.type === 'group' ? (m.name || m.id || '') : '',
+        }),
       })
     }
   }
   return out
+}
+
+function displayRowProbeSummaryTitle(row) {
+  const plats = displayRowProbePlatforms(row)
+  if (!plats.length) return ''
+  const lines = [`「${row?.name || '音源'}」平台检测汇总`]
+  for (const p of plats) {
+    lines.push(`· ${p.label}${p.suffix || ''}（${probeLevelLabel(p.level)}）`)
+  }
+  const ok = plats.filter((p) => p.level === 'ok').length
+  lines.push(`合计：${ok}/${plats.length} 正常`)
+  lines.push('将鼠标移到具体平台标签可看完整明细')
+  return lines.join('\n')
 }
 
 function displayRowProbeRatio(row) {
@@ -2239,10 +2366,26 @@ async function refreshSourceListQuiet() {
   } catch {}
 }
 
+function displayRowProbeSourceIds(row) {
+  if (!row) return []
+  if (row.type === 'group') {
+    return (row.members || [])
+      .map((m) => String(m?.id || '').trim())
+      .filter((id) => id && isSourceActive(id))
+  }
+  const id = String(row.id || row.primary?.id || '').trim()
+  return id && isSourceActive(id) ? [id] : []
+}
+
+function isDisplayRowProbing(row) {
+  return Boolean(row?.id) && sourceProbingRowId.value === row.id
+}
+
 async function runSourceProbeNow() {
   if (!isAdminUser.value || sourceProbeRunning.value) return
   sourceProbeRunning.value = true
-  sourceProbeSummary.value = '正在检测音源…'
+  sourceProbingRowId.value = ''
+  sourceProbeSummary.value = '正在检测全部音源…'
   try {
     const res = await api.source.probeRun()
     if (res?.skipped) {
@@ -2261,6 +2404,43 @@ async function runSourceProbeNow() {
     showToast(e.message || '音源检测失败', 'error')
   } finally {
     sourceProbeRunning.value = false
+    sourceProbingRowId.value = ''
+  }
+}
+
+/** 只测当前这一条（合集则测其已激活成员） */
+async function runSourceProbeOne(row) {
+  if (!isAdminUser.value || sourceProbeRunning.value || !row) return
+  const ids = displayRowProbeSourceIds(row)
+  if (!ids.length) {
+    showToast('请先激活该音源后再检测', 'info')
+    return
+  }
+  sourceProbeRunning.value = true
+  sourceProbingRowId.value = row.id
+  sourceProbeSummary.value = `正在检测「${row.name}」…`
+  try {
+    const res = await api.source.probeRun({ sourceIds: ids })
+    if (res?.skipped) {
+      sourceProbeSummary.value = '已有检测任务在进行中'
+      showToast('已有检测任务在进行中', 'info')
+    } else {
+      const ok = res?.okCount ?? 0
+      const total = res?.total ?? 0
+      const label = row.name || '音源'
+      sourceProbeSummary.value = total
+        ? `「${label}」检测完成 ${ok}/${total}`
+        : `「${label}」无可测平台`
+      showToast(sourceProbeSummary.value, total ? 'success' : 'info')
+    }
+    applySourceList(await api.source.list())
+    await reloadEnabledPlatformsFromServer()
+  } catch (e) {
+    sourceProbeSummary.value = ''
+    showToast(e.message || '音源检测失败', 'error')
+  } finally {
+    sourceProbeRunning.value = false
+    sourceProbingRowId.value = ''
   }
 }
 
@@ -3202,6 +3382,7 @@ onActivated(() => {
 onUnmounted(() => {
   stopFfmpegPoll()
   stopImportElapsed()
+  stopProbeDotsAnim()
   clearTimeout(customColorSaveTimer)
   clearTimeout(lyricColorSaveTimer)
   if (platformSaveTimer) clearTimeout(platformSaveTimer)
@@ -3945,8 +4126,15 @@ async function toggleSmoothStreamSetting() {
   const turningOn = currentlyOn === false
   settings[PLAYER_SMOOTH_STREAM_KEY] = turningOn ? 'true' : 'false'
   try {
+    // 电脑端：转码不再改可视化开关。手机端仍互斥（Web Audio 与 CarPlay 冲突）
     const patch = { [PLAYER_SMOOTH_STREAM_KEY]: settings[PLAYER_SMOOTH_STREAM_KEY] }
-    if (turningOn) {
+    let isMobile = false
+    try {
+      const { isTouchMobileDevice } = await import('../utils/device.js')
+      isMobile = isTouchMobileDevice()
+    } catch {}
+    const closingViz = turningOn && isMobile
+    if (closingViz) {
       settings['player.visualizer'] = 'false'
       patch['player.visualizer'] = 'false'
     }
@@ -3954,7 +4142,9 @@ async function toggleSmoothStreamSetting() {
     await loadPlayerSettings()
     showToast(
       turningOn
-        ? '已开启本地转码：弱网下转 128k AAC，并已关闭音频可视化'
+        ? (closingViz
+          ? '已开启本地转码：弱网下转 128k AAC，并已关闭音频可视化'
+          : '已开启本地转码：弱网下转 128k AAC（可视化保持不变，可自行开关）')
         : '已关闭本地转码：始终直出原文件；播不动会提示并可跳下一曲',
       'success',
     )
@@ -4317,6 +4507,16 @@ function sourcePlatformSummary(source) {
 function closeSourcePlatformPanel() {
   expandedSourceId.value = ''
   platformPopoverStyle.value = {}
+  platformPopoverAbove.value = false
+}
+
+function estimatePlatformPopoverHeight(sourceId, mobile) {
+  const display = sourceDisplayRows.value.find((row) => row.id === sourceId)
+  const count = display ? Math.max(1, platformOptionsForDisplayRow(display).length) : 5
+  // 标题区 + 列表项 + 内边距（手机隐藏 tip 更矮）
+  return mobile
+    ? 48 + count * 48 + 18
+    : 96 + count * 56 + 28
 }
 
 function placePlatformPopover() {
@@ -4326,19 +4526,45 @@ function placePlatformPopover() {
   if (!btn) return
   const r = btn.getBoundingClientRect()
   const mobile = window.innerWidth <= 768
+  const gap = 6
+  const edge = 8
   const width = mobile
     ? Math.min(260, window.innerWidth - 28)
     : Math.min(360, Math.max(280, window.innerWidth - 16))
   let left = r.right - width
-  if (left < 8) left = 8
-  if (left + width > window.innerWidth - 8) left = Math.max(8, window.innerWidth - width - 8)
-  const maxH = mobile
+  if (left < edge) left = edge
+  if (left + width > window.innerWidth - edge) {
+    left = Math.max(edge, window.innerWidth - width - edge)
+  }
+
+  const spaceBelow = window.innerHeight - r.bottom - gap - edge
+  const spaceAbove = r.top - gap - edge
+  const preferredMax = mobile
     ? Math.min(280, window.innerHeight * 0.46)
     : Math.min(420, window.innerHeight * 0.7)
-  let top = r.bottom + 6
-  if (top + 160 > window.innerHeight) {
-    top = Math.max(8, r.top - 6 - Math.min(maxH, window.innerHeight - 16))
+
+  const pop = document.querySelector('.source-platform-popover')
+  const measured = pop ? pop.getBoundingClientRect().height : 0
+  const estimated = estimatePlatformPopoverHeight(id, mobile)
+  const needH = Math.min(preferredMax, measured > 40 ? measured : estimated)
+
+  // 下方放不下、且上方更宽裕 → 翻到按钮上方
+  const placeAbove = spaceBelow < needH && spaceAbove > spaceBelow
+  platformPopoverAbove.value = placeAbove
+  const avail = Math.max(120, placeAbove ? spaceAbove : spaceBelow)
+  const maxH = Math.min(preferredMax, avail)
+  const usedH = Math.min(needH, maxH)
+
+  let top
+  if (placeAbove) {
+    top = Math.max(edge, r.top - gap - usedH)
+  } else {
+    top = r.bottom + gap
+    if (top + usedH > window.innerHeight - edge) {
+      top = Math.max(edge, window.innerHeight - edge - usedH)
+    }
   }
+
   platformPopoverStyle.value = {
     position: 'fixed',
     top: `${Math.round(top)}px`,
@@ -4347,12 +4573,41 @@ function placePlatformPopover() {
     maxHeight: `${Math.round(maxH)}px`,
     zIndex: 12050,
   }
+
+  // 首帧用估算；布局后再按真实高度校正一次，避免列表多时仍被底边裁切
+  requestAnimationFrame(() => {
+    if (expandedSourceId.value !== id) return
+    const el = document.querySelector('.source-platform-popover')
+    if (!el) return
+    const h = el.getBoundingClientRect().height
+    if (h <= 40) return
+    const stillAbove = spaceBelow < h && spaceAbove > spaceBelow
+    platformPopoverAbove.value = stillAbove
+    const avail2 = Math.max(120, stillAbove ? spaceAbove : spaceBelow)
+    const maxH2 = Math.min(preferredMax, avail2)
+    const used2 = Math.min(h, maxH2)
+    let top2
+    if (stillAbove) {
+      top2 = Math.max(edge, r.top - gap - used2)
+    } else {
+      top2 = r.bottom + gap
+      if (top2 + used2 > window.innerHeight - edge) {
+        top2 = Math.max(edge, window.innerHeight - edge - used2)
+      }
+    }
+    platformPopoverStyle.value = {
+      ...platformPopoverStyle.value,
+      top: `${Math.round(top2)}px`,
+      maxHeight: `${Math.round(maxH2)}px`,
+    }
+  })
 }
 
 function toggleSourcePlatformPanel(sourceId) {
   expandedSourceId.value = expandedSourceId.value === sourceId ? '' : sourceId
   if (!expandedSourceId.value) {
     platformPopoverStyle.value = {}
+    platformPopoverAbove.value = false
     return
   }
   const display = sourceDisplayRows.value.find((row) => row.id === sourceId)
@@ -5361,6 +5616,19 @@ function showToast(text, type = 'info') {
     opacity: 1;
   }
 }
+@keyframes source-plat-rise {
+  from {
+    transform: translateY(6px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+.source-platform-popover.place-above {
+  animation-name: source-plat-rise;
+}
 .platform-popover-head {
   margin-bottom: 12px;
 }
@@ -5466,25 +5734,30 @@ function showToast(text, type = 'info') {
 
 .source-list {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  /* 统一卡宽；列数随宽度自动增减，大屏不拉伸 */
+  grid-template-columns: repeat(auto-fill, 248px);
   gap: 12px;
   margin-bottom: 16px;
-  align-items: stretch;
+  justify-content: start;
+  align-items: start;
 }
 .source-item {
+  --source-card-w: 248px;
+  --source-card-h: 292px;
   position: relative;
   display: flex;
   flex-direction: column;
   gap: 10px;
+  width: var(--source-card-w);
+  height: var(--source-card-h);
+  max-width: 100%;
   min-width: 0;
-  height: 100%;
-  min-height: 220px;
+  box-sizing: border-box;
   padding: 14px 16px;
-  padding-top: 14px;
   border-radius: 12px;
   background: var(--bg-elevated);
   border: 1px solid var(--border-light);
-  overflow: visible;
+  overflow: hidden;
   transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
 }
 .source-item.active {
@@ -5514,6 +5787,7 @@ function showToast(text, type = 'info') {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  overflow: hidden;
 }
 .source-status-line {
   display: flex;
@@ -5545,15 +5819,19 @@ function showToast(text, type = 'info') {
   font-size: 11px;
   color: var(--text-muted);
   font-weight: 600;
+  cursor: help;
 }
 .source-probe-ratio.level-ok { color: #16a34a; }
 .source-probe-ratio.level-mixed { color: var(--warning, #e6a23c); }
 .source-probe-ratio.level-down { color: var(--error, #ef4444); }
 .source-probe-zone {
-  min-height: 52px;
+  flex: 1 1 auto;
+  min-height: 44px;
+  max-height: 72px;
   display: flex;
   flex-direction: column;
   justify-content: flex-start;
+  overflow: hidden;
 }
 .source-probe-pills {
   display: flex;
@@ -5569,6 +5847,7 @@ function showToast(text, type = 'info') {
   font-size: 11px;
   line-height: 1.45;
   border: 1px solid transparent;
+  cursor: help;
 }
 .source-probe-pill.level-ok {
   color: #166534;
@@ -5623,7 +5902,7 @@ function showToast(text, type = 'info') {
   gap: 6px;
   flex-shrink: 0;
   width: 100%;
-  margin-top: 0;
+  margin-top: auto;
   padding-top: 10px;
   border-top: 1px solid var(--border-light);
   position: relative;
@@ -5645,9 +5924,22 @@ function showToast(text, type = 'info') {
 .source-actions-tools > .btn-sm {
   flex: 1 1 0;
   min-width: 0;
-  justify-content: center;
+  justify-content: flex-start;
   height: 28px;
   box-sizing: border-box;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-left: 10px;
+  padding-right: 8px;
+}
+/* 省略号占位固定，避免「检测」随点数增减左右晃 */
+.probe-busy-dots {
+  display: inline-block;
+  min-width: 1.35em;
+  text-align: left;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
 }
 /* 兼容旧类名 */
 .source-card-foot.source-actions,
@@ -6078,16 +6370,6 @@ function showToast(text, type = 'info') {
 
 @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 
-@media (max-width: 1500px) {
-  .source-list {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-}
-@media (max-width: 1200px) {
-  .source-list {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-}
 @media (max-width: 1100px) {
   .paths-top-row,
   .source-top-row:not(.single) {
@@ -6154,9 +6436,12 @@ function showToast(text, type = 'info') {
     gap: 10px;
   }
   .source-item {
+    --source-card-w: 100%;
+    --source-card-h: 268px;
+    width: var(--source-card-w);
+    height: var(--source-card-h);
     gap: 8px;
     padding: 10px 10px 12px;
-    min-height: 0;
   }
   .source-card-head {
     min-height: 0;
@@ -6175,7 +6460,8 @@ function showToast(text, type = 'info') {
     font-size: 11px;
   }
   .source-probe-zone {
-    min-height: 0;
+    min-height: 36px;
+    max-height: 56px;
   }
   .source-probe-pills {
     gap: 4px;
@@ -6232,6 +6518,7 @@ function showToast(text, type = 'info') {
     width: 100%;
     height: 32px;
     min-height: 32px;
+    justify-content: flex-start;
   }
   .source-actions { width: 100%; }
   .source-platform-popover {
@@ -6303,6 +6590,10 @@ function showToast(text, type = 'info') {
     gap: 10px;
   }
   .source-item {
+    --source-card-w: 100%;
+    --source-card-h: 260px;
+    width: var(--source-card-w);
+    height: var(--source-card-h);
     padding: 12px 12px 12px;
   }
   .source-name {

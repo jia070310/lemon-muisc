@@ -638,13 +638,27 @@ sourceRouter.post('/probe/config', requireAdmin, (req, res) => {
   }
 })
 
-/** 立即跑一轮监测（管理员）；进行中则返回 busy */
+/** 立即跑一轮监测（管理员）；可传 sourceId / sourceIds 只测单个或若干音源；进行中则返回 busy */
 sourceRouter.post('/probe/run', requireAdmin, async (req, res) => {
   try {
     if (isSourceProbeRunning()) {
       return res.json({ ok: true, skipped: true, reason: 'busy', ...getSourceProbeStatus() })
     }
-    const result = await runSourceProbeRound({ reason: 'manual' })
+    const body = req.body || {}
+    const sourceIds = []
+    if (Array.isArray(body.sourceIds)) {
+      for (const id of body.sourceIds) {
+        const s = String(id || '').trim()
+        if (s) sourceIds.push(s)
+      }
+    }
+    const one = String(body.sourceId || '').trim()
+    if (one) sourceIds.push(one)
+    const uniq = [...new Set(sourceIds)]
+    const result = await runSourceProbeRound({
+      reason: uniq.length ? 'manual-one' : 'manual',
+      sourceIds: uniq.length ? uniq : null,
+    })
     res.json({ ok: true, ...result, status: getSourceProbeStatus() })
   } catch (e) {
     res.status(500).json({ error: e.message })

@@ -200,15 +200,56 @@ function probePillSuffix(p) {
   return ''
 }
 
+function formatProbeMs(ms) {
+  const n = Number(ms) || 0
+  if (n <= 0) return ''
+  if (n < 1000) return `${Math.round(n)}ms`
+  return `${(n / 1000).toFixed(1)}s`
+}
+
+function formatProbeTime(iso) {
+  const s = String(iso || '').trim()
+  if (!s) return ''
+  const d = new Date(s)
+  if (Number.isNaN(d.getTime())) return s
+  const pad = (x) => String(x).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}
+
+function probeLevelLabel(level) {
+  if (level === 'ok') return '正常'
+  if (level === 'watch') return '观察'
+  if (level === 'fail') return '失败'
+  if (level === 'down') return '连续失败 / 已降权'
+  return '未知'
+}
+
 function probePillTitle(p) {
   if (p._placeholder || (p.level === 'unknown' && !p.sampleCount)) {
     return `${p.label} · 尚未检测`
   }
-  const pct = Math.round((p.okRatio || 0) * 100)
-  const bits = [`${p.label}`, `近 ${p.sampleCount || 0} 次成功率 ${pct}%`]
-  if (p.avgMs) bits.push(`平均 ${(p.avgMs / 1000).toFixed(1)}s`)
-  if (p.lastError) bits.push(p.lastError)
-  return bits.join(' · ')
+  const level = p.level || 'unknown'
+  const lines = [String(p.label || p.id || '平台'), `状态：${probeLevelLabel(level)}`]
+  const samples = Number(p.sampleCount) || 0
+  const pct = Math.round((Number(p.okRatio) || 0) * 100)
+  if (samples > 0) {
+    lines.push(`近 ${samples} 次：成功 ${Number(p.okCount) || 0} · 失败 ${Number(p.failCount) || 0} · 成功率 ${pct}%`)
+  } else {
+    lines.push('尚无检测样本')
+  }
+  const lastMs = formatProbeMs(p.lastMs)
+  const avgMs = formatProbeMs(p.avgMs)
+  if (lastMs || avgMs) lines.push(`耗时：最近 ${lastMs || '—'} · 平均 ${avgMs || '—'}`)
+  const streak = Number(p.failStreak) || 0
+  if (streak > 0) lines.push(`连续失败：${streak} 次`)
+  if (p.lastError) lines.push(`最近错误：${String(p.lastError).slice(0, 160)}`)
+  else if (p.recentOk === true) lines.push('最近一次：成功')
+  else if (p.recentOk === false) lines.push('最近一次：失败')
+  const hist = Array.isArray(p.history) ? p.history.slice(-8) : []
+  if (hist.length) lines.push(`近期：${hist.map((h) => (h?.ok ? '✓' : '✗')).join('')}`)
+  const at = formatProbeTime(p.updatedAt)
+  if (at) lines.push(`更新：${at}`)
+  return lines.join('\n')
 }
 
 function applyProbeStatus(res) {

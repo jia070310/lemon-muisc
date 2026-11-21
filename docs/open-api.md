@@ -1,4 +1,4 @@
-# 柠檬音乐 · 开放 API
+﻿# 柠檬音乐 · 开放 API
 
 面向自托管 / NAS 上的第三方客户端（原生 APP、脚本等）。机器可读规格：
 
@@ -29,7 +29,7 @@ GET /api/v1
 {
   "ok": true,
   "name": "Lemon Music",
-  "appVersion": "1.2.17.24",
+  "appVersion": "1.2.17.25",
   "apiVersion": 1,
   "openapi": "http://host:7983/api/openapi.json",
   "docs": "http://host:7983/api/docs",

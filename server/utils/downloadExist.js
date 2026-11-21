@@ -3,7 +3,9 @@ import path from 'path'
 import { readMetaLite } from '../meta.js'
 import { qualityLabel, qualityRank } from './downloadQuality.js'
 import { resolveDownloadGroupDir } from './downloadPath.js'
-import { getDownloadSavePath } from './filePaths.js'
+import { getDownloadSavePath, getUserAccessibleRoots } from './filePaths.js'
+import { findIndexedExistingForDownload, normalizeAudioFileBaseKey } from './libraryCache.js'
+import { parseFilename } from './filenameParse.js'
 
 export const EXIST_AUDIO_EXTS = ['.mp3', '.flac', '.wav', '.ape', '.ogg', '.m4a', '.aac', '.wma', '.opus', '.dsf', '.dff']
 
@@ -42,29 +44,45 @@ function sanitizeFileBase(name) {
  * 例：歌名、歌名(1)、歌名 (1)、歌名（1）
  */
 export function isSameAudioBaseName(entryBase, canonicalBase) {
-  const entry = String(entryBase || '').trim().toLowerCase()
-  const canonical = String(canonicalBase || '').trim().toLowerCase()
+  const entry = normalizeAudioFileBaseKey(entryBase)
+  const canonical = normalizeAudioFileBaseKey(canonicalBase)
   if (!entry || !canonical) return false
   if (entry === canonical) return true
-  const stripped = entry
-    .replace(/\s*[\(（]\s*\d+\s*[\)）]\s*$/u, '')
-    .replace(/\s+[-\u2013]\s*副本\s*\d*$/u, '')
-    .replace(/\s+copy(?:\s*\d+)?$/iu, '')
-    .trim()
-  return stripped === canonical
+  // 歌名-歌手 vs 歌手-歌名
+  const flip = (s) => {
+    const parts = s.split(/\s*[-–—_]\s*/)
+    if (parts.length < 2) return ''
+    return `${parts.slice(1).join(' - ')} - ${parts[0]}`
+  }
+  if (flip(entry) === canonical || flip(canonical) === entry) return true
+  return false
 }
 
-/** 在分组目录下按「主文件名」查找已有音频（忽略扩展名差异，含 name(1) 等副本） */
+function entryMatchesDownloadTask(nameOnly, task, baseName) {
+  if (isSameAudioBaseName(nameOnly, baseName)) return true
+  const title = String(task?.name || '').trim().toLowerCase()
+  const artist = String(task?.singer || '').trim().toLowerCase().split(/[/／,，&＆+、]/)[0] || ''
+  if (!title || !artist) return false
+  const parsed = parseFilename(`${nameOnly}.flac`)
+  const pt = String(parsed?.title || '').trim().toLowerCase()
+  const pa = String(parsed?.artist || '').trim().toLowerCase()
+  if (pt === title && (pa === artist || pa.includes(artist) || artist.includes(pa))) return true
+  // 文件名里同时出现歌名与歌手即可
+  const low = String(nameOnly || '').toLowerCase()
+  return low.includes(title) && low.includes(artist)
+}
+
+/**
+ * 查找本地已有「同一首歌」的音频。
+ * 1) 读 library_index（全库+下载，不整盘扫）：多文件名候选 + 歌名/歌手身份
+ * 2) 兜底扫本次目标分组目录一层（尚未入库的文件）
+ */
 export function findExistingSameNameFiles(task, settings = {}) {
   const baseName = resolveTaskBaseName(task, settings)
-  if (!baseName) return []
-  const savePath = settings.__savePath || getDownloadSavePath(task?.user_id || null)
-  const groupDir = resolveDownloadGroupDir(savePath, settings, task)
-  if (!groupDir || !fs.existsSync(groupDir)) return []
+  if (!baseName && !String(task?.name || '').trim()) return []
 
   const found = []
   const seen = new Set()
-
   const pushIfFile = (fullPath) => {
     if (!fullPath || seen.has(fullPath)) return
     try {
@@ -75,24 +93,36 @@ export function findExistingSameNameFiles(task, settings = {}) {
     } catch {}
   }
 
-  for (const ext of EXIST_AUDIO_EXTS) {
-    pushIfFile(path.join(groupDir, baseName + ext))
-  }
-
-  let entries = []
+  // 1) 索引：覆盖多级专辑目录中的 `06. 歌手 - 歌名` 等命名
   try {
-    entries = fs.readdirSync(groupDir)
-  } catch {
-    return found
-  }
+    const userId = task?.user_id || null
+    const roots = getUserAccessibleRoots(userId)
+    for (const fp of findIndexedExistingForDownload(task, { baseName, userId, roots })) {
+      pushIfFile(fp)
+    }
+  } catch { /* 索引不可用时仍走目录兜底 */ }
 
-  for (const entry of entries) {
-    if (entry.endsWith('.part') || entry.toLowerCase().endsWith('.lrc')) continue
-    const ext = path.extname(entry).toLowerCase()
-    if (!EXIST_AUDIO_EXTS.includes(ext)) continue
-    const nameOnly = entry.slice(0, -ext.length)
-    if (!isSameAudioBaseName(nameOnly, baseName)) continue
-    pushIfFile(path.join(groupDir, entry))
+  // 2) 分组目录一层兜底
+  const savePath = settings.__savePath || getDownloadSavePath(task?.user_id || null)
+  const groupDir = resolveDownloadGroupDir(savePath, settings, task)
+  if (groupDir && fs.existsSync(groupDir)) {
+    for (const ext of EXIST_AUDIO_EXTS) {
+      pushIfFile(path.join(groupDir, baseName + ext))
+    }
+    let entries = []
+    try {
+      entries = fs.readdirSync(groupDir)
+    } catch {
+      entries = []
+    }
+    for (const entry of entries) {
+      if (entry.endsWith('.part') || entry.toLowerCase().endsWith('.lrc')) continue
+      const ext = path.extname(entry).toLowerCase()
+      if (!EXIST_AUDIO_EXTS.includes(ext)) continue
+      const nameOnly = entry.slice(0, -ext.length)
+      if (!entryMatchesDownloadTask(nameOnly, task, baseName)) continue
+      pushIfFile(path.join(groupDir, entry))
+    }
   }
 
   return found

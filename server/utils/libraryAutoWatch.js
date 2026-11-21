@@ -10,11 +10,11 @@ import {
   getLibraryWatchIntervalMs,
   isPartialScan,
 } from './libraryScanSettings.js'
-import { syncLibraryIndex } from './libraryCache.js'
+import { syncLibraryIndexAsync } from './libraryCache.js'
 import { getLibraryScanStatus, startLibraryScanJob } from './libraryScanJob.js'
 import { notifyLibraryRemoved } from './libraryNotify.js'
 import { markLibraryIndexDirty } from './libraryIndexState.js'
-import { computeLibraryListingFingerprint } from './libraryDirFingerprint.js'
+import { computeLibraryListingFingerprintAsync } from './libraryDirFingerprint.js'
 
 let timer = null
 let tickInFlight = false
@@ -41,7 +41,7 @@ async function tick({ forceFull = false } = {}) {
     // 冷启动：只建签名，不立刻对每个音频 stat（避免「一开机盘狂转」）
     if (!lastListingFp && !forceFull) {
       try {
-        lastListingFp = computeLibraryListingFingerprint(dirs)
+        lastListingFp = await computeLibraryListingFingerprintAsync(dirs)
       } catch (e) {
         console.warn('[library-watch] 初始签名失败:', e?.message || e)
       }
@@ -49,24 +49,25 @@ async function tick({ forceFull = false } = {}) {
     }
 
     const needFull = forceFull || ticksSinceFullSync >= FORCE_FULL_EVERY_TICKS
+    let fpBeforeSync = ''
 
     if (!needFull) {
-      let fp = ''
       try {
-        fp = computeLibraryListingFingerprint(dirs)
+        fpBeforeSync = await computeLibraryListingFingerprintAsync(dirs)
       } catch (e) {
         console.warn('[library-watch] 签名失败，回退全量比对:', e?.message || e)
       }
-      if (fp && fp === lastListingFp) {
+      if (fpBeforeSync && fpBeforeSync === lastListingFp) {
         return
       }
-      if (fp) lastListingFp = fp
+      if (fpBeforeSync) lastListingFp = fpBeforeSync
     }
 
-    const syncResult = syncLibraryIndex(dirs, { partial: isPartialScan(dirs) })
+    const syncResult = await syncLibraryIndexAsync(dirs, { partial: isPartialScan(dirs) })
     ticksSinceFullSync = 0
+    // sync 不改磁盘：可复用比对前指纹，避免同轮再全量 walk（#59）
     try {
-      lastListingFp = computeLibraryListingFingerprint(dirs)
+      lastListingFp = fpBeforeSync || await computeLibraryListingFingerprintAsync(dirs)
     } catch {
       /* keep previous */
     }

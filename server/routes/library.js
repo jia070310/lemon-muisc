@@ -12,11 +12,12 @@ import {
   resolveReal,
   getDownloadSavePath,
   getEffectivePathsMode,
+  getUserAccessibleRoots,
 } from '../utils/filePaths.js'
 import { listAudioFiles } from '../utils/audioScan.js'
 import {
   getAllCachedTracks,
-  syncLibraryIndex,
+  syncLibraryIndexAsync,
   scanBatchAndCache,
   removeCachePaths,
   renameCachePath,
@@ -228,12 +229,12 @@ libraryRouter.get('/genres', (req, res) => {
 })
 
 /** 比对磁盘与缓存，返回已缓存、待扫描、已删除列表 */
-libraryRouter.post('/sync', (req, res) => {
+libraryRouter.post('/sync', async (req, res) => {
   try {
     const userId = req.user?.id
     const dirs = resolveScanDirs(req.body?.dirs, userId)
     const partial = isPartialScan(dirs, userId)
-    const result = syncLibraryIndex(dirs, { partial })
+    const result = await syncLibraryIndexAsync(dirs, { partial })
     if (result.removed.length) {
       notifyLibraryRemoved(result.removed)
     }
@@ -243,7 +244,7 @@ libraryRouter.post('/sync', (req, res) => {
         cached: [],
         pending: [],
         removed: result.removed || [],
-        cachedCount: result.cached?.length || 0,
+        cachedCount: result.cachedCount || 0,
         pendingCount: result.pending?.length || 0,
         total: result.total || 0,
       },
@@ -294,7 +295,7 @@ libraryRouter.get('/sync-state', (req, res) => {
 })
 
 /** 启动服务端后台扫描（关闭页面后仍会继续） */
-libraryRouter.post('/scan-start', (req, res) => {
+libraryRouter.post('/scan-start', async (req, res) => {
   try {
     const force = Boolean(req.body?.force)
     const scanAll = Boolean(req.body?.scanAll)
@@ -326,7 +327,7 @@ libraryRouter.post('/scan-start', (req, res) => {
       })
     }
     const partial = isPartialScan(dirs, userId)
-    const syncResult = syncLibraryIndex(dirs, { partial })
+    const syncResult = await syncLibraryIndexAsync(dirs, { partial })
     if (syncResult.removed.length) {
       notifyLibraryRemoved(syncResult.removed)
     }
@@ -338,7 +339,7 @@ libraryRouter.post('/scan-start', (req, res) => {
         cached: [],
         pending: [],
         removed: syncResult.removed || [],
-        cachedCount: syncResult.cached?.length || 0,
+        cachedCount: syncResult.cachedCount || 0,
         pendingCount: syncResult.pending?.length || 0,
         total: syncResult.total || 0,
       },
@@ -589,7 +590,8 @@ function fileSizeOrZero(filePath) {
 /** 检测重复曲目（同基名歌名+歌手；含 Live 等版本变体；优先文件名解析） */
 libraryRouter.get('/duplicates', (req, res) => {
   try {
-    const userDirs = getMusicPathsForUser(req.user?.id)
+    // 读 library_index（音乐库 + 下载目录），不整盘扫
+    const userDirs = getUserAccessibleRoots(req.user?.id)
     const tracks = getAllCachedTracks(userDirs) || []
     const groups = new Map()
     for (const t of tracks) {

@@ -134,6 +134,90 @@ export function listAudioFiles(rootDir, { maxDepth = Infinity, maxFiles = 300000
 listAudioFiles.lastErrors = []
 
 /**
+ * 异步版枚举：规则与 listAudioFiles 一致；目录仍用同步 readdir（NAS 小文件并发 promise 更慢），
+ * 每处理约 32 个目录让出一次事件循环，避免大库堵死 HTTP（#60）。
+ */
+export async function listAudioFilesAsync(rootDir, { maxDepth = Infinity, maxFiles = 300000 } = {}) {
+  const files = []
+  const errors = []
+  const yieldNow = () => new Promise((resolve) => setImmediate(resolve))
+  if (!rootDir) {
+    listAudioFilesAsync.lastErrors = errors
+    return files
+  }
+  try {
+    if (isUnderAppCachePath(rootDir)) {
+      listAudioFilesAsync.lastErrors = errors
+      return files
+    }
+  } catch {}
+
+  const stack = [{ dir: rootDir, depth: 0 }]
+  let dirsSinceYield = 0
+
+  while (stack.length && files.length < maxFiles) {
+    const { dir, depth } = stack.pop()
+    if (depth > maxDepth) continue
+
+    let entries
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true })
+    } catch (e) {
+      errors.push({ dir, error: e.message })
+      continue
+    }
+
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name)
+      if (entry.isDirectory() && !entry.isSymbolicLink()) {
+        if (!shouldSkipDirectory(entry.name, fullPath)) {
+          stack.push({ dir: fullPath, depth: depth + 1 })
+        }
+        continue
+      }
+      if (entry.isSymbolicLink()) {
+        try {
+          const st = fs.statSync(fullPath)
+          if (st.isDirectory()) {
+            if (!shouldSkipDirectory(entry.name, fullPath)) {
+              stack.push({ dir: fullPath, depth: depth + 1 })
+            }
+            continue
+          }
+          if (st.isFile() && isAudioName(entry.name) && !isTransientOrCacheName(entry.name)) {
+            files.push(fullPath)
+            if (files.length >= maxFiles) break
+          }
+        } catch (e) {
+          errors.push({ dir: fullPath, error: e.message })
+        }
+        continue
+      }
+      if (
+        entryLooksLikeFile(entry, fullPath) &&
+        isAudioName(entry.name) &&
+        !isTransientOrCacheName(entry.name)
+      ) {
+        files.push(fullPath)
+        if (files.length >= maxFiles) break
+      }
+    }
+
+    dirsSinceYield += 1
+    if (dirsSinceYield >= 32) {
+      dirsSinceYield = 0
+      await yieldNow()
+    }
+  }
+
+  files.sort((x, y) => x.localeCompare(y, 'zh-CN'))
+  listAudioFilesAsync.lastErrors = errors
+  return files
+}
+
+listAudioFilesAsync.lastErrors = []
+
+/**
  * 列出目录下一层内容（不递归），用于标签编辑目录树
  */
 export function listDirEntries(dirPath) {

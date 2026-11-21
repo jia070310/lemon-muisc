@@ -43,14 +43,27 @@ export function supportsElementFullscreen() {
   )
 }
 
+function hasDesktopPointerCapability() {
+  if (typeof window === 'undefined') return false
+  try {
+    if (window.matchMedia('(any-pointer: fine)').matches) return true
+    if (window.matchMedia('(any-hover: hover)').matches) return true
+  } catch {}
+  return false
+}
+
 /** 触摸为主的手机/平板（不依赖视口宽度） */
 export function isTouchMobileDevice() {
   if (typeof window === 'undefined') return false
+  if (navigator.userAgentData?.mobile === true) return true
+  if (MOBILE_UA_RE.test(getUa())) return true
   try {
-    if (window.matchMedia('(hover: none) and (pointer: coarse)').matches) return true
+    // 有鼠标/触控板时不要因触控屏把 PC 判成手机
+    if (window.matchMedia('(hover: none) and (pointer: coarse)').matches) {
+      return !hasDesktopPointerCapability()
+    }
   } catch {}
-  if (navigator.userAgentData?.mobile) return true
-  return MOBILE_UA_RE.test(getUa())
+  return false
 }
 
 /** 窄屏或触摸移动设备，用于移动端 UI 分支 */

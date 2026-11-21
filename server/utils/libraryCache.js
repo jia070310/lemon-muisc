@@ -2,9 +2,9 @@ import fs from 'fs'
 import path from 'path'
 import { randomUUID } from 'crypto'
 import { getDB } from '../db.js'
-import { getMusicPaths, getAllMusicScanRoots, isUnderConfiguredMusicDir, isPathUnderMusicDirs } from './filePaths.js'
-import { listAudioFiles } from './audioScan.js'
-import { parseFilename } from './filenameParse.js'
+import { getMusicPaths, getAllMusicScanRoots, isUnderConfiguredMusicDir, isPathUnderMusicDirs, getUserAccessibleRoots } from './filePaths.js'
+import { listAudioFiles, listAudioFilesAsync } from './audioScan.js'
+import { parseFilename, cleanFilenameNoise } from './filenameParse.js'
 import { readMetaLite, isLikelyTagMojibake } from '../meta.js'
 import { mapWithConcurrency } from './asyncPool.js'
 import { splitArtists } from './artistTag.js'
@@ -12,8 +12,19 @@ import { bumpLibraryIndexRevision, getLibraryIndexRevision } from './libraryInde
 
 let tableReady = false
 let columnsReady = false
-/** @type {{ revision: number, dirsKey: string, tracks: any[] } | null} */
+/** @type {{ revision: number, dirsKey: string, tracks: any[], at?: number } | null} */
 let allTracksMemo = null
+/** 全量曲目物化缓存有效期（ms）：默认 60s，0 表示禁用常驻缓存（#61） */
+const ALLTRACKS_MEMO_MS = (() => {
+  const v = Number(process.env.LEMON_ALLTRACKS_MEMO_MS)
+  return Number.isFinite(v) && v >= 0 ? v : 60000
+})()
+const CACHE_READ_BATCH = 2000
+const COMPARE_YIELD_EVERY = 300
+const STAT_BATCH = 400
+const yieldToLoop = () => new Promise((resolve) => setImmediate(resolve))
+/** @type {Promise<any> | null} */
+let syncInFlight = null
 
 const VARIOUS_ARTISTS_NAME = '群星 (Various Artists)'
 
@@ -65,6 +76,8 @@ function ensureSearchColumns(db) {
   add('mood_analyzed_at', 'mood_analyzed_at INTEGER NOT NULL DEFAULT 0')
   add('mood_file_mtime', 'mood_file_mtime REAL NOT NULL DEFAULT 0')
   add('track_id', "track_id TEXT NOT NULL DEFAULT ''")
+  // 主文件名键：忽略扩展名与 (1)/副本 后缀，供下载同名检测 / 去重读索引（# 性能）
+  add('file_base', "file_base TEXT NOT NULL DEFAULT ''")
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_library_title ON library_index(title COLLATE NOCASE);
     CREATE INDEX IF NOT EXISTS idx_library_artist ON library_index(artist COLLATE NOCASE);
@@ -74,7 +87,9 @@ function ensureSearchColumns(db) {
     CREATE INDEX IF NOT EXISTS idx_library_mood_status ON library_index(mood_status);
     CREATE INDEX IF NOT EXISTS idx_library_mood_xy ON library_index(mood_valence, mood_arousal);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_library_track_id ON library_index(track_id) WHERE track_id != '';
+    CREATE INDEX IF NOT EXISTS idx_library_file_base ON library_index(file_base) WHERE file_base != '';
   `)
+  scheduleFileBaseBackfill(db)
   try {
     const missing = db.prepare(`SELECT file_path FROM library_index WHERE track_id IS NULL OR track_id = ''`).all()
     if (missing.length) {
@@ -135,6 +150,198 @@ function extractSearchFields(meta = {}, filePath = '') {
 
 function normalizePathKey(filePath) {
   return path.resolve(String(filePath || ''))
+}
+
+function collapseDupField(value) {
+  return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
+/**
+ * 音频主文件名键：去扩展名、曲序号前缀（06.）、噪声，并剥离 name(1)/副本。
+ * 例：`06. 刘德华 - 在梦里.flac` → `刘德华 - 在梦里`
+ */
+export function normalizeAudioFileBaseKey(nameOrPath = '') {
+  const raw = String(nameOrPath || '').trim()
+  if (!raw) return ''
+  const base = path.basename(raw)
+  const ext = path.extname(base)
+  let entry = (ext ? base.slice(0, -ext.length) : base).trim()
+  entry = cleanFilenameNoise(entry).toLowerCase()
+  entry = entry
+    .replace(/\s*[\(（]\s*\d+\s*[\)）]\s*$/u, '')
+    .replace(/\s+[-\u2013]\s*副本\s*\d*$/u, '')
+    .replace(/\s+copy(?:\s*\d+)?$/iu, '')
+    .trim()
+  return entry
+}
+
+/** 下载任务可能产生的多种主文件名键（歌名-歌手 / 歌手-歌名） */
+export function buildDownloadFileBaseCandidates(task = {}, baseName = '') {
+  const keys = new Set()
+  const add = (s) => {
+    const k = normalizeAudioFileBaseKey(s)
+    if (k) keys.add(k)
+  }
+  add(baseName)
+  const name = String(task?.name || '').trim()
+  const singer = String(task?.singer || task?.albumArtist || '').trim()
+  if (name && singer) {
+    add(`${name} - ${singer}`)
+    add(`${singer} - ${name}`)
+    add(`${name}_${singer}`)
+    add(`${singer}_${name}`)
+  } else if (name) {
+    add(name)
+  }
+  return [...keys]
+}
+
+let fileBaseBackfillStarted = false
+/** 后台分批回填 / 纠正 file_base（含带曲序号的旧值），避免启动堵事件循环 */
+function scheduleFileBaseBackfill(db) {
+  if (fileBaseBackfillStarted || !db) return
+  fileBaseBackfillStarted = true
+  const BATCH = 800
+  const tick = () => {
+    try {
+      // 空值，或仍带曲序号前缀的旧键，需重算
+      const rows = db.prepare(`
+        SELECT file_path, file_base FROM library_index
+        WHERE file_base IS NULL OR file_base = ''
+           OR file_base GLOB '[0-9]. *'
+           OR file_base GLOB '[0-9][0-9]. *'
+           OR file_base GLOB '[0-9][0-9][0-9]. *'
+           OR file_base GLOB '[0-9] - *'
+           OR file_base GLOB '[0-9][0-9] - *'
+        LIMIT ${BATCH}
+      `).all()
+      if (!rows.length) return
+      const upd = db.prepare('UPDATE library_index SET file_base = ? WHERE file_path = ?')
+      const run = db.transaction((list) => {
+        for (const r of list) {
+          const next = normalizeAudioFileBaseKey(r.file_path)
+          if (next && next !== r.file_base) upd.run(next, r.file_path)
+          else if (!r.file_base && next) upd.run(next, r.file_path)
+        }
+      })
+      run(rows)
+      if (rows.length >= BATCH) setImmediate(tick)
+    } catch {
+      /* ignore */
+    }
+  }
+  setImmediate(tick)
+}
+
+function filterIndexedPathsByScope(rows, scope) {
+  const found = []
+  const seen = new Set()
+  for (const row of rows) {
+    const fp = normalizePathKey(row.file_path)
+    if (!fp || seen.has(fp)) continue
+    if (scope.length && !isPathUnderMusicDirs(fp, scope)) continue
+    try {
+      if (!fs.existsSync(fp) || !fs.statSync(fp).isFile()) continue
+    } catch {
+      continue
+    }
+    seen.add(fp)
+    found.push(fp)
+  }
+  return found
+}
+
+function resolveIndexScope({ userId = null, roots = null } = {}) {
+  if (Array.isArray(roots) && roots.length) return roots
+  return userId ? getUserAccessibleRoots(userId) : getAllMusicScanRoots()
+}
+
+/**
+ * 按主文件名键查索引（不扫盘）。
+ * @param {string} baseName 任务主文件名或路径
+ * @param {{ userId?: string|null, roots?: string[]|null }} [opts]
+ * @returns {string[]} 仍存在于磁盘的绝对路径
+ */
+export function findIndexedFilesByAudioBase(baseName, { userId = null, roots = null } = {}) {
+  const key = normalizeAudioFileBaseKey(baseName)
+  if (!key) return []
+  ensureLibraryCacheTable()
+  const db = getDB()
+  if (!db) return []
+
+  let rows = []
+  try {
+    rows = db.prepare(`
+      SELECT file_path FROM library_index WHERE file_base = ?
+    `).all(key)
+  } catch {
+    return []
+  }
+  if (!rows.length) return []
+  return filterIndexedPathsByScope(rows, resolveIndexScope({ userId, roots }))
+}
+
+/**
+ * 下载同名检测专用：多文件名候选 + 歌名/歌手身份匹配（覆盖「06. 歌手 - 歌名」等命名）。
+ * @returns {string[]}
+ */
+export function findIndexedExistingForDownload(task, { baseName = '', userId = null, roots = null } = {}) {
+  ensureLibraryCacheTable()
+  const db = getDB()
+  if (!db) return []
+  const scope = resolveIndexScope({ userId, roots })
+  const seen = new Set()
+  const out = []
+  const pushRows = (rows) => {
+    for (const fp of filterIndexedPathsByScope(rows || [], scope)) {
+      if (seen.has(fp)) continue
+      seen.add(fp)
+      out.push(fp)
+    }
+  }
+
+  const keys = buildDownloadFileBaseCandidates(task, baseName)
+  if (keys.length) {
+    try {
+      const placeholders = keys.map(() => '?').join(',')
+      const rows = db.prepare(`
+        SELECT file_path FROM library_index WHERE file_base IN (${placeholders})
+      `).all(...keys)
+      pushRows(rows)
+    } catch { /* ignore */ }
+  }
+
+  // 身份匹配：索引 title/artist（扫描入库后可用），不依赖文件名顺序
+  const title = collapseDupField(task?.name)
+  const artistRaw = collapseDupField(task?.singer || task?.albumArtist)
+  const artist = artistRaw.split(/[/／,，&＆+、]/)[0]?.trim() || ''
+  if (title && artist) {
+    try {
+      const rows = db.prepare(`
+        SELECT file_path FROM library_index
+        WHERE lower(trim(title)) = ?
+          AND (
+            lower(trim(artist)) = ?
+            OR lower(trim(artist)) LIKE ?
+            OR lower(trim(artist)) LIKE ?
+          )
+        LIMIT 50
+      `).all(title, artist, `${artist}/%`, `${artist},%`)
+      pushRows(rows)
+    } catch { /* ignore */ }
+
+    // 文件名解析兜底：file_base 含歌名与歌手（顺序不限）
+    try {
+      const rows = db.prepare(`
+        SELECT file_path, file_base FROM library_index
+        WHERE file_base LIKE ? AND file_base LIKE ?
+        LIMIT 80
+      `).all(`%${title}%`, `%${artist}%`)
+      pushRows(rows)
+    } catch { /* ignore */ }
+  }
+
+  return out
 }
 
 function buildStubEntry(filePath) {
@@ -236,22 +443,26 @@ function sanitizeCacheMeta(meta) {
 }
 
 function rowToSlimFile(row) {
+  // 列表只取白名单字段，无需 sanitize 全量浅拷贝；
+  // parsedTitle/parsedArtist 已落库时不再跑文件名正则（#61）
   let meta = {}
   try {
-    meta = sanitizeCacheMeta(JSON.parse(row.meta_json || '{}'))
+    meta = JSON.parse(row.meta_json || '{}')
   } catch {}
   const filePath = row.file_path
   const fileName = meta.fileName || path.basename(filePath)
-  const parsed = parseFilename(fileName)
+  let parsed = null
+  const ensureParsed = () => (parsed || (parsed = parseFilename(fileName)))
   const out = {
     filePath,
     mtime: row.mtime,
     size: row.size,
     fileName,
-    parsedTitle: meta.parsedTitle || parsed.title,
-    parsedArtist: meta.parsedArtist || parsed.artist,
+    parsedTitle: meta.parsedTitle || ensureParsed().title,
+    parsedArtist: meta.parsedArtist || ensureParsed().artist,
   }
   for (const key of CACHE_LIST_FIELDS) {
+    if (key === 'fileName' || key === 'parsedTitle' || key === 'parsedArtist') continue
     if (meta[key] != null && meta[key] !== '') out[key] = meta[key]
   }
   return attachTrackId(out, row)
@@ -282,22 +493,27 @@ export function getAllCachedTracks(dirsOverride = null) {
 
   const revision = getLibraryIndexRevision()
   const dirsKey = dirs.map((d) => normalizePathKey(d)).sort().join('\n')
-  if (
-    allTracksMemo
+  const memoFresh = ALLTRACKS_MEMO_MS > 0
+    && allTracksMemo
     && allTracksMemo.revision === revision
     && allTracksMemo.dirsKey === dirsKey
     && Array.isArray(allTracksMemo.tracks)
-  ) {
+    && Date.now() - (allTracksMemo.at || 0) < ALLTRACKS_MEMO_MS
+  if (memoFresh) {
     return allTracksMemo.tracks
   }
 
   const filter = buildDirSqlFilter(dirs)
-  const rows = filter
-    ? db.prepare(`SELECT file_path, mtime, size, meta_json, track_id FROM library_index WHERE ${filter.where} ORDER BY mtime DESC`).all(...filter.params)
-    : db.prepare('SELECT file_path, mtime, size, meta_json, track_id FROM library_index ORDER BY mtime DESC').all()
-
-  const tracks = rows.map(rowToSlimFile)
-  allTracksMemo = { revision, dirsKey, tracks }
+  // iterate 流式转换，避免一次性物化全部 rows（#61）
+  const baseSql = 'SELECT file_path, mtime, size, meta_json, track_id FROM library_index'
+  const sql = filter
+    ? `${baseSql} WHERE ${filter.where} ORDER BY mtime DESC`
+    : `${baseSql} ORDER BY mtime DESC`
+  const stmt = db.prepare(sql)
+  const iter = filter ? stmt.iterate(...filter.params) : stmt.iterate()
+  const tracks = []
+  for (const row of iter) tracks.push(rowToSlimFile(row))
+  allTracksMemo = { revision, dirsKey, tracks, at: Date.now() }
   return tracks
 }
 
@@ -316,15 +532,11 @@ export function buildDiskIndex(dirs) {
       const key = normalizePathKey(fp)
       try {
         const st = fs.statSync(fp)
-        const fileName = path.basename(fp)
-        const parsed = parseFilename(fileName)
+        // 对比阶段只需要 mtime/size，文件名解析延后到 pending 时再做
         map.set(key, {
           filePath: fp,
-          fileName,
           mtime: st.mtimeMs || 0,
           size: st.size || 0,
-          parsedTitle: parsed.title,
-          parsedArtist: parsed.artist,
         })
       } catch {}
     }
@@ -332,19 +544,57 @@ export function buildDiskIndex(dirs) {
   return map
 }
 
-export function syncLibraryIndex(dirs, { partial = false } = {}) {
-  ensureLibraryCacheTable()
-  const db = getDB()
-  const musicDirs = (dirs?.length ? dirs : getMusicPaths()).filter(Boolean)
-  const disk = buildDiskIndex(musicDirs)
+/** 与 buildDiskIndex 等价，stat 按小批同步 + 批间让出事件循环（#60） */
+export async function buildDiskIndexAsync(dirs) {
+  const map = new Map()
+  for (const dir of dirs) {
+    if (!isUnderConfiguredMusicDir(dir)) continue
+    if (!fs.existsSync(dir)) continue
+    const paths = await listAudioFilesAsync(dir)
+    for (let i = 0; i < paths.length; i += STAT_BATCH) {
+      const end = Math.min(i + STAT_BATCH, paths.length)
+      for (let j = i; j < end; j++) {
+        const fp = paths[j]
+        let st
+        try {
+          st = fs.statSync(fp)
+        } catch {
+          continue
+        }
+        map.set(normalizePathKey(fp), {
+          filePath: fp,
+          mtime: st.mtimeMs || 0,
+          size: st.size || 0,
+        })
+      }
+      if (end < paths.length) await yieldToLoop()
+    }
+  }
+  return map
+}
 
-  const filter = partial ? buildDirSqlFilter(musicDirs) : null
-  const cachedRows = filter
-    ? db.prepare(`SELECT file_path, mtime, size, meta_json, track_id FROM library_index WHERE ${filter.where}`).all(...filter.params)
-    : db.prepare('SELECT file_path, mtime, size, meta_json, track_id FROM library_index').all()
-  const cachedMap = new Map(cachedRows.map(r => [normalizePathKey(r.file_path), r]))
+/** 缓存表按 rowid 分页读取，返回 Map；批间让出事件循环 */
+async function readCachedRowsMap(db, filter) {
+  const cacheMap = new Map()
+  const baseCols = 'rowid AS rid, file_path, mtime, size'
+  const where = filter ? `WHERE ${filter.where}` : ''
+  const params = filter ? filter.params : []
+  const sql = `SELECT ${baseCols} FROM library_index ${where ? where + ' AND' : 'WHERE'} rowid > ? ORDER BY rowid LIMIT ${CACHE_READ_BATCH}`
+  const stmt = db.prepare(sql)
+  let lastRid = 0
+  for (;;) {
+    const rows = stmt.all(...params, lastRid)
+    if (!rows.length) break
+    for (const row of rows) cacheMap.set(normalizePathKey(row.file_path), row)
+    lastRid = rows[rows.length - 1].rid
+    if (rows.length < CACHE_READ_BATCH) break
+    await yieldToLoop()
+  }
+  return cacheMap
+}
 
-  const cached = []
+function compareDiskToCache(disk, cachedMap, musicDirs, { partial = false } = {}) {
+  let cachedCount = 0
   const pending = []
   const removed = []
 
@@ -352,7 +602,7 @@ export function syncLibraryIndex(dirs, { partial = false } = {}) {
     const key = normalizePathKey(diskEntry.filePath)
     const row = cachedMap.get(key)
     if (row && row.mtime === diskEntry.mtime && row.size === diskEntry.size) {
-      cached.push(rowToFile(row))
+      cachedCount += 1
       cachedMap.delete(key)
     } else {
       pending.push({
@@ -369,15 +619,98 @@ export function syncLibraryIndex(dirs, { partial = false } = {}) {
     }
   }
 
-  if (removed.length) {
-    const stmt = db.prepare('DELETE FROM library_index WHERE file_path = ?')
-    const delMany = db.transaction((paths) => {
-      for (const p of paths) stmt.run(p)
-    })
-    delMany(removed)
-  }
+  return { cachedCount, pending, removed }
+}
 
-  return { cached, pending, removed, total: disk.size }
+function deleteRemovedCacheRows(db, removed) {
+  if (!removed.length) return
+  const stmt = db.prepare('DELETE FROM library_index WHERE file_path = ?')
+  const delMany = db.transaction((paths) => {
+    for (const p of paths) stmt.run(p)
+  })
+  delMany(removed)
+}
+
+export function syncLibraryIndex(dirs, { partial = false } = {}) {
+  ensureLibraryCacheTable()
+  const db = getDB()
+  const musicDirs = (dirs?.length ? dirs : getMusicPaths()).filter(Boolean)
+  const disk = buildDiskIndex(musicDirs)
+
+  const filter = partial ? buildDirSqlFilter(musicDirs) : null
+  // 对比阶段只需 file_path/mtime/size，不再拉 meta_json
+  const cachedRows = filter
+    ? db.prepare(`SELECT file_path, mtime, size FROM library_index WHERE ${filter.where}`).all(...filter.params)
+    : db.prepare('SELECT file_path, mtime, size FROM library_index').all()
+  const cachedMap = new Map(cachedRows.map((r) => [normalizePathKey(r.file_path), r]))
+
+  const { cachedCount, pending, removed } = compareDiskToCache(disk, cachedMap, musicDirs, { partial })
+  deleteRemovedCacheRows(db, removed)
+
+  // cached 明细无人消费，仅返回空数组 + cachedCount 兼容旧调用方
+  return { cached: [], cachedCount, pending, removed, total: disk.size }
+}
+
+/**
+ * 与 syncLibraryIndex 语义一致，全流程分片让出事件循环；
+ * 并发调用串行化，避免后台监测与手动扫描交错删行（#60）。
+ */
+export async function syncLibraryIndexAsync(dirs, { partial = false } = {}) {
+  if (syncInFlight) {
+    try {
+      await syncInFlight
+    } catch {}
+  }
+  const task = (async () => {
+    ensureLibraryCacheTable()
+    const db = getDB()
+    const musicDirs = (dirs?.length ? dirs : getMusicPaths()).filter(Boolean)
+
+    const disk = await buildDiskIndexAsync(musicDirs)
+    const filter = partial ? buildDirSqlFilter(musicDirs) : null
+    const cachedMap = await readCachedRowsMap(db, filter)
+
+    let cachedCount = 0
+    const pending = []
+    const removed = []
+    let ops = 0
+
+    for (const [, diskEntry] of disk) {
+      const key = normalizePathKey(diskEntry.filePath)
+      const row = cachedMap.get(key)
+      if (row && row.mtime === diskEntry.mtime && row.size === diskEntry.size) {
+        cachedCount += 1
+        cachedMap.delete(key)
+      } else {
+        pending.push({
+          ...buildStubEntry(diskEntry.filePath),
+          mtime: diskEntry.mtime,
+          size: diskEntry.size,
+        })
+      }
+      ops += 1
+      if (ops >= COMPARE_YIELD_EVERY) {
+        ops = 0
+        await yieldToLoop()
+      }
+    }
+
+    for (const [, row] of cachedMap) {
+      if (!partial || isPathUnderMusicDirs(row.file_path, musicDirs)) {
+        removed.push(row.file_path)
+      }
+    }
+
+    deleteRemovedCacheRows(db, removed)
+    return { cached: [], cachedCount, pending, removed, total: disk.size }
+  })()
+
+  syncInFlight = task
+  try {
+    return await task
+  } finally {
+    if (syncInFlight === task) syncInFlight = null
+  }
 }
 
 export function upsertCacheEntry(filePath, mtime, size, meta, { preserveTrackId } = {}) {
@@ -388,14 +721,15 @@ export function upsertCacheEntry(filePath, mtime, size, meta, { preserveTrackId 
   const clean = sanitizeCacheMeta(rest)
   const metaJson = JSON.stringify(clean)
   const fields = extractSearchFields(clean, key)
+  const fileBase = normalizeAudioFileBaseKey(clean.fileName || key)
   const existing = db.prepare('SELECT track_id FROM library_index WHERE file_path = ?').get(key)
   const trackId = String(preserveTrackId || existing?.track_id || '').trim() || randomUUID()
   db.prepare(`
     INSERT INTO library_index (
-      file_path, mtime, size, meta_json, scanned_at, track_id,
+      file_path, mtime, size, meta_json, scanned_at, track_id, file_base,
       title, artist, album_artist, album, year, genre, duration, format, track_no, has_picture, has_lyrics
     )
-    VALUES (?, ?, ?, ?, unixepoch(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, unixepoch(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(file_path) DO UPDATE SET
       mtime = excluded.mtime,
       size = excluded.size,
@@ -405,6 +739,7 @@ export function upsertCacheEntry(filePath, mtime, size, meta, { preserveTrackId 
         WHEN library_index.track_id IS NOT NULL AND library_index.track_id != '' THEN library_index.track_id
         ELSE excluded.track_id
       END,
+      file_base = excluded.file_base,
       title = excluded.title,
       artist = excluded.artist,
       album_artist = excluded.album_artist,
@@ -422,6 +757,7 @@ export function upsertCacheEntry(filePath, mtime, size, meta, { preserveTrackId 
     size || 0,
     metaJson,
     trackId,
+    fileBase,
     fields.title,
     fields.artist,
     fields.albumArtist,

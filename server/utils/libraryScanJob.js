@@ -4,7 +4,7 @@ import {
   isPartialScan,
 } from './libraryScanSettings.js'
 import {
-  syncLibraryIndex,
+  syncLibraryIndexAsync,
   scanBatchAndCache,
   countCachedTracks,
 } from './libraryCache.js'
@@ -69,7 +69,7 @@ async function runScanJob(precomputed, scanDirs) {
     scanState.error = ''
     emitProgress({ text: '比对文件' })
 
-    const syncResult = precomputed || syncLibraryIndex(dirs, { partial: isPartialScan(dirs) })
+    const syncResult = precomputed || (await syncLibraryIndexAsync(dirs, { partial: isPartialScan(dirs) }))
     if (!precomputed && syncResult.removed?.length) {
       notifyLibraryRemoved(syncResult.removed)
     }
