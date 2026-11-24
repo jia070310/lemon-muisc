@@ -188,6 +188,23 @@
               "size": 5792451
             }
           }
+        },
+        "1.2.17.26": {
+          "changelog": "歌词 · 逐词；全屏「改歌词」跟随当前「逐字」显示：优先拉取增强/逐词时间轴；设置「试听/下载歌词样式 = 逐词」时，标签编辑网络获取 / 批量整理同步逐词，并在歌词编辑区提示后台模式；播放；`localhost` 开发页不再误报「局域网直出失败」；本机与局域网直出策略分开文案；WebSocket 增加应用层 / 协议层心跳，降低中间层掐断长连接概率",
+          "updated_at": "2026-11-24T22:55:07+08:00",
+          "os_min_version": "1.1.8",
+          "packages": {
+            "x86": {
+              "download_url": "https://github.com/jia070310/lemon-muisc/releases/download/v1.2.17.26/lemon-music-1.2.17.26-x86.fpk",
+              "sha256": "deb6225e1a94fdbc5f9c5947c63dc9ba24e4fc88305fe677fa305c3fface8850",
+              "size": 5745869
+            },
+            "arm": {
+              "download_url": "https://github.com/jia070310/lemon-muisc/releases/download/v1.2.17.26/lemon-music-1.2.17.26-arm.fpk",
+              "sha256": "fd9eb14cbbf32b4c8fe3f9f4d9aa1ffe0d6461031f68af56b8f87b71e75c2f2a",
+              "size": 5745869
+            }
+          }
         }
       }
     }
