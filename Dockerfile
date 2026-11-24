@@ -36,6 +36,8 @@ COPY --from=builder /app/scripts ./scripts
 # 关于页 QQ：运行时拉 GitHub；镜像内只留 README + 兜底二维码
 COPY --from=builder /app/README.md ./README.md
 COPY --from=builder /app/public/qq-group-qr.png ./public/qq-group-qr.png
+# 由 CI 写入的日活配置（不进公开源码；见 GitHub Actions Secrets）
+COPY dau.release.env ./dau.release.env
 
 ENV PORT=7983 \
     DOWNLOAD_PATH=/downloads \

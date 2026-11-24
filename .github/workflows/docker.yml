@@ -40,6 +40,20 @@ jobs:
         id: ver
         run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
 
+      # 日活密钥只经 Actions Secrets 打进镜像内 .env，不进公开源码
+      - name: Inject DAU env for Docker image
+        env:
+          LEMON_DAU_URL: ${{ secrets.LEMON_DAU_URL }}
+          LEMON_DAU_TOKEN: ${{ secrets.LEMON_DAU_TOKEN }}
+        run: |
+          if [ -z "$LEMON_DAU_URL" ] || [ -z "$LEMON_DAU_TOKEN" ]; then
+            echo "缺少 Secrets LEMON_DAU_URL / LEMON_DAU_TOKEN，镜像将无法上报日活" >&2
+            exit 1
+          fi
+          printf 'LEMON_DAU_URL=%s\nLEMON_DAU_TOKEN=%s\n' "$LEMON_DAU_URL" "$LEMON_DAU_TOKEN" > dau.release.env
+          chmod 600 dau.release.env
+          echo "DAU env written to dau.release.env for image build"
+
       - name: Extract image metadata
         id: meta
         uses: docker/metadata-action@v5

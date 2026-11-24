@@ -139,6 +139,35 @@ if (Test-Path $qqQr) {
 }
 Remove-Item -Recurse -Force $AppBundle -ErrorAction SilentlyContinue
 
+# 本地打包：从根目录 .env 写入日活配置（与 CI Secrets → dau.release.env 同路径）
+Write-Host ">>> inject dau.release.env" -ForegroundColor Cyan
+$dauUrl = $env:LEMON_DAU_URL
+$dauToken = $env:LEMON_DAU_TOKEN
+$rootEnv = Join-Path $Root ".env"
+if (Test-Path $rootEnv) {
+  Get-Content -Path $rootEnv -Encoding UTF8 | ForEach-Object {
+    $line = $_.Trim()
+    if (-not $line -or $line.StartsWith("#")) { return }
+    $eq = $line.IndexOf("=")
+    if ($eq -le 0) { return }
+    $key = $line.Substring(0, $eq).Trim()
+    $val = $line.Substring($eq + 1).Trim()
+    if (($val.StartsWith('"') -and $val.EndsWith('"')) -or ($val.StartsWith("'") -and $val.EndsWith("'"))) {
+      $val = $val.Substring(1, $val.Length - 2)
+    }
+    if ($key -eq "LEMON_DAU_URL" -and -not $dauUrl) { $dauUrl = $val }
+    if ($key -eq "LEMON_DAU_TOKEN" -and -not $dauToken) { $dauToken = $val }
+  }
+}
+$dauOut = Join-Path $FpkDir "app\dau.release.env"
+if ($dauUrl -and $dauToken) {
+  [IO.File]::WriteAllText($dauOut, "LEMON_DAU_URL=$dauUrl`nLEMON_DAU_TOKEN=$dauToken`n")
+  Write-Host "    wrote $dauOut" -ForegroundColor Green
+} else {
+  Write-Host "    WARN: LEMON_DAU_URL/TOKEN missing — FPK will not report DAU" -ForegroundColor Yellow
+  if (Test-Path $dauOut) { Remove-Item -Force $dauOut }
+}
+
 Write-Host ">>> normalize cmd scripts to LF" -ForegroundColor Cyan
 Get-ChildItem -Path (Join-Path $FpkDir "cmd") -File | ForEach-Object {
   $text = [IO.File]::ReadAllText($_.FullName).Replace("`r`n", "`n")

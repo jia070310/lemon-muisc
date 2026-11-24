@@ -4,25 +4,27 @@ import path from 'path'
 import fs from 'fs'
 import { fileURLToPath } from 'url'
 
-/** 本地开发：加载项目根目录 .env（不覆盖已有环境变量；无 dotenv 依赖） */
+/** 本地开发 / 发行包：加载根目录 .env 与 dau.release.env（不覆盖已有环境变量；无 dotenv 依赖） */
 function loadLocalEnvFile() {
   try {
     const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
-    const envPath = path.join(root, '.env')
-    if (!fs.existsSync(envPath)) return
-    const text = fs.readFileSync(envPath, 'utf8')
-    for (const rawLine of text.split(/\r?\n/)) {
-      const line = rawLine.trim()
-      if (!line || line.startsWith('#')) continue
-      const i = line.indexOf('=')
-      if (i <= 0) continue
-      const key = line.slice(0, i).trim()
-      let val = line.slice(i + 1).trim()
-      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
-        val = val.slice(1, -1)
+    for (const name of ['.env', 'dau.release.env']) {
+      const envPath = path.join(root, name)
+      if (!fs.existsSync(envPath)) continue
+      const text = fs.readFileSync(envPath, 'utf8')
+      for (const rawLine of text.split(/\r?\n/)) {
+        const line = rawLine.trim()
+        if (!line || line.startsWith('#')) continue
+        const i = line.indexOf('=')
+        if (i <= 0) continue
+        const key = line.slice(0, i).trim()
+        let val = line.slice(i + 1).trim()
+        if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+          val = val.slice(1, -1)
+        }
+        if (!key || process.env[key] != null) continue
+        process.env[key] = val
       }
-      if (!key || process.env[key] != null) continue
-      process.env[key] = val
     }
   } catch {}
 }

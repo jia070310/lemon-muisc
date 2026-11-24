@@ -12,10 +12,14 @@ fpk/app/.stage-*/
 fpk/app/package.json
 fpk/app/package-lock.json
 fpk/app/deps.rev
+fpk/app/dau.release.env
+fpk/app/README.md
+fpk/app/public/
 tools/fnpack
 tools/fnpack.exe
 tools/regctl.exe
 # 日活接收端 / 本地日活数据 / 临时联调文件（不进公开仓库）
+tools/dau/
 tools/dau-receiver.mjs
 tools/dau-receiver.mjs.*
 tools/_dashboard_snip.js

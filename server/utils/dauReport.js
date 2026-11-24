@@ -22,7 +22,7 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const HEARTBEAT_MS = 15 * 60 * 1000
-const BOOT_DELAY_MS = 20 * 1000
+const BOOT_DELAY_MS = 5 * 1000
 const MAX_ACTIVE_SEC = 30 * 60
 const TZ = 'Asia/Shanghai'
 
@@ -203,9 +203,15 @@ export async function reportDailyActive(opts = {}) {
  * @param {{ configPath?: string }} [opts]
  */
 export function startDauReporter(opts = {}) {
-  if (isDisabled() || !getEndpoint()) {
+  if (isDisabled()) {
+    console.info('[dau] 已禁用（LEMON_DAU_DISABLED），跳过上报')
     return () => {}
   }
+  if (!getEndpoint()) {
+    console.info('[dau] 未配置 LEMON_DAU_URL，跳过上报（发行包需在构建时注入）')
+    return () => {}
+  }
+  console.info(`[dau] 上报已启用 → ${getEndpoint()} · edition=${getDeployEdition()}`)
 
   const configPath = opts.configPath || resolveConfigPath()
   lastBeatAt = Date.now()
