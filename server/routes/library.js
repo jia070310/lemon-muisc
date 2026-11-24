@@ -32,6 +32,7 @@ import {
   queryMoodMapPoints,
   queryMoodTracksInRegion,
   getTrackById,
+  findIndexedExistingForDownload,
 } from '../utils/libraryCache.js'
 import { inspectFakeFlacFile } from '../utils/audioFormat.js'
 import { parseFilename } from '../utils/filenameParse.js'
@@ -1040,6 +1041,41 @@ libraryRouter.put('/user-data', (req, res) => {
     notifyLibraryUserDataChanged(req.user.id, { revision: (hasRev || hasBase) ? nextRevision : serverRev })
     const saved = getLibraryUserData(req.user.id)
     res.json({ ok: true, revision: saved.revision, data: saved })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+/**
+ * 在线搜索结果对照本地库：只读 library_index（不整盘扫）。
+ * body: { songs: [{ key?, id?, name, singer }] }
+ * 返回: { matches: { [key]: { paths, path } } }
+ */
+libraryRouter.post('/match-online', (req, res) => {
+  try {
+    const raw = Array.isArray(req.body?.songs) ? req.body.songs : []
+    const songs = raw.slice(0, 120)
+    const userId = req.user?.id || null
+    const roots = getUserAccessibleRoots(userId)
+    const matches = {}
+    for (let i = 0; i < songs.length; i++) {
+      const song = songs[i] || {}
+      const name = String(song.name || song.title || '').trim()
+      const singer = String(song.singer || song.artist || '').trim()
+      if (!name) continue
+      const key = String(song.key || song.id || `${name}::${singer}::${i}`)
+      const paths = findIndexedExistingForDownload(
+        { name, singer },
+        { userId, roots },
+      )
+      if (!paths.length) continue
+      matches[key] = {
+        paths,
+        path: paths[0],
+        count: paths.length,
+      }
+    }
+    res.json({ ok: true, matches, checked: songs.length })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }

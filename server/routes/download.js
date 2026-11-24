@@ -38,6 +38,7 @@ import {
   probeRemoteAudioDurationSeconds,
   assertNotPreviewClip,
 } from '../utils/audioDuration.js'
+import { recordDownloadFail, recordDownloadOk } from '../utils/featureUsage.js'
 import {
   assertLosslessContentType,
   assertLosslessFile,
@@ -1558,6 +1559,7 @@ function markError(taskId, message, meta) {
   taskMeta.downloadArtifacts = []
   saveTaskMeta(taskId, taskMeta)
   getDB().prepare("UPDATE download_tasks SET status = 'error', error = ?, file_path = NULL WHERE id = ?").run(friendly, taskId)
+  try { recordDownloadFail() } catch {}
   dlBroadcast('download:status', { id: taskId, status: 'error', error: friendly, downgradeOffer: null, existFileOffer: null })
   if (row?.user_id) scheduleExistSummary(row.user_id)
 }
@@ -2261,6 +2263,7 @@ async function downloadTask(task, settings, abortSignal = null) {
 
             getDB().prepare("UPDATE download_tasks SET status = 'completed', file_path = ?, progress = 1, error = NULL WHERE id = ?")
               .run(filePath, task.id)
+            try { recordDownloadOk() } catch {}
             dlBroadcast('download:status', { id: task.id, status: 'completed', progress: 1, filePath, quality, source, tip: '' })
             scanBatchAndCache([{ filePath }]).then((rows) => {
               if (rows?.length) bumpLibraryIndexRevision()

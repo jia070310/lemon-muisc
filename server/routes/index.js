@@ -20,6 +20,7 @@ import { podcastRouter } from './podcast.js'
 import { dlnaRouter } from './dlna.js'
 import { openApiPublicRouter } from './openApi.js'
 import { requireAuth } from '../middleware/auth.js'
+import { featureUsageMiddleware } from '../utils/featureUsage.js'
 
 export const apiRouter = Router()
 
@@ -30,6 +31,7 @@ apiRouter.use('/auth', authRouter)
 apiRouter.use('/health', healthRouter)
 
 apiRouter.use(requireAuth)
+apiRouter.use(featureUsageMiddleware)
 
 apiRouter.use('/settings', settingsRouter)
 apiRouter.use('/source', sourceRouter)

@@ -461,7 +461,7 @@ import { searchState, loadSearchSources } from '../stores/search.js'
 import { loadingPlay, isPaused, isPlayingItem, playItem, addToQueue, isInQueue } from '../stores/player.js'
 import { getQualityLabel } from '../utils/quality.js'
 import { platformLabel } from '../utils/platforms.js'
-import { cleanText, cleanTrackItem } from '../utils/text.js'
+import { cleanText, cleanTrackItem, formatArtists } from '../utils/text.js'
 import { getAudiobookAlbumId, splitAudiobookSearchResults } from '../utils/audiobook.js'
 import {
   trackSelectKey,
@@ -913,6 +913,70 @@ let albumSearchAbort = null
 let albumOpenAbort = null
 let playlistSearchAbort = null
 let playlistOpenAbort = null
+let matchOnlineSeq = 0
+let matchOnlineAbort = null
+
+function singerTextForMatch(item) {
+  const raw = item?.singer ?? item?.artist ?? ''
+  if (Array.isArray(raw)) {
+    return formatArtists(raw.map((p) => (typeof p === 'string' ? p : (p?.name || ''))).filter(Boolean).join(' / '))
+  }
+  if (raw && typeof raw === 'object') return formatArtists(raw.name || '')
+  return formatArtists(raw)
+}
+
+/** 搜索/详情结果出来后，用库索引标「已在库」与本地路径（不扫盘） */
+async function enrichResultsLibraryMatch(list) {
+  matchOnlineAbort?.abort()
+  const controller = new AbortController()
+  matchOnlineAbort = controller
+  const seq = ++matchOnlineSeq
+  if (!Array.isArray(list) || !list.length) return
+
+  const payload = []
+  for (let i = 0; i < Math.min(list.length, 120); i++) {
+    const item = list[i]
+    const name = cleanText(item?.name || item?.title || '')
+    if (!name) continue
+    payload.push({
+      key: trackSelectKey(item, i),
+      name,
+      singer: singerTextForMatch(item),
+    })
+  }
+  if (!payload.length) return
+
+  try {
+    const res = await api.library.matchOnline(payload, { signal: controller.signal })
+    if (seq !== matchOnlineSeq || searchState.results !== list) return
+    const matches = res?.matches || {}
+    for (let i = 0; i < list.length; i++) {
+      const item = list[i]
+      const key = trackSelectKey(item, i)
+      const hit = matches[key]
+      if (hit?.path) {
+        item._inLibrary = true
+        item._libraryPath = hit.path
+        item._libraryPaths = Array.isArray(hit.paths) ? hit.paths : [hit.path]
+      } else {
+        item._inLibrary = false
+        item._libraryPath = ''
+        item._libraryPaths = []
+      }
+    }
+  } catch (e) {
+    if (isAbortedError(e)) return
+  } finally {
+    if (matchOnlineAbort === controller) matchOnlineAbort = null
+  }
+}
+
+watch(
+  () => searchState.results,
+  (list) => {
+    enrichResultsLibraryMatch(list)
+  },
+)
 
 function cancelSongSearch() {
   songSearchAbort?.abort()

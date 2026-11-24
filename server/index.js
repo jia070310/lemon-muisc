@@ -3,6 +3,31 @@ import cors from 'cors'
 import path from 'path'
 import fs from 'fs'
 import { fileURLToPath } from 'url'
+
+/** 本地开发：加载项目根目录 .env（不覆盖已有环境变量；无 dotenv 依赖） */
+function loadLocalEnvFile() {
+  try {
+    const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
+    const envPath = path.join(root, '.env')
+    if (!fs.existsSync(envPath)) return
+    const text = fs.readFileSync(envPath, 'utf8')
+    for (const rawLine of text.split(/\r?\n/)) {
+      const line = rawLine.trim()
+      if (!line || line.startsWith('#')) continue
+      const i = line.indexOf('=')
+      if (i <= 0) continue
+      const key = line.slice(0, i).trim()
+      let val = line.slice(i + 1).trim()
+      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+        val = val.slice(1, -1)
+      }
+      if (!key || process.env[key] != null) continue
+      process.env[key] = val
+    }
+  } catch {}
+}
+loadLocalEnvFile()
+
 import { initDB, getDB } from './db.js'
 import { migrateFilePaths } from './utils/filePaths.js'
 import { apiRouter } from './routes/index.js'
@@ -268,4 +293,11 @@ server.listen(PORT, '::', () => {
       .then(({ scheduleMoodAutoAnalyze }) => scheduleMoodAutoAnalyze({ delayMs: 5000 }))
       .catch(() => {})
   }, 35 * 60 * 1000).unref?.()
+
+  // 9) 日活上报（需自行配置 LEMON_DAU_URL / LEMON_DAU_TOKEN；未配置则跳过）
+  setTimeout(() => {
+    import('./utils/dauReport.js')
+      .then(({ startDauReporter }) => startDauReporter({ configPath: CONFIG_PATH }))
+      .catch(() => {})
+  }, 20 * 1000).unref?.()
 })

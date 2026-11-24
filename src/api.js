@@ -502,6 +502,13 @@ export const api = {
       body: { paths },
       timeout: 60000,
     }),
+    /** 在线曲目批量对照本地索引（不扫盘），返回命中路径 */
+    matchOnline: (songs, options = {}) => request('/library/match-online', {
+      method: 'POST',
+      body: { songs },
+      timeout: 30000,
+      signal: options.signal,
+    }),
     artists: (params = {}) => {
       const q = new URLSearchParams()
       for (const [k, v] of Object.entries(params || {})) {
@@ -675,7 +682,15 @@ export const api = {
       }
       return request('/tag/match', { method: 'POST', body: { ...params, source } })
     },
-    matchApply: (match, source, fields) => request('/tag/match-apply', { method: 'POST', body: { match, source, fields } }),
+    matchApply: (match, source, fields, opts = {}) => request('/tag/match-apply', {
+      method: 'POST',
+      body: {
+        match,
+        source,
+        fields,
+        ...(opts.preferWords != null ? { preferWords: Boolean(opts.preferWords) } : {}),
+      },
+    }),
     matchBatch: (files, source, options = {}) => request('/tag/match-batch', {
       method: 'POST',
       body: { files, source, ...options },

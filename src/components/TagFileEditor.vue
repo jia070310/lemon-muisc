@@ -47,7 +47,13 @@
             <AppSelect v-model="fetchSource" :options="sourceOptions" size="sm" variant="attached-end" title="选择音源" />
           </div>
         </div>
-        <textarea v-model="editForm.lyric" rows="10" @input="markModified" placeholder="LRC 歌词内容"></textarea>
+        <p v-if="backendLyricWordMode" class="lyric-mode-hint">后台模式为逐词：网络获取将优先拉取增强时间轴（无则回退逐行）</p>
+        <textarea
+          v-model="editForm.lyric"
+          rows="10"
+          @input="markModified"
+          :placeholder="backendLyricWordMode ? '增强 LRC / 逐词歌词（含 &lt;mm:ss.xx&gt; 字级时间）' : 'LRC 歌词内容'"
+        ></textarea>
       </label>
     </div>
 
@@ -175,6 +181,9 @@
             </div>
             <div v-else class="preview-lyric">
               <div class="preview-lyric-title">歌词预览</div>
+              <div v-if="backendLyricWordMode || fetchPreviewMeta.lyricStyle === 'word'" class="lyric-mode-hint preview-lyric-hint">
+                {{ fetchPreviewMeta.lyricStyle === 'word' ? '已按逐词模式获取增强歌词' : '后台模式为逐词，优先拉取增强时间轴' }}
+              </div>
               <pre>{{ fetchPreviewMeta.lyric ? fetchPreviewMeta.lyric.slice(0, 1200) : '暂无歌词' }}{{ fetchPreviewMeta.lyric?.length > 1200 ? '…' : '' }}</pre>
             </div>
           </div>
@@ -232,6 +241,19 @@ const fetchArtist = ref('')
 const fetchTitle = ref('')
 const fetchAlbum = ref('')
 const fetchIntent = ref('cover')
+/** 与设置「试听/下载歌词样式」同步 */
+const backendLyricWordMode = ref(false)
+
+async function loadBackendLyricStyle() {
+  try {
+    const res = await api.settings.get()
+    const settings = res?.data || res || {}
+    backendLyricWordMode.value = String(settings['download.lyricStyle'] || 'line').toLowerCase() === 'word'
+  } catch {
+    backendLyricWordMode.value = false
+  }
+}
+void loadBackendLyricStyle()
 
 const fetchIntentLabel = computed(() => {
   if (fetchIntent.value === 'cover') return '网络获取封面'
@@ -532,7 +554,9 @@ function applyFetchedMetaToForm(meta) {
     else if (meta.picUrl) editForm.value.picUrl = meta.picUrl
     else if (fetchPreview.value?.picUrl) editForm.value.picUrl = fetchPreview.value.picUrl
     coverDirty.value = true
-  } else if (fetchIntent.value === 'lyric' && meta.lyric) {
+  }
+  // meta / lyric：有歌词则写入（封面意图不覆盖已有歌词）
+  if (fetchIntent.value !== 'cover' && typeof meta.lyric === 'string' && meta.lyric) {
     editForm.value.lyric = meta.lyric
   }
 }
@@ -631,6 +655,13 @@ defineExpose({ togglePlay })
 }
 .field-block { gap: 8px !important; }
 .field-toolbar { display: flex; align-items: center; }
+.lyric-mode-hint {
+  margin: 6px 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--accent);
+}
+.preview-lyric-hint { margin-bottom: 8px; }
 .meta-fetch-toolbar { margin-bottom: 4px; }
 .split-btn { display: flex; align-items: stretch; gap: 0; }
 .split-btn .btn-primary { border-radius: var(--radius) 0 0 var(--radius); }

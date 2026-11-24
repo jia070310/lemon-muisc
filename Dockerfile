@@ -40,6 +40,7 @@ COPY --from=builder /app/public/qq-group-qr.png ./public/qq-group-qr.png
 ENV PORT=7983 \
     DOWNLOAD_PATH=/downloads \
     CONFIG_PATH=/config \
+    LEMON_EDITION=docker \
     NODE_ENV=production
 
 EXPOSE 7983

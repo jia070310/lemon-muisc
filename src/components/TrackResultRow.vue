@@ -7,7 +7,17 @@
       <input type="checkbox" :checked="selected" @change="$emit('toggle-select')" />
     </span>
     <span class="col-index">{{ index + 1 }}</span>
-    <span class="col-name" :title="cleanText(item.name)">{{ cleanText(item.name) }}</span>
+    <span class="col-name">
+      <span class="name-line">
+        <span class="name-text" :title="cleanText(item.name)">{{ cleanText(item.name) }}</span>
+        <span v-if="item._inLibrary" class="in-lib-badge" title="本地音乐库已有同曲">已在库</span>
+      </span>
+      <span
+        v-if="item._libraryPath"
+        class="lib-path"
+        :title="libraryPathTitle"
+      >{{ shortLibraryPath }}</span>
+    </span>
     <span class="col-singer" :title="formatArtists(item.singer)">{{ formatArtists(item.singer) }}</span>
     <span class="col-album" :title="cleanText(item.album || item.albumName)">{{ cleanText(item.album || item.albumName) || '-' }}</span>
     <span class="col-duration">{{ item.interval || '-' }}</span>
@@ -86,6 +96,23 @@ defineEmits([
 ])
 
 const qualities = computed(() => props.item._qualities || getItemQualities(props.item))
+
+const shortLibraryPath = computed(() => {
+  const raw = String(props.item?._libraryPath || '').trim()
+  if (!raw) return ''
+  const norm = raw.replace(/\\/g, '/')
+  const parts = norm.split('/').filter(Boolean)
+  if (parts.length <= 2) return norm
+  return `…/${parts.slice(-2).join('/')}`
+})
+
+const libraryPathTitle = computed(() => {
+  const paths = Array.isArray(props.item?._libraryPaths) ? props.item._libraryPaths.filter(Boolean) : []
+  const primary = String(props.item?._libraryPath || paths[0] || '').trim()
+  if (!primary) return ''
+  if (paths.length > 1) return `${primary}\n另有 ${paths.length - 1} 个同曲文件`
+  return primary
+})
 </script>
 
 <style scoped>
@@ -121,7 +148,45 @@ const qualities = computed(() => props.item._qualities || getItemQualities(props
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.col-name { font-weight: 500; }
+.col-name {
+  font-weight: 500;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  white-space: normal;
+}
+.name-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.name-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.in-lib-badge {
+  flex-shrink: 0;
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: 999px;
+  font-weight: 600;
+  color: #15803d;
+  background: rgba(34, 197, 94, 0.14);
+}
+.lib-path {
+  font-size: 11px;
+  line-height: 1.3;
+  font-weight: 400;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .col-singer, .col-album { color: var(--text-secondary); }
 .col-duration { color: var(--text-muted); text-align: center; }
 .col-index { color: var(--text-muted); text-align: center; }
@@ -239,11 +304,12 @@ const qualities = computed(() => props.item._qualities || getItemQualities(props
     grid-area: name;
     min-width: 0;
     overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    display: block;
+    display: flex;
     font-size: 14px;
     line-height: 1.35;
+  }
+  .lib-path {
+    font-size: 10px;
   }
   .col-singer {
     grid-area: meta;

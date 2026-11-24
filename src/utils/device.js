@@ -93,26 +93,47 @@ export function isConstrainedNetwork() {
   return false
 }
 
-/** 判断主机名是否为常见局域网 / 本机地址（用于 NAS 内网访问） */
+/** 本机回环（localhost / 127.x），如 Vite 开发页 http://localhost:5174 */
+export function isLoopbackHost(hostname) {
+  const h = String(hostname || '').trim().toLowerCase()
+  if (!h) return false
+  if (h === 'localhost' || h === '[::1]' || h === '::1') return true
+  const m = h.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/)
+  if (!m) return false
+  return Number(m[1]) === 127
+}
+
+/**
+ * 常见局域网主机名（不含 localhost）。
+ * 用于「局域网」文案；本机开发页不要误报成局域网。
+ */
 export function isLikelyLanHost(hostname) {
   const h = String(hostname || '').trim().toLowerCase()
-  if (!h || h === 'localhost') return true
+  if (!h || isLoopbackHost(h)) return false
   if (h.endsWith('.local')) return true
-  if (h === '[::1]' || h === '::1') return true
   const m = h.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/)
   if (!m) return false
   const a = Number(m[1])
   const b = Number(m[2])
   if (a === 10) return true
-  if (a === 127) return true
   if (a === 192 && b === 168) return true
   if (a === 169 && b === 254) return true
   if (a === 172 && b >= 16 && b <= 31) return true
   return false
 }
 
-/** 当前页面是否通过局域网地址打开（与服务器同网段访问 NAS 时直出本地文件） */
+/** 当前页面是否通过局域网地址打开（不含 localhost 开发页） */
 export function isLikelyLanAccess() {
   if (typeof window === 'undefined') return false
   return isLikelyLanHost(window.location.hostname)
+}
+
+/**
+ * 本机或局域网访问：带宽通常足够，本地曲可优先直出原文件。
+ * localhost / 127.x / 私网 IP / *.local 均计入。
+ */
+export function isLocalNetworkAccess() {
+  if (typeof window === 'undefined') return false
+  const h = window.location.hostname
+  return isLoopbackHost(h) || isLikelyLanHost(h)
 }

@@ -16,6 +16,7 @@ import { mapWithConcurrency } from '../utils/asyncPool.js'
 import { notifyLibraryChanged } from '../utils/libraryNotify.js'
 import { enrichFilesFromCache, readBatchFromCacheOrScan, getAllCachedTracks, refreshCacheAfterTagWrite } from '../utils/libraryCache.js'
 import { getMergedSettings } from '../utils/userSettings.js'
+import { preferDownloadWordLyric } from '../utils/lyric.js'
 import {
   albumHintFromFilePath,
   isMatchArtistAcceptable,
@@ -414,7 +415,12 @@ tagRouter.post('/match-apply', async (req, res) => {
     const { match, source, fields } = req.body
     if (!match) return res.status(400).json({ error: '缺少匹配项' })
 
-    const meta = await fetchMatchMeta(match, source, fields)
+    const settings = getMergedSettings(req.user?.id)
+    // 显式 preferWords（如全屏改歌词）优先；否则跟随后台「试听/下载歌词样式」
+    const preferWords = req.body?.preferWords != null
+      ? Boolean(req.body.preferWords)
+      : preferDownloadWordLyric(settings)
+    const meta = await fetchMatchMeta(match, source, fields, null, { preferWords })
     res.json({ ok: true, data: meta })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -428,6 +434,7 @@ tagRouter.post('/match-batch', async (req, res) => {
     if (files.length > 50) return res.status(400).json({ error: '单次最多 50 个文件' })
 
     const settings = getMergedSettings(req.user?.id)
+    const preferWords = preferDownloadWordLyric(settings)
     const rewriteAll = req.body.rewriteAll === true
     const useExistingTags = req.body.useExistingTags === true
     const rewriteFields = Array.isArray(req.body.rewriteFields)
@@ -510,7 +517,7 @@ tagRouter.post('/match-batch', async (req, res) => {
         }
         const wantGenre = !rewriteFields.length || rewriteFields.includes('genre')
         // 与 match-apply（右侧预览）相同：拉全量标签字段，再按勾选过滤写入
-        let meta = await fetchMatchMeta(picked, sdkSource, null, { title, artist })
+        let meta = await fetchMatchMeta(picked, sdkSource, null, { title, artist }, { preferWords })
         // 勾了风格但首条结果没有：换候选再取（右侧手动常点到有风格的那条）
         if (wantGenre && !String(meta.genre || '').trim()) {
           const pickedKey = matchSongKey(picked)
@@ -520,7 +527,7 @@ tagRouter.post('/match-batch', async (req, res) => {
               const filterArtist = artist || existArtist || parsedArtist
               if (!isMatchArtistAcceptable(candidate.singer, filterArtist, file.filePath)) continue
             }
-            const alt = await fetchMatchMeta(candidate, sdkSource, null, { title, artist })
+            const alt = await fetchMatchMeta(candidate, sdkSource, null, { title, artist }, { preferWords })
             if (String(alt.genre || '').trim()) {
               meta = {
                 ...meta,

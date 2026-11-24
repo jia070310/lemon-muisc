@@ -54,7 +54,12 @@ import { discoverState } from './discover.js'
 import { QUALITY_LABELS, QUALITY_ORDER, getQualityLabel } from '../utils/quality.js'
 import { isPwaStandalone } from '../utils/pwa.js'
 import { logRuntime, snapshotAudioError } from '../utils/runtimeLog.js'
-import { isConstrainedNetwork, isTouchMobileDevice, isLikelyLanAccess } from '../utils/device.js'
+import {
+  isConstrainedNetwork,
+  isTouchMobileDevice,
+  isLikelyLanAccess,
+  isLocalNetworkAccess,
+} from '../utils/device.js'
 import { appConfirm } from './appDialog.js'
 
 function logPlayerIssue(level, message, extra = {}) {
@@ -1062,29 +1067,39 @@ function stashMediaAudio(trackKey) {
   const url = stripStreamAuth(audio.src)
   if (!url) return
 
-  try { audio.pause() } catch {}
+  suppressAudioFocusPause += 1
+  try {
+    try { audio.pause() } catch {}
 
-  const entry = {
-    element: audio,
-    url,
-    savedTime: audio.currentTime || 0,
-    mediaSource: mainAudioTapElement === audio ? mainMediaSource : null,
+    const hadMediaSource = mainAudioTapElement === audio && Boolean(mainMediaSource)
+    const entry = {
+      element: audio,
+      url,
+      savedTime: audio.currentTime || 0,
+      // Edge：关掉 Context 后旧 MES 节点不可复用，避免半死管线导致下一首卡在 00:00
+      mediaSource: null,
+    }
+
+    if (mainAudioTapElement === audio) {
+      detachPlaybackGraphKeepElement()
+      mainMediaSource = null
+      mainAudioTapElement = null
+    }
+
+    mediaAudioCache.set(trackKey, entry)
+    trimMediaAudioCache()
+    // 缓存里其它元素一律静音暂停，避免切歌后残留双声
+    silenceCachedAudioElements({ exceptKey: trackKey })
+
+    audio = null
+    hasMediaSrc = false
+    invalidatePlaybackGraph()
+    if (hadMediaSource || audioCtx) {
+      shutdownAudioContext()
+    }
+  } finally {
+    suppressAudioFocusPause = Math.max(0, suppressAudioFocusPause - 1)
   }
-
-  if (mainAudioTapElement === audio) {
-    detachPlaybackGraphKeepElement()
-    mainMediaSource = null
-    mainAudioTapElement = null
-  }
-
-  mediaAudioCache.set(trackKey, entry)
-  trimMediaAudioCache()
-  // 缓存里其它元素一律静音暂停，避免切歌后残留双声
-  silenceCachedAudioElements({ exceptKey: trackKey })
-
-  audio = null
-  hasMediaSrc = false
-  invalidatePlaybackGraph()
 }
 
 function takeMediaAudioCache(trackKey, url) {
@@ -1779,8 +1794,15 @@ function bindAudioElementEvents(el) {
       syncMediaSessionPlaybackState()
       return
     }
-    // 切歌 / Seek / 重建原生输出等内部操作触发的 pause：忽略
-    if (suppressAudioFocusPause > 0 || seekInProgress || loadingPlay.value || endedHandling) {
+    // 切歌 / Seek / 重建原生输出 / 开播缓冲中的 pause：忽略
+    // Edge 常在 loadingPlay 已清空后仍补发延迟 pause，若此时当作用户暂停会卡在 00:00
+    if (
+      suppressAudioFocusPause > 0
+      || seekInProgress
+      || loadingPlay.value
+      || endedHandling
+      || isBuffering.value
+    ) {
       return
     }
     // 其它视频/音频 App 抢占焦点、或系统打断：同步为暂停。
@@ -3962,14 +3984,15 @@ function shouldTranscodeLocalExt(ext, { forceDirectLocal = false, forceSmoothLoc
     return Boolean(smoothStreamEnabled.value && LOCAL_REPAIR_EXTS.has(ext))
   }
   if (!smoothStreamEnabled.value) return false
-  if (isLikelyLanAccess()) return false
+  // 本机开发页 / 局域网：带宽够，优先直出（APE/DSD 仍强制转码）
+  if (isLocalNetworkAccess()) return false
   return LOCAL_SMOOTH_EXTS.has(ext)
 }
 
 /** 是否应对本地曲启用流畅转码策略（预热、缓存 :smooth 等） */
 function preferLocalSmoothTranscode() {
   if (!smoothStreamEnabled.value) return false
-  if (isLikelyLanAccess()) return false
+  if (isLocalNetworkAccess()) return false
   return true
 }
 
@@ -4117,24 +4140,37 @@ async function startPlaybackFromUrl(url, { resumeTime = 0, item, source, isLocal
     else audio = createAudioElement()
   }
 
-  // 出错后的 Audio 再设同一 src 常常不会重新加载，必须换新元素
-  if (audio.error) {
-    recreateMainAudioElement()
-    applyAudioOutput()
-  }
-
   clearPlaybackKickWatch()
   if (!resumeTime) currentTime.value = 0
   duration.value = 0
   if (item) applyDurationFallback(item)
   const authedUrl = withStreamAuth(url)
-  if (!urlsMatch(audio.src, url) || audio.error) {
-    invalidatePlaybackGraph()
-    resetAudioBeforeLoad(audio)
+  const srcChanged = !urlsMatch(audio.src, url) || Boolean(audio.error)
+  // MediaElementSource 绑定过的元素上改 src：Chromium/Edge 易出现「假播放、进度 00:00」
+  const mustRecreate = Boolean(
+    audio.error
+    || (srcChanged && (isMainAudioTapped() || isMediaElementBound(audio))),
+  )
+
+  suppressAudioFocusPause += 1
+  try {
+    if (mustRecreate) {
+      recreateMainAudioElement()
+      teardownPlaybackGraph({ closeContext: true })
+      applyAudioOutput()
+    } else if (srcChanged) {
+      invalidatePlaybackGraph()
+      resetAudioBeforeLoad(audio)
+    }
+    applyAudioCrossOrigin(audio, url)
+    audio.src = authedUrl
+    hasMediaSrc = true
+    // Edge：显式 load，避免只改 src 仍停在旧媒体管道
+    try { audio.load() } catch {}
+  } finally {
+    suppressAudioFocusPause = Math.max(0, suppressAudioFocusPause - 1)
   }
-  applyAudioCrossOrigin(audio, url)
-  audio.src = authedUrl
-  hasMediaSrc = true
+
   // 外网本地与在线一样尽早 play；流畅转码仍等更多缓冲
   const repairing = isLocal && /\/api\/play\/local-smooth(?:\?|$)/.test(String(url || ''))
   const localSmoothUrl = isLocal && /\/api\/play\/local-smooth(?:\?|$)/.test(String(url || ''))
@@ -4164,7 +4200,12 @@ async function startPlaybackFromUrl(url, { resumeTime = 0, item, source, isLocal
     try {
       // 流畅 / CarPlay 原生路径不要创建 AudioContext，避免无线调度被幽灵节点干扰
       if (!shouldAvoidWebAudio()) await ensureAudioContextRunning()
-      await audio.play()
+      suppressAudioFocusPause += 1
+      try {
+        await audio.play()
+      } finally {
+        suppressAudioFocusPause = Math.max(0, suppressAudioFocusPause - 1)
+      }
     } catch (playErr) {
       if (playErr?.name === 'NotAllowedError') {
         throw new Error('浏览器拦截了自动播放，请再点一次播放')
@@ -4235,13 +4276,21 @@ function watchPlaybackKickstart({ intent, isLocal, url, item, source }) {
   const token = playbackKickToken
   const startedAt = Date.now()
   let recovered = false
+  let recreated = false
 
   const tick = async () => {
     if (token !== playbackKickToken || intent !== playIntentToken) return
-    if (!audio || isPaused.value || dlnaCastingUdn.value) {
+    if (!audio || dlnaCastingUdn.value) {
       if (dlnaCastingUdn.value) {
         try { audio?.pause() } catch {}
       }
+      endPlaybackBuffer()
+      return
+    }
+    // 缓冲中被延迟 pause 误打成暂停：清掉并继续踢启动（Edge 切歌常见）
+    if (isPaused.value && isBuffering.value) {
+      isPaused.value = false
+    } else if (isPaused.value) {
       endPlaybackBuffer()
       return
     }
@@ -4257,8 +4306,8 @@ function watchPlaybackKickstart({ intent, isLocal, url, item, source }) {
     beginPlaybackBuffer()
     const waited = Date.now() - startedAt
 
-    // 局域网本地：假播放时升到 canplay 再踢一次；外网勿强制 canplay（FLAC 会再卡数秒）
-    if (isLocal && isLikelyLanAccess() && !recovered && waited >= 1600) {
+    // 本机/局域网本地：假播放时升到 canplay 再踢一次；外网勿强制 canplay（FLAC 会再卡数秒）
+    if (isLocal && isLocalNetworkAccess() && !recovered && waited >= 1600) {
       recovered = true
       try {
         invalidatePlaybackGraph()
@@ -4270,11 +4319,17 @@ function watchPlaybackKickstart({ intent, isLocal, url, item, source }) {
           applyAudioCrossOrigin(audio, url)
           audio.src = url
           hasMediaSrc = true
+          try { audio.load() } catch {}
         }
         await waitForAudioReady(url, { isLocal: true, preferCanPlay: true })
         if (intent !== playIntentToken || token !== playbackKickToken) return
         if (!shouldAvoidWebAudio()) unlockAudioFromGesture()
-        await audio.play()
+        suppressAudioFocusPause += 1
+        try {
+          await audio.play()
+        } finally {
+          suppressAudioFocusPause = Math.max(0, suppressAudioFocusPause - 1)
+        }
         isPaused.value = false
         applyAudioOutput()
       } catch {
@@ -4283,13 +4338,48 @@ function watchPlaybackKickstart({ intent, isLocal, url, item, source }) {
       playbackKickTimer = setTimeout(tick, 250)
       return
     }
-    // 外网本地：进度未动时只再调一次 play()，不抬高就绪门槛
-    if (isLocal && !isLikelyLanAccess() && !recovered && waited >= 900) {
+    // 外网本地 / 桌面：进度未动时先再踢一次 play()
+    if (!recovered && waited >= (isLocal ? 900 : 1200)) {
       recovered = true
       try {
         if (intent !== playIntentToken || token !== playbackKickToken) return
         if (!shouldAvoidWebAudio()) unlockAudioFromGesture()
-        await audio.play()
+        suppressAudioFocusPause += 1
+        try {
+          await audio.play()
+        } finally {
+          suppressAudioFocusPause = Math.max(0, suppressAudioFocusPause - 1)
+        }
+        isPaused.value = false
+        applyAudioOutput()
+      } catch {}
+      playbackKickTimer = setTimeout(tick, 250)
+      return
+    }
+    // 再踢后仍卡在 00:00：换新 <audio>（等同点一次停止），清掉 Edge 半死管线
+    if (recovered && !recreated && !isMobileAudioClient() && waited >= 2200) {
+      recreated = true
+      try {
+        if (intent !== playIntentToken || token !== playbackKickToken) return
+        const keepUrl = audio.src || url
+        suppressAudioFocusPause += 1
+        try {
+          recreateMainAudioElement()
+          teardownPlaybackGraph({ closeContext: true })
+          applyAudioCrossOrigin(audio, keepUrl)
+          audio.src = keepUrl
+          hasMediaSrc = true
+          try { audio.load() } catch {}
+          await waitForAudioReady(keepUrl, {
+            isLocal,
+            preferCanPlay: Boolean(isLocal),
+          })
+          if (intent !== playIntentToken || token !== playbackKickToken) return
+          if (!shouldAvoidWebAudio()) unlockAudioFromGesture()
+          await audio.play()
+        } finally {
+          suppressAudioFocusPause = Math.max(0, suppressAudioFocusPause - 1)
+        }
         isPaused.value = false
         applyAudioOutput()
       } catch {}
@@ -5077,9 +5167,9 @@ function waitForAudioReady(expectedUrl = '', { isLocal = false, preferCanPlay = 
   }
   // 开播门槛：
   // - 在线 / 外网本地：metadata(1) 即播（与平台流一致；外网 FLAC 若等 HAVE_CURRENT_DATA 会白等数秒）
-  // - 局域网本地：HAVE_CURRENT_DATA(2)，盘内秒开且防假播放
+  // - 本机或局域网本地：HAVE_CURRENT_DATA(2)，盘内秒开且防假播放
   // - 卡住重试 preferCanPlay → canplay(3)；流畅 → canplaythrough(4)
-  const lanLocal = isLocal && isLikelyLanAccess()
+  const lanLocal = isLocal && isLocalNetworkAccess()
   const minReady = (() => {
     if (!isLocal) return 1
     if (preferCanPlayThrough) return 4

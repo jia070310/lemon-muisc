@@ -661,7 +661,13 @@
                 />
               </div>
             </div>
-            <textarea v-model="editForm.lyric" rows="8" @input="markModified" placeholder="LRC 歌词内容"></textarea>
+            <p v-if="backendLyricWordMode" class="lyric-mode-hint">后台模式为逐词：网络获取将优先拉取增强时间轴（无则回退逐行）</p>
+            <textarea
+              v-model="editForm.lyric"
+              rows="8"
+              @input="markModified"
+              :placeholder="backendLyricWordMode ? '增强 LRC / 逐词歌词（含 &lt;mm:ss.xx&gt; 字级时间）' : 'LRC 歌词内容'"
+            ></textarea>
           </label>
         </div>
 
@@ -892,6 +898,9 @@
             </div>
             <div v-else class="preview-lyric">
               <div class="preview-lyric-title">歌词预览</div>
+              <div v-if="backendLyricWordMode || fetchPreviewMeta.lyricStyle === 'word'" class="lyric-mode-hint preview-lyric-hint">
+                {{ fetchPreviewMeta.lyricStyle === 'word' ? '已按逐词模式获取增强歌词' : '后台模式为逐词，优先拉取增强时间轴' }}
+              </div>
               <pre>{{ fetchPreviewMeta.lyric ? fetchPreviewMeta.lyric.slice(0, 1200) : '暂无歌词' }}{{ fetchPreviewMeta.lyric?.length > 1200 ? '…' : '' }}</pre>
             </div>
           </div>
@@ -1010,6 +1019,8 @@ const renamePatternOptions = [
 ]
 const RENAME_PREF_KEY = 'lemon-tag-rename-on-save'
 const fetchSource = ref('tx')
+/** 与设置「试听/下载歌词样式」同步：逐词时网络获取走增强时间轴 */
+const backendLyricWordMode = ref(false)
 const REWRITE_PREF_KEY = 'lemon-tag-rewrite-prefs'
 const rewriteFieldFlags = reactive({
   title: false,
@@ -1577,6 +1588,16 @@ watch(matching, (running) => {
   if (running) closeOrganizeMenu()
 })
 
+async function loadBackendLyricStyle() {
+  try {
+    const res = await api.settings.get()
+    const settings = res?.data || res || {}
+    backendLyricWordMode.value = String(settings['download.lyricStyle'] || 'line').toLowerCase() === 'word'
+  } catch {
+    backendLyricWordMode.value = false
+  }
+}
+
 onMounted(async () => {
   loadRewritePrefs()
   loadRenamePrefs()
@@ -1585,6 +1606,7 @@ onMounted(async () => {
   if (compactMq.addEventListener) compactMq.addEventListener('change', syncCompactLayout)
   else compactMq.addListener?.(syncCompactLayout)
 
+  void loadBackendLyricStyle()
   await loadDirs()
   await initTreeExpansion()
   const session = tagEditorSession.value
@@ -4130,6 +4152,13 @@ tr.playing .play-btn,
 
 .field-block { gap: 6px !important; }
 .field-toolbar { display: flex; align-items: center; margin-bottom: 4px; }
+.lyric-mode-hint {
+  margin: 0 0 6px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--accent);
+}
+.preview-lyric-hint { margin-bottom: 8px; }
 .meta-fetch-toolbar {
   margin-bottom: 8px;
   display: flex;

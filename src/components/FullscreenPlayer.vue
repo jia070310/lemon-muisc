@@ -453,6 +453,7 @@
           :file-name="lyricPickFileName"
           :default-source="lyricPickDefaultSource"
           :busy="lyricPickBusy"
+          :prefer-words="lyricDisplayMode === 'word'"
           @close="showLyricPick = false"
           @confirm="onLyricPickConfirm"
         />

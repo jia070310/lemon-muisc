@@ -5,6 +5,7 @@ import { fetchPicBuffer, detectImageMime } from './fetchPic.js'
 import { fetchTrackLyric } from './trackMeta.js'
 import { resolveCoverUrl } from './cover.js'
 import { joinArtists } from './artistTag.js'
+import { ylyricToEnhancedLrc } from './lyric.js'
 
 const SOURCE_MAP = {
   wy: 'wy',
@@ -471,9 +472,14 @@ export async function matchByArtistTitle(artist = '', title = '', source = 'wy',
     .slice(0, limit)
 }
 
-export async function fetchMatchMeta(match, source, fields = null, expectLocal = null) {
+/**
+ * @param {object|null} expectLocal
+ * @param {{ preferWords?: boolean }} [opts]
+ */
+export async function fetchMatchMeta(match, source, fields = null, expectLocal = null, opts = {}) {
   const sdkSource = normalizeTagSource(source || match.source)
   const songId = match.songmid || match.hash || match.songId || match.copyrightId || match.id
+  const preferWords = Boolean(opts?.preferWords)
   const wantLyric = wantsField(fields, 'lyric')
   const wantCover = wantsField(fields, 'cover')
   const wantTags = !fields?.length
@@ -492,6 +498,8 @@ export async function fetchMatchMeta(match, source, fields = null, expectLocal =
     picUrl: '',
     pic: '',
     lyric: '',
+    ylyric: '',
+    lyricStyle: preferWords ? 'word' : 'line',
     songId,
     source: sdkSource,
   }
@@ -527,8 +535,25 @@ export async function fetchMatchMeta(match, source, fields = null, expectLocal =
           artist: localSinger || match.singer || '',
         },
         useOtherSource: true,
+        preferWords,
       })
-      meta.lyric = lrc?.lyric || ''
+      meta.ylyric = lrc?.ylyric || ''
+      if (preferWords) {
+        const enhanced = ylyricToEnhancedLrc(lrc?.ylyric)
+        if (enhanced) {
+          meta.lyric = enhanced
+          meta.lyricStyle = 'word'
+        } else if (lrc?.lyric && /<\d/.test(lrc.lyric)) {
+          meta.lyric = lrc.lyric
+          meta.lyricStyle = 'word'
+        } else {
+          meta.lyric = lrc?.lyric || ''
+          meta.lyricStyle = 'line'
+        }
+      } else {
+        meta.lyric = lrc?.lyric || ''
+        meta.lyricStyle = 'line'
+      }
     } catch {}
   }
 

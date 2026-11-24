@@ -5,7 +5,7 @@
         <div class="modal-head">
           <div>
             <h3 id="lyric-pick-title">修改歌词</h3>
-            <p class="modal-sub">从网络搜索并选择正确歌词应用到当前播放</p>
+            <p class="modal-sub">{{ modalSubText }}</p>
           </div>
           <button type="button" class="btn-ghost btn-sm" :disabled="busy" @click="$emit('close')">关闭</button>
         </div>
@@ -77,6 +77,8 @@
               <div class="preview-meta">
                 <div><strong>{{ previewMeta.title || preview?.name || '-' }}</strong></div>
                 <div>{{ previewMeta.artist || preview?.singer || '-' }} · {{ previewMeta.album || preview?.album || '-' }}</div>
+                <div v-if="preferWords" class="preview-mode-tip">当前为逐字显示，已优先拉取逐词时间轴</div>
+                <div v-else-if="previewMeta.lyricStyle === 'word'" class="preview-mode-tip">已获取逐词增强歌词</div>
               </div>
               <pre class="preview-lyric">{{ lyricPreviewText }}</pre>
             </template>
@@ -117,6 +119,8 @@ const props = defineProps({
   fileName: { type: String, default: '' },
   defaultSource: { type: String, default: 'tx' },
   busy: { type: Boolean, default: false },
+  /** 与全屏「逐字」同步：为 true 时优先拉取增强/逐词时间轴 */
+  preferWords: { type: Boolean, default: false },
 })
 
 const emit = defineEmits(['close', 'confirm'])
@@ -137,6 +141,11 @@ const preview = ref(null)
 const previewMeta = ref(null)
 const toast = ref(null)
 
+const modalSubText = computed(() => (
+  props.preferWords
+    ? '当前为逐字显示，将优先搜索逐词时间轴并应用到播放'
+    : '从网络搜索并选择正确歌词应用到当前播放'
+))
 const canApply = computed(() => Boolean(String(previewMeta.value?.lyric || '').trim()))
 const lyricPreviewText = computed(() => {
   const lyric = String(previewMeta.value?.lyric || '')
@@ -206,10 +215,17 @@ async function previewItem(item) {
   previewMeta.value = null
   previewLoading.value = true
   try {
-    const res = await api.tag.matchApply(item, source.value, ['lyric'])
+    const res = await api.tag.matchApply(item, source.value, ['lyric'], {
+      preferWords: Boolean(props.preferWords),
+    })
     previewMeta.value = res.data || null
     if (!String(previewMeta.value?.lyric || '').trim()) {
-      showToast('该结果暂无歌词，请换一条', 'info')
+      showToast(
+        props.preferWords ? '该结果暂无逐词/逐行歌词，请换一条' : '该结果暂无歌词，请换一条',
+        'info',
+      )
+    } else if (props.preferWords && previewMeta.value?.lyricStyle !== 'word') {
+      showToast('未找到官方逐词轴，已回退为逐行歌词', 'info')
     }
   } catch (e) {
     showToast(e.message || '加载歌词失败', 'error')
@@ -227,6 +243,7 @@ function confirm() {
     match: preview.value,
     meta: previewMeta.value,
     source: source.value,
+    preferWords: Boolean(props.preferWords),
   })
 }
 </script>
@@ -269,6 +286,12 @@ function confirm() {
   font-size: 12px;
   color: var(--text-muted);
   line-height: 1.45;
+}
+.preview-mode-tip {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--accent);
+  line-height: 1.4;
 }
 .search-bar {
   display: flex;

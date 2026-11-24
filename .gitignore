@@ -15,6 +15,17 @@ fpk/app/deps.rev
 tools/fnpack
 tools/fnpack.exe
 tools/regctl.exe
+# 日活接收端 / 本地日活数据 / 临时联调文件（不进公开仓库）
+tools/dau-receiver.mjs
+tools/dau-receiver.mjs.*
+tools/_dashboard_snip.js
+config/dau-*.json
+tmp-dau-*
+tmp-*-test*
+tmp-task-*
+tmp-verify-*
+tmp-playerbar-*
+tmp-login-*
 .env
 .env.*
 !.env.example

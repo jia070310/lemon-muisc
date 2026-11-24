@@ -68,6 +68,27 @@ function isContainerRuntime() {
   return Boolean(process.env.CONFIG_PATH)
 }
 
+/**
+ * 部署形态：飞牛 FPK / Docker / 其他（本地开发等）
+ * 可用 LEMON_EDITION=fpk|docker|other 强制指定。
+ * @returns {'fpk'|'docker'|'other'}
+ */
+export function getDeployEdition() {
+  const forced = String(process.env.LEMON_EDITION || '').trim().toLowerCase()
+  if (forced === 'fpk' || forced === 'native') return 'fpk'
+  if (forced === 'docker') return 'docker'
+  if (forced === 'other' || forced === 'dev' || forced === 'local') return 'other'
+
+  if (process.env.LEMON_NATIVE === '1' || isNativeHostMode()) return 'fpk'
+  if (fs.existsSync('/.dockerenv')) return 'docker'
+
+  const dl = (process.env.DOWNLOAD_PATH || '').trim()
+  const cfg = (process.env.CONFIG_PATH || '').trim()
+  if (dl === DEFAULT_DOWNLOAD_DIR || dl === DEFAULT_MUSIC_DIR || cfg === '/config') return 'docker'
+
+  return 'other'
+}
+
 export function markUserPathsConfigured() {
   try {
     const root = getConfigRoot()
