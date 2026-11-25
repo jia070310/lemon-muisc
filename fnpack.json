@@ -222,6 +222,23 @@
               "size": 5746147
             }
           }
+        },
+        "1.2.17.28": {
+          "changelog": "紧急修复 bug",
+          "updated_at": "2026-11-25T16:10:51+08:00",
+          "os_min_version": "1.1.8",
+          "packages": {
+            "x86": {
+              "download_url": "https://github.com/jia070310/lemon-muisc/releases/download/v1.2.17.28/lemon-music-1.2.17.28-x86.fpk",
+              "sha256": "e792aacd23dc42196660dbbd040bbcff908fdbeda92d4c2c04ae58d019c61e45",
+              "size": 6480353
+            },
+            "arm": {
+              "download_url": "https://github.com/jia070310/lemon-muisc/releases/download/v1.2.17.28/lemon-music-1.2.17.28-arm.fpk",
+              "sha256": "ed316be80c6916435ad23b7cb8e7615dac041b1670c16abf26814b13700b474e",
+              "size": 6480357
+            }
+          }
         }
       }
     }
