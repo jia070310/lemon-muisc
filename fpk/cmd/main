@@ -39,6 +39,7 @@ DOWNLOADS_HOST_PATH=${downloads}
 LOG_PATH=${TRIM_PKGVAR}/log
 PKGVAR_PATH=${TRIM_PKGVAR}
 EOF
+  append_dau_env "${ENV_FILE}" || true
   save_paths "${music}" "${downloads}" "${config}" 2>/dev/null || true
 }
 

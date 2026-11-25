@@ -22,6 +22,7 @@ import {
   isMatchArtistAcceptable,
   mergeMatchMetaFillMissing,
 } from '../utils/pathAlbumHint.js'
+import { recordTagVolume } from '../utils/featureUsage.js'
 
 export const tagRouter = Router()
 
@@ -211,6 +212,7 @@ tagRouter.post('/read', async (req, res) => {
     const { filePath } = req.body
     if (!filePath || !fs.existsSync(filePath)) return res.status(400).json({ error: '文件不存在' })
     const meta = await readMeta(filePath)
+    recordTagVolume(1)
     res.json({ ok: true, data: meta })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -230,6 +232,7 @@ tagRouter.post('/read-batch', async (req, res) => {
 
     if (lite) {
       const data = await readBatchFromCacheOrScan(filePaths)
+      recordTagVolume(filePaths.length)
       return res.json({ ok: true, data })
     }
 
@@ -251,6 +254,7 @@ tagRouter.post('/read-batch', async (req, res) => {
       }
       return { filePath, ok: false, error: lastErr?.message || '读取失败' }
     })
+    recordTagVolume(filePaths.length)
     res.json({ ok: true, data: results })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -273,6 +277,7 @@ tagRouter.post('/write', async (req, res) => {
     await writeMeta(filePath, ext, writeData)
     await refreshCacheAfterTagWrite(filePath, writeData).catch(() => {})
     notifyLibraryChanged([filePath], { reason: 'tag-write' })
+    recordTagVolume(1)
     res.json({ ok: true })
   } catch (e) {
     console.error('[tag/write]', e.message)
@@ -300,6 +305,7 @@ tagRouter.post('/write-batch', async (req, res) => {
     const metaByPath = new Map(prepared.map((f) => [f.filePath, f.meta]))
     await Promise.all(written.map((fp) => refreshCacheAfterTagWrite(fp, metaByPath.get(fp) || {}).catch(() => {})))
     notifyLibraryChanged(written, { reason: 'tag-write-batch' })
+    recordTagVolume(files.length)
     res.json({ ok: true, data: results })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -374,6 +380,7 @@ tagRouter.post('/scan', async (req, res) => {
       }
     }
 
+    recordTagVolume(enriched.length)
     res.json({
       ok: true,
       data: enriched,
@@ -578,6 +585,7 @@ tagRouter.post('/match-batch', async (req, res) => {
         return { filePath: file.filePath, ok: false, error: e.message }
       }
     })
+    recordTagVolume(files.length)
     res.json({ ok: true, data: results })
   } catch (e) {
     res.status(500).json({ error: e.message })

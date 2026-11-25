@@ -34,6 +34,12 @@ const PREFIX_MAP = [
 /** @type {Record<string, number>} */
 const counts = Object.create(null)
 
+/** 标签批量操作的单次文件量（读/写/匹配等），供用量分层 */
+/** @type {number[]} */
+const tagVolumes = []
+const MAX_TAG_VOLUME_BUF = 200
+const MAX_TAG_VOLUME_ONE = 50_000
+
 /** @type {{ playOk: number, playFail: number, downloadOk: number, downloadFail: number }} */
 const quality = {
   playOk: 0,
@@ -162,6 +168,36 @@ export function recordFeature(key, n = 1) {
 }
 
 /**
+ * 记录标签编辑单次处理文件量（批量读/写/匹配等）
+ * @param {number} n
+ */
+export function recordTagVolume(n = 0) {
+  const v = Math.floor(Number(n) || 0)
+  if (!Number.isFinite(v) || v <= 0) return
+  tagVolumes.push(Math.min(v, MAX_TAG_VOLUME_ONE))
+  if (tagVolumes.length > MAX_TAG_VOLUME_BUF) {
+    tagVolumes.splice(0, tagVolumes.length - MAX_TAG_VOLUME_BUF)
+  }
+}
+
+/**
+ * @returns {number[]|null}
+ */
+export function drainTagVolumes() {
+  if (!tagVolumes.length) return null
+  const out = tagVolumes.splice(0, tagVolumes.length)
+  return out
+}
+
+/**
+ * @param {number[]|null|undefined} list
+ */
+export function restoreTagVolumes(list) {
+  if (!Array.isArray(list) || !list.length) return
+  for (const n of list) recordTagVolume(n)
+}
+
+/**
  * @param {'playOk'|'playFail'|'downloadOk'|'downloadFail'} kind
  * @param {number} [n=1]
  */
@@ -252,10 +288,30 @@ function isPlayUrlPath(pathname) {
 /**
  * Express 中间件：鉴权后按路由前缀计数；/play/url 按响应码记成功率；UA 记访问端。
  */
+function isTagCoverPath(pathname) {
+  const p = String(pathname || '').split('?')[0]
+  return p === '/tag/cover' || p.endsWith('/tag/cover')
+}
+
+function isTagOpenPath(pathname) {
+  const p = String(pathname || '').split('?')[0]
+  // 进入标签页会拉目录列表，记为「打开」
+  return p === '/tag/dirs' || p.endsWith('/tag/dirs')
+}
+
 export function featureUsageMiddleware(req, res, next) {
   try {
-    const key = featureKeyFromPath(req.path || '')
-    if (key) recordFeature(key)
+    const pathOnly = String(req.path || '').split('?')[0]
+
+    // 封面图请求极多，不计入标签编辑
+    if (!isTagCoverPath(pathOnly)) {
+      if (isTagOpenPath(pathOnly) && String(req.method || 'GET').toUpperCase() === 'GET') {
+        recordFeature('tagOpen')
+      } else {
+        const key = featureKeyFromPath(pathOnly)
+        if (key) recordFeature(key)
+      }
+    }
 
     const userId = req.user?.id
     if (userId != null && String(userId).trim()) {

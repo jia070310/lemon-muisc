@@ -41,6 +41,14 @@ install_node_modules || fail_install "npm 依赖安装失败：${TRIM_PKGVAR}/lo
 ensure_better_sqlite3_native || true
 
 ensure_desktop_entry || true
+# 升级后合并 DAU 环境并上报 upgrade（不计日活）
+if [ -f "${TRIM_PKGETC}/app.env" ]; then
+  append_dau_env "${TRIM_PKGETC}/app.env" || true
+fi
+if declare -F resolve_config_path >/dev/null 2>&1; then
+  export CONFIG_PATH="$(resolve_config_path 2>/dev/null || true)"
+fi
+report_dau_event upgrade || true
 update_install_ui "升级完成，请启用应用"
 log_line "升级完成"
 exit 0

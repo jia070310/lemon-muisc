@@ -15,9 +15,11 @@ import { getDeployEdition } from './filePaths.js'
 import {
   drainFeatureCounts,
   drainQualityCounts,
+  drainTagVolumes,
   peekClientSurface,
   restoreFeatureCounts,
   restoreQualityCounts,
+  restoreTagVolumes,
 } from './featureUsage.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -61,6 +63,29 @@ function installIdPath(configPath) {
 
 function lastBeatPath(configPath) {
   return path.join(configPath, 'dau-last-beat.json')
+}
+
+function installReportedPath(configPath) {
+  return path.join(configPath, 'dau-install-reported.json')
+}
+
+function hasInstallReported(configPath) {
+  try {
+    return fs.existsSync(installReportedPath(configPath))
+  } catch {
+    return false
+  }
+}
+
+function markInstallReported(configPath, event = 'install') {
+  try {
+    fs.mkdirSync(path.dirname(installReportedPath(configPath)), { recursive: true })
+    fs.writeFileSync(
+      installReportedPath(configPath),
+      JSON.stringify({ at: new Date().toISOString(), event }, null, 2),
+      'utf8',
+    )
+  } catch {}
 }
 
 export function getOrCreateInstallId(configPath = resolveConfigPath()) {
@@ -125,17 +150,19 @@ export async function reportDailyActive(opts = {}) {
   const configPath = opts.configPath || resolveConfigPath()
   const now = Date.now()
   const event = String(opts.event || 'heartbeat')
+  const isInstallEvent = event === 'install' || event === 'upgrade'
   const prev = lastBeatAt || readLastBeatAt(configPath) || now
   let activeSec = Math.floor((now - prev) / 1000)
   if (!Number.isFinite(activeSec) || activeSec < 0) activeSec = 0
-  if (event === 'boot') activeSec = 0
+  if (event === 'boot' || isInstallEvent) activeSec = 0
   if (activeSec > MAX_ACTIVE_SEC) activeSec = MAX_ACTIVE_SEC
 
   const { day, hour } = shanghaiParts(new Date(now))
   const installId = getOrCreateInstallId(configPath)
-  const features = drainFeatureCounts()
-  const quality = drainQualityCounts()
-  const clientSurfaceSnap = peekClientSurface()
+  const features = isInstallEvent ? {} : drainFeatureCounts()
+  const quality = isInstallEvent ? null : drainQualityCounts()
+  const tagVolumes = isInstallEvent ? [] : drainTagVolumes()
+  const clientSurfaceSnap = isInstallEvent ? null : peekClientSurface()
   const body = {
     installId,
     appVersion: getAppVersion(),
@@ -149,6 +176,7 @@ export async function reportDailyActive(opts = {}) {
   }
   if (Object.keys(features).length) body.features = features
   if (quality) body.quality = quality
+  if (tagVolumes?.length) body.tagVolumes = tagVolumes
   // 当日访问端绝对值（按登录用户 + UA 粗分）；失败无需回滚
   if (clientSurfaceSnap?.day) {
     body.clientSurface = {
@@ -176,18 +204,25 @@ export async function reportDailyActive(opts = {}) {
       signal: ac.signal,
     })
     if (!res.ok) {
-      restoreFeatureCounts(features)
-      restoreQualityCounts(quality)
+      if (!isInstallEvent) {
+        restoreFeatureCounts(features)
+        restoreQualityCounts(quality)
+        restoreTagVolumes(tagVolumes)
+      }
       const text = await res.text().catch(() => '')
       console.warn(`[dau] 上报失败 HTTP ${res.status}: ${text.slice(0, 160)}`)
       return { ok: false, status: res.status }
     }
     lastBeatAt = now
     writeLastBeatAt(configPath, now)
-    return { ok: true, day, hour, activeSec, event, features, quality, clientSurface: body.clientSurface }
+    if (isInstallEvent) markInstallReported(configPath, event)
+    return { ok: true, day, hour, activeSec, event, features, quality, tagVolumes, clientSurface: body.clientSurface }
   } catch (e) {
-    restoreFeatureCounts(features)
-    restoreQualityCounts(quality)
+    if (!isInstallEvent) {
+      restoreFeatureCounts(features)
+      restoreQualityCounts(quality)
+      restoreTagVolumes(tagVolumes)
+    }
     if (e?.name !== 'AbortError') {
       console.warn('[dau] 上报失败:', e?.message || e)
     }
@@ -199,7 +234,8 @@ export async function reportDailyActive(opts = {}) {
 }
 
 /**
- * 启动后上报 boot，并每 15 分钟 heartbeat。
+ * 启动后：若尚未上报过安装完成则先发 install，再 boot；并每 15 分钟 heartbeat。
+ * Docker / 旧 FPK（安装脚本未 curl）靠首次启动补报安装。
  * @param {{ configPath?: string }} [opts]
  */
 export function startDauReporter(opts = {}) {
@@ -221,7 +257,17 @@ export function startDauReporter(opts = {}) {
   }
 
   if (bootTimer) clearTimeout(bootTimer)
-  bootTimer = setTimeout(() => beat('boot'), BOOT_DELAY_MS)
+  bootTimer = setTimeout(() => {
+    const run = async () => {
+      try {
+        if (!hasInstallReported(configPath)) {
+          await reportDailyActive({ configPath, event: 'install', force: true })
+        }
+      } catch {}
+      beat('boot')
+    }
+    run().catch(() => beat('boot'))
+  }, BOOT_DELAY_MS)
   bootTimer.unref?.()
 
   if (timer) clearInterval(timer)

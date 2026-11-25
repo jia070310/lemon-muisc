@@ -645,3 +645,71 @@ install_node_modules() {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] npm install ok (rc=${rc})" >> "${log_file}"
   return 0
 }
+
+# 把构建注入的 dau.release.env 合并进 app.env（供 Node 进程读取）
+append_dau_env() {
+  local dest="${1:-${TRIM_PKGETC}/app.env}"
+  local root envf
+  root="$(app_root)"
+  envf="${root}/dau.release.env"
+  [ -f "${envf}" ] || return 0
+  [ -f "${dest}" ] || return 0
+  if grep -q '^LEMON_DAU_' "${dest}" 2>/dev/null; then
+    grep -v '^LEMON_DAU_' "${dest}" > "${dest}.tmp" 2>/dev/null && mv "${dest}.tmp" "${dest}"
+  fi
+  grep -E '^LEMON_DAU_' "${envf}" | tr -d '\r' >> "${dest}" || true
+}
+
+# 安装/升级完成：上报 event=install|upgrade（不计日活；失败不影响安装）
+report_dau_event() {
+  local kind="${1:-install}"
+  local root envf url token cfg idfile id ver day hour ts
+  root="$(app_root)"
+  envf="${root}/dau.release.env"
+  [ -f "${envf}" ] || return 0
+  url="$(grep -E '^LEMON_DAU_URL=' "${envf}" | head -1 | cut -d= -f2- | tr -d '\r' | sed 's/^["'\'']//;s/["'\'']$//')"
+  token="$(grep -E '^LEMON_DAU_TOKEN=' "${envf}" | head -1 | cut -d= -f2- | tr -d '\r' | sed 's/^["'\'']//;s/["'\'']$//')"
+  [ -n "${url}" ] && [ -n "${token}" ] || return 0
+
+  cfg="${CONFIG_PATH:-}"
+  if [ -z "${cfg}" ] && declare -F resolve_config_path >/dev/null 2>&1; then
+    cfg="$(resolve_config_path 2>/dev/null || true)"
+  fi
+  if [ -z "${cfg}" ] && declare -F default_config_path >/dev/null 2>&1; then
+    cfg="$(default_config_path 2>/dev/null || true)"
+  fi
+  [ -n "${cfg}" ] || cfg="${TRIM_PKGVAR}/config"
+  mkdir -p "${cfg}" 2>/dev/null || true
+
+  idfile="${cfg}/dau-install-id.json"
+  if [ -f "${idfile}" ]; then
+    id="$(sed -n 's/.*"installId"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${idfile}" | head -1)"
+  fi
+  if [ -z "${id}" ] || [ "${#id}" -lt 8 ]; then
+    id="$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen 2>/dev/null || echo "fpk-$(date +%s)-$$-${RANDOM}")"
+    printf '{\n  "installId": "%s",\n  "createdAt": "%s"\n}\n' "${id}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "${idfile}"
+  fi
+
+  ver="$(awk -F'"' '/"version"/{print $4; exit}' "${root}/package.json" 2>/dev/null)"
+  ver="${ver:-unknown}"
+  day="$(TZ=Asia/Shanghai date +%F)"
+  hour="$(TZ=Asia/Shanghai date +%H)"
+  hour=$((10#${hour}))
+  ts="$(($(date +%s) * 1000))"
+
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] dau ${kind}: curl missing" >> "${TRIM_PKGVAR}/log/install.log" 2>/dev/null || true
+    return 0
+  fi
+  if curl -fsS -m 10 -X POST "${url}" \
+    -H "Content-Type: application/json" \
+    -H "X-DAU-Token: ${token}" \
+    -d "{\"installId\":\"${id}\",\"appVersion\":\"${ver}\",\"platform\":\"linux\",\"edition\":\"fpk\",\"event\":\"${kind}\",\"day\":\"${day}\",\"hour\":${hour},\"activeSec\":0,\"ts\":${ts}}" \
+    >/dev/null 2>&1; then
+    printf '{\n  "at": "%s",\n  "event": "%s"\n}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${kind}" > "${cfg}/dau-install-reported.json"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] dau ${kind} ok id=${id}" >> "${TRIM_PKGVAR}/log/install.log" 2>/dev/null || true
+  else
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] dau ${kind} failed" >> "${TRIM_PKGVAR}/log/install.log" 2>/dev/null || true
+  fi
+  return 0
+}

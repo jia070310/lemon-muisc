@@ -66,6 +66,8 @@ CONFIG_PATH=${config_path}
 MUSIC_HOST_PATH=${music_path}
 DOWNLOADS_HOST_PATH=${downloads_path}
 EOF
+export CONFIG_PATH="${config_path}"
+append_dau_env "${TRIM_PKGETC}/app.env" || true
 
 case "${music_path}" in
   "${TRIM_PKGVAR}"/*) ;;
@@ -101,6 +103,7 @@ ensure_better_sqlite3_native || fail_install "better-sqlite3 原生库缺失。�
 
 ensure_desktop_entry || true
 mark_install_complete
+report_dau_event install || true
 if port_blocked_by_others "${listen_port}"; then
   update_install_ui "【安装完成】默认端口 ${listen_port} 已被占用。请到「应用设置」改为 1024–65535 内的空闲端口，再点「启用」。"
   log_line "port ${listen_port} occupied, ask user to change in app settings"
